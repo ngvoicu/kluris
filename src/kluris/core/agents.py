@@ -9,7 +9,7 @@ AGENT_REGISTRY: dict[str, dict] = {
     "cursor": {"dir": ".cursor", "subdir": "commands", "format": "md", "args": "$ARGUMENTS"},
     "windsurf": {"dir": ".windsurf", "subdir": "workflows", "format": "md", "args": "$ARGUMENTS"},
     "copilot": {"dir": ".copilot", "subdir": "agents", "format": "agent.md", "args": "$ARGUMENTS"},
-    "codex": {"dir": ".agents", "subdir": "skills", "format": "skill.md", "args": "$ARGUMENTS"},
+    "codex": {"dir": ".codex", "subdir": "skills", "format": "skill.md", "args": "$ARGUMENTS"},
     "gemini": {"dir": ".gemini", "subdir": "commands", "format": "toml", "args": "{{args}}"},
     "kilocode": {"dir": ".config/kilo", "subdir": "commands", "format": "md", "args": "$ARGUMENTS"},
     "junie": {"dir": ".junie", "subdir": "commands", "format": "md", "args": "$ARGUMENTS"},

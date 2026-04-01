@@ -34,7 +34,7 @@ def test_install_creates_codex_skill(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
     runner = CliRunner()
     runner.invoke(cli, ["create", "my-brain", "--path", str(tmp_path)])
-    skill_file = tmp_path / ".agents" / "skills" / "kluris" / "SKILL.md"
+    skill_file = tmp_path / ".codex" / "skills" / "kluris" / "SKILL.md"
     assert skill_file.exists()
 
 
