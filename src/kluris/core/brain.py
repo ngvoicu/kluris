@@ -12,6 +12,26 @@ from kluris.core.config import BrainConfig, GitConfig, AgentsConfig, NeuronTempl
 
 # --- Brain type defaults ---
 
+# Neuron templates -- available to ALL brains regardless of type
+NEURON_TEMPLATES: dict[str, dict] = {
+    "decision": {
+        "description": "Architecture or product decision record",
+        "sections": ["Context", "Decision", "Rationale",
+                     "Alternatives considered", "Consequences"],
+    },
+    "incident": {
+        "description": "Incident or outage postmortem",
+        "sections": ["Summary", "Timeline", "Root cause",
+                     "Impact", "Resolution", "Lessons learned"],
+    },
+    "runbook": {
+        "description": "Operational procedure",
+        "sections": ["Purpose", "Prerequisites", "Steps",
+                     "Rollback", "Contacts"],
+    },
+}
+
+# Brain types -- only used for initial scaffolding
 BRAIN_TYPES: dict[str, dict] = {
     "team": {
         "structure": {
@@ -24,23 +44,6 @@ BRAIN_TYPES: dict[str, dict] = {
             "cortex": "Runbooks, playbooks, dev workflows, onboarding, migration plans",
             "wisdom": "Domain knowledge, learnings, dated notes",
         },
-        "neuron_templates": {
-            "decision": {
-                "description": "Architecture or product decision record",
-                "sections": ["Context", "Decision", "Rationale",
-                             "Alternatives considered", "Consequences"],
-            },
-            "incident": {
-                "description": "Incident or outage postmortem",
-                "sections": ["Summary", "Timeline", "Root cause",
-                             "Impact", "Resolution", "Lessons learned"],
-            },
-            "runbook": {
-                "description": "Operational procedure",
-                "sections": ["Purpose", "Prerequisites", "Steps",
-                             "Rollback", "Contacts"],
-            },
-        },
     },
     "personal": {
         "structure": {
@@ -48,7 +51,6 @@ BRAIN_TYPES: dict[str, dict] = {
             "tasks": "Current priorities, blockers, in-progress work",
             "notes": "Daily notes, ideas, learnings",
         },
-        "neuron_templates": {},
     },
     "product": {
         "structure": {
@@ -59,7 +61,6 @@ BRAIN_TYPES: dict[str, dict] = {
             "competitors": "Competitive analysis, market positioning",
             "decisions": "Product decisions and rationale",
         },
-        "neuron_templates": {},
     },
     "research": {
         "structure": {
@@ -70,11 +71,9 @@ BRAIN_TYPES: dict[str, dict] = {
             "tools": "Research tools, scripts, environments",
             "questions": "Open questions, hypotheses to test",
         },
-        "neuron_templates": {},
     },
     "blank": {
         "structure": {},
-        "neuron_templates": {},
     },
 }
 

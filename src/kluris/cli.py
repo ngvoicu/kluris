@@ -105,7 +105,7 @@ def _resolve_brains(brain_name: str | None, multi: bool = True) -> list[tuple[st
         return [(n, e.model_dump()) for n, e in config.brains.items()]
 
     brain_list = "\n".join(
-        f"  {'* ' if n == config.default_brain else '  '}{n} ({e.type}) — {e.path}"
+        f"  {'* ' if n == config.default_brain else '  '}{n} — {e.path}"
         for n, e in config.brains.items()
     )
     raise click.ClickException(
@@ -279,33 +279,20 @@ def clone_cmd(url: str, path: str | None, branch_name: str | None, as_json: bool
     # Create local kluris.yml (not in repo -- it's gitignored)
     if not (dest / "kluris.yml").exists():
         from kluris.core.config import BrainConfig, GitConfig, write_brain_config
-        # Detect type from structure on disk
-        detected_type = "team"
-        dirs = {d.name for d in dest.iterdir() if d.is_dir() and d.name != ".git"}
-        if {"projects", "tasks", "notes"} <= dirs:
-            detected_type = "personal"
-        elif {"prd", "features", "ux"} <= dirs:
-            detected_type = "product"
-        elif {"literature", "experiments", "findings"} <= dirs:
-            detected_type = "research"
-        elif {"architecture", "decisions", "services"} <= dirs:
-            detected_type = "team"
-
         local_config = BrainConfig(
             name=name,
             description=f"{name} knowledge base",
-            type=detected_type,
             git=GitConfig(default_branch=branch_name or "main"),
         )
         write_brain_config(local_config, dest)
 
     brain_config = read_brain_config(dest)
-    entry = BrainEntry(path=str(dest), repo=url, description=brain_config.description, type=brain_config.type)
+    entry = BrainEntry(path=str(dest), repo=url, description=brain_config.description)
     register_brain(name, entry)
     _do_install()
 
     if as_json:
-        click.echo(json_lib.dumps({"ok": True, "name": name, "path": str(dest), "type": brain_config.type, "remote": url}))
+        click.echo(json_lib.dumps({"ok": True, "name": name, "path": str(dest), "remote": url}))
     else:
         console.print(f"Brain cloned: [bold]{name}[/bold]")
         console.print(f"  Path: {dest}")
@@ -449,10 +436,8 @@ def neuron(file_path: str, lobe: str | None, template_name: str | None,
     parent_map = "./map.md"
     sections = None
     if template_name:
-        brain_config = read_brain_config(brain_path)
-        from kluris.core.brain import get_type_defaults
-        defaults = get_type_defaults(brain_config.type)
-        templates = defaults.get("neuron_templates", {})
+        from kluris.core.brain import NEURON_TEMPLATES
+        templates = NEURON_TEMPLATES
         tmpl = lookup_template(template_name, templates)
         if tmpl is None:
             available = ", ".join(templates.keys()) if templates else "(none for this brain type)"
@@ -774,29 +759,22 @@ def doctor(as_json: bool):
 
 
 @cli.command()
-@click.option("--brain", "brain_name", help="Specific brain")
 @click.option("--json", "as_json", is_flag=True, help="JSON output")
-def templates(brain_name: str | None, as_json: bool):
-    """List available neuron templates for the current brain."""
-    brains = _resolve_brains(brain_name, multi=False)
-    name, entry = brains[0]
-    brain_path = Path(entry["path"])
-    brain_config = read_brain_config(brain_path)
-    from kluris.core.brain import get_type_defaults
-    defaults = get_type_defaults(brain_config.type)
-    tmpls = defaults.get("neuron_templates", {})
+def templates(as_json: bool):
+    """List available neuron templates."""
+    from kluris.core.brain import NEURON_TEMPLATES
+    tmpls = NEURON_TEMPLATES
 
     if as_json:
-        click.echo(json_lib.dumps({"ok": True, "brain": name, "type": brain_config.type, "templates": tmpls}))
+        click.echo(json_lib.dumps({"ok": True, "templates": tmpls}))
         return
 
     if not tmpls:
-        console.print(f"Brain '{name}' ({brain_config.type}) has no neuron templates.")
-        console.print("Only 'team' brains have built-in templates (decision, incident, runbook).")
+        console.print("No neuron templates available.")
         return
 
     from rich.table import Table
-    table = Table(title=f"Neuron Templates — {name} ({brain_config.type})")
+    table = Table(title="Neuron Templates")
     table.add_column("Template")
     table.add_column("Description")
     table.add_column("Sections")

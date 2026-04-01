@@ -5,7 +5,7 @@ from pathlib import Path
 
 import yaml
 
-from kluris.core.brain import get_type_defaults, scaffold_brain, validate_brain_name
+from kluris.core.brain import NEURON_TEMPLATES, get_type_defaults, scaffold_brain, validate_brain_name
 
 
 # --- [TEST-KLU-09] Brain scaffolding ---
@@ -59,7 +59,7 @@ def test_creates_kluris_yml(tmp_path):
     assert (brain / "kluris.yml").exists()
     data = yaml.safe_load((brain / "kluris.yml").read_text())
     assert data["name"] == "brain"
-    assert data["type"] == "team"
+    assert "type" not in data  # type is scaffold-only
     assert "structure" not in data
 
 
@@ -86,8 +86,8 @@ def test_creates_readme(tmp_path):
 
 def test_team_has_neuron_templates(tmp_path):
     """Templates are built into kluris per brain type, not stored in kluris.yml."""
-    defaults = get_type_defaults("team")
-    templates = defaults.get("neuron_templates", {})
+    
+    templates = NEURON_TEMPLATES
     assert "decision" in templates
     assert "incident" in templates
     assert "runbook" in templates

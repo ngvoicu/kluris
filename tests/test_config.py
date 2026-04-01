@@ -24,7 +24,7 @@ from kluris.core.config import (
 
 def test_kluris_importable():
     assert hasattr(kluris, "__version__")
-    assert kluris.__version__ == "0.2.1"
+    assert kluris.__version__ == "0.2.2"
 
 
 def test_global_config_defaults():
@@ -66,7 +66,6 @@ def test_brain_config_defaults():
     cfg = BrainConfig(name="x")
     assert cfg.name == "x"
     assert cfg.description == ""
-    assert cfg.type == "team"
     assert isinstance(cfg.git, GitConfig)
     assert isinstance(cfg.agents, AgentsConfig)
 
@@ -125,13 +124,12 @@ def test_write_read_brain_config(tmp_path):
     brain_path = tmp_path / "my-brain"
     brain_path.mkdir()
 
-    cfg = BrainConfig(name="my-brain", description="Test brain", type="team")
+    cfg = BrainConfig(name="my-brain", description="Test brain")
     write_brain_config(cfg, brain_path)
 
     loaded = read_brain_config(brain_path)
     assert loaded.name == "my-brain"
     assert loaded.description == "Test brain"
-    assert loaded.type == "team"
 
 
 def test_config_not_found_returns_empty(tmp_path, monkeypatch):

@@ -54,7 +54,6 @@ class BrainConfig(BaseModel):
     """Local brain config stored in kluris.yml (gitignored)."""
     name: str
     description: str = ""
-    type: str = "team"
     git: GitConfig = GitConfig()
     agents: AgentsConfig = AgentsConfig()
 
