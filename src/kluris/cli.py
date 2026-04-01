@@ -97,7 +97,7 @@ def _resolve_brains(brain_name: str | None, multi: bool = True) -> list[tuple[st
 
     if len(config.brains) == 0:
         raise click.ClickException(
-            "No brains registered. Run 'kluris create <path>' to create one."
+            "No brains registered. Run 'kluris create <name>' to create one."
         )
 
     if multi:
@@ -120,26 +120,54 @@ def cli():
 
 
 @cli.command()
-@click.argument("path", type=click.Path())
+@click.argument("name")
+@click.option("--path", "base_path", type=click.Path(),
+              help="Directory to create the brain in (default: current dir)")
 @click.option("--type", "brain_type", default="team",
-              type=click.Choice(list(BRAIN_TYPES.keys())), help="Brain type")
+              type=click.Choice(list(BRAIN_TYPES.keys())), help="Brain type: team, personal, product, research, blank")
 @click.option("--from-config", "from_config", type=click.Path(exists=True),
               help="Custom YAML config file for structure")
 @click.option("--json", "as_json", is_flag=True, help="JSON output")
-def create(path: str, brain_type: str, from_config: str | None, as_json: bool):
-    """Create a new brain."""
-    brain_path = Path(path).resolve()
-    name = brain_path.name
+def create(name: str, base_path: str | None, brain_type: str,
+           from_config: str | None, as_json: bool):
+    """Create a new brain.
 
+    NAME is the brain name (lowercase, hyphens ok). Examples:
+
+    \b
+      kluris create my-team-brain
+      kluris create my-brain --type personal
+      kluris create research-notes --type research --path ~/brains
+    """
     if not validate_brain_name(name):
         raise click.ClickException(
             f"Brain name '{name}' is invalid. "
             "Use lowercase letters, numbers, and hyphens only."
         )
 
-    if (brain_path / "kluris.yml").exists():
+    if base_path:
+        base = Path(base_path).resolve()
+        if not base.is_dir():
+            raise click.ClickException(
+                f"--path '{base_path}' is not a directory."
+            )
+        if (base / "kluris.yml").exists():
+            raise click.ClickException(
+                f"--path '{base_path}' is already a brain. "
+                "Pass the parent directory, not the brain itself."
+            )
+        brain_path = base / name
+    else:
+        brain_path = (Path.cwd() / name).resolve()
+
+    if brain_path.exists() and brain_path.is_dir() and any(brain_path.iterdir()):
+        if (brain_path / "kluris.yml").exists():
+            raise click.ClickException(
+                f"{brain_path} already contains a kluris.yml. Use a different name."
+            )
         raise click.ClickException(
-            f"{brain_path} already contains a kluris.yml. Use a different path."
+            f"{brain_path} already exists and is not empty. "
+            "Choose a different name or use --path to specify a location."
         )
 
     custom_config = None
@@ -232,7 +260,7 @@ def list_cmd(as_json: bool):
         return
 
     if not config.brains:
-        console.print("No brains registered. Run 'kluris create <path>' to create one.")
+        console.print("No brains registered. Run 'kluris create <name>' to create one.")
         return
 
     table = Table(title="Registered Brains")

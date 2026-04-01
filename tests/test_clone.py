@@ -13,7 +13,7 @@ def _create_remote_brain(tmp_path, monkeypatch):
     monkeypatch.setenv("KLURIS_CONFIG", str(tmp_path / "config.yml"))
     monkeypatch.setenv("HOME", str(tmp_path))
     runner = CliRunner()
-    runner.invoke(cli, ["create", str(tmp_path / "source-brain")])
+    runner.invoke(cli, ["create", "source-brain", "--path", str(tmp_path)])
 
     # Create bare remote and push
     bare = tmp_path / "remote.git"

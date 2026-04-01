@@ -8,14 +8,14 @@ from kluris.cli import cli
 
 
 def _create_brain(runner, tmp_path):
-    runner.invoke(cli, ["create", str(tmp_path / "my-brain"), "--json"])
+    runner.invoke(cli, ["create", "my-brain", "--path", str(tmp_path)])
 
 
 def test_create_json(tmp_path, monkeypatch):
     monkeypatch.setenv("KLURIS_CONFIG", str(tmp_path / "config.yml"))
     monkeypatch.setenv("HOME", str(tmp_path))
     runner = CliRunner()
-    result = runner.invoke(cli, ["create", str(tmp_path / "my-brain"), "--json"])
+    result = runner.invoke(cli, ["create", "my-brain", "--path", str(tmp_path), "--json"])
     data = json.loads(result.output)
     assert data["ok"] is True
     assert "name" in data

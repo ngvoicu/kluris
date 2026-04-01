@@ -29,7 +29,7 @@ knowledge. When someone leaves, nothing is lost.
 ```bash
 pipx install kluris
 kluris doctor                          # Check prerequisites
-kluris create ~/my-brain --type team   # Create a team brain
+kluris create my-brain --type team   # Create a team brain
 ```
 
 Then open any project and run `/kluris.learn` — the AI agent will analyze
@@ -40,7 +40,7 @@ and decisions.
 
 ```bash
 # 1. Create a brain for your team
-kluris create ~/acme-brain --type team
+kluris create acme-brain --type team
 
 # 2. In your backend project, run the slash command:
 #    /kluris.learn focus on architecture and API design
@@ -104,8 +104,8 @@ keep everything navigable.
 | `blank` | (empty) | Custom structure |
 
 ```bash
-kluris create ~/my-brain --type personal
-kluris create ~/product-brain --type product
+kluris create my-brain --type personal
+kluris create product-brain --type product
 ```
 
 ## How it works
@@ -135,7 +135,7 @@ kluris create ~/product-brain --type product
 
 | Command | Flags | What it does |
 |---------|-------|-------------|
-| `kluris create <path>` | `--type`, `--from-config`, `--json` | Create a new brain |
+| `kluris create <name>` | `--path`, `--type`, `--from-config`, `--json` | Create a new brain |
 | `kluris clone <url> [path]` | `--json` | Clone an existing brain |
 | `kluris list` | `--json` | List all registered brains |
 | `kluris status` | `--brain`, `--json` | Brain tree and recent changes |

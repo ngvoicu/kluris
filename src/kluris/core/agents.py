@@ -39,7 +39,7 @@ If the config file doesn't exist or has no brains registered:
 
 > No brains found. To get started:
 > 1. Install kluris: `pipx install kluris`
-> 2. Create a brain: `kluris create ~/my-brain`
+> 2. Create a brain: `kluris create my-brain`
 > 3. Populate it: run `/kluris.learn` in any project
 >
 > This will create a shared knowledge base your AI agents can read and write.

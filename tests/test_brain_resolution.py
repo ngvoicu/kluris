@@ -11,8 +11,8 @@ def test_explicit_brain_flag(tmp_path, monkeypatch):
     monkeypatch.setenv("KLURIS_CONFIG", str(tmp_path / "config.yml"))
     monkeypatch.setenv("HOME", str(tmp_path))
     runner = CliRunner()
-    runner.invoke(cli, ["create", str(tmp_path / "brain-a")])
-    runner.invoke(cli, ["create", str(tmp_path / "brain-b")])
+    runner.invoke(cli, ["create", "brain-a", "--path", str(tmp_path)])
+    runner.invoke(cli, ["create", "brain-b", "--path", str(tmp_path)])
     result = runner.invoke(cli, ["status", "--brain", "brain-b", "--json"])
     data = json.loads(result.output)
     assert data["brains"][0]["name"] == "brain-b"
@@ -22,8 +22,8 @@ def test_default_brain_used(tmp_path, monkeypatch):
     monkeypatch.setenv("KLURIS_CONFIG", str(tmp_path / "config.yml"))
     monkeypatch.setenv("HOME", str(tmp_path))
     runner = CliRunner()
-    runner.invoke(cli, ["create", str(tmp_path / "brain-a")])
-    runner.invoke(cli, ["create", str(tmp_path / "brain-b")])
+    runner.invoke(cli, ["create", "brain-a", "--path", str(tmp_path)])
+    runner.invoke(cli, ["create", "brain-b", "--path", str(tmp_path)])
     # brain-a is default (first created)
     result = runner.invoke(cli, ["status", "--json"])
     data = json.loads(result.output)
@@ -34,7 +34,7 @@ def test_single_brain_auto(tmp_path, monkeypatch):
     monkeypatch.setenv("KLURIS_CONFIG", str(tmp_path / "config.yml"))
     monkeypatch.setenv("HOME", str(tmp_path))
     runner = CliRunner()
-    runner.invoke(cli, ["create", str(tmp_path / "only-brain")])
+    runner.invoke(cli, ["create", "only-brain", "--path", str(tmp_path)])
     result = runner.invoke(cli, ["status", "--json"])
     data = json.loads(result.output)
     assert len(data["brains"]) == 1
@@ -44,8 +44,8 @@ def test_multi_brain_recall_all(tmp_path, monkeypatch):
     monkeypatch.setenv("KLURIS_CONFIG", str(tmp_path / "config.yml"))
     monkeypatch.setenv("HOME", str(tmp_path))
     runner = CliRunner()
-    runner.invoke(cli, ["create", str(tmp_path / "brain-a")])
-    runner.invoke(cli, ["create", str(tmp_path / "brain-b")])
+    runner.invoke(cli, ["create", "brain-a", "--path", str(tmp_path)])
+    runner.invoke(cli, ["create", "brain-b", "--path", str(tmp_path)])
     # Remove default so it doesn't short-circuit to one brain
     from kluris.core.config import read_global_config, write_global_config
     cfg = read_global_config()
@@ -62,8 +62,8 @@ def test_multi_brain_neuron_error(tmp_path, monkeypatch):
     monkeypatch.setenv("KLURIS_CONFIG", str(tmp_path / "config.yml"))
     monkeypatch.setenv("HOME", str(tmp_path))
     runner = CliRunner()
-    runner.invoke(cli, ["create", str(tmp_path / "brain-a")])
-    runner.invoke(cli, ["create", str(tmp_path / "brain-b")])
+    runner.invoke(cli, ["create", "brain-a", "--path", str(tmp_path)])
+    runner.invoke(cli, ["create", "brain-b", "--path", str(tmp_path)])
     from kluris.core.config import read_global_config, write_global_config
     cfg = read_global_config()
     cfg.default_brain = None

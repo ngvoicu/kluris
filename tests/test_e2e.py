@@ -13,7 +13,7 @@ def test_full_workflow(tmp_path, monkeypatch):
     runner = CliRunner()
 
     # 1. Create brain
-    result = runner.invoke(cli, ["create", str(tmp_path / "my-brain")])
+    result = runner.invoke(cli, ["create", "my-brain", "--path", str(tmp_path)])
     assert result.exit_code == 0
 
     brain = tmp_path / "my-brain"
@@ -57,8 +57,8 @@ def test_multi_brain(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
     runner = CliRunner()
 
-    runner.invoke(cli, ["create", str(tmp_path / "brain-a")])
-    runner.invoke(cli, ["create", str(tmp_path / "brain-b")])
+    runner.invoke(cli, ["create", "brain-a", "--path", str(tmp_path)])
+    runner.invoke(cli, ["create", "brain-b", "--path", str(tmp_path)])
 
     result = runner.invoke(cli, ["list", "--json"])
     data = json.loads(result.output)
