@@ -84,8 +84,8 @@ def test_install_idempotent(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
     runner = CliRunner()
     runner.invoke(cli, ["create", "my-brain", "--path", str(tmp_path)])
-    result1 = runner.invoke(cli, ["install"])
-    result2 = runner.invoke(cli, ["install"])
+    result1 = runner.invoke(cli, ["install-commands"])
+    result2 = runner.invoke(cli, ["install-commands"])
     assert result1.exit_code == 0
     assert result2.exit_code == 0
 
@@ -98,7 +98,7 @@ def test_install_clean_slate(tmp_path, monkeypatch):
     # Create a stale file
     stale = tmp_path / ".claude" / "commands" / "kluris.old-command.md"
     stale.write_text("stale content", encoding="utf-8")
-    runner.invoke(cli, ["install"])
+    runner.invoke(cli, ["install-commands"])
     assert not stale.exists()
 
 
@@ -107,7 +107,7 @@ def test_install_json(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
     runner = CliRunner()
     runner.invoke(cli, ["create", "my-brain", "--path", str(tmp_path)])
-    result = runner.invoke(cli, ["install", "--json"])
+    result = runner.invoke(cli, ["install-commands", "--json"])
     data = json.loads(result.output)
     assert data["ok"] is True
     assert data["agents"] == 8

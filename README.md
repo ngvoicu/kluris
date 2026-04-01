@@ -159,7 +159,8 @@ as an expert. `/kluris.recall` just searches and reports what the brain knows
 | `kluris push` | Commit and push brain changes to git |
 | `kluris mri` | Generate interactive HTML brain visualization |
 | `kluris templates` | List available neuron templates |
-| `kluris install` | Install slash commands for all AI agents |
+| `kluris install-commands` | Install slash commands into AI agent directories |
+| `kluris uninstall-commands` | Remove all kluris commands from agent directories |
 | `kluris remove <name>` | Unregister a brain (keeps files) |
 | `kluris doctor` | Check prerequisites (git, Python, config dir) |
 | `kluris help` | Show all commands |

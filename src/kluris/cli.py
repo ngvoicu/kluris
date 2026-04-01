@@ -715,16 +715,42 @@ def _do_install(as_json: bool = False):
     return {"agents": agent_count, "commands_per_agent": 9, "total_files": total_files}
 
 
-@cli.command()
+@cli.command("install-commands")
 @click.option("--json", "as_json", is_flag=True, help="JSON output")
-def install(as_json: bool):
-    """Install slash commands for AI agents."""
+def install_commands(as_json: bool):
+    """Install slash commands into AI agent directories."""
     result = _do_install(as_json)
 
     if as_json:
         click.echo(json_lib.dumps({"ok": True, **result}))
     else:
         console.print(f"Installed {result['total_files']} commands for {result['agents']} agents")
+
+
+@cli.command("uninstall-commands")
+@click.option("--json", "as_json", is_flag=True, help="JSON output")
+def uninstall_commands(as_json: bool):
+    """Remove all kluris slash commands from AI agent directories."""
+    import shutil
+    home = Path(os.environ.get("HOME", "")) if os.environ.get("HOME") else Path.home()
+    removed = 0
+
+    for agent_name, reg in AGENT_REGISTRY.items():
+        base = home / reg["dir"] / reg["subdir"]
+        if not base.exists():
+            continue
+        for item in base.glob("kluris*"):
+            if item.is_file():
+                item.unlink()
+                removed += 1
+            elif item.is_dir():
+                shutil.rmtree(item)
+                removed += 1
+
+    if as_json:
+        click.echo(json_lib.dumps({"ok": True, "removed": removed}))
+    else:
+        console.print(f"Removed {removed} kluris commands from agent directories")
 
 
 @cli.command()
@@ -834,7 +860,8 @@ def help_cmd(command: str | None, as_json: bool):
         ("dream", "Regenerate maps and neuron index, validate links"),
         ("push", "Commit and push brain changes to git"),
         ("mri", "Generate interactive HTML brain visualization"),
-        ("install", "Install slash commands for all AI agents"),
+        ("install-commands", "Install slash commands into AI agent directories"),
+        ("uninstall-commands", "Remove all kluris commands from agent directories"),
         ("remove", "Unregister a brain (keeps files on disk)"),
         ("templates", "List available neuron templates for the current brain"),
         ("doctor", "Check prerequisites (git, Python, config dir)"),

@@ -125,7 +125,7 @@ def test_install_json(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
     runner = CliRunner()
     _create_brain(runner, tmp_path)
-    result = runner.invoke(cli, ["install", "--json"])
+    result = runner.invoke(cli, ["install-commands", "--json"])
     data = json.loads(result.output)
     assert data["ok"] is True
     assert "agents" in data
@@ -151,7 +151,7 @@ def test_help_json(tmp_path, monkeypatch):
     data = json.loads(result.output)
     assert data["ok"] is True
     assert "commands" in data
-    assert len(data["commands"]) == 15
+    assert len(data["commands"]) == 16
 
 
 def test_doctor_json(tmp_path, monkeypatch):
