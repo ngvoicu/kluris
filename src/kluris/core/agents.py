@@ -151,7 +151,7 @@ If this task produces new knowledge worth persisting, suggest running
 """,
     },
     "kluris.remember": {
-        "description": "Analyze and extract knowledge to store in the Kluris brain",
+        "description": "Extract and store knowledge in the brain — from session or a specific topic",
         "allowed_tools": "Read, Write, Bash(cd:*), Bash(git:*), Bash(grep:*), Bash(find:*), Glob, Grep",
         "body": """\
 {args}
@@ -198,7 +198,7 @@ discussed, or any knowledge valuable in future sessions.
 """,
     },
     "kluris.learn": {
-        "description": "Analyze the current project and populate the Kluris brain — the fastest way to build team knowledge",
+        "description": "Scan a project or learn about a topic and store it in the brain",
         "allowed_tools": "Read, Write, Bash(cd:*), Bash(git:*), Bash(grep:*), Bash(find:*), Glob, Grep",
         "body": """\
 Analyze this project and populate the brain with what you learn.

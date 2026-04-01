@@ -24,7 +24,7 @@ from kluris.core.config import (
 
 def test_kluris_importable():
     assert hasattr(kluris, "__version__")
-    assert kluris.__version__ == "0.2.5"
+    assert kluris.__version__ == "0.2.6"
 
 
 def test_global_config_defaults():
@@ -73,7 +73,6 @@ def test_brain_config_defaults():
 def test_git_config_defaults():
     cfg = GitConfig()
     assert cfg.default_branch == "main"
-    assert cfg.auto_push is True
     assert cfg.commit_prefix == "brain:"
 
 

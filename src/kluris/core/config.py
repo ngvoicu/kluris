@@ -26,7 +26,6 @@ class GlobalConfig(BaseModel):
 class GitConfig(BaseModel):
     """Git settings for a brain."""
     default_branch: str = "main"
-    auto_push: bool = True
     commit_prefix: str = "brain:"
 
 
