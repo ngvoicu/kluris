@@ -13,6 +13,15 @@ def _run(args: list[str], cwd: Path) -> subprocess.CompletedProcess:
     )
 
 
+def is_git_repo(path: Path) -> bool:
+    """Return True when path is inside a git work tree."""
+    try:
+        result = _run(["git", "rev-parse", "--is-inside-work-tree"], cwd=path)
+    except (FileNotFoundError, subprocess.CalledProcessError):
+        return False
+    return result.stdout.strip() == "true"
+
+
 def git_init(path: Path) -> None:
     """Initialize a git repo at path."""
     _run(["git", "init"], cwd=path)

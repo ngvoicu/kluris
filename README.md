@@ -32,6 +32,9 @@ kluris doctor        # Check prerequisites
 kluris create        # Interactive wizard
 ```
 
+By default, `kluris create <name>` makes a local git repo with no remote.
+Add `--remote <url>` to connect one, or `--no-git` to skip git entirely.
+
 Or skip the wizard:
 
 ```bash
@@ -114,7 +117,7 @@ works the same -- all templates and commands are available regardless of type.
 ## How it works
 
 1. `kluris create` scaffolds a brain (interactive wizard or flags)
-2. `kluris install` generates slash commands for 8 AI agents
+2. `kluris install-commands` generates slash commands for 8 AI agents
 3. Agents use `/kluris.learn` to scan projects and populate the brain
 4. Team members use `/kluris.think <task>` to load brain context before working
 5. `kluris dream` validates links, regenerates maps and neuron index
@@ -154,6 +157,7 @@ as an expert. `/kluris.recall` just searches and reports what the brain knows
 | `kluris dream` | Regenerate maps and neuron index, validate links |
 | `kluris push` | Commit and push brain changes to git |
 | `kluris mri` | Generate interactive HTML brain visualization |
+| `kluris use <name>` | Set the default brain |
 | `kluris templates` | List available neuron templates |
 | `kluris install-commands` | Install slash commands into AI agent directories |
 | `kluris uninstall-commands` | Remove all kluris commands from agent directories |
@@ -166,9 +170,6 @@ All commands support `--json` for machine-readable output.
 ## Neuron templates
 
 Available in every brain. Use `kluris templates` to see them.
-
-```bash
-```
 
 | Template | Sections |
 |----------|----------|

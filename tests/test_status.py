@@ -32,3 +32,16 @@ def test_status_json(tmp_path, monkeypatch):
     data = json.loads(result.output)
     assert data["ok"] is True
     assert "brains" in data
+
+
+def test_status_no_git_brain(tmp_path, monkeypatch):
+    monkeypatch.setenv("KLURIS_CONFIG", str(tmp_path / "config.yml"))
+    monkeypatch.setenv("HOME", str(tmp_path))
+    runner = CliRunner()
+    runner.invoke(cli, ["create", "my-brain", "--path", str(tmp_path), "--no-git"])
+    result = runner.invoke(cli, ["status", "--json"])
+    import json
+    data = json.loads(result.output)
+    assert result.exit_code == 0
+    assert data["brains"][0]["git_enabled"] is False
+    assert data["brains"][0]["recent_commits"] == []

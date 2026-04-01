@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from datetime import date
 from pathlib import Path
 
 import yaml
@@ -101,6 +102,10 @@ Thumbs.db
 """
 
 
+def _today() -> str:
+    return date.today().isoformat()
+
+
 def lookup_template(name: str, templates: dict) -> dict | None:
     """Look up a neuron template by name. Returns None if not found."""
     return templates.get(name)
@@ -152,6 +157,23 @@ def get_type_defaults(brain_type: str) -> dict:
     return BRAIN_TYPES.get(brain_type, BRAIN_TYPES["blank"])
 
 
+def infer_brain_type(brain_path: Path) -> str:
+    """Best-effort brain type inference from top-level lobe directories."""
+    lobe_names = sorted(
+        item.name
+        for item in brain_path.iterdir()
+        if item.is_dir() and item.name != ".git"
+    )
+    if not lobe_names:
+        return "blank"
+
+    for brain_type, defaults in BRAIN_TYPES.items():
+        if sorted(defaults["structure"].keys()) == lobe_names:
+            return brain_type
+
+    return "product-group"
+
+
 def scaffold_brain(
     brain_path: Path,
     name: str,
@@ -164,7 +186,7 @@ def scaffold_brain(
 
     defaults = get_type_defaults(brain_type)
     structure = (custom_config or {}).get("structure", defaults["structure"])
-    neuron_templates = defaults.get("neuron_templates", {})
+    today = _today()
 
     # Create lobe directories with empty map.md
     for lobe_name, lobe_desc in structure.items():
@@ -172,7 +194,7 @@ def scaffold_brain(
         lobe_dir.mkdir(exist_ok=True)
         map_content = (
             f"---\nauto_generated: true\nparent: ../brain.md\n"
-            f"updated: 2026-04-01\n---\n# {lobe_name.replace('-', ' ').title()}\n\n"
+            f"updated: {today}\n---\n# {lobe_name.replace('-', ' ').title()}\n\n"
             f"{lobe_desc}\n"
         )
         (lobe_dir / "map.md").write_text(map_content, encoding="utf-8")
@@ -181,7 +203,6 @@ def scaffold_brain(
     config = BrainConfig(
         name=name,
         description=description,
-        type=brain_type,
         git=GitConfig(),
         agents=AgentsConfig(),
     )
@@ -196,7 +217,7 @@ def scaffold_brain(
         for lobe, desc in structure.items()
     )
     brain_md = (
-        f"---\nauto_generated: true\nupdated: 2026-04-01\n---\n"
+        f"---\nauto_generated: true\nupdated: {today}\n---\n"
         f"# {name}\n\n{description}\n\n## Lobes\n\n{lobe_links}\n\n"
         f"## Reference\n\n"
         f"- [glossary.md](./glossary.md) — Domain-specific terms\n"
@@ -205,9 +226,9 @@ def scaffold_brain(
 
     # Write glossary.md
     glossary_md = (
-        "---\nauto_generated: false\nupdated: 2026-04-01\n---\n"
+        f"---\nauto_generated: false\nupdated: {today}\n---\n"
         "# Glossary\n\nProject-specific terms, acronyms, and conventions.\n\n"
-        "| Term | Meaning |\n|------|---------||\n"
+        "| Term | Meaning |\n|------|---------|\n"
     )
     (brain_path / "glossary.md").write_text(glossary_md, encoding="utf-8")
 
@@ -258,8 +279,6 @@ All commands accept free text: `/kluris.learn focus on auth`, `/kluris.remember 
 | `/kluris.recall <topic>` | Search and summarize what the brain knows (read-only). |
 | `/kluris.learn [focus]` | Scan a project or learn about a topic and store it in the brain. |
 | `/kluris.remember [topic]` | Extract and store knowledge -- from session or a specific topic. |
-| `/kluris.neuron <topic>` | Create a new knowledge file (`--template` for structure). |
-| `/kluris.lobe <name>` | Create a new knowledge region. |
 | `/kluris.push [msg]` | Commit and push to git. |
 | `/kluris.dream [focus]` | AI brain analysis. Run `kluris dream` CLI for mechanical fixes. |
 | `/kluris.mri` | Generate interactive brain visualization (runs CLI). |
@@ -269,6 +288,7 @@ All commands accept free text: `/kluris.learn focus on auth`, `/kluris.remember 
 ```bash
 kluris status          # Brain tree, recent changes, neuron counts
 kluris recall <query>  # Search across neurons
+kluris use <name>      # Switch the default brain
 kluris templates       # List available neuron templates
 kluris dream           # Regenerate maps, validate links
 kluris push            # Commit and push to git

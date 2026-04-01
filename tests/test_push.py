@@ -44,3 +44,16 @@ def test_push_no_remote_warning(tmp_path, monkeypatch):
     result = runner.invoke(cli, ["push", "-m", "test"])
     # Should succeed (local commit) even without remote
     assert result.exit_code == 0
+
+
+def test_push_no_git_brain(tmp_path, monkeypatch):
+    monkeypatch.setenv("KLURIS_CONFIG", str(tmp_path / "config.yml"))
+    monkeypatch.setenv("HOME", str(tmp_path))
+    runner = CliRunner()
+    runner.invoke(cli, ["create", "my-brain", "--path", str(tmp_path), "--no-git"])
+    result = runner.invoke(cli, ["push", "--json"])
+    import json
+    data = json.loads(result.output)
+    assert result.exit_code == 0
+    assert data["brains"][0]["git_enabled"] is False
+    assert data["brains"][0]["pushed"] is False

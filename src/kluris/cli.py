@@ -14,6 +14,7 @@ from rich.tree import Tree
 from kluris.core.brain import (
     BRAIN_TYPES,
     generate_neuron_content,
+    infer_brain_type,
     lookup_template,
     scaffold_brain,
     validate_brain_name,
@@ -31,6 +32,7 @@ from kluris.core.git import (
     git_clone,
     git_commit,
     git_init,
+    is_git_repo,
     git_log,
     git_push,
     git_status,
@@ -44,7 +46,7 @@ from kluris.core.linker import (
 from kluris.core.maps import generate_brain_md, generate_index_md, generate_map_md
 from kluris.core.mri import generate_mri_html
 from kluris.core.frontmatter import read_frontmatter, update_frontmatter
-from kluris.core.agents import AGENT_REGISTRY, render_commands
+from kluris.core.agents import AGENT_REGISTRY, COMMANDS, render_commands
 
 console = Console()
 
@@ -114,6 +116,23 @@ def _resolve_brains(brain_name: str | None, multi: bool = True) -> list[tuple[st
     )
 
 
+def _set_default_brain(name: str) -> str:
+    """Persist the given brain as the default and return it."""
+    config = read_global_config()
+    config.default_brain = name
+    write_global_config(config)
+    return name
+
+
+def _recall_match_tier(file_name: str) -> int:
+    """Rank recall matches so authored knowledge wins over generated files."""
+    if file_name in {"brain.md", "map.md", "index.md", "README.md"}:
+        return 2
+    if file_name == "glossary.md":
+        return 1
+    return 0
+
+
 @click.group(cls=KlurisGroup)
 @click.version_option(package_name="kluris")
 def cli():
@@ -127,9 +146,9 @@ def cli():
               help="Directory to create the brain in (default: current dir)")
 @click.option("--type", "brain_type", default=None,
               type=click.Choice(list(BRAIN_TYPES.keys())), help="Brain type")
-@click.option("--remote", help="Git remote URL to set as origin")
+@click.option("--remote", help="Optional git remote URL (default: local git only)")
 @click.option("--branch", "branch_name", default=None, help="Default git branch")
-@click.option("--no-git", "no_git", is_flag=True, help="Skip git init")
+@click.option("--no-git", "no_git", is_flag=True, help="Skip git entirely (default: local git only)")
 @click.option("--from-config", "from_config", type=click.Path(exists=True),
               help="Custom YAML config file for structure")
 @click.option("--json", "as_json", is_flag=True, help="JSON output")
@@ -142,6 +161,7 @@ def create(name: str | None, desc: str | None, base_path: str | None,
 
     \b
       kluris create
+      kluris create my-brain          # local git only
       kluris create my-brain --type personal
       kluris create team-brain --remote git@github.com:team/brain.git
     """
@@ -157,10 +177,14 @@ def create(name: str | None, desc: str | None, base_path: str | None,
             type_options = ", ".join(BRAIN_TYPES.keys())
             brain_type = click.prompt(f"  Brain type ({type_options})", default="product-group", type=str)
         if not no_git:
-            use_git = click.confirm("  Initialize git?", default=True)
+            use_git = click.confirm("  Initialize local git repo?", default=True)
             no_git = not use_git
             if not no_git and not remote:
-                remote = click.prompt("  Git remote URL (optional, Enter to skip)", default="", type=str) or None
+                remote = click.prompt(
+                    "  Git remote URL (optional, leave blank for local-only)",
+                    default="",
+                    type=str,
+                ) or None
             if not no_git and branch_name is None:
                 branch_name = click.prompt("  Default branch", default="main", type=str)
         console.print()
@@ -245,12 +269,11 @@ def create(name: str | None, desc: str | None, base_path: str | None,
     register_brain(name, entry)
 
     if config.default_brain is None or len(config.brains) == 0:
-        config = read_global_config()
-        config.default_brain = name
-        write_global_config(config)
+        _set_default_brain(name)
 
     # Install slash commands
     _do_install()
+    actual_default = read_global_config().default_brain
 
     defaults = BRAIN_TYPES.get(brain_type, {})
     lobe_count = len(defaults.get("structure", {}))
@@ -258,7 +281,7 @@ def create(name: str | None, desc: str | None, base_path: str | None,
     if as_json:
         click.echo(json_lib.dumps({
             "ok": True, "name": name, "path": str(brain_path),
-            "type": brain_type, "lobes": lobe_count, "default_brain": name,
+            "type": brain_type, "lobes": lobe_count, "default_brain": actual_default,
         }))
     else:
         console.print(f"Brain created: [bold]{name}[/bold] ({brain_type})")
@@ -313,6 +336,7 @@ def clone_cmd(url: str | None, path: str | None, branch_name: str | None, as_jso
         name = dest.name.lower().replace(" ", "-")
 
     # Create local kluris.yml (not in repo -- it's gitignored)
+    inferred_type = infer_brain_type(dest)
     if not (dest / "kluris.yml").exists():
         from kluris.core.config import BrainConfig, GitConfig, write_brain_config
         local_config = BrainConfig(
@@ -323,8 +347,16 @@ def clone_cmd(url: str | None, path: str | None, branch_name: str | None, as_jso
         write_brain_config(local_config, dest)
 
     brain_config = read_brain_config(dest)
-    entry = BrainEntry(path=str(dest), repo=url, description=brain_config.description)
+    entry = BrainEntry(
+        path=str(dest),
+        repo=url,
+        description=brain_config.description,
+        type=inferred_type,
+    )
     register_brain(name, entry)
+    config = read_global_config()
+    if config.default_brain is None:
+        _set_default_brain(name)
     _do_install()
 
     if as_json:
@@ -378,18 +410,22 @@ def status(brain_name: str | None, as_json: bool):
         lobes = [d for d in brain_path.iterdir() if d.is_dir() and d.name != ".git"]
         neurons = list(brain_path.rglob("*.md"))
         neurons = [n for n in neurons if n.name not in {"map.md", "brain.md", "index.md", "glossary.md", "README.md"}]
-        log = git_log(brain_path, 10)
-        uncommitted = git_status(brain_path)
+        git_enabled = is_git_repo(brain_path)
+        log = git_log(brain_path, 10) if git_enabled else []
+        uncommitted = git_status(brain_path) if git_enabled else ""
 
         results.append({
             "name": name, "lobes": len(lobes), "neurons": len(neurons),
             "uncommitted": uncommitted,
+            "git_enabled": git_enabled,
             "recent_commits": [e["message"] for e in log],
         })
 
         if not as_json:
             console.print(f"\n[bold]{name}[/bold] ({entry['type']})")
             console.print(f"  Lobes: {len(lobes)}, Neurons: {len(neurons)}")
+            if not git_enabled:
+                console.print("  Git: disabled")
             if uncommitted:
                 console.print(f"  Uncommitted:\n{uncommitted}")
             for e in log[:5]:
@@ -406,7 +442,7 @@ def status(brain_name: str | None, as_json: bool):
 def recall(query: str, brain_name: str | None, as_json: bool):
     """Search brain content."""
     brains = _resolve_brains(brain_name)
-    all_results = []
+    matches_by_tier: dict[int, list[dict]] = {0: [], 1: [], 2: []}
 
     for name, entry in brains:
         brain_path = Path(entry["path"])
@@ -414,17 +450,24 @@ def recall(query: str, brain_name: str | None, as_json: bool):
         for md_file in brain_path.rglob("*.md"):
             if ".git" in md_file.parts:
                 continue
+            tier = _recall_match_tier(md_file.name)
             try:
                 lines = md_file.read_text(encoding="utf-8").splitlines()
                 for i, line in enumerate(lines, 1):
                     if query_lower in line.lower():
                         rel = str(md_file.relative_to(brain_path))
-                        all_results.append({
+                        matches_by_tier[tier].append({
                             "brain": name, "file": rel,
                             "line": str(i), "text": line.strip(),
                         })
             except (OSError, UnicodeDecodeError):
                 continue
+
+    all_results = []
+    for tier in (0, 1, 2):
+        if matches_by_tier[tier]:
+            all_results = matches_by_tier[tier]
+            break
 
     if as_json:
         click.echo(json_lib.dumps({"ok": True, "query": query, "results": all_results}))
@@ -621,11 +664,30 @@ def push(msg: str | None, brain_name: str | None, as_json: bool):
 
     for name, entry in brains:
         brain_path = Path(entry["path"])
+        if not is_git_repo(brain_path):
+            result = {
+                "name": name,
+                "files_committed": 0,
+                "branch": None,
+                "pushed": False,
+                "git_enabled": False,
+            }
+            results.append(result)
+            if not as_json:
+                console.print(f"{name}: git is disabled (--no-git)")
+            continue
+
         status_out = git_status(brain_path)
         if not status_out:
             if not as_json:
                 console.print(f"{name}: nothing to push")
-            results.append({"name": name, "files_committed": 0, "branch": "main", "pushed": False})
+            results.append({
+                "name": name,
+                "files_committed": 0,
+                "branch": "main",
+                "pushed": False,
+                "git_enabled": True,
+            })
             continue
 
         git_add(brain_path)
@@ -642,13 +704,39 @@ def push(msg: str | None, brain_name: str | None, as_json: bool):
                 console.print(f"  [yellow]Warning: no remote configured. Committed locally.[/yellow]")
 
         files = len(status_out.strip().splitlines())
-        results.append({"name": name, "files_committed": files, "branch": brain_config.git.default_branch, "pushed": pushed})
+        results.append({
+            "name": name,
+            "files_committed": files,
+            "branch": brain_config.git.default_branch,
+            "pushed": pushed,
+            "git_enabled": True,
+        })
 
         if not as_json:
             console.print(f"{name}: {files} files committed" + (" and pushed" if pushed else ""))
 
     if as_json:
         click.echo(json_lib.dumps({"ok": True, "brains": results}))
+
+
+@cli.command("use")
+@click.argument("brain_name")
+@click.option("--json", "as_json", is_flag=True, help="JSON output")
+def use_brain(brain_name: str, as_json: bool):
+    """Set the default brain."""
+    config = read_global_config()
+    if brain_name not in config.brains:
+        raise click.ClickException(
+            f"No brain named '{brain_name}' is registered. "
+            f"Run 'kluris list' to see available brains."
+        )
+
+    _set_default_brain(brain_name)
+
+    if as_json:
+        click.echo(json_lib.dumps({"ok": True, "default_brain": brain_name}))
+    else:
+        console.print(f"Default brain: [bold]{brain_name}[/bold]")
 
 
 @cli.command()
@@ -716,7 +804,7 @@ def _do_install(as_json: bool = False):
         total_files += len(files)
         agent_count += 1
 
-    return {"agents": agent_count, "commands_per_agent": 9, "total_files": total_files}
+    return {"agents": agent_count, "commands_per_agent": len(COMMANDS), "total_files": total_files}
 
 
 @cli.command("install-commands")
@@ -865,6 +953,7 @@ def help_cmd(command: str | None, as_json: bool):
         ("dream", "Regenerate maps and neuron index, validate links"),
         ("push", "Commit and push brain changes to git"),
         ("mri", "Generate interactive HTML brain visualization"),
+        ("use", "Set the default brain"),
         ("install-commands", "Install slash commands into AI agent directories"),
         ("uninstall-commands", "Remove all kluris commands from agent directories"),
         ("remove", "Unregister a brain (keeps files on disk)"),

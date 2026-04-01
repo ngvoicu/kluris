@@ -101,6 +101,7 @@ def test_main_help():
     assert "create" in result.output
     assert "clone" in result.output
     assert "dream" in result.output
+    assert "use" in result.output
     assert "install-commands" in result.output
     assert "uninstall-commands" in result.output
     assert "templates" in result.output

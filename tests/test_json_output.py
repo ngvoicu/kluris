@@ -1,4 +1,4 @@
-"""Tests for --json output on all 14 commands."""
+"""Tests for --json output on all kluris commands."""
 
 import json
 
@@ -129,6 +129,7 @@ def test_install_json(tmp_path, monkeypatch):
     data = json.loads(result.output)
     assert data["ok"] is True
     assert "agents" in data
+    assert data["commands_per_agent"] == 8
     assert "total_files" in data
 
 
@@ -151,7 +152,18 @@ def test_help_json(tmp_path, monkeypatch):
     data = json.loads(result.output)
     assert data["ok"] is True
     assert "commands" in data
-    assert len(data["commands"]) == 16
+    assert len(data["commands"]) == 17
+
+
+def test_use_json(tmp_path, monkeypatch):
+    monkeypatch.setenv("KLURIS_CONFIG", str(tmp_path / "config.yml"))
+    monkeypatch.setenv("HOME", str(tmp_path))
+    runner = CliRunner()
+    _create_brain(runner, tmp_path)
+    result = runner.invoke(cli, ["use", "my-brain", "--json"])
+    data = json.loads(result.output)
+    assert data["ok"] is True
+    assert data["default_brain"] == "my-brain"
 
 
 def test_doctor_json(tmp_path, monkeypatch):

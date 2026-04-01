@@ -86,6 +86,16 @@ def test_create_json(tmp_path, monkeypatch):
     assert data["name"] == "my-brain"
 
 
+def test_create_json_reports_actual_default(tmp_path, monkeypatch):
+    monkeypatch.setenv("KLURIS_CONFIG", str(tmp_path / "config.yml"))
+    monkeypatch.setenv("HOME", str(tmp_path))
+    runner = CliRunner()
+    runner.invoke(cli, ["create", "brain-a", "--path", str(tmp_path)])
+    result = runner.invoke(cli, ["create", "brain-b", "--path", str(tmp_path), "--json"])
+    data = json.loads(result.output)
+    assert data["default_brain"] == "brain-a"
+
+
 def test_create_error_invalid_name(tmp_path, monkeypatch):
     monkeypatch.setenv("KLURIS_CONFIG", str(tmp_path / "config.yml"))
     monkeypatch.setenv("HOME", str(tmp_path))
