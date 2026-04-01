@@ -252,17 +252,20 @@ document architecture, conventions, APIs, and decisions into this brain.
 
 ### Slash commands (inside AI agents)
 
+All commands accept free text: `/kluris.learn focus on auth`, `/kluris.remember the JWT decision`.
+
 | Command | What it does |
 |---------|-------------|
 | `/kluris <anything>` | **Main command.** Read, write, or search the brain. |
 | `/kluris.think <task>` | Load brain knowledge, then work on the task as the team's expert. |
 | `/kluris.recall <topic>` | Search and summarize what the brain knows (read-only). |
-| `/kluris.learn [focus]` | Deep-scan current project, populate the brain. |
-| `/kluris.remember [topic]` | Extract knowledge from the current session. |
+| `/kluris.learn [focus]` | Scan a project or learn about a topic and store it in the brain. |
+| `/kluris.remember [topic]` | Extract and store knowledge -- from session or a specific topic. |
 | `/kluris.neuron <topic>` | Create a new knowledge file (`--template` for structure). |
 | `/kluris.lobe <name>` | Create a new knowledge region. |
 | `/kluris.push [msg]` | Commit and push to git. |
 | `/kluris.dream [focus]` | AI brain analysis. Run `kluris dream` CLI for mechanical fixes. |
+| `/kluris.mri` | Generate interactive brain visualization (runs CLI). |
 
 ### CLI commands
 

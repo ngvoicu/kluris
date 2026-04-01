@@ -122,17 +122,23 @@ works the same -- all templates and commands are available regardless of type.
 
 ## Slash commands (used inside AI agents)
 
+All slash commands accept free text. Examples:
+- `/kluris.learn focus on authentication and API design`
+- `/kluris.think implement the new auth flow`
+- `/kluris.remember the decision about using raw SQL instead of ORM`
+
 | Command | What it does |
 |---------|-------------|
 | `/kluris <anything>` | **Main command.** Read, write, or search the brain. Natural language. |
 | `/kluris.think <task>` | Load brain knowledge, then work on the task as the team's expert. |
 | `/kluris.recall <topic>` | Search the brain and summarize what it knows (read-only). |
-| `/kluris.learn [focus]` | Deep-scan the current project and populate the brain. |
-| `/kluris.remember [topic]` | Extract knowledge from the current session into the brain. |
+| `/kluris.learn [focus]` | Scan a project or learn about a topic and store it in the brain. |
+| `/kluris.remember [topic]` | Extract and store knowledge -- from the session or a specific topic. |
 | `/kluris.neuron <topic>` | Create a new knowledge file (supports `--template`). |
 | `/kluris.lobe <name>` | Create a new knowledge region (folder). |
 | `/kluris.push [msg]` | Commit and push brain changes to git. |
 | `/kluris.dream [focus]` | AI-powered brain analysis. Run `kluris dream` CLI for mechanical fixes. |
+| `/kluris.mri` | Generate an interactive brain visualization (runs CLI). |
 
 **think vs recall:** `/kluris.think` reads the brain then works on your task
 as an expert. `/kluris.recall` just searches and reports what the brain knows
@@ -184,7 +190,6 @@ name: my-brain
 description: my-brain knowledge base
 git:
   default_branch: main
-  auto_push: true
   commit_prefix: "brain:"
 agents:
   commands_for: [claude, cursor, windsurf, copilot, codex, kilocode, gemini, junie]
