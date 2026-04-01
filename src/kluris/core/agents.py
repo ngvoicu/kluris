@@ -448,19 +448,18 @@ def _render_toml(cmd_name: str, cmd: dict, args_placeholder: str) -> str:
     return f'description = "{cmd["description"]}"\n\nprompt = """\n{body}\n"""\n'
 
 
-def _render_skill_md(commands: dict, args_placeholder: str) -> str:
-    """Render a single SKILL.md containing all commands."""
+def _render_skill_md(cmd_name: str, cmd: dict, args_placeholder: str) -> str:
+    """Render a single SKILL.md for one command (spec-kit pattern)."""
+    body = cmd["body"].replace("{args}", args_placeholder)
+    # Convert kluris.think -> kluris-think for directory name
+    skill_name = cmd_name.replace(".", "-")
     frontmatter = (
         "---\n"
-        "name: kluris\n"
-        "description: Git-backed AI brain — shared, versioned knowledge base for your team\n"
+        f"name: {skill_name}\n"
+        f"description: {cmd['description']}\n"
         "---\n\n"
     )
-    sections = []
-    for name, cmd in commands.items():
-        body = cmd["body"].replace("{args}", args_placeholder)
-        sections.append(f"## /{name}\n\n{cmd['description']}\n\n{body}")
-    return frontmatter + "# Kluris Brain Skill\n\n" + "\n---\n\n".join(sections) + "\n"
+    return frontmatter + f"# {cmd['description']}\n\n{body}\n"
 
 
 def render_commands(agent_name: str, output_dir: Path) -> list[Path]:
@@ -472,12 +471,15 @@ def render_commands(agent_name: str, output_dir: Path) -> list[Path]:
     files = []
 
     if fmt == "skill.md":
-        skill_dir = output_dir / "kluris"
-        skill_dir.mkdir(exist_ok=True)
-        content = _render_skill_md(COMMANDS, args)
-        path = skill_dir / "SKILL.md"
-        path.write_text(content, encoding="utf-8")
-        files.append(path)
+        # Codex: one SKILL.md per command in separate directories (spec-kit pattern)
+        for name, cmd in COMMANDS.items():
+            skill_name = name.replace(".", "-")
+            skill_dir = output_dir / skill_name
+            skill_dir.mkdir(parents=True, exist_ok=True)
+            content = _render_skill_md(name, cmd, args)
+            path = skill_dir / "SKILL.md"
+            path.write_text(content, encoding="utf-8")
+            files.append(path)
     elif fmt == "toml":
         for name, cmd in COMMANDS.items():
             content = _render_toml(name, cmd, args)

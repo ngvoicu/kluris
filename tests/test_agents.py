@@ -60,8 +60,12 @@ def test_render_toml(tmp_path):
 
 def test_render_skill_md(tmp_path):
     files = render_commands("codex", tmp_path)
-    assert len(files) == 1
-    assert files[0].name == "SKILL.md"
+    assert len(files) == 9  # one SKILL.md per command (spec-kit pattern)
+    assert all(f.name == "SKILL.md" for f in files)
+    # Each in its own directory: kluris/, kluris-think/, etc.
+    dir_names = sorted(f.parent.name for f in files)
+    assert "kluris" in dir_names
+    assert "kluris-think" in dir_names
 
 
 def test_render_agent_md(tmp_path):
