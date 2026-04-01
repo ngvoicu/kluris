@@ -65,7 +65,7 @@ def get_config_path() -> Path:
     env_path = os.environ.get("KLURIS_CONFIG")
     if env_path:
         return Path(env_path)
-    return Path.home() / ".config" / "kluris" / "config.yml"
+    return Path.home() / ".kluris" / "config.yml"
 
 
 def read_global_config() -> GlobalConfig:

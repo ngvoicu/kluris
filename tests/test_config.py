@@ -24,7 +24,7 @@ from kluris.core.config import (
 
 def test_kluris_importable():
     assert hasattr(kluris, "__version__")
-    assert kluris.__version__ == "0.2.7"
+    assert kluris.__version__ == "0.2.8"
 
 
 def test_global_config_defaults():
@@ -115,7 +115,7 @@ def test_config_path_from_env(tmp_path, monkeypatch):
 
 def test_config_path_default(monkeypatch):
     monkeypatch.delenv("KLURIS_CONFIG", raising=False)
-    expected = Path.home() / ".config" / "kluris" / "config.yml"
+    expected = Path.home() / ".kluris" / "config.yml"
     assert get_config_path() == expected
 
 

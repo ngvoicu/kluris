@@ -30,7 +30,7 @@ A Kluris brain is a shared knowledge base — a standalone git repo of structure
 markdown files. You are the team's subject matter expert. The brain contains
 everything the team knows.
 
-**Config:** Read `~/.config/kluris/config.yml` (or the path in env var
+**Config:** Read `~/.kluris/config.yml` (or the path in env var
 `KLURIS_CONFIG`) to discover all available brains.
 
 ## First-run detection
@@ -114,7 +114,7 @@ to commit and push. Do NOT run git commands unless explicitly asked.
         "body": """\
 Task: {args}
 
-Config: Read `~/.config/kluris/config.yml` (or `KLURIS_CONFIG` env var).
+Config: Read `~/.kluris/config.yml` (or `KLURIS_CONFIG` env var).
 Select the relevant brain based on context. Use `default_brain` if set.
 
 ## Your role
@@ -156,7 +156,7 @@ If this task produces new knowledge worth persisting, suggest running
         "body": """\
 {args}
 
-Config: Read `~/.config/kluris/config.yml` (or `KLURIS_CONFIG` env var).
+Config: Read `~/.kluris/config.yml` (or `KLURIS_CONFIG` env var).
 Select the relevant brain. Use `default_brain` if set.
 
 ## Mode
@@ -203,7 +203,7 @@ discussed, or any knowledge valuable in future sessions.
         "body": """\
 Analyze this project and populate the brain with what you learn.
 
-Config: Read `~/.config/kluris/config.yml` (or `KLURIS_CONFIG` env var).
+Config: Read `~/.kluris/config.yml` (or `KLURIS_CONFIG` env var).
 Select the relevant brain. Use `default_brain` if set.
 
 Focus on: {args}
@@ -269,7 +269,7 @@ When adding `related:` links, add the reverse link too (bidirectional).
         "body": """\
 Search the brain for: {args}
 
-Config: Read `~/.config/kluris/config.yml` (or `KLURIS_CONFIG` env var).
+Config: Read `~/.kluris/config.yml` (or `KLURIS_CONFIG` env var).
 
 ## Steps
 
@@ -288,7 +288,7 @@ Config: Read `~/.config/kluris/config.yml` (or `KLURIS_CONFIG` env var).
         "body": """\
 Create a new neuron about: {args}
 
-Config: Read `~/.config/kluris/config.yml` (or `KLURIS_CONFIG` env var).
+Config: Read `~/.kluris/config.yml` (or `KLURIS_CONFIG` env var).
 Select the relevant brain. Use `default_brain` if set.
 
 ## Steps
@@ -323,7 +323,7 @@ Select the relevant brain. Use `default_brain` if set.
         "body": """\
 Create a new brain region: {args}
 
-Config: Read `~/.config/kluris/config.yml` (or `KLURIS_CONFIG` env var).
+Config: Read `~/.kluris/config.yml` (or `KLURIS_CONFIG` env var).
 Select the relevant brain. Use `default_brain` if set.
 
 ## Steps
@@ -339,7 +339,7 @@ Select the relevant brain. Use `default_brain` if set.
         "description": "Commit and push all pending Kluris brain changes to git",
         "allowed_tools": "Bash(cd:*), Bash(git:*)",
         "body": """\
-Config: Read `~/.config/kluris/config.yml` (or `KLURIS_CONFIG` env var).
+Config: Read `~/.kluris/config.yml` (or `KLURIS_CONFIG` env var).
 
 ## Push the brain
 
@@ -369,7 +369,7 @@ Config: Read `~/.config/kluris/config.yml` (or `KLURIS_CONFIG` env var).
         "description": "Kluris brain maintenance — validate, repair, and strengthen the knowledge base",
         "allowed_tools": "Read, Write, Bash(cd:*), Bash(grep:*), Bash(find:*), Glob, Grep",
         "body": """\
-Config: Read `~/.config/kluris/config.yml` (or `KLURIS_CONFIG` env var).
+Config: Read `~/.kluris/config.yml` (or `KLURIS_CONFIG` env var).
 Select the relevant brain. Use `default_brain` if set.
 
 Focus on: {args}
@@ -442,7 +442,7 @@ Use both: CLI for mechanics, slash command for intelligence.
         "description": "Generate an interactive visualization of the brain's knowledge graph",
         "allowed_tools": "Bash(kluris:*), Bash(open:*)",
         "body": """\
-Config: Read `~/.config/kluris/config.yml` (or `KLURIS_CONFIG` env var).
+Config: Read `~/.kluris/config.yml` (or `KLURIS_CONFIG` env var).
 
 ## Generate a brain MRI
 
