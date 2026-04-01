@@ -174,7 +174,7 @@ def scaffold_brain(
             f"updated: 2026-04-01\n---\n# {lobe_name.replace('-', ' ').title()}\n\n"
             f"{lobe_desc}\n"
         )
-        (lobe_dir / "map.md").write_text(map_content)
+        (lobe_dir / "map.md").write_text(map_content, encoding="utf-8")
 
     # Write kluris.yml (NO structure key)
     config = BrainConfig(
@@ -204,7 +204,7 @@ def scaffold_brain(
         f"- [index.md](./index.md) — Complete neuron index\n"
         f"- [glossary.md](./glossary.md) — Domain-specific terms\n"
     )
-    (brain_path / "brain.md").write_text(brain_md)
+    (brain_path / "brain.md").write_text(brain_md, encoding="utf-8")
 
     # Write index.md
     index_md = (
@@ -213,7 +213,7 @@ def scaffold_brain(
         "| Neuron | Lobe | Tags | Updated |\n"
         "|--------|------|------|---------|\n"
     )
-    (brain_path / "index.md").write_text(index_md)
+    (brain_path / "index.md").write_text(index_md, encoding="utf-8")
 
     # Write glossary.md
     glossary_md = (
@@ -221,16 +221,16 @@ def scaffold_brain(
         "# Glossary\n\nProject-specific terms, acronyms, and conventions.\n\n"
         "| Term | Meaning |\n|------|---------||\n"
     )
-    (brain_path / "glossary.md").write_text(glossary_md)
+    (brain_path / "glossary.md").write_text(glossary_md, encoding="utf-8")
 
     # Write README.md
     tree_lines = [f"├── {lobe}/" for lobe in structure]
     tree_output = "\n".join(tree_lines) if tree_lines else "(empty)"
     readme_md = _generate_readme(name, description, tree_output)
-    (brain_path / "README.md").write_text(readme_md)
+    (brain_path / "README.md").write_text(readme_md, encoding="utf-8")
 
     # Write .gitignore
-    (brain_path / ".gitignore").write_text(GITIGNORE_CONTENT)
+    (brain_path / ".gitignore").write_text(GITIGNORE_CONTENT, encoding="utf-8")
 
 
 def _generate_readme(name: str, description: str, tree_output: str) -> str:

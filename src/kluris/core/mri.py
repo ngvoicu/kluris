@@ -231,6 +231,6 @@ canvas.addEventListener('click', e => {{
 </html>"""
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(html)
+    output_path.write_text(html, encoding="utf-8")
 
     return {"nodes": len(graph["nodes"]), "edges": len(graph["edges"])}

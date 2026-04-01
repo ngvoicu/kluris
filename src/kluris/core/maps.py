@@ -24,7 +24,7 @@ def _get_lobes(brain_path: Path) -> list[dict]:
             map_file = item / "map.md"
             if map_file.exists():
                 # Try to extract description from map.md content
-                content = map_file.read_text()
+                content = map_file.read_text(encoding="utf-8")
                 lines = content.split("\n")
                 for line in lines:
                     if line.strip() and not line.startswith("#") and not line.startswith("---"):

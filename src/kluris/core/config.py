@@ -76,7 +76,7 @@ def read_global_config() -> GlobalConfig:
     path = get_config_path()
     if not path.exists():
         return GlobalConfig()
-    data = yaml.safe_load(path.read_text()) or {}
+    data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     return GlobalConfig.model_validate(data)
 
 
@@ -91,13 +91,13 @@ def write_global_config(config: GlobalConfig) -> None:
             k: {kk: vv for kk, vv in v.items() if vv is not None}
             for k, v in data["brains"].items()
         }
-    path.write_text(yaml.dump(data, default_flow_style=False, sort_keys=False))
+    path.write_text(yaml.dump(data, default_flow_style=False, sort_keys=False), encoding="utf-8")
 
 
 def read_brain_config(brain_path: Path) -> BrainConfig:
     """Read kluris.yml from a brain directory."""
     config_file = brain_path / "kluris.yml"
-    data = yaml.safe_load(config_file.read_text()) or {}
+    data = yaml.safe_load(config_file.read_text(encoding="utf-8")) or {}
     return BrainConfig.model_validate(data)
 
 
@@ -105,7 +105,7 @@ def write_brain_config(config: BrainConfig, brain_path: Path) -> None:
     """Write kluris.yml to a brain directory."""
     config_file = brain_path / "kluris.yml"
     data = config.model_dump(exclude_none=True)
-    config_file.write_text(yaml.dump(data, default_flow_style=False, sort_keys=False))
+    config_file.write_text(yaml.dump(data, default_flow_style=False, sort_keys=False), encoding="utf-8")
 
 
 def register_brain(name: str, entry: BrainEntry) -> None:

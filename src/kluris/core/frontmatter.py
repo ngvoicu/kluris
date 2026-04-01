@@ -28,7 +28,7 @@ def read_frontmatter(path: Path) -> tuple[dict, str]:
 def write_frontmatter(path: Path, metadata: dict, content: str) -> None:
     """Write a markdown file with YAML frontmatter and content."""
     post = frontmatter.Post(content, **metadata)
-    path.write_text(frontmatter.dumps(post) + "\n")
+    path.write_text(frontmatter.dumps(post) + "\n", encoding="utf-8")
 
 
 def update_frontmatter(path: Path, updates: dict) -> None:
@@ -36,4 +36,4 @@ def update_frontmatter(path: Path, updates: dict) -> None:
     post = frontmatter.load(str(path))
     for key, value in updates.items():
         post[key] = value
-    path.write_text(frontmatter.dumps(post) + "\n")
+    path.write_text(frontmatter.dumps(post) + "\n", encoding="utf-8")

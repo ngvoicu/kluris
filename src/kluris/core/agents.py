@@ -470,25 +470,25 @@ def render_commands(agent_name: str, output_dir: Path) -> list[Path]:
         skill_dir.mkdir(exist_ok=True)
         content = _render_skill_md(COMMANDS, args)
         path = skill_dir / "SKILL.md"
-        path.write_text(content)
+        path.write_text(content, encoding="utf-8")
         files.append(path)
     elif fmt == "toml":
         for name, cmd in COMMANDS.items():
             content = _render_toml(name, cmd, args)
             path = output_dir / f"{name}.toml"
-            path.write_text(content)
+            path.write_text(content, encoding="utf-8")
             files.append(path)
     elif fmt == "agent.md":
         for name, cmd in COMMANDS.items():
             content = _render_md(name, cmd, args, copilot=True)
             path = output_dir / f"{name}.agent.md"
-            path.write_text(content)
+            path.write_text(content, encoding="utf-8")
             files.append(path)
     else:
         for name, cmd in COMMANDS.items():
             content = _render_md(name, cmd, args)
             path = output_dir / f"{name}.md"
-            path.write_text(content)
+            path.write_text(content, encoding="utf-8")
             files.append(path)
 
     return files

@@ -145,7 +145,7 @@ def create(path: str, brain_type: str, from_config: str | None, as_json: bool):
     custom_config = None
     if from_config:
         import yaml
-        custom_config = yaml.safe_load(Path(from_config).read_text())
+        custom_config = yaml.safe_load(Path(from_config).read_text(encoding="utf-8"))
 
     scaffold_brain(brain_path, name, f"{name} knowledge base", brain_type, custom_config)
 
@@ -356,7 +356,7 @@ def neuron(file_path: str, lobe: str | None, template_name: str | None,
         target_file.stem.replace("-", " ").title(),
         parent_map, template_name, sections,
     )
-    target_file.write_text(content)
+    target_file.write_text(content, encoding="utf-8")
 
     # Regenerate maps to include the new neuron
     _run_dream_on_brain(brain_path)
