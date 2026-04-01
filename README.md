@@ -105,14 +105,81 @@ keep everything navigable.
 
 Types determine the initial folder structure. After creation, every brain
 works the same -- all templates and commands are available regardless of type.
+You can add or remove lobes freely after creation.
 
-| Type | Lobes | Use case |
-|------|-------|----------|
-| `product-group` (default) | architecture, decisions, product, standards, services, infrastructure, cortex, wisdom | Shared team knowledge |
-| `personal` | projects, tasks, notes | Individual developer |
-| `product` | prd, features, ux, analytics, competitors, decisions | Product management |
-| `research` | literature, experiments, findings, datasets, tools, questions | Research projects |
-| `blank` | (empty) | Build from scratch |
+### product-group (default)
+
+For a group of projects/services that share knowledge. Example: a platform
+with 3 backends, a frontend, and shared infrastructure.
+
+| Lobe | What goes in it |
+|------|----------------|
+| `architecture/` | System design, technical patterns, data flow, tech stack choices |
+| `decisions/` | ADRs and key decisions across all domains (tech, product, business) |
+| `product/` | PRDs, roadmap, features, user research |
+| `standards/` | Coding standards, naming conventions, review checklists |
+| `services/` | Per-service sub-folders -- each service gets its own map.md, APIs, data models |
+| `infrastructure/` | Hosting, CI/CD, Docker, networking, deployment, environments |
+| `cortex/` | Runbooks, playbooks, dev workflows, onboarding, migration plans |
+| `wisdom/` | Domain knowledge, learnings, things figured out along the way |
+
+The `services/` lobe nests deeper -- one sub-folder per service:
+
+```
+services/
+├── map.md
+├── btb-backend/
+│   ├── map.md
+│   ├── auth-flow.md
+│   └── endpoints/
+│       ├── map.md
+│       └── post-auth-login.md
+├── btb-frontend/
+│   ├── map.md
+│   └── state-management.md
+└── btb-summon/
+    └── map.md
+```
+
+### personal
+
+For an individual developer's knowledge -- projects, tasks, and notes.
+
+| Lobe | What goes in it |
+|------|----------------|
+| `projects/` | Sub-folder per project: branches, status, TODOs |
+| `tasks/` | Current priorities, blockers, in-progress work |
+| `notes/` | Daily notes, ideas, learnings |
+
+### product
+
+For product management -- requirements, features, and user research.
+
+| Lobe | What goes in it |
+|------|----------------|
+| `prd/` | Requirements, user stories, acceptance criteria |
+| `features/` | Sub-folder per feature: specs, status, feedback |
+| `ux/` | User research, personas, journey maps, wireframes |
+| `analytics/` | Metrics, KPIs, experiment results |
+| `competitors/` | Competitive analysis, market positioning |
+| `decisions/` | Product decisions and rationale |
+
+### research
+
+For research projects -- literature, experiments, and findings.
+
+| Lobe | What goes in it |
+|------|----------------|
+| `literature/` | Papers, articles, summaries, key findings |
+| `experiments/` | Hypotheses, methodology, results |
+| `findings/` | Synthesized insights, conclusions |
+| `datasets/` | Data sources, schemas, access notes |
+| `tools/` | Research tools, scripts, environments |
+| `questions/` | Open questions, hypotheses to test |
+
+### blank
+
+Empty -- build your own structure from scratch.
 
 ## How it works
 
