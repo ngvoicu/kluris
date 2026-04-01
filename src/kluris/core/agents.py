@@ -438,6 +438,40 @@ analysis on top — synapse suggestions, staleness checks, content quality.
 Use both: CLI for mechanics, slash command for intelligence.
 """,
     },
+    "kluris.mri": {
+        "description": "Generate an interactive visualization of the brain's knowledge graph",
+        "allowed_tools": "Bash(kluris:*), Bash(open:*)",
+        "body": """\
+Config: Read `~/.config/kluris/config.yml` (or `KLURIS_CONFIG` env var).
+
+## Generate a brain MRI
+
+Run the CLI command to generate the visualization:
+
+```bash
+kluris mri
+```
+
+This creates `brain-mri.html` in the brain directory -- a standalone HTML file
+with an interactive force-directed graph showing all neurons, lobes, and their
+connections.
+
+After generating, open it:
+
+```bash
+open <brain_path>/brain-mri.html
+```
+
+The MRI shows:
+- **Nodes** colored by lobe (green = neuron, blue = map, orange = brain.md)
+- **Edges** by type (solid = parent, dashed = related/synapse, dotted = inline link)
+- **Click** any node to see its path and type
+- **Node count and edge count** in the top-left panel
+
+This is a CLI-only operation -- the visualization requires generating HTML
+with JavaScript, which the agent cannot do inline.
+""",
+    },
 }
 
 
