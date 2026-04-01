@@ -58,8 +58,9 @@ def _run_dream_on_brain(brain_path: Path) -> None:
             generate_map_md(brain_path, lobe)
         generate_brain_md(brain_path, brain_config.name, brain_config.description)
         generate_index_md(brain_path)
-    except Exception:
-        pass  # Dream is best-effort when triggered by neuron/lobe
+    except Exception as e:
+        import sys
+        print(f"Warning: dream failed: {e}", file=sys.stderr)
 
 
 class KlurisGroup(click.Group):
