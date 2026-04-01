@@ -76,7 +76,7 @@ kluris mri           # Generate brain-mri.html
 ```
 acme-brain/
 ├── kluris.yml              # Local config (gitignored -- your agents, branch)
-├── brain.md                # Root index + neuron table (auto-generated)
+├── brain.md                # Root lobes directory (auto-generated)
 ├── glossary.md             # Domain terms (hand-edited)
 ├── README.md               # Usage guide
 ├── architecture/

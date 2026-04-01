@@ -56,7 +56,7 @@ the request clearly targets a different brain. If ambiguous, ask.
 
 Follow this protocol every time you read from the brain. Do not skip steps.
 
-1. **Scan brain.md — read `<brain_path>/brain.md` for lobes and neuron index
+1. **Read brain.md — read `<brain_path>/brain.md` for root lobes and descriptions
    of all neurons with their titles, lobes, tags, and update dates
 2. **Start at brain.md** — read `<brain_path>/brain.md` to see all lobes
 3. **Descend to relevant lobes** — read the `map.md` of lobes related to
@@ -127,7 +127,7 @@ senior engineer who's been on the team for years would.
 
 ## Step 1: Read the brain (full reading protocol)
 
-1. **Scan brain.md — read `<brain_path>/brain.md` for lobes and neuron index
+1. **Read brain.md — read `<brain_path>/brain.md` for root lobes and descriptions
 2. **Start at brain.md** — read `<brain_path>/brain.md` to see all lobes
 3. **Descend to relevant lobes** — read `map.md` of related lobes (max 3)
 4. **Read target neurons** — read matching neurons (max 10)
@@ -170,7 +170,7 @@ discussed, or any knowledge valuable in future sessions.
 
 ## Process
 
-1. **Scan brain.md to see lobes and what neurons already exist
+1. **Read brain.md to see root lobes, then read relevant map.md files
 2. **Read brain.md** to understand the lobe structure
 3. Analyze — either the specified topic or the session context
 4. Extract knowledge. Focus on:
@@ -273,7 +273,7 @@ Config: Read `~/.kluris/config.yml` (or `KLURIS_CONFIG` env var).
 
 ## Steps
 
-1. **Scan brain.md first — check the neuron index table for matching titles or tags
+1. **Read brain.md for lobes, then search relevant map.md files for matching neurons
 2. Search all brains: `grep -ri "{args}" <brain_path>/ --include="*.md" -l`
 3. Read the top matching neurons (max 10)
 4. Follow their `related:` synapses for additional context
@@ -425,7 +425,7 @@ to run `/kluris.push`.
 
 ### Tip: Run the CLI for mechanical fixes
 
-For regenerating maps and the neuron index in brain.md, tell the user to run
+For regenerating maps and brain.md, tell the user to run
 the CLI command in their terminal:
 
 ```bash
@@ -433,7 +433,7 @@ kluris dream
 ```
 
 The CLI `kluris dream` mechanically regenerates all map.md files and the
-neuron index in brain.md. This slash command (`/kluris.dream`) adds AI-powered
+brain.md root index. This slash command (`/kluris.dream`) adds AI-powered
 analysis on top — synapse suggestions, staleness checks, content quality.
 Use both: CLI for mechanics, slash command for intelligence.
 """,

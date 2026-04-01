@@ -198,9 +198,6 @@ def scaffold_brain(
     brain_md = (
         f"---\nauto_generated: true\nupdated: 2026-04-01\n---\n"
         f"# {name}\n\n{description}\n\n## Lobes\n\n{lobe_links}\n\n"
-        f"## Neuron Index\n\n0 neurons.\n\n"
-        f"| Neuron | Lobe | Tags | Updated |\n"
-        f"|--------|------|------|---------|\n\n"
         f"## Reference\n\n"
         f"- [glossary.md](./glossary.md) — Domain-specific terms\n"
     )

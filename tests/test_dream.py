@@ -51,7 +51,8 @@ def test_dream_regenerates_brain_md(tmp_path, monkeypatch):
     assert "experiments" in brain_md
 
 
-def test_dream_regenerates_index(tmp_path, monkeypatch):
+def test_dream_updates_map_with_neuron(tmp_path, monkeypatch):
+    """After adding a neuron, dream should update the lobe's map.md (not brain.md)."""
     monkeypatch.setenv("KLURIS_CONFIG", str(tmp_path / "config.yml"))
     monkeypatch.setenv("HOME", str(tmp_path))
     runner = CliRunner()
@@ -60,8 +61,8 @@ def test_dream_regenerates_index(tmp_path, monkeypatch):
         "---\nparent: ./map.md\ntags: [auth]\ncreated: 2026-04-01\nupdated: 2026-04-01\n---\n# Auth\n", encoding="utf-8"
     )
     runner.invoke(cli, ["dream"])
-    index = (tmp_path / "my-brain" / "brain.md").read_text()
-    assert "auth" in index.lower()
+    map_content = (tmp_path / "my-brain" / "architecture" / "map.md").read_text()
+    assert "auth" in map_content.lower()
 
 
 def test_dream_reports_broken_links(tmp_path, monkeypatch):

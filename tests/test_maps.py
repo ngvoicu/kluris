@@ -122,33 +122,22 @@ def test_map_empty_lobe(tmp_path):
     assert "# Decisions" in content or "# decisions" in content.lower()
 
 
-# --- Neuron index (now in brain.md) ---
+# --- brain.md is lightweight: lobes only, no neuron index ---
 
 
-def test_brain_md_has_neuron_index(tmp_path):
-    brain = _make_brain_with_git(tmp_path)
-    (brain / "decisions" / "use-sql.md").write_text(
-        "---\nparent: ../map.md\ntags: [sql]\ncreated: 2026-04-01\nupdated: 2026-04-01\n---\n# Use Raw SQL\n", encoding="utf-8"
-    )
-    generate_brain_md(brain, "test", "Test brain")
-    content = (brain / "brain.md").read_text()
-    assert "Neuron Index" in content
-    assert "Auth" in content or "auth" in content
-    assert "Use Raw SQL" in content or "use-sql" in content
-
-
-def test_brain_md_index_columns(tmp_path):
+def test_brain_md_no_neuron_index(tmp_path):
+    """brain.md should NOT contain a neuron table -- maps handle that."""
     brain = _make_brain_with_git(tmp_path)
     generate_brain_md(brain, "test", "Test brain")
     content = (brain / "brain.md").read_text()
-    assert "Neuron" in content
-    assert "Lobe" in content
-    assert "Tags" in content
-    assert "Updated" in content
+    assert "Neuron Index" not in content
+    assert "| Neuron |" not in content
 
 
-def test_brain_md_empty_index(tmp_path):
+def test_brain_md_lobes_only(tmp_path):
     brain = _make_brain(tmp_path)
     generate_brain_md(brain, "test", "Test brain")
     content = (brain / "brain.md").read_text()
-    assert "0 neurons" in content
+    assert "## Lobes" in content
+    assert "glossary.md" in content
+    assert "architecture" in content

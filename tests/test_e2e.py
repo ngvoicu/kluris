@@ -37,9 +37,9 @@ def test_full_workflow(tmp_path, monkeypatch):
     arch_map = (brain / "architecture" / "map.md").read_text()
     assert "auth.md" in arch_map
 
-    # 6. Verify index has neurons
-    index = (brain / "brain.md").read_text()
-    assert "auth" in index.lower() or "Auth" in index
+    # 6. Verify brain.md has lobes (neurons are in map.md, not brain.md)
+    brain_content = (brain / "brain.md").read_text()
+    assert "architecture" in brain_content
 
     # 7. MRI
     result = runner.invoke(cli, ["mri"])
