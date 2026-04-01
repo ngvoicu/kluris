@@ -1,0 +1,27 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "kluris"
+version = "0.1.0"
+description = "Create and manage git-backed AI brains for multi-project, multi-agent teams"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+dependencies = [
+    "click>=8.1",
+    "rich>=13.0",
+    "pyyaml>=6.0",
+    "python-frontmatter>=1.1",
+    "pydantic>=2.0",
+]
+
+[project.scripts]
+kluris = "kluris.cli:cli"
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "pytest-cov>=5.0"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/kluris"]
