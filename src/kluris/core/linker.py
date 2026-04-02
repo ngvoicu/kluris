@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import os
 import re
 from pathlib import Path
 
-from kluris.core.frontmatter import read_frontmatter
+from kluris.core.frontmatter import read_frontmatter, update_frontmatter
 
 SKIP_DIRS = {".git"}
 SKIP_FILES = {"brain.md", "index.md", "glossary.md", "README.md", ".gitignore"}
@@ -44,14 +45,32 @@ def parse_markdown_links(content: str) -> list[str]:
 
 
 def validate_synapses(brain_path: Path) -> list[dict]:
-    """Find broken markdown links (target file doesn't exist)."""
+    """Find broken markdown links and broken related synapses."""
     broken = []
+    neurons = {neuron.resolve() for neuron in _neuron_files(brain_path)}
     for md_file in _all_md_files(brain_path):
         if md_file.name in VALIDATE_SKIP_FILES:
             continue
-        _, content = read_frontmatter(md_file)
+        meta, content = read_frontmatter(md_file)
         links = parse_markdown_links(content)
         for target in links:
+            resolved = (md_file.parent / target).resolve()
+            if not resolved.exists():
+                broken.append({
+                    "file": str(md_file.relative_to(brain_path)),
+                    "target": target,
+                })
+
+        if md_file.resolve() not in neurons:
+            continue
+
+        related = meta.get("related", [])
+        if not isinstance(related, list):
+            continue
+
+        for target in related:
+            if not isinstance(target, str):
+                continue
             resolved = (md_file.parent / target).resolve()
             if not resolved.exists():
                 broken.append({
@@ -103,6 +122,45 @@ def validate_bidirectional(brain_path: Path) -> list[dict]:
     return one_way
 
 
+def fix_bidirectional_synapses(brain_path: Path) -> int:
+    """Add missing reverse related links for existing neuron targets."""
+    fixed = 0
+    neurons = {neuron.resolve(): neuron for neuron in _neuron_files(brain_path)}
+
+    for source in neurons.values():
+        meta, _ = read_frontmatter(source)
+        related = meta.get("related", [])
+        if not isinstance(related, list):
+            continue
+
+        for rel in related:
+            if not isinstance(rel, str):
+                continue
+
+            target = neurons.get((source.parent / rel).resolve())
+            if target is None:
+                continue
+
+            target_meta, _ = read_frontmatter(target)
+            target_related = target_meta.get("related", [])
+            if not isinstance(target_related, list):
+                target_related = []
+
+            resolved_back = [
+                (target.parent / existing).resolve()
+                for existing in target_related
+                if isinstance(existing, str)
+            ]
+            if source.resolve() in resolved_back:
+                continue
+
+            reverse_link = Path(os.path.relpath(source, start=target.parent)).as_posix()
+            update_frontmatter(target, {"related": [*target_related, reverse_link]})
+            fixed += 1
+
+    return fixed
+
+
 def detect_orphans(brain_path: Path) -> list[Path]:
     """Find neurons not referenced from any map.md."""
     neurons = _neuron_files(brain_path)
@@ -138,3 +196,20 @@ def check_frontmatter(brain_path: Path) -> list[dict]:
         if "updated" not in meta:
             issues.append({"file": rel, "field": "updated"})
     return issues
+
+
+def fix_missing_frontmatter(brain_path: Path) -> int:
+    """Infer missing parent frontmatter for neurons from their directory."""
+    fixed = 0
+    for neuron in _neuron_files(brain_path):
+        if neuron.parent == brain_path:
+            continue
+
+        meta, _ = read_frontmatter(neuron)
+        if "parent" in meta:
+            continue
+
+        update_frontmatter(neuron, {"parent": "./map.md"})
+        fixed += 1
+
+    return fixed

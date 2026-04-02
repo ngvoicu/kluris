@@ -60,6 +60,18 @@ def test_broken_link(tmp_path):
     assert any("nonexistent" in b["target"] for b in broken)
 
 
+def test_broken_related_synapse(tmp_path):
+    brain = _make_linked_brain(tmp_path)
+    (brain / "architecture" / "auth.md").write_text(
+        "---\nparent: ./map.md\nrelated:\n  - ../standards/missing.md\n"
+        "tags: [auth]\ncreated: 2026-04-01\nupdated: 2026-04-01\n---\n# Auth\n",
+        encoding="utf-8",
+    )
+    broken = validate_synapses(brain)
+    assert len(broken) >= 1
+    assert any("missing.md" in b["target"] for b in broken)
+
+
 def test_orphaned_neuron(tmp_path):
     brain = _make_linked_brain(tmp_path)
     # Add a neuron not referenced from any map

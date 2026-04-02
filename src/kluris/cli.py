@@ -40,6 +40,8 @@ from kluris.core.git import (
 from kluris.core.linker import (
     check_frontmatter,
     detect_orphans,
+    fix_bidirectional_synapses,
+    fix_missing_frontmatter,
     validate_bidirectional,
     validate_synapses,
 )
@@ -684,6 +686,9 @@ def dream(brain_name: str | None, as_json: bool):
             except Exception:
                 pass
 
+        fix_missing_frontmatter(brain_path)
+        fix_bidirectional_synapses(brain_path)
+
         # Regenerate maps
         for lobe in _brain_directories(brain_path):
             generate_map_md(brain_path, lobe)
@@ -720,7 +725,7 @@ def dream(brain_name: str | None, as_json: bool):
         if healthy:
             console.print("\n[bold green]Brain is healthy.[/bold green]")
         else:
-            console.print("\n[bold yellow]Issues found. Run dream again after fixing.[/bold yellow]")
+            console.print("\n[bold yellow]Remaining issues need manual attention.[/bold yellow]")
 
     if not healthy:
         raise SystemExit(1)
