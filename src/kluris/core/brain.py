@@ -302,14 +302,7 @@ One command does everything. The agent reads your intent and acts accordingly.
 
 | Command | What it does |
 |---------|-------------|
-| `/kluris <anything>` | **Main command.** Read, write, or search the brain. |
-| `/kluris.think <task>` | Load brain knowledge, work on the task as the team's expert. |
-| `/kluris.recall <topic>` | Search and report what the brain knows (read-only). |
-| `/kluris.learn <focus>` | Learn a specific aspect of a project. Asks before writing. |
-| `/kluris.remember <what>` | Store a specific piece of knowledge. Asks before writing. |
-| `/kluris.push [msg]` | Commit and push to git. |
-| `/kluris.dream [focus]` | AI brain analysis. Run `kluris dream` CLI for mechanical fixes. |
-| `/kluris.mri` | Generate interactive visualization (runs CLI). |
+| `/kluris <anything>` | One command handles everything -- search, learn, remember, think, create. |
 
 ## CLI commands
 
@@ -358,6 +351,6 @@ Content here.
 4. **Use standard markdown links** -- `[label](./relative/path.md)`
 5. **Focus on decisions and rationale** -- "we chose X because Y"
 6. **Bidirectional synapses** -- if A links to B, add the reverse link in B
-7. **Run `/kluris.push` to save** -- agents never auto-commit
+7. **Run `kluris push` to save** -- use the CLI command to commit and push
 8. **Run `kluris dream` after adding neurons** -- keeps maps and brain.md fresh
 """

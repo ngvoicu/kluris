@@ -65,7 +65,7 @@ kluris create my-brain --type personal --path ~/brains
 kluris create my-brain --remote git@github.com:team/brain.git
 ```
 
-Then open any project and run `/kluris.learn <focus>` -- the AI agent will
+Then open any project and run `/kluris learn the endpoints` -- the AI agent will
 analyze that part of the codebase, show you a plan, and ask before writing
 knowledge into the brain.
 
@@ -76,17 +76,17 @@ knowledge into the brain.
 kluris create
 
 # 2. In your backend project, run the slash command:
-#    /kluris.learn focus on architecture and API design
+#    /kluris learn about architecture and API design
 
 # 3. In your frontend project:
-#    /kluris.learn focus on components and state management
+#    /kluris learn about components and state management
 
 # 4. Now any agent in any project can use the brain:
-#    /kluris.think implement the new auth flow
+#    /kluris implement the new auth flow
 #    (agent loads architecture decisions, API contracts, conventions)
 
 # 5. After a session with useful decisions:
-#    /kluris.remember
+#    /kluris remember what we learned
 
 # 6. Validate and push
 kluris dream         # Regenerate maps, validate links
@@ -219,7 +219,7 @@ One command does everything: `/kluris <natural language>`
 ```
 /kluris what do we know about auth
 /kluris learn the API endpoints from this project
-/kluris remember we chose raw SQL over JPA for performance
+/kluris remember what we learned we chose raw SQL over JPA for performance
 /kluris implement the new auth flow using brain knowledge
 /kluris create a decision record about migrating to Keycloak
 /kluris create openapi docs for this service
