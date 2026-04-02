@@ -46,7 +46,7 @@ from kluris.core.linker import (
 from kluris.core.maps import generate_brain_md, generate_index_md, generate_map_md
 from kluris.core.mri import generate_mri_html
 from kluris.core.frontmatter import read_frontmatter, update_frontmatter
-from kluris.core.agents import AGENT_REGISTRY, COMMANDS, OLD_COMMAND_DIRS, render_commands
+from kluris.core.agents import AGENT_REGISTRY, COMMANDS, OLD_COMMAND_DIRS, render_commands, install_workflow
 
 console = Console()
 
@@ -900,6 +900,24 @@ def _do_install(as_json: bool = False):
             continue
         total_files += len(files)
         agent_count += 1
+
+    # Windsurf: also install as workflow for /kluris manual invocation
+    for agent_name, reg in AGENT_REGISTRY.items():
+        wf_dir = reg.get("also_workflow")
+        if wf_dir:
+            try:
+                wf_path = home / wf_dir
+                # Clean old workflow files
+                if wf_path.exists():
+                    for old in wf_path.glob("kluris*"):
+                        try:
+                            old.unlink()
+                        except OSError:
+                            pass
+                install_workflow(wf_path, brain_info=brain_info)
+                total_files += 1
+            except OSError:
+                pass
 
     # Also install to universal ~/.agents/skills/ path
     universal = home / ".agents" / "skills"

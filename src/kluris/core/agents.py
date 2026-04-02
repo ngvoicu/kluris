@@ -8,7 +8,8 @@ from pathlib import Path
 AGENT_REGISTRY: dict[str, dict] = {
     "claude": {"dir": ".claude", "subdir": "skills"},
     "cursor": {"dir": ".cursor", "subdir": "skills"},
-    "windsurf": {"dir": ".codeium/windsurf", "subdir": "skills"},
+    "windsurf": {"dir": ".codeium/windsurf", "subdir": "skills",
+                  "also_workflow": ".codeium/windsurf/global_workflows"},
     "copilot": {"dir": ".copilot", "subdir": "skills"},
     "codex": {"dir": ".codex", "subdir": "skills"},
     "gemini": {"dir": ".gemini", "subdir": "skills"},
@@ -130,6 +131,17 @@ def render_skill(brain_info: str = "") -> str:
     )
 
 
+def _render_workflow(brain_info: str = "") -> str:
+    """Render a Windsurf workflow .md file (for /kluris manual invocation)."""
+    body = SKILL_BODY.replace("{brain_info}", brain_info)
+    return (
+        f"---\n"
+        f"description: {SKILL_DESCRIPTION[:200]}\n"
+        f"---\n\n"
+        f"{body}\n"
+    )
+
+
 def render_commands(agent_name: str, output_dir: Path, brain_info: str = "") -> list[Path]:
     """Install kluris SKILL.md for an agent."""
     skill_dir = output_dir / "kluris"
@@ -138,6 +150,14 @@ def render_commands(agent_name: str, output_dir: Path, brain_info: str = "") -> 
     path = skill_dir / "SKILL.md"
     path.write_text(content, encoding="utf-8")
     return [path]
+
+
+def install_workflow(workflow_dir: Path, brain_info: str = "") -> Path:
+    """Install a Windsurf workflow .md for /kluris manual invocation."""
+    workflow_dir.mkdir(parents=True, exist_ok=True)
+    wf_file = workflow_dir / "kluris.md"
+    wf_file.write_text(_render_workflow(brain_info), encoding="utf-8")
+    return wf_file
 
 
 def install_for_agent(agent_name: str, home: Path | None = None) -> list[Path]:
