@@ -235,15 +235,32 @@ def scaffold_brain(
     # Write README.md
     tree_lines = [f"├── {lobe}/" for lobe in structure]
     tree_output = "\n".join(tree_lines) if tree_lines else "(empty)"
-    readme_md = _generate_readme(name, description, tree_output)
+    readme_md = _generate_readme(name, description, tree_output, brain_type, structure)
     (brain_path / "README.md").write_text(readme_md, encoding="utf-8")
 
     # Write .gitignore
     (brain_path / ".gitignore").write_text(GITIGNORE_CONTENT, encoding="utf-8")
 
 
-def _generate_readme(name: str, description: str, tree_output: str) -> str:
-    """Generate the brain README content."""
+def _generate_readme(name: str, description: str, tree_output: str,
+                     brain_type: str, structure: dict) -> str:
+    """Generate the brain README content with type-specific lobe explanations."""
+
+    # Build lobe table
+    if structure:
+        lobe_rows = "\n".join(
+            f"| `{lobe}/` | {desc} |"
+            for lobe, desc in structure.items()
+        )
+        lobe_section = (
+            f"## Lobes\n\n"
+            f"| Lobe | What goes in it |\n"
+            f"|------|----------------|\n"
+            f"{lobe_rows}\n"
+        )
+    else:
+        lobe_section = "## Lobes\n\n(empty -- add lobes with `kluris lobe <name>`)\n"
+
     return f"""\
 # {name}
 
@@ -265,25 +282,37 @@ kluris clone <this-repo-url>
 
 ### Start populating the brain
 
-Run `/kluris.learn API endpoints` or `/kluris.learn database schema` in any project. The agent will analyze the specific aspect and
-document architecture, conventions, APIs, and decisions into this brain.
+```
+/kluris.learn API endpoints
+/kluris.learn database schema
+/kluris.learn auth flow
+/kluris.remember we chose raw SQL over JPA for performance
+```
 
-### Slash commands (inside AI agents)
+Each command focuses on one topic, presents a plan, and asks before writing.
 
-All commands accept free text: `/kluris.learn API endpoints`, `/kluris.remember we chose raw SQL for performance`.
+{lobe_section}
+
+## Brain structure
+
+```
+{tree_output}
+```
+
+## Slash commands
 
 | Command | What it does |
 |---------|-------------|
 | `/kluris <anything>` | **Main command.** Read, write, or search the brain. |
-| `/kluris.think <task>` | Load brain knowledge, then work on the task as the team's expert. |
-| `/kluris.recall <topic>` | Search and summarize what the brain knows (read-only). |
-| `/kluris.learn [focus]` | Learn a specific aspect of the project (APIs, schema, auth...). Asks before writing. |
-| `/kluris.remember [topic]` | Store a specific piece of knowledge. Asks before writing. |
+| `/kluris.think <task>` | Load brain knowledge, work on the task as the team's expert. |
+| `/kluris.recall <topic>` | Search and report what the brain knows (read-only). |
+| `/kluris.learn <focus>` | Learn a specific aspect of a project. Asks before writing. |
+| `/kluris.remember <what>` | Store a specific piece of knowledge. Asks before writing. |
 | `/kluris.push [msg]` | Commit and push to git. |
 | `/kluris.dream [focus]` | AI brain analysis. Run `kluris dream` CLI for mechanical fixes. |
-| `/kluris.mri` | Generate interactive brain visualization (runs CLI). |
+| `/kluris.mri` | Generate interactive visualization (runs CLI). |
 
-### CLI commands
+## CLI commands
 
 ```bash
 kluris status          # Brain tree, recent changes, neuron counts
@@ -296,20 +325,7 @@ kluris mri             # Generate interactive visualization
 kluris help            # All commands
 ```
 
-## Brain structure
-
-```
-{tree_output}
-```
-
 ## Neuron templates
-
-Use templates for consistent structure. Available in every brain.
-
-```bash
-kluris neuron use-raw-sql.md --lobe decisions --template decision
-kluris neuron outage-jan.md --lobe wisdom --template incident
-```
 
 | Template | Sections |
 |----------|----------|
