@@ -24,10 +24,32 @@ globally installed slash commands.
 One brain serves all your projects. Every AI agent on the team reads the same
 knowledge. When someone leaves, nothing is lost.
 
-## Quick start
+## Install
+
+**macOS:**
+```bash
+brew install pipx && pipx ensurepath
+```
+
+**Linux:**
+```bash
+python3 -m pip install --user pipx && pipx ensurepath
+```
+
+**Windows:**
+```bash
+pip install pipx && pipx ensurepath
+```
+
+Then restart your terminal and:
 
 ```bash
 pipx install kluris
+```
+
+## Quick start
+
+```bash
 kluris doctor        # Check prerequisites
 kluris create        # Interactive wizard
 ```
