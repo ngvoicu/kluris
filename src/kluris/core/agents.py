@@ -145,12 +145,13 @@ discussed, or any knowledge valuable in future sessions.
 ALL writes go to the BRAIN directory, NOT the current project.
 The current project is what you ANALYZE. The brain is where you WRITE.
 
-## What to learn
+## Your focus
 
-You MUST have a focus. If no arguments were provided, ask:
+The text above is what the user wants you to learn. Use it directly as your
+focus. Do NOT ask what to focus on -- the user already told you.
+
+Only if the text above is completely empty, ask:
 "What should I learn? Examples: API endpoints, database schema, auth flow"
-
-Do NOT scan the entire project. Focus only on the requested topic.
 
 ## Step 1: Find brain path and check what exists
 
