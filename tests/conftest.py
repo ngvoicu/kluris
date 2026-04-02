@@ -26,6 +26,7 @@ def temp_config(tmp_path, monkeypatch):
 def temp_home(tmp_path, monkeypatch):
     """Temp HOME dir so kluris install writes to tmp instead of real home."""
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))  # Windows compat
     return tmp_path
 
 

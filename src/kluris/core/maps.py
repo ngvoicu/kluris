@@ -8,7 +8,7 @@ from pathlib import Path
 from kluris.core.frontmatter import read_frontmatter, write_frontmatter
 
 SKIP_FILES = {"map.md", "brain.md", "index.md", "glossary.md", "README.md", ".gitignore"}
-SKIP_DIRS = {".git"}
+SKIP_DIRS = {".git", ".github", ".vscode", ".idea", "node_modules", "__pycache__"}
 
 
 def _today() -> str:
@@ -19,7 +19,7 @@ def _get_lobes(brain_path: Path) -> list[dict]:
     """Discover top-level lobe directories (dirs containing map.md)."""
     lobes = []
     for item in sorted(brain_path.iterdir()):
-        if item.is_dir() and item.name not in SKIP_DIRS:
+        if item.is_dir() and item.name not in SKIP_DIRS and not item.name.startswith("."):
             desc = _read_map_description(item / "map.md")
             lobes.append({"name": item.name, "description": desc, "path": item})
     return lobes

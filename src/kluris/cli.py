@@ -466,7 +466,8 @@ def status(brain_name: str | None, as_json: bool):
 
     for name, entry in brains:
         brain_path = Path(entry["path"])
-        lobes = [d for d in brain_path.iterdir() if d.is_dir() and d.name != ".git"]
+        _skip = {".git", ".github", ".vscode", ".idea", "node_modules", "__pycache__"}
+        lobes = [d for d in brain_path.iterdir() if d.is_dir() and d.name not in _skip and not d.name.startswith(".")]
         neurons = list(brain_path.rglob("*.md"))
         neurons = [n for n in neurons if n.name not in {"map.md", "brain.md", "index.md", "glossary.md", "README.md"}]
         git_enabled = is_git_repo(brain_path)
@@ -564,9 +565,13 @@ def neuron(file_path: str, lobe: str | None, template_name: str | None,
     brain_path = Path(entry["path"])
 
     if lobe:
-        target_dir = brain_path / lobe
+        target_dir = (brain_path / lobe).resolve()
     else:
-        target_dir = brain_path / Path(file_path).parent if "/" in file_path else brain_path
+        target_dir = (brain_path / Path(file_path).parent).resolve() if "/" in file_path else brain_path
+
+    # Security: ensure target stays inside the brain
+    if not str(target_dir).startswith(str(brain_path.resolve())):
+        raise click.ClickException("Path escapes the brain directory. Use a relative path within the brain.")
 
     target_dir.mkdir(parents=True, exist_ok=True)
     target_file = target_dir / Path(file_path).name
@@ -613,9 +618,13 @@ def lobe_cmd(name: str, parent_dir: str | None, desc: str,
     brain_path = Path(entry["path"])
 
     if parent_dir:
-        lobe_path = brain_path / parent_dir / name
+        lobe_path = (brain_path / parent_dir / name).resolve()
     else:
-        lobe_path = brain_path / name
+        lobe_path = (brain_path / name).resolve()
+
+    # Security: ensure lobe stays inside the brain
+    if not str(lobe_path).startswith(str(brain_path.resolve())):
+        raise click.ClickException("Path escapes the brain directory. Use a relative path within the brain.")
 
     lobe_path.mkdir(parents=True, exist_ok=True)
 
