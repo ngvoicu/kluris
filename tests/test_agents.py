@@ -18,7 +18,6 @@ def test_render_skill_has_frontmatter():
     assert "---" in content
     assert "name: kluris" in content
     assert "description:" in content
-    assert "allowed-tools:" in content
 
 
 def test_render_skill_has_brain_info():

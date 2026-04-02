@@ -122,10 +122,8 @@ def render_skill(brain_info: str = "") -> str:
     body = SKILL_BODY.replace("{brain_info}", brain_info)
     return (
         "---\n"
-        "name: kluris\n"
-        "description: >\n"
-        f"  {SKILL_DESCRIPTION}\n"
-        "allowed-tools: Read, Write, Bash, Glob, Grep\n"
+        f"name: kluris\n"
+        f"description: {SKILL_DESCRIPTION}\n"
         "---\n\n"
         f"{body}\n"
     )
