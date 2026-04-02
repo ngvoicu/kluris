@@ -9,7 +9,7 @@ Published to PyPI as `kluris`. Source: `ngvoicu/kluris-cli`.
 
 ```bash
 pip install -e ".[dev]"          # dev install
-pytest tests/ -v                 # 207 tests
+pytest tests/ -v                 # 221 tests
 pytest tests/ --cov=kluris -q    # 90%+ coverage
 ```
 
@@ -17,13 +17,13 @@ pytest tests/ --cov=kluris -q    # 90%+ coverage
 
 All CLI commands are in `src/kluris/cli.py` (single file).
 Core logic is in `src/kluris/core/` (8 modules).
-Slash command templates are inline strings in `src/kluris/core/agents.py`.
+Agent skill and workflow templates are inline strings in `src/kluris/core/agents.py`.
 No Jinja2 templates -- dependency was removed.
 
 ## Key Files
 
 - `src/kluris/cli.py` -- all Click commands, wizard logic, KlurisGroup error handler
-- `src/kluris/core/agents.py` -- AGENT_REGISTRY (8 agents), COMMANDS (8 slash commands)
+- `src/kluris/core/agents.py` -- AGENT_REGISTRY (8 agents), single `kluris` skill/workflow renderer
 - `src/kluris/core/brain.py` -- BRAIN_TYPES, NEURON_TEMPLATES, scaffold_brain()
 - `src/kluris/core/config.py` -- Pydantic models, config read/write, register/unregister
 - `src/kluris/core/maps.py` -- generate_brain_md(), generate_map_md()

@@ -8,7 +8,7 @@
 
 Kluris is a CLI tool that creates **brains** -- standalone git repos of
 structured markdown that AI coding agents read, search, and update through
-globally installed slash commands.
+globally installed agent skills and workflows.
 
 **Kluris = the tool. A brain = the git repo it creates.**
 
@@ -89,11 +89,11 @@ kluris create
 #    /kluris remember what we learned
 
 # 6. Validate and push
-kluris dream         # Regenerate maps, validate links
+kluris dream         # Regenerate maps, auto-fix safe issues, validate remaining links
 kluris push          # Commit and push to git
 
 # 7. Visualize the brain
-kluris mri           # Generate brain-mri.html
+kluris mri           # Run preflight fixes, then generate brain-mri.html
 ```
 
 ## What a brain looks like
@@ -206,11 +206,38 @@ Empty -- build your own structure from scratch.
 ## How it works
 
 1. `kluris create` scaffolds a brain (interactive wizard or flags)
-2. `kluris install-skills` generates slash commands for 8 AI agents
+2. `kluris install-skills` installs the Kluris skill for 8 AI agents
 3. Use `/kluris` to search, learn, remember, and work with brain knowledge
 4. Agents read the brain and apply team knowledge to tasks
-5. `kluris dream` regenerates maps and validates links
-6. `kluris mri` generates an interactive HTML visualization
+5. `kluris dream` regenerates maps, auto-fixes safe issues, and validates remaining links
+6. `kluris mri` runs the same safe preflight fixes as `dream`, then generates an interactive HTML visualization
+
+## Release and publish
+
+The PyPI publish pipeline is triggered by pushing a git tag that matches `v*`.
+The workflow lives in [`.github/workflows/publish.yml`](/Users/gabrielvoicu/Projects/ngvoicu/kluris/kluris-cli/.github/workflows/publish.yml#L1) and listens for pushed tags such as `v1.0.8`.
+
+Typical release flow:
+
+```bash
+# 1. Bump the package version in pyproject.toml and src/kluris/__init__.py
+
+# 2. Verify the release candidate
+pytest tests/ -q
+
+# 3. Commit the release
+git add pyproject.toml src/kluris/__init__.py tests/
+git commit -m "chore: release v1.0.8"
+
+# 4. Create the publish tag
+git tag v1.0.8
+
+# 5. Push the commit and the tag
+git push origin main
+git push origin v1.0.8
+```
+
+Once the `v1.0.8` tag reaches GitHub, the publish pipeline builds the package and publishes that version to PyPI.
 
 ## Slash command
 
@@ -240,13 +267,13 @@ All writes ask for approval before creating files.
 | `kluris list` | List all registered brains |
 | `kluris status` | Show brain tree, recent changes, neuron counts |
 | `kluris recall <query>` | Search brain and show results |
-| `kluris dream` | Regenerate maps and neuron index, validate links |
+| `kluris dream` | Regenerate maps, auto-fix safe issues, and validate remaining links |
 | `kluris push` | Commit and push brain changes to git |
-| `kluris mri` | Generate interactive HTML brain visualization |
+| `kluris mri` | Run preflight fixes, then generate an interactive HTML brain visualization |
 | `kluris use <name>` | Set the default brain |
 | `kluris templates` | List available neuron templates |
-| `kluris install-skills` | Install slash commands into AI agent directories |
-| `kluris uninstall-skills` | Remove all kluris commands from agent directories |
+| `kluris install-skills` | Install the Kluris skill into AI agent directories |
+| `kluris uninstall-skills` | Remove the Kluris skill from AI agent directories |
 | `kluris remove <name>` | Unregister a brain (keeps files) |
 | `kluris doctor` | Check prerequisites (git, Python, config dir) |
 | `kluris help` | Show all commands |
@@ -288,7 +315,7 @@ agents:
 | **Synapse** | Link between neurons (bidirectional) |
 | **Map** | `map.md` -- auto-generated lobe index |
 | **MRI** | Interactive brain visualization |
-| **Dream** | Brain maintenance -- regenerate, validate, repair |
+| **Dream** | Brain maintenance -- regenerate maps, update dates, auto-fix safe issues, validate remaining links |
 
 ## Supported agents
 

@@ -2,7 +2,7 @@
 
 ## What This Is
 
-Kluris is a Python CLI tool that creates and manages **brains** -- git-backed repos of structured markdown that AI agents read, search, and update through globally installed slash commands.
+Kluris is a Python CLI tool that creates and manages **brains** -- git-backed repos of structured markdown that AI agents read, search, and update through globally installed agent skills and workflows.
 
 **Kluris = the tool. A brain = the git repo it creates.**
 
@@ -12,7 +12,7 @@ Kluris is a Python CLI tool that creates and manages **brains** -- git-backed re
 cd kluris-cli
 source .venv/bin/activate        # or: pipx install -e .
 pip install -e ".[dev]"          # dev install with pytest
-pytest tests/ -v                 # run all tests (207 tests)
+pytest tests/ -v                 # run all tests (221 tests)
 pytest tests/ --cov=kluris -q    # with coverage (90%+)
 pytest tests/test_create.py -v   # single test file
 ```
@@ -21,7 +21,7 @@ pytest tests/test_create.py -v   # single test file
 
 ```
 src/kluris/
-  cli.py              # Click CLI -- all 15+ commands in one file
+  cli.py              # Click CLI -- all 17 commands in one file
   core/
     config.py          # Pydantic models (GlobalConfig, BrainConfig, BrainEntry)
     brain.py           # BRAIN_TYPES, NEURON_TEMPLATES, scaffold_brain(), validate_brain_name()
@@ -30,7 +30,7 @@ src/kluris/
     linker.py          # validate_synapses(), validate_bidirectional(), detect_orphans()
     mri.py             # build_graph(), generate_mri_html() -- standalone HTML viz
     git.py             # git_init(), git_add(), git_commit(), git_log(), git_push(), etc.
-    agents.py          # AGENT_REGISTRY (8 agents), COMMANDS (8 slash commands), render_commands()
+    agents.py          # AGENT_REGISTRY (8 agents), single `kluris` skill/workflow renderer
 ```
 
 ## Key Design Decisions
@@ -41,36 +41,35 @@ src/kluris/
 - **Brain types are scaffold-only** -- after creation, type is irrelevant. All templates available everywhere.
 - **NEURON_TEMPLATES are global** -- decision, incident, runbook available to every brain regardless of type.
 - **brain.md is lightweight** -- root lobes + glossary link only. No neuron index. Agents navigate through map.md hierarchy.
-- **Slash commands are inline** in agents.py COMMANDS dict, not .j2 template files.
-- **MRI uses inline canvas JS** -- no vendored Cytoscape.js. ~5KB HTML output.
+- **Agent skill/workflow templates are inline** in agents.py, not .j2 template files.
+- **MRI uses inline canvas JS** -- no vendored Cytoscape.js. Standalone HTML with search, inspector, and interactive graph navigation.
 - **Cross-platform** -- all file I/O uses `encoding="utf-8"`, all paths use `pathlib.Path`.
 
 ## Config Paths
 
 - **Global config:** `~/.kluris/config.yml` (override: `KLURIS_CONFIG` env var)
 - **Brain config:** `<brain>/kluris.yml` (gitignored, local only)
-- **Slash commands:** `~/.claude/commands/`, `~/.cursor/commands/`, etc.
+- **Installed skills:** `~/.claude/skills/`, `~/.cursor/skills/`, `~/.copilot/skills/`, etc.
 
 ## Agent Registry (8 agents)
 
 | Agent | Dir | Format |
 |-------|-----|--------|
-| claude | ~/.claude/commands/ | .md |
-| cursor | ~/.cursor/commands/ | .md |
-| windsurf | ~/.windsurf/workflows/ | .md |
-| copilot | ~/.copilot/agents/ | .agent.md (with mode: frontmatter) |
-| codex | ~/.codex/skills/ | SKILL.md per command (spec-kit pattern) |
-| gemini | ~/.gemini/commands/ | .toml |
-| kilocode | ~/.config/kilo/commands/ | .md |
-| junie | ~/.junie/commands/ | .md |
+| claude | ~/.claude/skills/kluris/ | SKILL.md |
+| cursor | ~/.cursor/skills/kluris/ | SKILL.md |
+| windsurf | ~/.codeium/windsurf/skills/kluris/ | SKILL.md + workflow |
+| copilot | ~/.copilot/skills/kluris/ | SKILL.md |
+| codex | ~/.codex/skills/kluris/ | SKILL.md |
+| gemini | ~/.gemini/skills/kluris/ | SKILL.md |
+| kilocode | ~/.kilo/skills/kluris/ | SKILL.md |
+| junie | ~/.junie/skills/kluris/ | SKILL.md |
 
-## Slash Commands (8)
+## Agent Skill
 
-kluris (single command, handles all intents)
+One `kluris` skill is installed across supported agents.
+Windsurf also gets a `kluris.md` workflow for manual invocation.
 
-All defined in `src/kluris/core/agents.py` COMMANDS dict.
-
-## CLI Commands (15+)
+## CLI Commands (17)
 
 create, clone, list, status, recall, neuron, lobe, dream, push, mri, templates, install-skills, uninstall-skills, remove, doctor, help
 
@@ -102,7 +101,7 @@ create, clone, list, status, recall, neuron, lobe, dream, push, mri, templates, 
 
 ## Testing
 
-- 207 tests across 22 test files
+- 221 tests across 22 test files
 - conftest.py has 5 fixtures: cli_runner, temp_config, temp_home, temp_brain, bare_remote
 - Tests use monkeypatch for KLURIS_CONFIG and HOME env vars
 - Git tests use real git in tmp_path (not mocked)

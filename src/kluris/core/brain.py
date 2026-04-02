@@ -312,9 +312,9 @@ kluris status          # Brain tree, recent changes, neuron counts
 kluris recall <query>  # Search across neurons
 kluris use <name>      # Switch the default brain
 kluris templates       # List available neuron templates
-kluris dream           # Regenerate maps, validate links
+kluris dream           # Regenerate maps, auto-fix safe issues, validate remaining links
 kluris push            # Commit and push to git
-kluris mri             # Generate interactive visualization
+kluris mri             # Run preflight fixes, then generate interactive visualization
 kluris help            # All commands
 ```
 

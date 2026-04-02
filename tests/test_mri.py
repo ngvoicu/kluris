@@ -84,6 +84,26 @@ def test_node_colors_by_lobe(tmp_path):
     assert "std" in lobes
 
 
+def test_graph_nodes_include_metadata(tmp_path):
+    brain = _make_brain_with_neurons(tmp_path)
+    auth = brain / "arch" / "auth.md"
+    auth.write_text(
+        (
+            "---\nparent: ./map.md\nrelated: []\n"
+            "tags: [auth]\ncreated: 2026-04-01\nupdated: 2026-04-01\n---\n"
+            "# Auth\n\nAuthentication flow details.\n\nUses Keycloak.\n"
+        ),
+        encoding="utf-8",
+    )
+    graph = build_graph(brain)
+    auth = next(node for node in graph["nodes"] if node["path"] == "arch/auth.md")
+    assert auth["title"]
+    assert isinstance(auth["tags"], list)
+    assert "degree" in auth
+    assert "Authentication flow details." in auth["content_preview"]
+    assert auth["content_preview_truncated"] is False
+
+
 def test_html_valid(tmp_path):
     brain = _make_brain_with_neurons(tmp_path)
     output = tmp_path / "brain-mri.html"
@@ -101,6 +121,17 @@ def test_html_no_cdn(tmp_path):
     html = output.read_text()
     assert "unpkg.com" not in html
     assert "cdnjs" not in html
+
+
+def test_html_has_search_and_details_ui(tmp_path):
+    brain = _make_brain_with_neurons(tmp_path)
+    output = tmp_path / "brain-mri.html"
+    generate_mri_html(brain, output)
+    html = output.read_text(encoding="utf-8")
+    assert 'id="search-input"' in html
+    assert 'id="details-panel"' in html
+    assert "Search the brain" in html
+    assert "Content preview" in html
 
 
 def test_html_under_500kb(tmp_path):

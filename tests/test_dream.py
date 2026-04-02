@@ -31,6 +31,8 @@ def test_dream_json(tmp_path, monkeypatch):
     data = json.loads(result.output)
     assert "healthy" in data
     assert "broken_synapses" in data
+    assert "fixes" in data
+    assert "total" in data["fixes"]
 
 
 def test_dream_exit_0_healthy(tmp_path, monkeypatch):
@@ -112,6 +114,7 @@ def test_dream_fixes_one_way_synapse(tmp_path, monkeypatch):
     meta, _ = read_frontmatter(tmp_path / "my-brain" / "standards" / "b.md")
     assert result.exit_code == 0
     assert data["one_way_synapses"] == 0
+    assert data["fixes"]["reverse_synapses_added"] == 1
     assert "../architecture/a.md" in meta["related"]
 
 
@@ -132,6 +135,7 @@ def test_dream_adds_missing_parent_frontmatter(tmp_path, monkeypatch):
 
     assert result.exit_code == 0
     assert data["frontmatter_issues"] == 0
+    assert data["fixes"]["parents_inferred"] == 1
     assert meta["parent"] == "./map.md"
 
 
@@ -156,7 +160,30 @@ def test_dream_fixes_orphans_by_regenerating_parent_map(tmp_path, monkeypatch):
 
     assert result.exit_code == 0
     assert data["orphans"] == 0
+    assert data["fixes"]["orphan_references_added"] == 1
     assert "orphan.md" in map_content
+
+
+def test_dream_shows_fix_counts_in_output(tmp_path, monkeypatch):
+    monkeypatch.setenv("KLURIS_CONFIG", str(tmp_path / "config.yml"))
+    monkeypatch.setenv("HOME", str(tmp_path))
+    runner = CliRunner()
+    runner.invoke(cli, ["create", "my-brain", "--path", str(tmp_path)])
+    (tmp_path / "my-brain" / "architecture" / "a.md").write_text(
+        "---\nparent: ./map.md\nrelated:\n  - ../standards/b.md\ntags: []\ncreated: 2026-04-01\nupdated: 2026-04-01\n---\n# A\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "my-brain" / "standards" / "b.md").write_text(
+        "---\nparent: ./map.md\nrelated: []\ntags: []\ncreated: 2026-04-01\nupdated: 2026-04-01\n---\n# B\n",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(cli, ["dream"])
+
+    assert result.exit_code == 0
+    assert "3 automatic fixes applied" in result.output
+    assert "1 missing reverse related links added" in result.output
+    assert "2 missing neuron references added to parent map.md files" in result.output
 
 
 def test_dream_reports_broken_related_synapse(tmp_path, monkeypatch):

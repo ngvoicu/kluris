@@ -101,9 +101,9 @@ Create directory in brain. Remind user to run `kluris dream`.
 ## CLI commands (for mechanical operations)
 
 These are terminal commands, not skill actions:
-- `kluris dream` -- regenerate maps, validate links
+- `kluris dream` -- regenerate maps, auto-fix safe issues, validate remaining links
 - `kluris push` -- commit and push brain changes to git
-- `kluris mri` -- generate interactive visualization
+- `kluris mri` -- run preflight fixes, then generate interactive visualization
 - `kluris templates` -- list neuron templates
 """
 

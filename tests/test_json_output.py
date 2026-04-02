@@ -95,6 +95,8 @@ def test_dream_json(tmp_path, monkeypatch):
     assert "broken_synapses" in data
     assert "one_way_synapses" in data
     assert "orphans" in data
+    assert "fixes" in data
+    assert "total" in data["fixes"]
 
 
 def test_push_json(tmp_path, monkeypatch):

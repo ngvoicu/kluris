@@ -112,6 +112,56 @@ def _run_dream_on_brain(brain_path: Path) -> None:
         print(f"Warning: dream failed: {e}", file=sys.stderr)
 
 
+def _sync_brain_state(brain_path: Path, brain_config) -> dict[str, int]:
+    """Bring generated files and auto-fixable metadata up to date."""
+    fixes = {
+        "dates_updated": 0,
+        "parents_inferred": 0,
+        "reverse_synapses_added": 0,
+        "orphan_references_added": 0,
+        "total": 0,
+    }
+
+    from kluris.core.git import git_file_last_modified, git_file_created_date
+
+    for md in brain_path.rglob("*.md"):
+        if md.name in {"map.md", "brain.md", "index.md", "glossary.md", "README.md"}:
+            continue
+        if ".git" in md.parts:
+            continue
+        try:
+            meta, _ = read_frontmatter(md)
+            updated = False
+            last_mod = git_file_last_modified(brain_path, str(md.relative_to(brain_path)))
+            if last_mod:
+                update_frontmatter(md, {"updated": last_mod[:10]})
+                updated = True
+            if "created" not in meta:
+                created = git_file_created_date(brain_path, str(md.relative_to(brain_path)))
+                if created:
+                    update_frontmatter(md, {"created": created[:10]})
+                    updated = True
+            if updated:
+                fixes["dates_updated"] += 1
+        except Exception:
+            pass
+
+    fixes["parents_inferred"] = fix_missing_frontmatter(brain_path)
+    fixes["reverse_synapses_added"] = fix_bidirectional_synapses(brain_path)
+    orphans_before = detect_orphans(brain_path)
+
+    for lobe in _brain_directories(brain_path):
+        generate_map_md(brain_path, lobe)
+
+    generate_brain_md(brain_path, brain_config.name, brain_config.description)
+    generate_index_md(brain_path)
+
+    orphans_after = detect_orphans(brain_path)
+    fixes["orphan_references_added"] = max(0, len(orphans_before) - len(orphans_after))
+    fixes["total"] = sum(fixes.values())
+    return fixes
+
+
 class KlurisGroup(click.Group):
     """Custom group that outputs JSON errors when --json is in args."""
 
@@ -321,7 +371,7 @@ def create(name: str | None, desc: str | None, base_path: str | None,
     if config.default_brain is None or len(config.brains) == 0:
         _set_default_brain(name)
 
-    # Install slash commands
+    # Install agent skills/workflows
     _do_install()
     actual_default = read_global_config().default_brain
 
@@ -652,49 +702,23 @@ def lobe_cmd(name: str, parent_dir: str | None, desc: str,
 @click.option("--brain", "brain_name", help="Specific brain")
 @click.option("--json", "as_json", is_flag=True, help="JSON output")
 def dream(brain_name: str | None, as_json: bool):
-    """Brain maintenance — regenerate maps, validate links, update dates."""
+    """Brain maintenance — regenerate maps, update dates, auto-fix safe issues, validate remaining links."""
     brains = _resolve_brains(brain_name)
     all_issues = {"broken_synapses": 0, "one_way_synapses": 0, "orphans": 0,
                   "frontmatter_issues": 0, "dates_updated": 0}
+    all_fixes = {
+        "dates_updated": 0,
+        "parents_inferred": 0,
+        "reverse_synapses_added": 0,
+        "orphan_references_added": 0,
+        "total": 0,
+    }
     healthy = True
 
     for name, entry in brains:
         brain_path = Path(entry["path"])
         brain_config = read_brain_config(brain_path)
-
-        # Auto-update dates from git
-        from kluris.core.git import git_file_last_modified, git_file_created_date
-        for md in brain_path.rglob("*.md"):
-            if md.name in {"map.md", "brain.md", "index.md", "glossary.md", "README.md"}:
-                continue
-            if ".git" in md.parts:
-                continue
-            try:
-                meta, _ = read_frontmatter(md)
-                updated = False
-                last_mod = git_file_last_modified(brain_path, str(md.relative_to(brain_path)))
-                if last_mod:
-                    update_frontmatter(md, {"updated": last_mod[:10]})
-                    updated = True
-                if "created" not in meta:
-                    created = git_file_created_date(brain_path, str(md.relative_to(brain_path)))
-                    if created:
-                        update_frontmatter(md, {"created": created[:10]})
-                        updated = True
-                if updated:
-                    all_issues["dates_updated"] += 1
-            except Exception:
-                pass
-
-        fix_missing_frontmatter(brain_path)
-        fix_bidirectional_synapses(brain_path)
-
-        # Regenerate maps
-        for lobe in _brain_directories(brain_path):
-            generate_map_md(brain_path, lobe)
-
-        generate_brain_md(brain_path, brain_config.name, brain_config.description)
-        generate_index_md(brain_path)
+        brain_fixes = _sync_brain_state(brain_path, brain_config)
 
         # Validate
         broken = validate_synapses(brain_path)
@@ -702,10 +726,13 @@ def dream(brain_name: str | None, as_json: bool):
         orphans = detect_orphans(brain_path)
         fm_issues = check_frontmatter(brain_path)
 
+        all_issues["dates_updated"] += brain_fixes["dates_updated"]
         all_issues["broken_synapses"] += len(broken)
         all_issues["one_way_synapses"] += len(one_way)
         all_issues["orphans"] += len(orphans)
         all_issues["frontmatter_issues"] += len(fm_issues)
+        for key, value in brain_fixes.items():
+            all_fixes[key] += value
 
         if broken or one_way or orphans or fm_issues:
             healthy = False
@@ -716,12 +743,18 @@ def dream(brain_name: str | None, as_json: bool):
             console.print(f"  {'[green]OK[/green]' if not one_way else f'[yellow]{len(one_way)} one-way[/yellow]'} bidirectional")
             console.print(f"  {'[green]OK[/green]' if not orphans else f'[yellow]{len(orphans)} orphans[/yellow]'}")
             console.print(f"  {'[green]OK[/green]' if not fm_issues else f'[yellow]{len(fm_issues)} issues[/yellow]'} frontmatter")
-            console.print(f"  {all_issues['dates_updated']} dates updated")
+            console.print(f"  {brain_fixes['total']} automatic fixes applied")
+            console.print(f"  {brain_fixes['dates_updated']} neuron dates refreshed from git")
+            console.print(f"  {brain_fixes['parents_inferred']} missing parent frontmatter values inferred")
+            console.print(f"  {brain_fixes['reverse_synapses_added']} missing reverse related links added")
+            console.print(f"  {brain_fixes['orphan_references_added']} missing neuron references added to parent map.md files")
 
     if as_json:
-        click.echo(json_lib.dumps({"ok": True, "healthy": healthy, **all_issues}))
+        click.echo(json_lib.dumps({"ok": True, "healthy": healthy, **all_issues, "fixes": all_fixes}))
 
     if not as_json:
+        if all_fixes["total"]:
+            console.print(f"\n[bold green]{all_fixes['total']} automatic fixes applied across all brains.[/bold green]")
         if healthy:
             console.print("\n[bold green]Brain is healthy.[/bold green]")
         else:
@@ -827,18 +860,22 @@ def mri(brain_name: str | None, output_path: str | None, as_json: bool):
 
     for name, entry in brains:
         brain_path = Path(entry["path"])
+        brain_config = read_brain_config(brain_path)
+        fixes = _sync_brain_state(brain_path, brain_config)
         out = Path(output_path) if output_path else brain_path / "brain-mri.html"
         stats = generate_mri_html(brain_path, out)
 
         if as_json:
-            click.echo(json_lib.dumps({"ok": True, "output_path": str(out), **stats}))
+            click.echo(json_lib.dumps({"ok": True, "output_path": str(out), "preflight_fixes": fixes, **stats}))
         else:
             console.print(f"MRI complete — {out}")
             console.print(f"  {stats['nodes']} nodes, {stats['edges']} edges")
+            if fixes["total"]:
+                console.print(f"  MRI preflight applied {fixes['total']} automatic fixes")
 
 
 def _do_install(as_json: bool = False):
-    """Install slash commands for all agents across all brains."""
+    """Install agent skills/workflows for all agents across all brains."""
     config = read_global_config()
     all_agents: set[str] = set()
 
@@ -950,7 +987,7 @@ def install_commands(as_json: bool):
     if as_json:
         click.echo(json_lib.dumps({"ok": True, **result}))
     else:
-        console.print(f"Installed {result['total_files']} commands for {result['agents']} agents")
+        console.print(f"Installed {result['total_files']} files for {result['agents']} agents")
 
 
 @cli.command("uninstall-skills")
@@ -1097,9 +1134,9 @@ def help_cmd(command: str | None, as_json: bool):
         ("recall", "Search brain and show what it knows (read-only)"),
         ("neuron", "Create a new neuron (--template for structured formats)"),
         ("lobe", "Create a new lobe (knowledge region)"),
-        ("dream", "Regenerate maps and neuron index, validate links"),
+        ("dream", "Regenerate maps, auto-fix safe issues, and validate remaining links"),
         ("push", "Commit and push brain changes to git"),
-        ("mri", "Generate interactive HTML brain visualization"),
+        ("mri", "Run preflight fixes and generate an interactive HTML brain visualization"),
         ("use", "Set the default brain"),
         ("install-skills", "Install kluris skill into AI agent directories"),
         ("uninstall-skills", "Remove kluris skill from all AI agent directories"),
