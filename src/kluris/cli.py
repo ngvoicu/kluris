@@ -46,7 +46,7 @@ from kluris.core.linker import (
 from kluris.core.maps import generate_brain_md, generate_index_md, generate_map_md
 from kluris.core.mri import generate_mri_html
 from kluris.core.frontmatter import read_frontmatter, update_frontmatter
-from kluris.core.agents import AGENT_REGISTRY, COMMANDS, render_commands
+from kluris.core.agents import AGENT_REGISTRY, COMMANDS, OLD_COMMAND_DIRS, render_commands
 
 console = Console()
 
@@ -870,15 +870,27 @@ def _do_install(as_json: bool = False):
         reg = AGENT_REGISTRY[agent_name]
         base = home / reg["dir"] / reg["subdir"]
 
-        # Clean slate: remove existing kluris.* files
+        import shutil
+
+        # Clean old command directories (migration from commands to skills)
+        for old_dir_rel in OLD_COMMAND_DIRS.get(agent_name, []):
+            old_dir = home / old_dir_rel
+            if old_dir.exists():
+                for old_file in old_dir.glob("kluris*"):
+                    try:
+                        if old_file.is_file():
+                            old_file.unlink()
+                        elif old_file.is_dir():
+                            shutil.rmtree(old_file)
+                    except OSError:
+                        pass
+
+        # Clean existing skill directory
         if base.exists():
-            for old_file in base.glob("kluris*"):
+            skill_dir = base / "kluris"
+            if skill_dir.exists():
                 try:
-                    if old_file.is_file():
-                        old_file.unlink()
-                    elif old_file.is_dir():
-                        import shutil
-                        shutil.rmtree(old_file)
+                    shutil.rmtree(skill_dir)
                 except OSError:
                     pass
 
@@ -892,10 +904,10 @@ def _do_install(as_json: bool = False):
     return {"agents": agent_count, "commands_per_agent": len(COMMANDS), "total_files": total_files}
 
 
-@cli.command("install-commands")
+@cli.command("install-skills")
 @click.option("--json", "as_json", is_flag=True, help="JSON output")
 def install_commands(as_json: bool):
-    """Install slash commands into AI agent directories."""
+    """Install kluris skill into AI agent directories."""
     result = _do_install(as_json)
 
     if as_json:
@@ -904,25 +916,38 @@ def install_commands(as_json: bool):
         console.print(f"Installed {result['total_files']} commands for {result['agents']} agents")
 
 
-@cli.command("uninstall-commands")
+@cli.command("uninstall-skills")
 @click.option("--json", "as_json", is_flag=True, help="JSON output")
-def uninstall_commands(as_json: bool):
-    """Remove all kluris slash commands from AI agent directories."""
+def uninstall_skills(as_json: bool):
+    """Remove all kluris skills from AI agent directories."""
     import os
     import shutil
     home = Path(os.environ.get("HOME", "")) if os.environ.get("HOME") else Path.home()
     removed = 0
 
     for agent_name, reg in AGENT_REGISTRY.items():
+        # Clean new skill dirs
         base = home / reg["dir"] / reg["subdir"]
-        if not base.exists():
-            continue
-        for item in base.glob("kluris*"):
-            if item.is_file():
-                item.unlink()
-                removed += 1
-            elif item.is_dir():
-                shutil.rmtree(item)
+        if base.exists():
+            for item in base.glob("kluris*"):
+                if item.is_file():
+                    item.unlink()
+                    removed += 1
+                elif item.is_dir():
+                    shutil.rmtree(item)
+                    removed += 1
+
+        # Clean old command dirs
+        for old_dir_rel in OLD_COMMAND_DIRS.get(agent_name, []):
+            old_dir = home / old_dir_rel
+            if old_dir.exists():
+                for item in old_dir.glob("kluris*"):
+                    if item.is_file():
+                        item.unlink()
+                        removed += 1
+                    elif item.is_dir():
+                        shutil.rmtree(item)
+                        removed += 1
                 removed += 1
 
     if as_json:
@@ -1039,8 +1064,8 @@ def help_cmd(command: str | None, as_json: bool):
         ("push", "Commit and push brain changes to git"),
         ("mri", "Generate interactive HTML brain visualization"),
         ("use", "Set the default brain"),
-        ("install-commands", "Install slash commands into AI agent directories"),
-        ("uninstall-commands", "Remove all kluris commands from agent directories"),
+        ("install-skills", "Install kluris skill into AI agent directories"),
+        ("uninstall-skills", "Remove kluris skill from all AI agent directories"),
         ("remove", "Unregister a brain (keeps files on disk)"),
         ("templates", "List available neuron templates for the current brain"),
         ("doctor", "Check prerequisites (git, Python, config dir)"),

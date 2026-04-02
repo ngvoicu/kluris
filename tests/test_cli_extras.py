@@ -47,7 +47,7 @@ def test_remove_triggers_install(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
     runner = CliRunner()
     runner.invoke(cli, ["create", "my-brain", "--path", str(tmp_path)])
-    assert (tmp_path / ".claude" / "commands" / "kluris.md").exists()
+    assert (tmp_path / ".claude" / "skills" / "kluris" / "SKILL.md").exists()
     runner.invoke(cli, ["remove", "my-brain"])
     # Commands should still exist (reinstalled for remaining brains)
     # or be cleaned if no brains left
@@ -92,7 +92,7 @@ def test_push_no_brains(tmp_path, monkeypatch):
 def test_version():
     runner = CliRunner()
     result = runner.invoke(cli, ["--version"])
-    assert "0.5" in result.output
+    assert "1.0" in result.output
 
 
 def test_main_help():
@@ -101,8 +101,8 @@ def test_main_help():
     assert "create" in result.output
     assert "clone" in result.output
     assert "dream" in result.output
-    assert "install-commands" in result.output
-    assert "uninstall-commands" in result.output
+    assert "install-skills" in result.output
+    assert "uninstall-skills" in result.output
     assert "templates" in result.output
 
 

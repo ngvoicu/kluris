@@ -1,29 +1,45 @@
-"""Agent registry and slash command rendering."""
+"""Agent registry and skill rendering (Agent Skills standard)."""
 
 from __future__ import annotations
 
 from pathlib import Path
 
+# All agents now use SKILL.md in their skills directory
 AGENT_REGISTRY: dict[str, dict] = {
-    "claude": {"dir": ".claude", "subdir": "commands", "format": "md", "args": "$ARGUMENTS"},
-    "cursor": {"dir": ".cursor", "subdir": "commands", "format": "md", "args": "$ARGUMENTS"},
-    "windsurf": {"dir": ".codeium/windsurf", "subdir": "global_workflows", "format": "md", "args": "$ARGUMENTS"},
-    "copilot": {"dir": ".copilot", "subdir": "agents", "format": "agent.md", "args": "$ARGUMENTS"},
-    "codex": {"dir": ".codex", "subdir": "skills", "format": "skill.md", "args": "$ARGUMENTS"},
-    "gemini": {"dir": ".gemini", "subdir": "commands", "format": "toml", "args": "{{args}}"},
-    "kilocode": {"dir": ".config/kilo", "subdir": "commands", "format": "md", "args": "$ARGUMENTS"},
-    "junie": {"dir": ".junie", "subdir": "commands", "format": "md", "args": "$ARGUMENTS"},
+    "claude": {"dir": ".claude", "subdir": "skills"},
+    "cursor": {"dir": ".cursor", "subdir": "skills"},
+    "windsurf": {"dir": ".codeium/windsurf", "subdir": "skills"},
+    "copilot": {"dir": ".copilot", "subdir": "skills"},
+    "codex": {"dir": ".codex", "subdir": "skills"},
+    "gemini": {"dir": ".gemini", "subdir": "skills"},
+    "kilocode": {"dir": ".kilo", "subdir": "skills"},
+    "junie": {"dir": ".junie", "subdir": "skills"},
 }
 
-# Full slash command templates matching the spec in reference-templates.md
+# Old command directories to clean up during install
+OLD_COMMAND_DIRS: dict[str, list[str]] = {
+    "claude": [".claude/commands"],
+    "cursor": [".cursor/commands"],
+    "windsurf": [".codeium/windsurf/global_workflows", ".windsurf/workflows"],
+    "copilot": [".copilot/agents"],
+    "codex": [".agents/skills"],
+    "gemini": [".gemini/commands"],
+    "kilocode": [".config/kilo/commands", ".kilocode/commands"],
+    "junie": [".junie/commands"],
+}
 
-COMMANDS = {
-    "kluris": {
-        "description": "Your team's AI brain — read, write, search, learn, and manage shared knowledge",
-        "allowed_tools": "Read, Write, Bash(cd:*), Bash(git:*), Bash(grep:*), Bash(find:*), Glob, Grep",
-        "body": """\
-{args}
+SKILL_DESCRIPTION = """\
+Your team's shared AI brain -- a git-backed knowledge base of architecture \
+decisions, service docs, API specs, conventions, and learnings. Use this \
+skill whenever the user mentions: brain, team knowledge, "what do we know \
+about", architecture decisions, service documentation, API endpoints, \
+coding standards, deployment docs, "remember this", "store this decision", \
+or wants to recall, learn, document, or work with shared project knowledge. \
+Also trigger when the user asks about how services work, why decisions \
+were made, or needs context from other projects. The brain paths are \
+baked in below -- do not search for config files."""
 
+SKILL_BODY = """\
 {brain_info}
 
 ## You are the team's subject matter expert
@@ -36,140 +52,96 @@ directory is the PROJECT you're working in.
 
 ## Reading protocol
 
-1. Read `<brain_path>/brain.md` — see description, root lobes
-2. Pick relevant lobes — read their `map.md` (max 3)
+1. Read `<brain_path>/brain.md` -- see description and root lobes
+2. Pick relevant lobes -- read their `map.md` (max 3)
 3. Drill into sub-lobes if needed
 4. Read specific neurons (max 10)
 5. Follow `related:` synapses for connected knowledge
 6. Check `glossary.md` for domain terms
 
-## What can you do?
+## Intent detection
 
 Understand the user's intent from their message:
 
-**Search** — "what do we know about X", "find info about Y"
-→ Navigate the brain, read neurons, summarize findings. Read-only.
+**Search** -- "what do we know about X", "find info about Y"
+Navigate the brain, read neurons, summarize findings. Read-only.
 
-**Think** — "implement X", "work on Y using brain knowledge"
-→ Read the brain first, then work on the task. Apply documented conventions.
-  If the task contradicts a documented decision, flag the conflict.
+**Think** -- "implement X", "work on Y using brain knowledge"
+Read the brain first, then work on the task. Apply documented conventions.
+If the task contradicts a documented decision, flag the conflict.
 
-**Learn from project** — "learn the endpoints", "document the schema"
-→ Analyze the CURRENT PROJECT, write to the BRAIN.
-  Present a plan before writing. Wait for approval.
-  Default location: `<brain_path>/services/<project-name>/`
-  Never overwrite existing neurons.
-  If user asks for OpenAPI: generate `openapi.yml` (OpenAPI 3.1), not markdown.
+**Learn from project** -- "learn the endpoints", "document the schema"
+Analyze the CURRENT PROJECT, write to the BRAIN.
+Present a plan before writing. Wait for approval.
+Default location: `<brain_path>/services/<project-name>/`
+Never overwrite existing neurons.
+If user asks for OpenAPI: generate `openapi.yml` (OpenAPI 3.1), not markdown.
 
-**Remember** — "remember we chose X", "store that we decided Y"
-→ Write a specific piece of knowledge to the brain.
-  Find the right lobe, check for existing neurons, ask before writing.
+**Remember** -- "remember we chose X", "store that we decided Y"
+Write a specific piece of knowledge to the brain.
+Find the right lobe, check for existing neurons, ask before writing.
 
-**Create neuron** — "create a decision record about X"
-→ Templates: decision (5 sections), incident (6), runbook (5).
+**Create neuron** -- "create a decision record about X"
+Templates: decision (Context, Decision, Rationale, Alternatives, Consequences),
+incident (Summary, Timeline, Root cause, Impact, Resolution, Lessons learned),
+runbook (Purpose, Prerequisites, Steps, Rollback, Contacts).
 
-**Create lobe** — "create a new section for monitoring"
-→ Create directory in brain. Remind user to run `kluris dream`.
+**Create lobe** -- "create a new section for monitoring"
+Create directory in brain. Remind user to run `kluris dream`.
 
 ## Writing rules
 
 - Frontmatter on every neuron: parent, related, tags, created, updated
 - Bidirectional synapses: if A links to B, add reverse link in B
 - Focus on decisions and rationale, not just descriptions
-- Do NOT edit map.md or brain.md
+- Do NOT edit map.md or brain.md -- auto-generated by `kluris dream`
 - After writing, remind user to run `kluris dream` then `kluris push`
 
 ## CLI commands (for mechanical operations)
 
-These are terminal commands, not slash commands:
-- `kluris dream` — regenerate maps, validate links
-- `kluris push` — commit and push brain changes to git
-- `kluris mri` — generate interactive visualization
-- `kluris templates` — list neuron templates
-""",
+These are terminal commands, not skill actions:
+- `kluris dream` -- regenerate maps, validate links
+- `kluris push` -- commit and push brain changes to git
+- `kluris mri` -- generate interactive visualization
+- `kluris templates` -- list neuron templates
+"""
+
+
+# Single COMMANDS dict for backward compat with render_commands
+COMMANDS = {
+    "kluris": {
+        "description": SKILL_DESCRIPTION,
+        "body": SKILL_BODY,
     },
 }
 
 
-def _render_md(cmd_name: str, cmd: dict, args_placeholder: str,
-               copilot: bool = False, brain_info: str = "") -> str:
-    """Render a markdown slash command file."""
-    body = cmd["body"].replace("{args}", args_placeholder)
-    body = body.replace("{brain_info}", brain_info)
-    allowed = cmd.get("allowed_tools", "")
-    fm = f"---\ndescription: {cmd['description']}\n"
-    if copilot:
-        fm += f"mode: {cmd_name}\n"
-    if allowed:
-        fm += f"allowed-tools: {allowed}\n"
-    fm += "---\n\n"
-    return fm + body + "\n"
-
-
-def _render_toml(cmd_name: str, cmd: dict, args_placeholder: str, brain_info: str = "") -> str:
-    """Render a TOML slash command file."""
-    body = cmd["body"].replace("{args}", args_placeholder)
-    body = body.replace("{brain_info}", brain_info)
-    body = body.replace('"""', '\\"\\"\\"')
-    return f'description = "{cmd["description"]}"\n\nprompt = """\n{body}\n"""\n'
-
-
-def _render_skill_md(cmd_name: str, cmd: dict, args_placeholder: str, brain_info: str = "") -> str:
-    """Render a single SKILL.md for one command (spec-kit pattern)."""
-    body = cmd["body"].replace("{args}", args_placeholder)
-    body = body.replace("{brain_info}", brain_info)
-    # Convert kluris.think -> kluris-think for directory name
-    skill_name = cmd_name.replace(".", "-")
-    frontmatter = (
+def render_skill(brain_info: str = "") -> str:
+    """Render the kluris SKILL.md content."""
+    body = SKILL_BODY.replace("{brain_info}", brain_info)
+    return (
         "---\n"
-        f"name: {skill_name}\n"
-        f"description: {cmd['description']}\n"
+        "name: kluris\n"
+        "description: >\n"
+        f"  {SKILL_DESCRIPTION}\n"
+        "allowed-tools: Read, Write, Bash, Glob, Grep\n"
         "---\n\n"
+        f"{body}\n"
     )
-    return frontmatter + f"# {cmd['description']}\n\n{body}\n"
 
 
 def render_commands(agent_name: str, output_dir: Path, brain_info: str = "") -> list[Path]:
-    """Render all slash command files for an agent into output_dir."""
-    reg = AGENT_REGISTRY[agent_name]
-    fmt = reg["format"]
-    args = reg["args"]
-    output_dir.mkdir(parents=True, exist_ok=True)
-    files = []
-
-    if fmt == "skill.md":
-        for name, cmd in COMMANDS.items():
-            skill_name = name.replace(".", "-")
-            skill_dir = output_dir / skill_name
-            skill_dir.mkdir(parents=True, exist_ok=True)
-            content = _render_skill_md(name, cmd, args, brain_info)
-            path = skill_dir / "SKILL.md"
-            path.write_text(content, encoding="utf-8")
-            files.append(path)
-    elif fmt == "toml":
-        for name, cmd in COMMANDS.items():
-            content = _render_toml(name, cmd, args, brain_info)
-            path = output_dir / f"{name}.toml"
-            path.write_text(content, encoding="utf-8")
-            files.append(path)
-    elif fmt == "agent.md":
-        for name, cmd in COMMANDS.items():
-            content = _render_md(name, cmd, args, copilot=True, brain_info=brain_info)
-            path = output_dir / f"{name}.agent.md"
-            path.write_text(content, encoding="utf-8")
-            files.append(path)
-    else:
-        for name, cmd in COMMANDS.items():
-            content = _render_md(name, cmd, args, brain_info=brain_info)
-            path = output_dir / f"{name}.md"
-            path.write_text(content, encoding="utf-8")
-            files.append(path)
-
-    return files
+    """Install kluris SKILL.md for an agent."""
+    skill_dir = output_dir / "kluris"
+    skill_dir.mkdir(parents=True, exist_ok=True)
+    content = render_skill(brain_info)
+    path = skill_dir / "SKILL.md"
+    path.write_text(content, encoding="utf-8")
+    return [path]
 
 
 def install_for_agent(agent_name: str, home: Path | None = None) -> list[Path]:
-    """Install slash commands for a specific agent at the correct home path."""
+    """Install kluris skill for a specific agent at the correct home path."""
     reg = AGENT_REGISTRY[agent_name]
     base = (home or Path.home()) / reg["dir"] / reg["subdir"]
     return render_commands(agent_name, base)

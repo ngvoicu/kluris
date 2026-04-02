@@ -206,7 +206,7 @@ Empty -- build your own structure from scratch.
 ## How it works
 
 1. `kluris create` scaffolds a brain (interactive wizard or flags)
-2. `kluris install-commands` generates slash commands for 8 AI agents
+2. `kluris install-skills` generates slash commands for 8 AI agents
 3. Use `/kluris` to search, learn, remember, and work with brain knowledge
 4. Agents read the brain and apply team knowledge to tasks
 5. `kluris dream` regenerates maps and validates links
@@ -245,8 +245,8 @@ All writes ask for approval before creating files.
 | `kluris mri` | Generate interactive HTML brain visualization |
 | `kluris use <name>` | Set the default brain |
 | `kluris templates` | List available neuron templates |
-| `kluris install-commands` | Install slash commands into AI agent directories |
-| `kluris uninstall-commands` | Remove all kluris commands from agent directories |
+| `kluris install-skills` | Install slash commands into AI agent directories |
+| `kluris uninstall-skills` | Remove all kluris commands from agent directories |
 | `kluris remove <name>` | Unregister a brain (keeps files) |
 | `kluris doctor` | Check prerequisites (git, Python, config dir) |
 | `kluris help` | Show all commands |

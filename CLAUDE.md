@@ -72,7 +72,7 @@ All defined in `src/kluris/core/agents.py` COMMANDS dict.
 
 ## CLI Commands (15+)
 
-create, clone, list, status, recall, neuron, lobe, dream, push, mri, templates, install-commands, uninstall-commands, remove, doctor, help
+create, clone, list, status, recall, neuron, lobe, dream, push, mri, templates, install-skills, uninstall-skills, remove, doctor, help
 
 ## Brain File Structure
 

@@ -125,7 +125,7 @@ def test_install_json(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
     runner = CliRunner()
     _create_brain(runner, tmp_path)
-    result = runner.invoke(cli, ["install-commands", "--json"])
+    result = runner.invoke(cli, ["install-skills", "--json"])
     data = json.loads(result.output)
     assert data["ok"] is True
     assert "agents" in data
