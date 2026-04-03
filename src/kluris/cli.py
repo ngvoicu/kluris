@@ -1005,7 +1005,9 @@ def uninstall_skills(as_json: bool):
     home = Path(os.environ.get("HOME", "")) if os.environ.get("HOME") else Path.home()
     removed = 0
 
+    agents_cleaned = []
     for agent_name, reg in AGENT_REGISTRY.items():
+        agent_removed = False
         # Clean new skill dirs
         base = home / reg["dir"] / reg["subdir"]
         if base.exists():
@@ -1013,9 +1015,11 @@ def uninstall_skills(as_json: bool):
                 if item.is_file():
                     item.unlink()
                     removed += 1
+                    agent_removed = True
                 elif item.is_dir():
+                    removed += sum(1 for _ in item.rglob("*") if _.is_file())
                     shutil.rmtree(item)
-                    removed += 1
+                    agent_removed = True
 
         # Clean old command dirs
         for old_dir_rel in OLD_COMMAND_DIRS.get(agent_name, []):
@@ -1025,15 +1029,19 @@ def uninstall_skills(as_json: bool):
                     if item.is_file():
                         item.unlink()
                         removed += 1
+                        agent_removed = True
                     elif item.is_dir():
+                        removed += sum(1 for _ in item.rglob("*") if _.is_file())
                         shutil.rmtree(item)
-                        removed += 1
-                removed += 1
+                        agent_removed = True
+
+        if agent_removed:
+            agents_cleaned.append(agent_name)
 
     if as_json:
-        click.echo(json_lib.dumps({"ok": True, "removed": removed}))
+        click.echo(json_lib.dumps({"ok": True, "removed": removed, "agents": len(agents_cleaned)}))
     else:
-        console.print(f"Removed {removed} kluris commands from agent directories")
+        console.print(f"Removed {removed} files from {len(agents_cleaned)} agents")
 
 
 @cli.command()
