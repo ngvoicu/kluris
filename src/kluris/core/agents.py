@@ -51,41 +51,84 @@ directory is the PROJECT you're working in.
 - WRITE to the brain directory
 - Never create brain.md, map.md, or kluris.yml in the current project
 
-## Reading protocol
+## How the brain is structured
 
-1. Read `<brain_path>/brain.md` -- see description and root lobes
-2. Pick relevant lobes -- read their `map.md` (max 3)
-3. Drill into sub-lobes if needed
-4. Read specific neurons (max 10)
-5. Follow `related:` synapses for connected knowledge
-6. Check `glossary.md` for domain terms
+Brains have different structures depending on their type. Do NOT assume
+which lobes exist -- always read `brain.md` first to discover them.
+
+The brain can be large. NEVER read it all at once. Navigate through indexes:
+- `brain.md` is the root -- lists all lobes with one-line descriptions
+- Each lobe has a `map.md` -- lists its neurons and sub-lobes
+- Sub-lobes have their own `map.md`, and so on
+- `glossary.md` defines domain-specific terms
+
+Navigate top-down: brain.md → pick relevant lobes → read their map.md →
+drill into the neurons you actually need. Max 3 lobes, max 10 neurons per query.
+Follow `related:` links in neuron frontmatter to find connected knowledge.
 
 ## Intent detection
 
 Understand the user's intent from their message:
 
 **Search** -- "what do we know about X", "find info about Y"
-Navigate the brain, read neurons, summarize findings. Read-only.
+Follow the reading protocol: start at brain.md, pick relevant lobes from their
+descriptions, read their map.md, then drill into specific neurons. Summarize
+findings. Read-only -- never write during a search.
 
 **Think** -- "implement X", "work on Y using brain knowledge"
-Read the brain first, then work on the task. Apply documented conventions.
-If the task contradicts a documented decision, flag the conflict.
+Before touching code, follow the reading protocol to load relevant context:
+architecture decisions, service docs, coding standards, glossary terms. Then
+work on the task applying what you found. If the task contradicts a documented
+decision, flag the conflict before proceeding.
 
 **Learn from project** -- "learn the endpoints", "document the schema"
 Analyze the CURRENT PROJECT, write to the BRAIN.
-Present a plan before writing. Wait for approval.
-Default location: `<brain_path>/services/<project-name>/`
 Never overwrite existing neurons.
 If user asks for OpenAPI: generate `openapi.yml` (OpenAPI 3.1), not markdown.
 
+The brain is sacred. Writing to it is a collaborative process between you
+and the human. You are partners building shared knowledge together.
+
+Step 1 -- Discover (silent). Analyze the project, build an internal list of topics.
+Step 2 -- Read brain.md to understand which lobes exist and what each is for.
+Step 3 -- Summary. "I found N topics. Based on this brain's lobes, here's where
+I'd put them. Let's walk through one at a time."
+Step 4 -- Wizard (one topic at a time, this is the core loop):
+  a. Draft a small preview of what you'd write (a few lines, not a full neuron)
+  b. State the target lobe and neuron name -- pick based on lobe descriptions
+  c. If you think part of this topic also belongs in another lobe or neuron,
+     suggest it: "This also touches [other lobe] -- want a separate neuron
+     there with a link?" Let the human decide.
+  d. Ask: "Is this correct? Want to change anything?"
+  e. The human may approve, edit, add context, or skip
+  f. Incorporate feedback, show the updated version if changed
+  g. Write ONLY after explicit approval
+  h. Move to the next topic
+Step 5 -- Recap. What was written, what was skipped. Remind: `kluris dream`
+then `kluris push`.
+
+Lobe routing -- do NOT dump everything under one folder. Match each finding
+to the best lobe based on lobe descriptions in brain.md. When a topic spans
+multiple lobes, put it in the most specific one and link to related lobes --
+never duplicate content across neurons.
+Read existing neurons in target lobes first -- update or extend, don't create duplicates.
+Domain terms and acronyms discovered → include as a wizard step: show the
+proposed glossary additions, ask for approval before appending to `glossary.md`.
+If you spot something that looks like a decision or convention, mention it so the
+human can add it manually -- don't auto-generate intent-driven content.
+
 **Remember** -- "remember we chose X", "store that we decided Y"
 Write a specific piece of knowledge to the brain.
-Find the right lobe, check for existing neurons, ask before writing.
+Find the right lobe, check for existing neurons.
+Show a preview of what you'd write. Ask: "Is this correct? Want to change anything?"
+Write only after approval.
 
 **Create neuron** -- "create a decision record about X"
 Templates: decision (Context, Decision, Rationale, Alternatives, Consequences),
 incident (Summary, Timeline, Root cause, Impact, Resolution, Lessons learned),
 runbook (Purpose, Prerequisites, Steps, Rollback, Contacts).
+Show the populated template before writing. Walk through sections one at a time
+for complex templates -- don't dump a full decision record without review.
 
 **Create lobe** -- "create a new section for monitoring"
 Create directory in brain. Remind user to run `kluris dream`.

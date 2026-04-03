@@ -47,3 +47,16 @@ def test_lobe_triggers_dream(tmp_path, monkeypatch):
     runner.invoke(cli, ["lobe", "experiments"])
     brain_md = (tmp_path / "my-brain" / "brain.md").read_text()
     assert "experiments" in brain_md
+
+
+def test_lobe_rejects_paths_outside_brain(tmp_path, monkeypatch):
+    monkeypatch.setenv("KLURIS_CONFIG", str(tmp_path / "config.yml"))
+    monkeypatch.setenv("HOME", str(tmp_path))
+    runner = CliRunner()
+    runner.invoke(cli, ["create", "my-brain", "--path", str(tmp_path)])
+
+    result = runner.invoke(cli, ["lobe", "secret", "--parent", "../my-brain-escape"])
+
+    assert result.exit_code != 0
+    assert "Path escapes the brain directory" in result.output
+    assert not (tmp_path / "my-brain-escape" / "secret").exists()

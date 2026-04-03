@@ -88,14 +88,14 @@ def _read_brain_identity(brain_path: Path, fallback_name: str) -> tuple[str, str
 
 
 def _brain_directories(brain_path: Path) -> list[Path]:
-    """Return all brain directories that should have map.md files."""
+    """Return all brain directories, deepest first so children get map.md before parents."""
     directories = [
         path for path in brain_path.rglob("*")
         if path.is_dir() and ".git" not in path.parts
     ]
     return sorted(
         directories,
-        key=lambda path: (len(path.relative_to(brain_path).parts), str(path)),
+        key=lambda path: (-len(path.relative_to(brain_path).parts), str(path)),
     )
 
 
@@ -103,7 +103,12 @@ def _run_dream_on_brain(brain_path: Path) -> None:
     """Regenerate maps, brain.md, and index.md for a single brain."""
     try:
         brain_config = read_brain_config(brain_path)
-        for lobe in _brain_directories(brain_path):
+        directories = _brain_directories(brain_path)
+        # Pass 1: create all map.md (deepest first so parents see children)
+        for lobe in directories:
+            generate_map_md(brain_path, lobe)
+        # Pass 2: regenerate so siblings see each other's map.md
+        for lobe in directories:
             generate_map_md(brain_path, lobe)
         generate_brain_md(brain_path, brain_config.name, brain_config.description)
         generate_index_md(brain_path)
@@ -112,7 +117,17 @@ def _run_dream_on_brain(brain_path: Path) -> None:
         print(f"Warning: dream failed: {e}", file=sys.stderr)
 
 
-def _sync_brain_state(brain_path: Path, brain_config) -> dict[str, int]:
+def _ensure_within_brain(path: Path, brain_path: Path) -> None:
+    """Reject paths that escape the selected brain directory."""
+    try:
+        path.resolve().relative_to(brain_path.resolve())
+    except ValueError as exc:
+        raise click.ClickException(
+            "Path escapes the brain directory. Use a relative path within the brain."
+        ) from exc
+
+
+def _sync_brain_state(brain_path: Path, brain_config) -> dict:
     """Bring generated files and auto-fixable metadata up to date."""
     fixes = {
         "dates_updated": 0,
@@ -150,16 +165,31 @@ def _sync_brain_state(brain_path: Path, brain_config) -> dict[str, int]:
     fixes["reverse_synapses_added"] = fix_bidirectional_synapses(brain_path)
     orphans_before = detect_orphans(brain_path)
 
-    for lobe in _brain_directories(brain_path):
+    directories = _brain_directories(brain_path)
+    maps_regenerated = []
+    # Pass 1: create all map.md (deepest first so parents see children)
+    for lobe in directories:
+        generate_map_md(brain_path, lobe)
+        maps_regenerated.append(str(lobe.relative_to(brain_path)))
+    # Pass 2: regenerate so siblings see each other's map.md
+    for lobe in directories:
         generate_map_md(brain_path, lobe)
 
     generate_brain_md(brain_path, brain_config.name, brain_config.description)
     generate_index_md(brain_path)
 
+    # Discover lobes from the freshly generated brain.md
+    from kluris.core.maps import _get_lobes
+    lobes_discovered = [l["name"] for l in _get_lobes(brain_path)]
+
     orphans_after = detect_orphans(brain_path)
     fixes["orphan_references_added"] = max(0, len(orphans_before) - len(orphans_after))
     fixes["total"] = sum(fixes.values())
-    return fixes
+    return {
+        "fixes": fixes,
+        "maps_regenerated": maps_regenerated,
+        "lobes_discovered": lobes_discovered,
+    }
 
 
 class KlurisGroup(click.Group):
@@ -213,7 +243,7 @@ def _resolve_brains(brain_name: str | None, multi: bool = True) -> list[tuple[st
     )
 
 
-def _set_default_brain(name: str) -> str:
+def _set_default_brain(name: str | None) -> str | None:
     """Persist the given brain as the default and return it."""
     config = read_global_config()
     config.default_brain = name
@@ -450,10 +480,13 @@ def clone_cmd(url: str | None, path: str | None, branch_name: str | None, as_jso
     inferred_type = infer_brain_type(dest)
     if not (dest / "kluris.yml").exists():
         from kluris.core.config import BrainConfig, GitConfig, write_brain_config
+        from kluris.core.git import _run
+
+        actual_branch = _run(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=dest).stdout.strip()
         local_config = BrainConfig(
             name=name,
             description=description,
-            git=GitConfig(default_branch=branch_name or "main"),
+            git=GitConfig(default_branch=actual_branch or branch_name or "main"),
         )
         write_brain_config(local_config, dest)
 
@@ -610,7 +643,7 @@ def neuron(file_path: str, lobe: str | None, template_name: str | None,
     Examples:
       kluris neuron auth.md --lobe architecture
       kluris neuron use-raw-sql.md --lobe decisions --template decision
-      kluris neuron outage-jan.md --lobe wisdom --template incident
+      kluris neuron outage-jan.md --lobe learnings --template incident
     """
     brains = _resolve_brains(brain_name, multi=False)
     name, entry = brains[0]
@@ -621,9 +654,7 @@ def neuron(file_path: str, lobe: str | None, template_name: str | None,
     else:
         target_dir = (brain_path / Path(file_path).parent).resolve() if "/" in file_path else brain_path
 
-    # Security: ensure target stays inside the brain
-    if not str(target_dir).startswith(str(brain_path.resolve())):
-        raise click.ClickException("Path escapes the brain directory. Use a relative path within the brain.")
+    _ensure_within_brain(target_dir, brain_path)
 
     target_dir.mkdir(parents=True, exist_ok=True)
     target_file = target_dir / Path(file_path).name
@@ -674,9 +705,7 @@ def lobe_cmd(name: str, parent_dir: str | None, desc: str,
     else:
         lobe_path = (brain_path / name).resolve()
 
-    # Security: ensure lobe stays inside the brain
-    if not str(lobe_path).startswith(str(brain_path.resolve())):
-        raise click.ClickException("Path escapes the brain directory. Use a relative path within the brain.")
+    _ensure_within_brain(lobe_path, brain_path)
 
     lobe_path.mkdir(parents=True, exist_ok=True)
 
@@ -718,7 +747,10 @@ def dream(brain_name: str | None, as_json: bool):
     for name, entry in brains:
         brain_path = Path(entry["path"])
         brain_config = read_brain_config(brain_path)
-        brain_fixes = _sync_brain_state(brain_path, brain_config)
+        sync_result = _sync_brain_state(brain_path, brain_config)
+        brain_fixes = sync_result["fixes"]
+        maps_regenerated = sync_result["maps_regenerated"]
+        lobes_discovered = sync_result["lobes_discovered"]
 
         # Validate
         broken = validate_synapses(brain_path)
@@ -739,6 +771,8 @@ def dream(brain_name: str | None, as_json: bool):
 
         if not as_json:
             console.print(f"\n[bold]{name}[/bold] health report:")
+            console.print(f"  Lobes: {', '.join(lobes_discovered)}")
+            console.print(f"  Maps regenerated: {len(maps_regenerated)} ({', '.join(maps_regenerated)})")
             console.print(f"  {'[green]OK[/green]' if not broken else f'[red]{len(broken)} broken[/red]'} synapses")
             console.print(f"  {'[green]OK[/green]' if not one_way else f'[yellow]{len(one_way)} one-way[/yellow]'} bidirectional")
             console.print(f"  {'[green]OK[/green]' if not orphans else f'[yellow]{len(orphans)} orphans[/yellow]'}")
@@ -842,7 +876,14 @@ def use_brain(brain_name: str, as_json: bool):
             f"Run 'kluris list' to see available brains."
         )
 
+    # Install skills first -- only persist the new default if install succeeds
+    old_default = config.default_brain
     _set_default_brain(brain_name)
+    try:
+        _do_install(as_json=as_json)
+    except Exception as e:
+        _set_default_brain(old_default)
+        raise click.ClickException(f"Skill installation failed, default brain not changed: {e}")
 
     if as_json:
         click.echo(json_lib.dumps({"ok": True, "default_brain": brain_name}))
@@ -861,17 +902,17 @@ def mri(brain_name: str | None, output_path: str | None, as_json: bool):
     for name, entry in brains:
         brain_path = Path(entry["path"])
         brain_config = read_brain_config(brain_path)
-        fixes = _sync_brain_state(brain_path, brain_config)
+        sync_result = _sync_brain_state(brain_path, brain_config)
         out = Path(output_path) if output_path else brain_path / "brain-mri.html"
         stats = generate_mri_html(brain_path, out)
 
         if as_json:
-            click.echo(json_lib.dumps({"ok": True, "output_path": str(out), "preflight_fixes": fixes, **stats}))
+            click.echo(json_lib.dumps({"ok": True, "output_path": str(out), "preflight_fixes": sync_result["fixes"], **stats}))
         else:
             console.print(f"MRI complete — {out}")
             console.print(f"  {stats['nodes']} nodes, {stats['edges']} edges")
-            if fixes["total"]:
-                console.print(f"  MRI preflight applied {fixes['total']} automatic fixes")
+            if sync_result["fixes"]["total"]:
+                console.print(f"  MRI preflight applied {sync_result['fixes']['total']} automatic fixes")
 
 
 def _do_install(as_json: bool = False):

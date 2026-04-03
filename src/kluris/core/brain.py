@@ -42,8 +42,7 @@ BRAIN_TYPES: dict[str, dict] = {
             "standards": "Coding standards, naming conventions, review checklists",
             "services": "Per-service sub-folders with setup, APIs, data models",
             "infrastructure": "Hosting, CI/CD, Docker, networking, deployment",
-            "cortex": "Runbooks, playbooks, dev workflows, onboarding, migration plans",
-            "wisdom": "Domain knowledge, learnings, dated notes",
+            "learnings": "Domain knowledge, lessons learned, troubleshooting tips, dated notes",
         },
     },
     "personal": {
@@ -283,13 +282,8 @@ kluris clone <this-repo-url>
 
 ### Start populating the brain
 
-```
-/kluris learn the API endpoints from this project
-/kluris learn the database schema
-/kluris remember we chose raw SQL over JPA for performance
-```
-
-One command does everything. The agent reads your intent and acts accordingly.
+One command does everything: `/kluris <natural language>`. The agent reads your
+intent and acts accordingly.
 
 {lobe_section}
 
@@ -299,11 +293,78 @@ One command does everything. The agent reads your intent and acts accordingly.
 {tree_output}
 ```
 
-## Slash commands
+## How to use /kluris
 
-| Command | What it does |
-|---------|-------------|
-| `/kluris <anything>` | One command handles everything -- search, learn, remember, think, create. |
+Everything goes through one slash command. The agent detects your intent.
+
+### Search -- ask questions, get answers from the brain
+
+```
+/kluris what do we know about authentication?
+/kluris how does the Docker setup work?
+/kluris what conventions do we follow for API naming?
+/kluris find everything related to Keycloak
+```
+
+Read-only. The agent navigates the brain, reads relevant neurons, and
+summarizes what it finds. Use this when you need context before starting work.
+
+### Think -- work on a task using brain knowledge
+
+```
+/kluris add a new API endpoint for user preferences
+/kluris fix the auth token refresh -- use brain knowledge
+/kluris refactor the data layer following our conventions
+/kluris implement the notification system
+```
+
+The agent reads the brain first (architecture, conventions, related service
+docs), then works on the task. If the task contradicts a documented decision,
+it flags the conflict before proceeding.
+
+### Learn -- collaboratively document a project into the brain
+
+```
+/kluris learn the API endpoints from this project
+/kluris learn the database schema
+/kluris learn about the Docker and deployment setup
+/kluris learn everything about this service
+```
+
+This is a collaborative wizard, not a dump. The agent analyzes the project,
+then walks through findings one at a time. For each piece of knowledge:
+1. It shows a small preview of what it would write
+2. It suggests which lobe and neuron name to use
+3. It asks: "Is this correct? Want to change anything?"
+4. You approve, edit, add context, or skip
+5. It writes only after your explicit approval
+
+The agent routes findings to the correct lobes (services, infrastructure,
+glossary) and suggests cross-lobe links when a topic spans multiple areas.
+
+### Remember -- store a specific decision or piece of knowledge
+
+```
+/kluris remember we chose raw SQL over JPA for performance
+/kluris remember the frontend health check is at /api/health
+/kluris remember we use Cloudflare Tunnel with zero public ports
+/kluris store that all timestamps must be TIMESTAMPTZ
+```
+
+The agent finds the right lobe, shows a preview, and asks for confirmation
+before writing.
+
+### Create -- make a new neuron from a template
+
+```
+/kluris create a decision record about migrating to Keycloak
+/kluris create an incident report for the January outage
+/kluris create a runbook for deploying to production
+/kluris create a new lobe for monitoring
+```
+
+For structured templates (decision, incident, runbook), the agent walks
+through sections one at a time so you can review each part.
 
 ## CLI commands
 

@@ -186,6 +186,22 @@ def test_dream_shows_fix_counts_in_output(tmp_path, monkeypatch):
     assert "2 missing neuron references added to parent map.md files" in result.output
 
 
+def test_dream_shows_lobes_and_maps(tmp_path, monkeypatch):
+    """Dream output must list discovered lobes and regenerated maps."""
+    monkeypatch.setenv("KLURIS_CONFIG", str(tmp_path / "config.yml"))
+    monkeypatch.setenv("HOME", str(tmp_path))
+    runner = CliRunner()
+    runner.invoke(cli, ["create", "my-brain", "--path", str(tmp_path)])
+
+    result = runner.invoke(cli, ["dream"])
+
+    assert result.exit_code == 0
+    assert "Lobes:" in result.output
+    assert "architecture" in result.output
+    assert "services" in result.output
+    assert "Maps regenerated:" in result.output
+
+
 def test_dream_reports_broken_related_synapse(tmp_path, monkeypatch):
     monkeypatch.setenv("KLURIS_CONFIG", str(tmp_path / "config.yml"))
     monkeypatch.setenv("HOME", str(tmp_path))
@@ -226,3 +242,41 @@ def test_dream_generates_nested_maps(tmp_path, monkeypatch):
 
     assert result.exit_code == 0
     assert (tmp_path / "my-brain" / "services" / "api" / "map.md").exists()
+
+
+def test_dream_sub_lobe_listed_in_parent_map(tmp_path, monkeypatch):
+    """After dream, parent lobe's map.md must contain a link to the sub-lobe."""
+    monkeypatch.setenv("KLURIS_CONFIG", str(tmp_path / "config.yml"))
+    monkeypatch.setenv("HOME", str(tmp_path))
+    runner = CliRunner()
+    runner.invoke(cli, ["create", "my-brain", "--path", str(tmp_path)])
+    (tmp_path / "my-brain" / "services" / "api").mkdir(parents=True)
+    (tmp_path / "my-brain" / "services" / "api" / "endpoints.md").write_text(
+        "---\nparent: ./map.md\nrelated: []\ntags: []\ncreated: 2026-04-01\nupdated: 2026-04-01\n---\n# Endpoints\n",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(cli, ["dream"])
+
+    assert result.exit_code == 0
+    parent_map = (tmp_path / "my-brain" / "services" / "map.md").read_text(encoding="utf-8")
+    assert "api/" in parent_map
+    assert "api/map.md" in parent_map
+
+
+def test_dream_sibling_sub_lobes_see_each_other(tmp_path, monkeypatch):
+    """Two sibling sub-lobes created together must both appear in each other's sideways links."""
+    monkeypatch.setenv("KLURIS_CONFIG", str(tmp_path / "config.yml"))
+    monkeypatch.setenv("HOME", str(tmp_path))
+    runner = CliRunner()
+    runner.invoke(cli, ["create", "my-brain", "--path", str(tmp_path)])
+    (tmp_path / "my-brain" / "services" / "api").mkdir(parents=True)
+    (tmp_path / "my-brain" / "services" / "web").mkdir(parents=True)
+
+    result = runner.invoke(cli, ["dream"])
+
+    assert result.exit_code == 0
+    api_map = (tmp_path / "my-brain" / "services" / "api" / "map.md").read_text(encoding="utf-8")
+    web_map = (tmp_path / "my-brain" / "services" / "web" / "map.md").read_text(encoding="utf-8")
+    assert "web" in api_map, "api/map.md should list web as sibling"
+    assert "api" in web_map, "web/map.md should list api as sibling"

@@ -71,3 +71,16 @@ def test_neuron_template_not_found(tmp_path, monkeypatch):
     result = runner.invoke(cli, ["neuron", "x.md", "--lobe", "architecture", "--template", "nonexistent"])
     assert result.exit_code != 0
     assert "not found" in result.output.lower()
+
+
+def test_neuron_rejects_paths_outside_brain(tmp_path, monkeypatch):
+    monkeypatch.setenv("KLURIS_CONFIG", str(tmp_path / "config.yml"))
+    monkeypatch.setenv("HOME", str(tmp_path))
+    runner = CliRunner()
+    runner.invoke(cli, ["create", "my-brain", "--path", str(tmp_path)])
+
+    result = runner.invoke(cli, ["neuron", "pwn.md", "--lobe", "../my-brain-escape"])
+
+    assert result.exit_code != 0
+    assert "Path escapes the brain directory" in result.output
+    assert not (tmp_path / "my-brain-escape" / "pwn.md").exists()

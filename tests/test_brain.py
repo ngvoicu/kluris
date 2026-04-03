@@ -16,7 +16,7 @@ def test_scaffold_team(tmp_path):
     brain = tmp_path / "brain"
     expected_lobes = [
         "architecture", "decisions", "product", "standards",
-        "services", "infrastructure", "cortex", "wisdom",
+        "services", "infrastructure", "learnings",
     ]
     for lobe in expected_lobes:
         assert (brain / lobe).is_dir(), f"Missing lobe: {lobe}"

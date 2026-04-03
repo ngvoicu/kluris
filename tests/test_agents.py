@@ -39,7 +39,7 @@ def test_render_skill_content(tmp_path):
     content = files[0].read_text()
     assert "name: kluris" in content
     assert "test-brain" in content
-    assert "Reading protocol" in content
+    assert "How the brain is structured" in content
     assert "Intent detection" in content
 
 

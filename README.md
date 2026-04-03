@@ -65,35 +65,38 @@ kluris create my-brain --type personal --path ~/brains
 kluris create my-brain --remote git@github.com:team/brain.git
 ```
 
-Then open any project and run `/kluris learn the endpoints` -- the AI agent will
-analyze that part of the codebase, show you a plan, and ask before writing
-knowledge into the brain.
+Then open any project and run `/kluris learn the endpoints` -- the agent will
+analyze the codebase and walk you through its findings one at a time, asking
+for your review before writing anything to the brain.
 
 ### Example workflow
 
 ```bash
-# 1. Create a brain (wizard or one-liner)
+# 1. Create a brain
 kluris create
 
-# 2. In your backend project, run the slash command:
-#    /kluris learn about architecture and API design
+# 2. In your backend project -- learn collaboratively:
+#    /kluris learn the API endpoints and data model
+#    (agent walks through findings one at a time, you review each)
 
 # 3. In your frontend project:
-#    /kluris learn about components and state management
+#    /kluris learn the components and routing
+#    (infra findings go to infrastructure/, service docs to services/)
 
-# 4. Now any agent in any project can use the brain:
-#    /kluris implement the new auth flow
-#    (agent loads architecture decisions, API contracts, conventions)
+# 4. Store decisions you made along the way:
+#    /kluris remember we chose raw SQL over JPA for query complexity
+#    /kluris create a decision record about the auth architecture
 
-# 5. After a session with useful decisions:
-#    /kluris remember what we learned
+# 5. Now any agent in any project can use the brain:
+#    /kluris what do we know about the auth flow?
+#    /kluris implement the new endpoint following our conventions
 
 # 6. Validate and push
-kluris dream         # Regenerate maps, auto-fix safe issues, validate remaining links
+kluris dream         # Regenerate maps, validate links
 kluris push          # Commit and push to git
 
 # 7. Visualize the brain
-kluris mri           # Run preflight fixes, then generate brain-mri.html
+kluris mri           # Generate interactive brain-mri.html
 ```
 
 ## What a brain looks like
@@ -142,8 +145,7 @@ with 3 backends, a frontend, and shared infrastructure.
 | `standards/` | Coding standards, naming conventions, review checklists |
 | `services/` | Per-service sub-folders -- each service gets its own map.md, APIs, data models |
 | `infrastructure/` | Hosting, CI/CD, Docker, networking, deployment, environments |
-| `cortex/` | Runbooks, playbooks, dev workflows, onboarding, migration plans |
-| `wisdom/` | Domain knowledge, learnings, things figured out along the way |
+| `learnings/` | Domain knowledge, lessons learned, troubleshooting tips, dated notes |
 
 The `services/` lobe nests deeper -- one sub-folder per service:
 
@@ -243,20 +245,87 @@ Once the `v1.0.8` tag reaches GitHub, the publish pipeline builds the package an
 
 One command does everything: `/kluris <natural language>`
 
+The agent reads your intent and acts accordingly. The brain is treated as
+sacred -- every write is a collaborative, step-by-step process with human
+review. Nothing is written without your explicit approval.
+
+### Search -- ask the brain, get answers
+
 ```
-/kluris what do we know about auth
+/kluris what do we know about authentication?
+/kluris how does the Docker setup work?
+/kluris what conventions do we follow for API naming?
+/kluris find everything related to Keycloak
+/kluris what's the deployment process for btb-backend?
+```
+
+Read-only. The agent navigates the brain and summarizes findings. Use this
+when you need context before starting work.
+
+### Think -- work on a task, informed by brain knowledge
+
+```
+/kluris add a new API endpoint for user preferences
+/kluris fix the auth token refresh -- use brain knowledge
+/kluris refactor the data layer following our conventions
+/kluris implement the notification system
+```
+
+The agent reads the brain first (architecture, conventions, service docs),
+then works on the task. Flags conflicts with documented decisions.
+
+### Learn -- collaboratively document a project
+
+```
 /kluris learn the API endpoints from this project
-/kluris remember what we learned we chose raw SQL over JPA for performance
-/kluris implement the new auth flow using brain knowledge
-/kluris create a decision record about migrating to Keycloak
-/kluris create openapi docs for this service
+/kluris learn the database schema
+/kluris learn about the Docker and deployment setup
+/kluris learn everything about this service
 ```
 
-The agent reads your intent and acts accordingly -- search, learn, remember,
-think, create neurons, or generate OpenAPI docs. It reads the brain config
-to find your brain path, then reads from and writes to that directory.
+A collaborative wizard. The agent analyzes the project, then walks through
+findings **one at a time**:
 
-All writes ask for approval before creating files.
+1. Shows a small preview of what it would write
+2. Suggests the target lobe and neuron name
+3. If a topic spans lobes, suggests cross-links: "This also touches
+   infrastructure -- want a separate neuron there?"
+4. Asks: "Is this correct? Want to change anything?"
+5. You approve, edit, add context, or skip
+6. Writes only after explicit approval
+7. Moves to the next topic
+
+Findings are routed to the correct lobes automatically -- service-specific
+knowledge goes to `services/`, infrastructure facts go to `infrastructure/`,
+and domain terms go to `glossary.md`. The agent never duplicates content
+across lobes -- it links instead.
+
+Decisions, standards, and learnings are **not auto-generated** -- these
+require human intent. If the agent spots something that looks like a decision,
+it mentions it so you can add it manually.
+
+### Remember -- store a specific piece of knowledge
+
+```
+/kluris remember we chose raw SQL over JPA for performance
+/kluris remember the frontend health check is at /api/health
+/kluris remember we use Cloudflare Tunnel with zero public ports
+/kluris store that all timestamps must be TIMESTAMPTZ
+```
+
+Preview before writing. Confirmation required.
+
+### Create -- make a neuron from a template
+
+```
+/kluris create a decision record about migrating to Keycloak
+/kluris create an incident report for the January outage
+/kluris create a runbook for deploying to production
+/kluris create openapi docs for this service
+/kluris create a new lobe for monitoring
+```
+
+For structured templates, the agent walks through sections step by step.
 
 ## CLI commands
 

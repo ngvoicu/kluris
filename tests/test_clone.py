@@ -33,6 +33,33 @@ def _create_remote_brain(tmp_path, monkeypatch):
     return bare
 
 
+def _create_remote_brain_on_branch(tmp_path, monkeypatch, branch_name):
+    """Create a brain on a non-main branch, push to bare remote, return remote path."""
+    monkeypatch.setenv("KLURIS_CONFIG", str(tmp_path / "config.yml"))
+    monkeypatch.setenv("HOME", str(tmp_path))
+    runner = CliRunner()
+    runner.invoke(
+        cli,
+        ["create", "source-brain", "--path", str(tmp_path), "--branch", branch_name, "--remote", str(tmp_path / "remote.git")],
+    )
+
+    bare = tmp_path / "remote.git"
+    subprocess.run(["git", "init", "--bare", str(bare)], capture_output=True)
+    subprocess.run(
+        ["git", "symbolic-ref", "HEAD", f"refs/heads/{branch_name}"],
+        cwd=str(bare), capture_output=True,
+    )
+    subprocess.run(
+        ["git", "remote", "add", "origin", str(bare)],
+        cwd=tmp_path / "source-brain", capture_output=True,
+    )
+    subprocess.run(
+        ["git", "push", "origin", branch_name],
+        cwd=tmp_path / "source-brain", capture_output=True,
+    )
+    return bare
+
+
 def _use_fresh_clone_registry(tmp_path, monkeypatch):
     monkeypatch.setenv("KLURIS_CONFIG", str(tmp_path / "clone-config.yml"))
     monkeypatch.setenv("HOME", str(tmp_path))
@@ -124,3 +151,16 @@ def test_clone_rejects_duplicate_canonical_name(tmp_path, monkeypatch):
     second_result = runner.invoke(cli, ["clone", str(bare), str(second_dest)])
     assert second_result.exit_code != 0
     assert "already registered" in second_result.output
+
+
+def test_clone_records_checked_out_branch_when_remote_default_is_not_main(tmp_path, monkeypatch):
+    bare = _create_remote_brain_on_branch(tmp_path, monkeypatch, "develop")
+    _use_fresh_clone_registry(tmp_path, monkeypatch)
+    runner = CliRunner()
+    dest = tmp_path / "cloned-branch-brain"
+
+    result = runner.invoke(cli, ["clone", str(bare), str(dest)])
+
+    assert result.exit_code == 0
+    brain_config = read_brain_config(dest)
+    assert brain_config.git.default_branch == "develop"
