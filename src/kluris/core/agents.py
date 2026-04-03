@@ -35,7 +35,7 @@ decisions, service docs, API specs, conventions, and learnings. Use this \
 skill whenever the user mentions: brain, team knowledge, "what do we know \
 about", architecture decisions, service documentation, API endpoints, \
 coding standards, deployment docs, "remember this", "store this decision", \
-or wants to recall, learn, document, or work with shared project knowledge. \
+or wants to search, learn, document, or work with shared project knowledge. \
 Also trigger when the user asks about how services work, why decisions \
 were made, or needs context from other projects. The brain paths are \
 baked in below -- do not search for config files."""
@@ -94,8 +94,10 @@ Step 2 -- Read brain.md to understand which lobes exist and what each is for.
 Step 3 -- Summary. "I found N topics. Based on this brain's lobes, here's where
 I'd put them. Let's walk through one at a time."
 Step 4 -- Wizard (one topic at a time, this is the core loop):
-  a. Draft a small preview of what you'd write (a few lines, not a full neuron)
-  b. State the target lobe and neuron name -- pick based on lobe descriptions
+  a. Show the FULL content you intend to write -- not a summary, the actual
+     neuron with all sections, frontmatter, and links. The human must see
+     exactly what will be written to judge correctness.
+  b. State the target lobe and neuron name -- pick based on lobe descriptions.
   c. If you think part of this topic also belongs in another lobe or neuron,
      suggest it: "This also touches [other lobe] -- want a separate neuron
      there with a link?" Let the human decide.
@@ -107,11 +109,13 @@ Step 4 -- Wizard (one topic at a time, this is the core loop):
 Step 5 -- Recap. What was written, what was skipped. Remind: `kluris dream`
 then `kluris push`.
 
-Lobe routing -- do NOT dump everything under one folder. Match each finding
-to the best lobe based on lobe descriptions in brain.md. When a topic spans
-multiple lobes, put it in the most specific one and link to related lobes --
-never duplicate content across neurons. Project neurons link to infrastructure
-neurons for deployment, environments, and env vars -- never duplicate infra content.
+Lobe routing -- when learning a single project, default to putting everything
+under that project's folder (e.g. projects/<name>/). Only route to other lobes
+when something is genuinely cross-cutting -- shared infrastructure used by
+multiple projects, or a decision that affects ALL projects, not just this one.
+If unsure, ask: "This could go in [other lobe] since it's cross-cutting,
+or stay in projects/<name>/ since it's specific to this project. Which do
+you prefer?"
 Read existing neurons in target lobes first -- update or extend, don't create duplicates.
 Domain terms and acronyms discovered → include as a wizard step: show the
 proposed glossary additions, ask for approval before appending to `glossary.md`.
