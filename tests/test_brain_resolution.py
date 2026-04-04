@@ -41,24 +41,6 @@ def test_single_brain_auto(tmp_path, monkeypatch):
     assert len(data["brains"]) == 1
 
 
-def test_multi_brain_recall_all(tmp_path, monkeypatch):
-    monkeypatch.setenv("KLURIS_CONFIG", str(tmp_path / "config.yml"))
-    monkeypatch.setenv("HOME", str(tmp_path))
-    runner = CliRunner()
-    create_test_brain(runner, "brain-a", tmp_path)
-    create_test_brain(runner, "brain-b", tmp_path)
-    # Remove default so it doesn't short-circuit to one brain
-    from kluris.core.config import read_global_config, write_global_config
-    cfg = read_global_config()
-    cfg.default_brain = None
-    write_global_config(cfg)
-    # recall operates on all when multi-brain
-    (tmp_path / "brain-a" / "projects" / "auth.md").write_text("# Keycloak Auth\n", encoding="utf-8")
-    result = runner.invoke(cli, ["recall", "Keycloak", "--json"])
-    data = json.loads(result.output)
-    assert data["ok"] is True
-
-
 def test_multi_brain_neuron_error(tmp_path, monkeypatch):
     monkeypatch.setenv("KLURIS_CONFIG", str(tmp_path / "config.yml"))
     monkeypatch.setenv("HOME", str(tmp_path))

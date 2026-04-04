@@ -70,7 +70,7 @@ Follow `related:` links in neuron frontmatter to find connected knowledge.
 
 Understand the user's intent from their message:
 
-**Search** -- "what do we know about X", "find info about Y"
+**Search** -- "`/kluris search X`", "what do we know about X", "find info about Y"
 Follow the reading protocol: start at brain.md, pick relevant lobes from their
 descriptions, read their map.md, then drill into specific neurons. Summarize
 findings. Read-only -- never write during a search.

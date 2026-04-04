@@ -62,13 +62,6 @@ def test_status_no_brains(tmp_path, monkeypatch):
     assert "No brains" in result.output
 
 
-def test_recall_no_brains(tmp_path, monkeypatch):
-    monkeypatch.setenv("KLURIS_CONFIG", str(tmp_path / "config.yml"))
-    runner = CliRunner()
-    result = runner.invoke(cli, ["recall", "anything"])
-    assert result.exit_code != 0
-
-
 def test_dream_no_brains(tmp_path, monkeypatch):
     monkeypatch.setenv("KLURIS_CONFIG", str(tmp_path / "config.yml"))
     runner = CliRunner()

@@ -292,10 +292,14 @@ intent and acts accordingly.
 ## How to use /kluris
 
 Everything goes through one slash command. The agent detects your intent.
+Search and guided documentation happen in `/kluris`; the CLI is for mechanical
+operations like `dream`, `push`, and `status`.
 
 ### Search -- ask questions, get answers from the brain
 
 ```
+/kluris search authentication
+/kluris search Docker setup
 /kluris what do we know about authentication?
 /kluris how does the Docker setup work?
 /kluris what conventions do we follow for API naming?
@@ -329,7 +333,7 @@ it flags the conflict before proceeding.
 
 This is a collaborative wizard, not a dump. The agent analyzes the project,
 then walks through findings one at a time:
-1. Shows the full neuron content it intends to write
+1. Shows a small preview of what it intends to write
 2. Suggests the target lobe and neuron name
 3. Asks: "Is this correct? Want to change anything?"
 4. You approve, edit, add context the code doesn't show, or skip

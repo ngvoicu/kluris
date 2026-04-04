@@ -12,7 +12,7 @@ Kluris is a Python CLI tool that creates and manages **brains** -- git-backed re
 cd kluris-cli
 source .venv/bin/activate        # or: pipx install -e .
 pip install -e ".[dev]"          # dev install with pytest
-pytest tests/ -v                 # run all tests (221 tests)
+pytest tests/ -v                 # run all tests (229 tests)
 pytest tests/ --cov=kluris -q    # with coverage (90%+)
 pytest tests/test_create.py -v   # single test file
 ```
@@ -21,7 +21,7 @@ pytest tests/test_create.py -v   # single test file
 
 ```
 src/kluris/
-  cli.py              # Click CLI -- all 17 commands in one file
+  cli.py              # Click CLI -- all 16 commands in one file
   core/
     config.py          # Pydantic models (GlobalConfig, BrainConfig, BrainEntry)
     brain.py           # BRAIN_TYPES, NEURON_TEMPLATES, scaffold_brain(), validate_brain_name()
@@ -68,10 +68,11 @@ src/kluris/
 
 One `kluris` skill is installed across supported agents.
 Windsurf also gets a `kluris.md` workflow for manual invocation.
+Search and guided documentation happen through `/kluris` in the agent, not a separate CLI search command.
 
-## CLI Commands (17)
+## CLI Commands (16)
 
-create, clone, list, status, recall, neuron, lobe, dream, push, mri, templates, install-skills, uninstall-skills, remove, doctor, help
+create, clone, list, status, neuron, lobe, dream, push, mri, templates, install-skills, uninstall-skills, remove, doctor, help, use
 
 ## Brain File Structure
 
@@ -101,7 +102,7 @@ create, clone, list, status, recall, neuron, lobe, dream, push, mri, templates, 
 
 ## Testing
 
-- 221 tests across 22 test files
+- 229 tests across 27 test files
 - conftest.py has 5 fixtures: cli_runner, temp_config, temp_home, temp_brain, bare_remote
 - Tests use monkeypatch for KLURIS_CONFIG and HOME env vars
 - Git tests use real git in tmp_path (not mocked)

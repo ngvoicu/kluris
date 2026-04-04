@@ -50,18 +50,6 @@ def test_status_json(tmp_path, monkeypatch):
     assert "neurons" in data["brains"][0]
 
 
-def test_recall_json(tmp_path, monkeypatch):
-    monkeypatch.setenv("KLURIS_CONFIG", str(tmp_path / "config.yml"))
-    monkeypatch.setenv("HOME", str(tmp_path))
-    runner = CliRunner()
-    _create_brain(runner, tmp_path)
-    result = runner.invoke(cli, ["recall", "projects", "--json"])
-    data = json.loads(result.output)
-    assert data["ok"] is True
-    assert "query" in data
-    assert "results" in data
-
-
 def test_neuron_json(tmp_path, monkeypatch):
     monkeypatch.setenv("KLURIS_CONFIG", str(tmp_path / "config.yml"))
     monkeypatch.setenv("HOME", str(tmp_path))
@@ -155,7 +143,7 @@ def test_help_json(tmp_path, monkeypatch):
     data = json.loads(result.output)
     assert data["ok"] is True
     assert "commands" in data
-    assert len(data["commands"]) == 17
+    assert len(data["commands"]) == 16
 
 
 def test_use_json(tmp_path, monkeypatch):

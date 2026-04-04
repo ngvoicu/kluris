@@ -63,7 +63,7 @@ Then open any project directory and use `/kluris`:
 ```
 
 The agent analyzes your code and walks you through each finding one at a
-time. You see the full content before it's written, and you approve, edit,
+time. You see a small preview before anything is written, and you approve, edit,
 or skip every piece.
 
 ### Joining an existing brain
@@ -84,7 +84,7 @@ anything is written.
 /kluris learn everything about this service
 ```
 
-The agent shows the full neuron content before writing. You can change the
+The agent starts with a preview before writing. You can change the
 target lobe, edit the content, add context the code doesn't show, or skip.
 
 ### Storing decisions and knowledge
@@ -99,8 +99,9 @@ target lobe, edit the content, add context the code doesn't show, or skip.
 ### Using brain knowledge while coding
 
 ```
+/kluris search auth flow
+/kluris search Docker setup
 /kluris what do we know about the auth flow?
-/kluris how does the Docker setup work?
 /kluris implement the new endpoint following our conventions
 /kluris fix the token refresh -- use brain knowledge
 ```
@@ -226,7 +227,7 @@ Empty -- build your own structure from scratch.
 
 1. `kluris create` scaffolds a brain with an interactive wizard
 2. `kluris install-skills` installs the `/kluris` skill for your AI agents
-3. Open any project and use `/kluris` -- one command handles everything
+3. Open any project and use `/kluris search`, `/kluris learn`, `/kluris remember`, or `/kluris create`
 4. The agent reads your code, proposes what to document, you review and approve
 5. `kluris dream` regenerates maps, fixes links, validates structure
 6. `kluris push` commits and pushes to git
@@ -250,8 +251,10 @@ Empty -- build your own structure from scratch.
 | `kluris uninstall-skills` | Remove the `/kluris` skill from AI agent directories |
 | `kluris remove <name>` | Unregister a brain (keeps files on disk) |
 | `kluris doctor` | Check prerequisites (git, Python, config) |
+| `kluris help` | Show command help |
 
 All commands support `--json` for machine-readable output.
+The CLI is for mechanical operations. Search and guided documentation happen through `/kluris` inside your agent.
 
 ## Neuron templates
 

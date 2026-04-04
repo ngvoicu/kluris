@@ -9,7 +9,7 @@ Published to PyPI as `kluris`. Source: `ngvoicu/kluris-cli`.
 
 ```bash
 pip install -e ".[dev]"          # dev install
-pytest tests/ -v                 # 221 tests
+pytest tests/ -v                 # 229 tests
 pytest tests/ --cov=kluris -q    # 90%+ coverage
 ```
 
@@ -41,7 +41,7 @@ No Jinja2 templates -- dependency was removed.
 - NEURON_TEMPLATES (decision, incident, runbook) are available to all brains
 - brain.md is lightweight (root lobes only, no neuron index)
 - Agents navigate hierarchically: brain.md -> map.md -> neurons
-- Slash command: 1 (/kluris handles everything -- push and dream are CLI-only)
+- Slash command: 1 (/kluris handles search, learn, remember, and create -- push and dream are CLI-only)
 - Version must be updated in both pyproject.toml and src/kluris/__init__.py
 - Tests must pass before pushing: `pytest tests/ -q`
 - CI runs on PR only (ubuntu, macos, windows x Python 3.10-3.13)
