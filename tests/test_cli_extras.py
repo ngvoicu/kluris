@@ -86,7 +86,8 @@ def test_push_no_brains(tmp_path, monkeypatch):
 def test_version():
     runner = CliRunner()
     result = runner.invoke(cli, ["--version"])
-    assert "1.0" in result.output
+    import kluris
+    assert kluris.__version__ in result.output
 
 
 def test_main_help():
