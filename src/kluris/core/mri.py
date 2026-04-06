@@ -903,6 +903,7 @@ let nodes = [];
 let filteredNodes = [];
 
 function visibleNode(node) {{
+  if (node.type === 'brain') return false; // brain name is in the page title
   if (!activeTypes.has(node.type)) return false;
   const query = searchInput.value.trim().toLowerCase();
   if (!query) return true;
@@ -1312,31 +1313,30 @@ function draw() {{
     ctx.shadowBlur = isSelected ? 28 : isHovered ? 18 : 10;
 
     if (node.type === 'map') {{
-      // Rounded rectangle for lobes
+      // Skip top-level lobe maps -- the hull label already shows the lobe name
       const depth = node.depth || 1;
-      const w = depth <= 1 ? 120 : 96;
-      const h = depth <= 1 ? 36 : 28;
+      if (depth <= 1) {{ ctx.shadowBlur = 0; continue; }}
+      const w = 96;
+      const h = 28;
       const rx = node.x - w / 2;
       const ry = node.y - h / 2;
       const lobeCol = lobeColor(node.lobe);
       ctx.beginPath();
       ctx.roundRect(rx, ry, w, h, 10);
-      ctx.fillStyle = rgbaFromHex(lobeCol, depth <= 1 ? 0.22 : 0.14);
+      ctx.fillStyle = rgbaFromHex(lobeCol, 0.14);
       ctx.fill();
       ctx.strokeStyle = isSelected ? '#ffffff' : rgbaFromHex(lobeCol, 0.6);
       ctx.lineWidth = isSelected ? 2.5 : 1.5;
       ctx.stroke();
       ctx.shadowBlur = 0;
-      // Label inside the rect
-      // Use directory name from path (e.g. "specmint" from "projects/specmint/map.md")
+      // Label: use directory name from path (e.g. "specmint" from "projects/specmint/map.md")
       const pathParts = node.path.split('/');
       const dirName = pathParts.length >= 2 ? pathParts[pathParts.length - 2] : node.lobe;
-      const lobeName = dirName;
-      const label = lobeName.length > 18 ? lobeName.slice(0, 18) + '...' : lobeName;
+      const label = dirName.length > 18 ? dirName.slice(0, 18) + '...' : dirName;
       ctx.fillStyle = 'rgba(233, 241, 255, 0.95)';
-      ctx.font = `bold ${{depth <= 1 ? 13 : 11}}px "Avenir Next", "Segoe UI", sans-serif`;
+      ctx.font = 'bold 11px "Avenir Next", "Segoe UI", sans-serif';
       ctx.textAlign = 'center';
-      ctx.fillText(depth <= 1 ? label.toUpperCase() : label, node.x, node.y + (depth <= 1 ? 5 : 4));
+      ctx.fillText(label, node.x, node.y + 4);
       ctx.textAlign = 'start';
 
     }} else if (node.type === 'glossary' || node.type === 'index') {{
