@@ -633,16 +633,13 @@ def generate_mri_html(brain_path: Path, output_path: Path) -> dict:
     <div class="panel-inner">
       <p class="eyebrow">Brain MRI</p>
       <h1>{brain_name}</h1>
-      <p class="subhead">
-        Search by name, path, lobe, or tags. Click any neuron to see its content.
-      </p>
       <div class="stats">
         <div class="stat">
-          <div class="stat-label">Nodes</div>
-          <div class="stat-value" id="stat-nodes">{len(graph["nodes"])}</div>
+          <div class="stat-label">Neurons</div>
+          <div class="stat-value" id="stat-nodes">{sum(1 for n in graph["nodes"] if n["type"] == "neuron")}</div>
         </div>
         <div class="stat">
-          <div class="stat-label">Edges</div>
+          <div class="stat-label">Links</div>
           <div class="stat-value" id="stat-edges">{len(graph["edges"])}</div>
         </div>
         <div class="stat">
@@ -651,35 +648,37 @@ def generate_mri_html(brain_path: Path, output_path: Path) -> dict:
         </div>
         <div class="stat">
           <div class="stat-label">Selected</div>
-          <div class="stat-value" id="stat-selected">None</div>
+          <div class="stat-value" id="stat-selected">--</div>
         </div>
       </div>
       <div class="search-wrap">
         <label for="search-input">Search the brain</label>
         <div class="search-row">
-          <input id="search-input" type="search" placeholder="Search by name, path, lobe, or tags" autocomplete="off">
+          <input id="search-input" type="search" placeholder="Name, path, lobe, or tag" autocomplete="off">
           <button class="button" id="reset-view" type="button">Reset</button>
         </div>
         <div class="filters" id="type-filters"></div>
       </div>
       <div class="section-title">Results</div>
-      <div id="result-count" class="subhead">Showing all neurons.</div>
+      <div id="result-count" class="subhead"></div>
       <div class="results" id="search-results"></div>
       <div class="legend">
-        <div class="legend-item"><span class="legend-swatch" style="background:rgba(123,247,255,0.25);border:2px solid #7bf7ff;border-radius:6px"></span>Project (pill)</div>
-        <div class="legend-item"><span class="legend-swatch" style="background:rgba(125,247,180,0.6);border-radius:50%"></span>Neuron (circle)</div>
-        <div class="legend-item"><span class="legend-swatch" style="background:#ffc6f4;transform:rotate(45deg);border-radius:2px"></span>Glossary (diamond)</div>
-        <div class="legend-item"><span class="legend-line parent"></span>Parent link</div>
-        <div class="legend-item"><span class="legend-line related"></span>Related link</div>
-        <div class="legend-item"><span class="legend-line inline"></span>Inline link</div>
+        <div class="section-title">Legend</div>
+        <div class="legend-item"><span class="legend-swatch" style="background:rgba(123,247,255,0.06);border:1px solid rgba(123,247,255,0.3);border-radius:4px"></span>Lobe (shaded area)</div>
+        <div class="legend-item"><span class="legend-swatch" style="background:rgba(123,247,255,0.14);border:1.5px solid rgba(123,247,255,0.6);border-radius:6px"></span>Project (pill)</div>
+        <div class="legend-item"><span class="legend-swatch" style="background:rgba(125,247,180,0.6);border-radius:50%"></span>Neuron</div>
+        <div class="legend-item"><span class="legend-swatch" style="background:#ffc6f4;transform:rotate(45deg);border-radius:2px"></span>Glossary</div>
+        <div class="legend-item"><span class="legend-line parent"></span>Parent</div>
+        <div class="legend-item"><span class="legend-line related"></span>Related</div>
+        <div class="legend-item"><span class="legend-line inline"></span>Inline</div>
       </div>
     </div>
   </aside>
 
   <main class="stage">
     <div class="stage-hud">
-      <div class="stage-pill">Drag nodes, pan empty space, zoom with the wheel, press <strong>/</strong> to focus search.</div>
-      <div class="stage-pill" id="stage-focus">No node selected</div>
+      <div class="stage-pill">Drag, pan, scroll to zoom, <strong>/</strong> to search</div>
+      <div class="stage-pill" id="stage-focus"></div>
     </div>
     <canvas id="mri-canvas"></canvas>
   </main>
@@ -688,9 +687,8 @@ def generate_mri_html(brain_path: Path, output_path: Path) -> dict:
     <div class="panel-inner">
       <p class="eyebrow">Inspector</p>
       <h2>Details</h2>
-      <p class="subhead">Click a neuron or search result to see its content.</p>
       <div class="details-empty" id="details-empty">
-        Nothing selected. Click a neuron to see its content, tags, and connections.
+        Click a neuron to see its content and connections.
       </div>
       <div id="details-panel"></div>
     </div>
@@ -981,8 +979,8 @@ function updateDetails() {{
   if (!node) {{
     detailsPanel.innerHTML = '';
     detailsEmpty.style.display = 'block';
-    statSelected.textContent = 'None';
-    stageFocus.textContent = 'No node selected';
+    statSelected.textContent = '--';
+    stageFocus.textContent = '';
     return;
   }}
 
