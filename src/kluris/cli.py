@@ -875,7 +875,7 @@ def mri(brain_name: str | None, output_path: str | None, open_browser: bool, as_
             if sync_result["fixes"]["total"]:
                 console.print(f"  MRI preflight applied {sync_result['fixes']['total']} automatic fixes")
             if open_browser:
-                webbrowser.open(f"file://{out.resolve()}")
+                webbrowser.open(out.resolve().as_uri())
 
 
 def _do_install(as_json: bool = False):

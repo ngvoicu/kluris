@@ -1046,14 +1046,14 @@ function refreshVisibility() {{
   renderResults();
 }}
 
-const TYPE_LABELS = {{ glossary: 'glossary', map: 'lobes', neuron: 'neurons' }};
+const TYPE_LABELS = {{ glossary: 'glossary', neuron: 'neurons' }};
 function renderFilters() {{
   const counts = graph.nodes.reduce((acc, node) => {{
     acc[node.type] = (acc[node.type] || 0) + 1;
     return acc;
   }}, {{}});
   typeFiltersEl.innerHTML = '';
-  for (const type of ['glossary', 'map', 'neuron']) {{
+  for (const type of ['glossary', 'neuron']) {{
     if (!counts[type]) continue;
     const label = TYPE_LABELS[type] || type;
     const button = document.createElement('button');
