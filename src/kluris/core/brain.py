@@ -264,8 +264,8 @@ def _generate_readme(name: str, description: str, tree_output: str,
 
 ## What is this?
 
-This is a **Kluris brain** -- a git-backed, structured knowledge base designed
-to be read and written by both humans and AI coding agents.
+This is a **Kluris brain** -- shared team knowledge that turns AI agents into
+subject matter experts. Curated by humans, read by every agent on the team.
 
 ## Quick start
 

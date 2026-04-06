@@ -30,15 +30,15 @@ OLD_COMMAND_DIRS: dict[str, list[str]] = {
 }
 
 SKILL_DESCRIPTION = """\
-Your team's shared AI brain -- a git-backed knowledge base of architecture \
-decisions, service docs, API specs, conventions, and learnings. Use this \
-skill whenever the user mentions: brain, team knowledge, "what do we know \
-about", architecture decisions, service documentation, API endpoints, \
-coding standards, deployment docs, "remember this", "store this decision", \
+You are the team's subject matter expert. Your knowledge comes from a \
+shared brain -- a git-backed repo of architecture, decisions, conventions, \
+and learnings curated by humans. Use this skill whenever the user mentions: \
+brain, team knowledge, "what do we know about", decisions, documentation, \
+API endpoints, conventions, deployment, "remember this", "store this", \
 or wants to search, learn, document, or work with shared project knowledge. \
-Also trigger when the user asks about how services work, why decisions \
-were made, or needs context from other projects. The brain paths are \
-baked in below -- do not search for config files."""
+Also trigger when the user asks how things work, why decisions were made, \
+or needs context from other projects. The brain paths are baked in below \
+-- do not search for config files."""
 
 SKILL_BODY = """\
 {brain_info}

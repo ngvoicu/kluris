@@ -2,7 +2,7 @@
 
 ## What This Is
 
-Kluris is a Python CLI tool that creates and manages **brains** -- git-backed repos of structured markdown that AI agents read, search, and update through globally installed agent skills and workflows.
+Kluris turns AI agents into team subject matter experts by giving them shared, human-curated knowledge stored in git-backed **brains**.
 
 **Kluris = the tool. A brain = the git repo it creates.**
 

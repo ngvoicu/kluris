@@ -255,7 +255,7 @@ def _set_default_brain(name: str | None) -> str | None:
 @click.group(cls=KlurisGroup)
 @click.version_option(package_name="kluris")
 def cli():
-    """Kluris — Git-backed AI brain manager."""
+    """Kluris — Turn AI agents into team subject matter experts."""
 
 
 @cli.command()
@@ -274,7 +274,7 @@ def cli():
 def create(name: str | None, desc: str | None, base_path: str | None,
            brain_type: str | None, remote: str | None, branch_name: str | None,
            no_git: bool, from_config: str | None, as_json: bool):
-    """Create a new brain.
+    """Create a new SME brain.
 
     Prompts for anything not provided via flags. Use --json to skip all prompts.
 
@@ -287,7 +287,7 @@ def create(name: str | None, desc: str | None, base_path: str | None,
     # Prompt for anything not provided, unless --json (fully non-interactive)
     if not as_json:
         if not name:
-            console.print("\n[bold]Create a new brain[/bold]\n")
+            console.print("\n[bold]Create a new SME brain[/bold]\n")
             name = click.prompt("  Brain name (lowercase, hyphens ok)", type=str)
         if not desc:
             desc = click.prompt("  What does this brain cover? (one sentence)", type=str)
@@ -1158,7 +1158,7 @@ def templates(as_json: bool):
 def help_cmd(command: str | None, as_json: bool):
     """Show help for kluris commands."""
     commands_info = [
-        ("create", "Create a new brain (--type, --remote, --no-git)"),
+        ("create", "Create a new SME brain (--type, --remote, --no-git)"),
         ("clone", "Clone a brain from a git remote"),
         ("list", "List registered brains"),
         ("status", "Show brain tree, recent changes, and neuron counts"),
@@ -1195,7 +1195,7 @@ def help_cmd(command: str | None, as_json: bool):
                 return
         raise click.ClickException(f"Unknown command: {command}")
 
-    console.print("kluris — Git-backed AI brain manager\n")
+    console.print("kluris — Turn AI agents into team subject matter experts\n")
     console.print("Commands:")
     for name, desc in commands_info:
         console.print(f"  {name:<10} {desc}")

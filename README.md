@@ -1,30 +1,32 @@
 # Kluris
 
-> Create and manage git-backed AI brains for multi-project, multi-agent teams.
+> Turn your AI agents into team subject matter experts.
 
 *When your best engineer sleeps, Kluris doesn't. When they leave, Kluris stays.*
 
 ## What is Kluris?
 
-Kluris is a CLI tool that creates **brains** -- standalone git repos of
-structured markdown that AI coding agents read, search, and update through
-globally installed agent skills and workflows.
+Kluris gives every AI agent on your team shared knowledge -- architecture,
+decisions, conventions, learnings -- so they work like an SME who knows your
+entire codebase, not a generic assistant starting from scratch every time.
 
-**Kluris = the tool. A brain = the git repo it creates.**
+Knowledge is stored in a **brain**: a git-backed repo of structured markdown
+that agents read, search, and apply automatically. The human and agent curate
+the brain together -- the agent proposes what to document, the human reviews
+and approves every piece.
 
 ### Why not a wiki, Notion, or CLAUDE.md?
 
-- **Wikis and Notion** are for humans. Agents can't natively read them, search
-  across them, or write back. Kluris brains are markdown in git -- AI-native.
+- **Wikis and Notion** are for humans. Agents can't read them, search across
+  them, or write back. A brain is markdown in git -- AI-native.
 - **CLAUDE.md** is per-project and per-tool. A brain sits above all your
-  projects and works with 8 different AI agents simultaneously.
-- **Agent memory** is selective and agent-controlled -- the agent decides what
-  to keep. A brain is a collaboration: the agent reads your projects and
-  proposes what to document, but the human reviews every piece, decides what
-  to store, and corrects or enriches the content before it's written.
+  projects and works with every AI agent on the team.
+- **Agent memory** is agent-controlled -- the agent decides what to keep.
+  A brain is human-curated -- you decide what goes in, review every entry,
+  and correct anything that's wrong.
 
-One brain serves all your projects. Every AI agent on the team reads the same
-knowledge. Version-controlled, human-curated, shared across the entire team.
+One brain serves all your projects. Every agent reads the same knowledge.
+Version-controlled, human-curated, shared across the entire team.
 
 ## Install
 
@@ -225,18 +227,18 @@ Empty -- build your own structure from scratch.
 
 ## How it works
 
-1. `kluris create` scaffolds a brain with an interactive wizard
-2. `kluris install-skills` installs the `/kluris` skill for your AI agents
-3. Open any project and use `/kluris search`, `/kluris learn`, `/kluris remember`, or `/kluris create`
-4. The agent reads your code, proposes what to document, you review and approve
-5. `kluris dream` regenerates maps, fixes links, validates structure
-6. `kluris push` commits and pushes to git
+1. `kluris create` -- create a brain (interactive wizard)
+2. `kluris install-skills` -- give the `/kluris` skill to your AI agents
+3. Open any project and use `/kluris` -- the agent becomes an SME
+4. Agent and human curate the brain together -- you review and approve every entry
+5. `kluris dream` -- maintain brain structure
+6. `kluris mri` -- visualize the brain
 
 ## CLI commands
 
 | Command | What it does |
 |---------|-------------|
-| `kluris create` | Create a new brain (interactive wizard) |
+| `kluris create` | Create a new SME brain (interactive wizard) |
 | `kluris clone <url>` | Clone a brain from git |
 | `kluris list` | List all registered brains |
 | `kluris use <name>` | Switch the default brain |
@@ -283,7 +285,7 @@ git:
 
 | Term | Meaning |
 |------|---------|
-| **Brain** | Git repo of structured markdown |
+| **Brain** | Git repo of shared team knowledge |
 | **Lobe** | Folder / knowledge region |
 | **Neuron** | Single knowledge file |
 | **Synapse** | Link between neurons (bidirectional) |

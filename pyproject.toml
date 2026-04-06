@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "kluris"
 version = "1.4.10"
-description = "Create and manage git-backed AI brains for multi-project, multi-agent teams"
+description = "Turn your AI agents into team subject matter experts with shared, human-curated knowledge"
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
