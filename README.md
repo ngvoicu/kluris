@@ -227,7 +227,7 @@ Empty -- build your own structure from scratch.
 
 ## How it works
 
-1. `kluris create` -- create an SME brain (interactive wizard)
+1. `kluris create` -- create a brain (interactive wizard)
 2. `kluris install-skills` -- give the `/kluris` skill to your AI agents
 3. Open any project and use `/kluris` -- the agent becomes an SME
 4. Agent and human curate the brain together -- you review and approve every entry
@@ -238,10 +238,10 @@ Empty -- build your own structure from scratch.
 
 | Command | What it does |
 |---------|-------------|
-| `kluris create` | Create a new SME brain (interactive wizard) |
-| `kluris clone <url>` | Clone an SME brain from git |
-| `kluris list` | List registered SME brains |
-| `kluris use <name>` | Switch the active SME brain |
+| `kluris create` | Create a new brain (interactive wizard) |
+| `kluris clone <url>` | Clone a brain from git |
+| `kluris list` | List registered brains |
+| `kluris use <name>` | Switch the active brain |
 | `kluris status` | Brain tree, neuron counts, recent changes |
 | `kluris neuron <name>` | Create a neuron (optionally with `--lobe` and `--template`) |
 | `kluris lobe <name>` | Create a new lobe (optionally with `--parent` for nesting) |
@@ -251,7 +251,7 @@ Empty -- build your own structure from scratch.
 | `kluris templates` | List available neuron templates |
 | `kluris install-skills` | Install the `/kluris` skill for your AI agents |
 | `kluris uninstall-skills` | Remove the `/kluris` skill from AI agent directories |
-| `kluris remove <name>` | Unregister an SME brain (keeps files on disk) |
+| `kluris remove <name>` | Unregister a brain (keeps files on disk) |
 | `kluris doctor` | Check prerequisites (git, Python, config) |
 | `kluris help` | Show command help |
 

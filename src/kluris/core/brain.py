@@ -276,7 +276,7 @@ pipx install kluris
 kluris clone <this-repo-url>
 ```
 
-### Start building your SME knowledge
+### Start building your team knowledge
 
 One command does everything: `/kluris <natural language>`. The agent reads your
 intent and acts accordingly.
@@ -370,7 +370,7 @@ through sections one at a time so you can review each part.
 
 ```bash
 kluris status          # Brain tree, recent changes, neuron counts
-kluris use <name>      # Switch the active SME brain
+kluris use <name>      # Switch the active brain
 kluris templates       # List available neuron templates
 kluris dream           # Regenerate maps, auto-fix safe issues, validate remaining links
 kluris push            # Commit and push to git

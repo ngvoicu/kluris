@@ -2,7 +2,7 @@
 
 ## Project: kluris-cli
 
-Python CLI tool for creating and managing git-backed AI knowledge brains.
+CLI tool that turns AI agents into team subject matter experts with shared, human-curated knowledge.
 Published to PyPI as `kluris`. Source: `ngvoicu/kluris-cli`.
 
 ## Quick Reference
