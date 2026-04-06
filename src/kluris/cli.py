@@ -394,6 +394,9 @@ def create(name: str | None, desc: str | None, base_path: str | None,
     if config.default_brain is None or len(config.brains) == 0:
         _set_default_brain(name)
 
+    # Dream to generate proper maps and navigation
+    _run_dream_on_brain(brain_path)
+
     # Install agent skills/workflows
     _do_install()
     actual_default = read_global_config().default_brain
