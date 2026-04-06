@@ -128,7 +128,7 @@ acme-brain/
 ├── README.md               # Usage guide
 ├── projects/
 │   ├── map.md              # Lobe index (auto-generated)
-│   └── btb-backend/
+│   └── btb-core/
 │       ├── map.md
 │       ├── data-model.md   # <- neuron
 │       └── auth-flow.md    # <- neuron
@@ -167,7 +167,7 @@ The `projects/` lobe nests deeper -- one sub-folder per project:
 ```
 projects/
 ├── map.md
-├── btb-backend/
+├── btb-core/
 │   ├── map.md
 │   ├── auth-flow.md
 │   └── endpoints/
