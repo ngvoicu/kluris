@@ -780,7 +780,13 @@ def generate_mri_html(brain_path: Path, output_path: Path) -> dict:
 
   <aside class="panel panel-right">
     <div class="panel-inner">
-      <p class="eyebrow">Inspector</p>
+      <div style="display:flex;align-items:center;justify-content:space-between">
+        <div><p class="eyebrow" style="margin:0">Inspector</p></div>
+        <div style="display:flex;gap:6px">
+          <button type="button" class="expand-btn" id="nav-back" title="Back">&larr;</button>
+          <button type="button" class="expand-btn" id="nav-forward" title="Forward">&rarr;</button>
+        </div>
+      </div>
       <h2>Details</h2>
       <div class="details-empty" id="details-empty">
         Click a neuron to see its content and connections.
@@ -1184,10 +1190,33 @@ function openModal(node) {{
   modal.style.display = 'flex';
 }}
 
-function selectNode(id, recenter = false) {{
+const navHistory = [];
+let navIndex = -1;
+
+function selectNode(id, recenter = false, fromNav = false) {{
+  if (id !== selectedId && id != null && !fromNav) {{
+    // Truncate forward history when navigating to a new node
+    navHistory.splice(navIndex + 1);
+    navHistory.push(id);
+    navIndex = navHistory.length - 1;
+  }}
   selectedId = id;
   updateDetails();
   if (recenter) focusOnNode(id);
+}}
+
+function navBack() {{
+  if (navIndex > 0) {{
+    navIndex--;
+    selectNode(navHistory[navIndex], true, true);
+  }}
+}}
+
+function navForward() {{
+  if (navIndex < navHistory.length - 1) {{
+    navIndex++;
+    selectNode(navHistory[navIndex], true, true);
+  }}
 }}
 
 let cameraAnim = null;
@@ -1575,7 +1604,7 @@ function draw() {{
       // Top-level: path is "lobe/map.md" (2 parts). Sub-lobe: "lobe/sub/map.md" (3+ parts)
       const pathDepth = node.path.split('/').length;
       if (pathDepth <= 2) {{ ctx.shadowBlur = 0; continue; }}
-      const w = 96;
+      const w = 140;
       const h = 28;
       const rx = node.x - w / 2;
       const ry = node.y - h / 2;
@@ -1588,10 +1617,12 @@ function draw() {{
       ctx.lineWidth = isSelected ? 2.5 : 1.5;
       ctx.stroke();
       ctx.shadowBlur = 0;
-      // Label: use directory name from path (e.g. "specmint" from "projects/specmint/map.md")
+      // Label: show parent/name for context (e.g. "projects / specmint")
       const pathParts = node.path.split('/');
       const dirName = pathParts.length >= 2 ? pathParts[pathParts.length - 2] : node.lobe;
-      const label = dirName.length > 18 ? dirName.slice(0, 18) + '...' : dirName;
+      const parentName = pathParts.length >= 3 ? pathParts[pathParts.length - 3] : '';
+      const fullLabel = parentName ? `${{parentName}} / ${{dirName}}` : dirName;
+      const label = fullLabel.length > 24 ? fullLabel.slice(0, 24) + '...' : fullLabel;
       ctx.fillStyle = 'rgba(233, 241, 255, 0.95)';
       ctx.font = 'bold 11px "Avenir Next", "Segoe UI", sans-serif';
       ctx.textAlign = 'center';
@@ -1746,6 +1777,8 @@ document.getElementById('reset-view').addEventListener('click', () => {{
   nodes = initializeNodes();
 }});
 
+document.getElementById('nav-back').addEventListener('click', navBack);
+document.getElementById('nav-forward').addEventListener('click', navForward);
 document.getElementById('modal-close').addEventListener('click', () => {{
   document.getElementById('content-modal').style.display = 'none';
 }});
