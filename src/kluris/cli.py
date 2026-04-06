@@ -853,7 +853,7 @@ def use_brain(brain_name: str, as_json: bool):
 @cli.command()
 @click.option("--brain", "brain_name", help="Specific brain")
 @click.option("--output", "output_path", help="Output HTML file path")
-@click.option("--open", "open_browser", is_flag=True, help="Open in browser after generating")
+@click.option("--open/--no-open", "open_browser", default=True, help="Open in browser (default: yes)")
 @click.option("--json", "as_json", is_flag=True, help="JSON output")
 def mri(brain_name: str | None, output_path: str | None, open_browser: bool, as_json: bool):
     """Generate interactive brain visualization."""
