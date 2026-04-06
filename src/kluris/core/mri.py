@@ -611,6 +611,74 @@ def generate_mri_html(brain_path: Path, output_path: Path) -> dict:
   .legend-line.related {{ background: linear-gradient(90deg, var(--accent), rgba(123,247,255,0.18)); }}
   .legend-line.parent {{ background: linear-gradient(90deg, var(--accent-3), rgba(248,199,109,0.18)); }}
   .legend-line.inline {{ background: linear-gradient(90deg, var(--accent-2), rgba(255,139,216,0.18)); }}
+  .expand-btn {{
+    appearance: none;
+    background: rgba(255,255,255,0.06);
+    border: 1px solid rgba(255,255,255,0.1);
+    color: var(--muted);
+    border-radius: 8px;
+    padding: 4px 8px;
+    font-size: 0.76rem;
+    cursor: pointer;
+    margin-left: 8px;
+  }}
+  .expand-btn:hover {{ color: var(--text); border-color: rgba(123,247,255,0.4); }}
+  .modal-overlay {{
+    position: fixed;
+    inset: 0;
+    z-index: 100;
+    background: rgba(0,0,0,0.7);
+    backdrop-filter: blur(6px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }}
+  .modal-box {{
+    width: min(90vw, 800px);
+    max-height: 85vh;
+    background: var(--panel-strong);
+    border: 1px solid rgba(255,255,255,0.1);
+    border-radius: var(--radius);
+    box-shadow: 0 40px 100px rgba(0,0,0,0.6);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }}
+  .modal-header {{
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 18px 22px;
+    border-bottom: 1px solid rgba(255,255,255,0.08);
+  }}
+  .modal-title {{
+    font-size: 1.1rem;
+    font-weight: 700;
+    color: var(--text);
+  }}
+  .modal-close {{
+    appearance: none;
+    background: none;
+    border: none;
+    color: var(--muted);
+    font-size: 1.6rem;
+    cursor: pointer;
+    padding: 0 4px;
+    line-height: 1;
+  }}
+  .modal-close:hover {{ color: var(--text); }}
+  .modal-content {{
+    flex: 1;
+    overflow: auto;
+    margin: 0;
+    padding: 22px;
+    color: #eef4ff;
+    font-family: var(--mono);
+    font-size: 0.88rem;
+    line-height: 1.7;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }}
   @media (max-width: 1200px) {{
     .shell {{ grid-template-columns: 300px minmax(0,1fr); }}
     .panel-right {{ display: none; }}
@@ -683,6 +751,15 @@ def generate_mri_html(brain_path: Path, output_path: Path) -> dict:
       <div id="details-panel"></div>
     </div>
   </aside>
+</div>
+<div id="content-modal" class="modal-overlay" style="display:none">
+  <div class="modal-box">
+    <div class="modal-header">
+      <div class="modal-title" id="modal-title"></div>
+      <button type="button" class="modal-close" id="modal-close">&times;</button>
+    </div>
+    <pre class="modal-content" id="modal-content"></pre>
+  </div>
 </div>
 <script>
 const graph = {graph_json};
@@ -1011,7 +1088,7 @@ function updateDetails() {{
       ${{tags ? `<div class="tag-row">${{tags}}</div>` : ''}}
       <div class="section-title">Excerpt</div>
       <div class="details-copy">${{escapeHtml(node.excerpt || 'No excerpt available for this node.')}}</div>
-      <div class="section-title">Content preview</div>
+      <div class="section-title">Content preview <button type="button" class="expand-btn" id="expand-preview">expand</button></div>
       <pre class="content-preview">${{contentPreview}}</pre>
       ${{previewNote}}
       <div class="section-title">Frontmatter links</div>
@@ -1025,6 +1102,15 @@ function updateDetails() {{
   `;
   for (const button of detailsPanel.querySelectorAll('[data-node-id]')) {{
     button.addEventListener('click', () => selectNode(Number(button.dataset.nodeId), true));
+  }}
+  const expandBtn = document.getElementById('expand-preview');
+  if (expandBtn) {{
+    expandBtn.addEventListener('click', () => {{
+      const modal = document.getElementById('content-modal');
+      document.getElementById('modal-title').textContent = node.title;
+      document.getElementById('modal-content').textContent = node.content_preview || 'No content.';
+      modal.style.display = 'flex';
+    }});
   }}
 }}
 
@@ -1590,7 +1676,16 @@ document.getElementById('reset-view').addEventListener('click', () => {{
   nodes = initializeNodes();
 }});
 
+document.getElementById('modal-close').addEventListener('click', () => {{
+  document.getElementById('content-modal').style.display = 'none';
+}});
+document.getElementById('content-modal').addEventListener('click', event => {{
+  if (event.target === event.currentTarget) event.currentTarget.style.display = 'none';
+}});
 document.addEventListener('keydown', event => {{
+  if (event.key === 'Escape') {{
+    document.getElementById('content-modal').style.display = 'none';
+  }}
   if (event.key === '/') {{
     event.preventDefault();
     searchInput.focus();
