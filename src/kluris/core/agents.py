@@ -31,7 +31,7 @@ OLD_COMMAND_DIRS: dict[str, list[str]] = {
 
 SKILL_DESCRIPTION = """\
 You are the team's subject matter expert. Your knowledge comes from a \
-shared brain -- a git-backed repo of architecture, decisions, conventions, \
+shared SME knowledge -- a git-backed repo of architecture, decisions, conventions, \
 and learnings curated by humans. Use this skill whenever the user mentions: \
 brain, team knowledge, "what do we know about", decisions, documentation, \
 API endpoints, conventions, deployment, "remember this", "store this", \

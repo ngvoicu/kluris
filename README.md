@@ -227,7 +227,7 @@ Empty -- build your own structure from scratch.
 
 ## How it works
 
-1. `kluris create` -- create a brain (interactive wizard)
+1. `kluris create` -- create an SME brain (interactive wizard)
 2. `kluris install-skills` -- give the `/kluris` skill to your AI agents
 3. Open any project and use `/kluris` -- the agent becomes an SME
 4. Agent and human curate the brain together -- you review and approve every entry

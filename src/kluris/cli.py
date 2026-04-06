@@ -506,7 +506,7 @@ def clone_cmd(url: str | None, path: str | None, branch_name: str | None, as_jso
 @cli.command("list")
 @click.option("--json", "as_json", is_flag=True, help="JSON output")
 def list_cmd(as_json: bool):
-    """List all registered brains."""
+    """List registered SME brains."""
     config = read_global_config()
 
     if as_json:
