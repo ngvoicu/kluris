@@ -1237,8 +1237,31 @@ function draw() {{
   for (const lobe of uniqueLobes) {{
     if (lobe === 'root') continue;
     const members = filteredNodes.filter(n => n.lobe === lobe);
-    if (members.length < 1) continue;
     const color = lobeColor(lobe);
+    if (members.length < 1) {{
+      // Empty lobe: draw circle at anchor with label
+      const anchor = lobeAnchors.get(lobe);
+      if (anchor) {{
+        ctx.beginPath();
+        ctx.arc(anchor.x, anchor.y, 50, 0, Math.PI * 2);
+        ctx.fillStyle = rgbaFromHex(color, 0.04);
+        ctx.fill();
+        ctx.strokeStyle = rgbaFromHex(color, 0.1);
+        ctx.lineWidth = 1;
+        ctx.setLineDash([6, 6]);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.fillStyle = rgbaFromHex(color, 0.2);
+        ctx.font = 'bold 16px "Avenir Next", "Segoe UI", sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText(lobe.toUpperCase(), anchor.x, anchor.y - 58);
+        ctx.fillStyle = rgbaFromHex(color, 0.12);
+        ctx.font = '11px "Avenir Next", "Segoe UI", sans-serif';
+        ctx.fillText('(empty)', anchor.x, anchor.y + 4);
+        ctx.textAlign = 'start';
+      }}
+      continue;
+    }}
     const points = members.map(n => ({{ x: n.x, y: n.y }}));
     if (points.length === 1) {{
       // Single node: draw circle
