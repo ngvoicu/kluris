@@ -9,7 +9,7 @@ from kluris.core.frontmatter import read_frontmatter
 from kluris.core.linker import LINK_PATTERN
 
 SKIP_DIRS = {".git"}
-SKIP_FILES = {".gitignore"}
+SKIP_FILES = {".gitignore", "README.md"}
 
 
 def _all_md_files(brain_path: Path) -> list[Path]:
@@ -94,9 +94,10 @@ def build_graph(brain_path: Path) -> dict:
         rel = str(f.relative_to(brain_path))
         node_ids[rel] = i
 
-        # Determine lobe
+        # Determine lobe and sublobe
         parts = f.relative_to(brain_path).parts
         lobe = parts[0] if len(parts) > 1 else "root"
+        sublobe = "/".join(parts[:2]) if len(parts) > 2 else lobe
 
         # Determine type
         if f.name == "brain.md":
@@ -127,6 +128,7 @@ def build_graph(brain_path: Path) -> dict:
             "label": title,
             "path": rel,
             "lobe": lobe,
+            "sublobe": sublobe,
             "type": ntype,
             "file_name": f.name,
             "title": title,
@@ -1144,6 +1146,21 @@ function tick() {{
       }}
     }}
   }}
+  // Sub-lobe cohesion: nodes in the same sub-project cluster tighter
+  const sublobeGroups = new Map();
+  for (const n of filteredNodes) {{
+    if (!sublobeGroups.has(n.sublobe)) sublobeGroups.set(n.sublobe, []);
+    sublobeGroups.get(n.sublobe).push(n);
+  }}
+  for (const [sl, members] of sublobeGroups) {{
+    if (members.length < 2 || sl === members[0].lobe) continue;
+    const cx = members.reduce((s, n) => s + n.x, 0) / members.length;
+    const cy = members.reduce((s, n) => s + n.y, 0) / members.length;
+    for (const n of members) {{
+      n.vx += (cx - n.x) * 0.003;
+      n.vy += (cy - n.y) * 0.003;
+    }}
+  }}
   // Edge springs
   for (const edge of graph.edges) {{
     if (!visibleIds.has(edge.source) || !visibleIds.has(edge.target)) continue;
@@ -1304,6 +1321,45 @@ function draw() {{
     ctx.textAlign = 'center';
     ctx.fillText(lobe.toUpperCase(), cx, minY - 50);
     ctx.textAlign = 'start';
+  }}
+
+  // --- Pass 1b: Sub-lobe group backgrounds ---
+  const sublobes = [...new Set(filteredNodes.map(n => n.sublobe))];
+  for (const sl of sublobes) {{
+    if (sl === 'root') continue;
+    // Only draw sub-lobe hulls when sublobe differs from lobe (i.e. nested)
+    const members = filteredNodes.filter(n => n.sublobe === sl);
+    if (members.length < 2) continue;
+    const topLobe = members[0].lobe;
+    if (sl === topLobe) continue; // top-level lobe, already drawn above
+    const color = lobeColor(topLobe);
+    const points = members.map(n => ({{ x: n.x, y: n.y }}));
+    if (points.length === 2) {{
+      const mx = (points[0].x + points[1].x) / 2;
+      const my = (points[0].y + points[1].y) / 2;
+      ctx.beginPath();
+      ctx.ellipse(mx, my, Math.hypot(points[1].x - points[0].x, points[1].y - points[0].y) / 2 + 30, 30, Math.atan2(points[1].y - points[0].y, points[1].x - points[0].x), 0, Math.PI * 2);
+      ctx.fillStyle = rgbaFromHex(color, 0.04);
+      ctx.fill();
+      ctx.strokeStyle = rgbaFromHex(color, 0.08);
+      ctx.lineWidth = 1;
+      ctx.setLineDash([4, 4]);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }} else {{
+      const hull = expandHull(convexHull(points), 28);
+      ctx.beginPath();
+      ctx.moveTo(hull[0].x, hull[0].y);
+      for (let i = 1; i < hull.length; i++) ctx.lineTo(hull[i].x, hull[i].y);
+      ctx.closePath();
+      ctx.fillStyle = rgbaFromHex(color, 0.04);
+      ctx.fill();
+      ctx.strokeStyle = rgbaFromHex(color, 0.08);
+      ctx.lineWidth = 1;
+      ctx.setLineDash([4, 4]);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }}
   }}
 
   // --- Pass 2: Edges ---
