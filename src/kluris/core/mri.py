@@ -1207,9 +1207,12 @@ function openModal(node) {{
     .map(id => nodes.find(n => n.id === id))
     .filter(n => n && n.type === 'neuron')
     .sort((a, b) => a.title.localeCompare(b.title));
-  navEl.innerHTML = connected.map(n =>
-    `<button type="button" class="modal-nav-btn" data-modal-nav="${{n.id}}">${{escapeHtml(n.title)}}</button>`
-  ).join('');
+  navEl.innerHTML = connected.map(n => {{
+    const parts = n.path.split('/');
+    const parent = parts.length >= 2 ? parts[parts.length - 2] : '';
+    const label = parent ? `${{parent}} / ${{n.title}}` : n.title;
+    return `<button type="button" class="modal-nav-btn" data-modal-nav="${{n.id}}">${{escapeHtml(label)}}</button>`;
+  }}).join('');
   for (const btn of navEl.querySelectorAll('[data-modal-nav]')) {{
     btn.addEventListener('click', () => {{
       const target = nodes.find(n => n.id === Number(btn.dataset.modalNav));
