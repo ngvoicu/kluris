@@ -1029,8 +1029,8 @@ let filteredNodes = [];
 
 function visibleNode(node) {{
   if (node.type === 'brain') return false;
-  // Hide top-level lobe maps -- hull label shows the lobe name
-  if (node.type === 'map' && node.path.split('/').length <= 2) return false;
+  // Hide all map nodes -- hull labels show lobe/project names
+  if (node.type === 'map') return false;
   if (!activeTypes.has(node.type)) return false;
   const query = searchInput.value.trim().toLowerCase();
   if (!query) return true;
