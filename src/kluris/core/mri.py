@@ -662,16 +662,6 @@ def generate_mri_html(brain_path: Path, output_path: Path) -> dict:
       <div class="section-title">Results</div>
       <div id="result-count" class="subhead"></div>
       <div class="results" id="search-results"></div>
-      <div class="legend">
-        <div class="section-title">Legend</div>
-        <div class="legend-item"><span class="legend-swatch" style="background:rgba(123,247,255,0.06);border:1px solid rgba(123,247,255,0.3);border-radius:4px"></span>Lobe (shaded area)</div>
-        <div class="legend-item"><span class="legend-swatch" style="background:rgba(123,247,255,0.14);border:1.5px solid rgba(123,247,255,0.6);border-radius:6px"></span>Project (pill)</div>
-        <div class="legend-item"><span class="legend-swatch" style="background:rgba(125,247,180,0.6);border-radius:50%"></span>Neuron</div>
-        <div class="legend-item"><span class="legend-swatch" style="background:#ffc6f4;transform:rotate(45deg);border-radius:2px"></span>Glossary</div>
-        <div class="legend-item"><span class="legend-line parent"></span>Parent</div>
-        <div class="legend-item"><span class="legend-line related"></span>Related</div>
-        <div class="legend-item"><span class="legend-line inline"></span>Inline</div>
-      </div>
     </div>
   </aside>
 
