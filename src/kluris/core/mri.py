@@ -91,7 +91,7 @@ def build_graph(brain_path: Path) -> dict:
 
     # Create nodes
     for i, f in enumerate(files):
-        rel = str(f.relative_to(brain_path))
+        rel = f.relative_to(brain_path).as_posix()
         node_ids[rel] = i
 
         # Determine lobe and sublobe
@@ -145,7 +145,7 @@ def build_graph(brain_path: Path) -> dict:
 
     # Create edges from frontmatter and inline links
     for f in files:
-        rel = str(f.relative_to(brain_path))
+        rel = f.relative_to(brain_path).as_posix()
         source_id = node_ids.get(rel)
         if source_id is None:
             continue
@@ -159,7 +159,7 @@ def build_graph(brain_path: Path) -> dict:
         parent = meta.get("parent")
         if parent:
             try:
-                parent_resolved = str((f.parent / parent).resolve().relative_to(brain_path.resolve()))
+                parent_resolved = (f.parent / parent).resolve().relative_to(brain_path.resolve()).as_posix()
             except (ValueError, OSError):
                 parent_resolved = ""
             if parent_resolved in node_ids:
@@ -174,7 +174,7 @@ def build_graph(brain_path: Path) -> dict:
         if isinstance(related, list):
             for r in related:
                 try:
-                    r_resolved = str((f.parent / r).resolve().relative_to(brain_path.resolve()))
+                    r_resolved = (f.parent / r).resolve().relative_to(brain_path.resolve()).as_posix()
                 except (ValueError, OSError):
                     continue
                 if r_resolved in node_ids:
@@ -190,7 +190,7 @@ def build_graph(brain_path: Path) -> dict:
             if target.startswith("http"):
                 continue
             try:
-                t_resolved = str((f.parent / target).resolve().relative_to(brain_path.resolve()))
+                t_resolved = (f.parent / target).resolve().relative_to(brain_path.resolve()).as_posix()
                 if t_resolved in node_ids and t_resolved != rel:
                     # Avoid duplicating parent/related edges
                     existing = {(e["source"], e["target"]) for e in edges}
