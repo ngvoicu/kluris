@@ -798,7 +798,11 @@ def generate_mri_html(brain_path: Path, output_path: Path) -> dict:
 <div id="content-modal" class="modal-overlay" style="display:none">
   <div class="modal-box">
     <div class="modal-header">
-      <div class="modal-title" id="modal-title"></div>
+      <div style="display:flex;align-items:center;gap:8px">
+        <button type="button" class="expand-btn" id="modal-back" title="Back">&larr;</button>
+        <button type="button" class="expand-btn" id="modal-forward" title="Forward">&rarr;</button>
+        <div class="modal-title" id="modal-title"></div>
+      </div>
       <button type="button" class="modal-close" id="modal-close">&times;</button>
     </div>
     <div class="modal-nav" id="modal-nav"></div>
@@ -1168,7 +1172,35 @@ function openModal(node) {{
   const modal = document.getElementById('content-modal');
   const breadcrumb = node.path.split('/').map(p => p.replace('.md', '')).join(' / ');
   document.getElementById('modal-title').innerHTML = `${{escapeHtml(node.title)}} <span style="color:var(--muted);font-size:0.8em;font-weight:400;margin-left:8px">${{escapeHtml(breadcrumb)}}</span>`;
-  document.getElementById('modal-content').textContent = node.content_preview || 'No content.';
+  // Render content with clickable markdown links
+  const rawContent = escapeHtml(node.content_preview || 'No content.');
+  const nodePath = node.path.replace(/[^/]+$/, ''); // directory of current node
+  const linkedContent = rawContent.replace(
+    /\[([^\]]*)\]\(([^)]+)\)/g,
+    (match, text, href) => {{
+      if (href.startsWith('http')) return match;
+      // Resolve relative path from node's directory
+      const parts = (nodePath + href).split('/');
+      const resolved = [];
+      for (const p of parts) {{
+        if (p === '..') resolved.pop();
+        else if (p && p !== '.') resolved.push(p);
+      }}
+      const resolvedPath = resolved.join('/');
+      const target = nodes.find(n => n.path === resolvedPath);
+      if (target) {{
+        return `<button type="button" class="modal-nav-btn" data-modal-nav="${{target.id}}" style="display:inline;padding:2px 6px;font-size:inherit">${{text}}</button>`;
+      }}
+      return `${{text}} (${{href}})`;
+    }}
+  );
+  document.getElementById('modal-content').innerHTML = linkedContent;
+  for (const btn of document.getElementById('modal-content').querySelectorAll('[data-modal-nav]')) {{
+    btn.addEventListener('click', () => {{
+      const target = nodes.find(n => n.id === Number(btn.dataset.modalNav));
+      if (target) {{ selectNode(target.id, true); openModal(target); }}
+    }});
+  }}
   // Build nav buttons for connected nodes
   const navEl = document.getElementById('modal-nav');
   const connected = [...(neighbors.get(node.id) || [])]
@@ -1779,6 +1811,16 @@ document.getElementById('reset-view').addEventListener('click', () => {{
 
 document.getElementById('nav-back').addEventListener('click', navBack);
 document.getElementById('nav-forward').addEventListener('click', navForward);
+document.getElementById('modal-back').addEventListener('click', () => {{
+  navBack();
+  const node = nodes.find(n => n.id === selectedId);
+  if (node && document.getElementById('content-modal').style.display !== 'none') openModal(node);
+}});
+document.getElementById('modal-forward').addEventListener('click', () => {{
+  navForward();
+  const node = nodes.find(n => n.id === selectedId);
+  if (node && document.getElementById('content-modal').style.display !== 'none') openModal(node);
+}});
 document.getElementById('modal-close').addEventListener('click', () => {{
   document.getElementById('content-modal').style.display = 'none';
 }});
