@@ -611,6 +611,27 @@ def generate_mri_html(brain_path: Path, output_path: Path) -> dict:
   .legend-line.related {{ background: linear-gradient(90deg, var(--accent), rgba(123,247,255,0.18)); }}
   .legend-line.parent {{ background: linear-gradient(90deg, var(--accent-3), rgba(248,199,109,0.18)); }}
   .legend-line.inline {{ background: linear-gradient(90deg, var(--accent-2), rgba(255,139,216,0.18)); }}
+  .breadcrumbs {{
+    margin-top: 8px;
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 2px;
+    font-family: var(--mono);
+    font-size: 0.82rem;
+  }}
+  .breadcrumb-link {{
+    appearance: none;
+    background: none;
+    border: none;
+    color: var(--accent);
+    font: inherit;
+    cursor: pointer;
+    padding: 2px 0;
+  }}
+  .breadcrumb-link:hover {{ text-decoration: underline; }}
+  .breadcrumb-current {{ color: var(--text); padding: 2px 0; }}
+  .breadcrumb-sep {{ color: var(--muted); padding: 0 4px; }}
   .expand-btn {{
     appearance: none;
     background: rgba(255,255,255,0.06);
@@ -1073,7 +1094,7 @@ function updateDetails() {{
     .map(id => nodes.find(item => item.id === id))
     .filter(Boolean)
     .sort((a, b) => a.title.localeCompare(b.title));
-  const tags = (node.tags || []).map(tag => `<span class="tag">${{escapeHtml(tag)}}</span>`).join('');
+  const tags = [...new Set(node.tags || [])].map(tag => `<span class="tag">${{escapeHtml(tag)}}</span>`).join('');
   const contentPreview = escapeHtml(node.content_preview || 'No content preview available for this node.');
   const previewNote = node.content_preview_truncated
     ? '<div class="content-preview-note">Preview truncated for readability. Open the source file for the full document.</div>'
@@ -1088,10 +1109,25 @@ function updateDetails() {{
       `).join('')
     : `<div class="details-empty">No connected nodes found for this selection.</div>`;
 
+  // Build breadcrumbs from path
+  const pathParts = node.path.split('/');
+  const crumbs = pathParts.map((part, i) => {{
+    const partPath = pathParts.slice(0, i + 1).join('/');
+    // Find a node matching this path (map.md for directories, or the file itself)
+    const isLast = i === pathParts.length - 1;
+    const targetPath = isLast ? partPath : partPath + '/map.md';
+    const target = nodes.find(n => n.path === targetPath);
+    const label = part.replace('.md', '');
+    if (target && target.id !== node.id) {{
+      return `<button type="button" class="breadcrumb-link" data-node-id="${{target.id}}">${{escapeHtml(label)}}</button>`;
+    }}
+    return `<span class="breadcrumb-current">${{escapeHtml(label)}}</span>`;
+  }}).join('<span class="breadcrumb-sep">/</span>');
+
   detailsPanel.innerHTML = `
     <div class="details-card">
       <div class="details-title">${{escapeHtml(node.title)}}</div>
-      <div class="details-path">${{escapeHtml(node.path)}}</div>
+      <div class="breadcrumbs">${{crumbs}}</div>
       <div class="meta-grid">
         <div class="meta-card"><span class="label">Type</span><span class="value">${{node.type === 'map' ? 'lobe' : node.type === 'neuron' ? 'neuron' : escapeHtml(node.type)}}</span></div>
         <div class="meta-card"><span class="label">Section</span><span class="value">${{escapeHtml(node.sublobe || node.lobe)}}</span></div>
@@ -1106,17 +1142,15 @@ function updateDetails() {{
       <div class="section-title">Content preview <button type="button" class="expand-btn" id="expand-preview">expand</button></div>
       <pre class="content-preview">${{contentPreview}}</pre>
       ${{previewNote}}
-      <div class="section-title">Frontmatter links</div>
-      <div class="details-copy">
-        Parent: <strong>${{escapeHtml(node.parent || '—')}}</strong><br>
-        Related entries: <strong>${{(node.related || []).length}}</strong>
-      </div>
       <div class="section-title">Connected nodes</div>
       <div class="results">${{connections}}</div>
     </div>
   `;
   for (const button of detailsPanel.querySelectorAll('[data-node-id]')) {{
     button.addEventListener('click', () => selectNode(Number(button.dataset.nodeId), true));
+  }}
+  for (const crumb of detailsPanel.querySelectorAll('.breadcrumb-link')) {{
+    crumb.addEventListener('click', () => selectNode(Number(crumb.dataset.nodeId), true));
   }}
   const expandBtn = document.getElementById('expand-preview');
   if (expandBtn) {{
@@ -1126,7 +1160,8 @@ function updateDetails() {{
 
 function openModal(node) {{
   const modal = document.getElementById('content-modal');
-  document.getElementById('modal-title').textContent = node.title;
+  const breadcrumb = node.path.split('/').map(p => p.replace('.md', '')).join(' / ');
+  document.getElementById('modal-title').innerHTML = `${{escapeHtml(node.title)}} <span style="color:var(--muted);font-size:0.8em;font-weight:400;margin-left:8px">${{escapeHtml(breadcrumb)}}</span>`;
   document.getElementById('modal-content').textContent = node.content_preview || 'No content.';
   // Build nav buttons for connected nodes
   const navEl = document.getElementById('modal-nav');
