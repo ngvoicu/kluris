@@ -147,17 +147,17 @@ def _sync_brain_state(brain_path: Path, brain_config) -> dict:
             continue
         try:
             meta, _ = read_frontmatter(md)
-            updated = False
+            changed = False
             last_mod = git_file_last_modified(brain_path, str(md.relative_to(brain_path)))
-            if last_mod:
+            if last_mod and str(meta.get("updated", "")) != last_mod[:10]:
                 update_frontmatter(md, {"updated": last_mod[:10]})
-                updated = True
+                changed = True
             if "created" not in meta:
                 created = git_file_created_date(brain_path, str(md.relative_to(brain_path)))
                 if created:
                     update_frontmatter(md, {"created": created[:10]})
-                    updated = True
-            if updated:
+                    changed = True
+            if changed:
                 fixes["dates_updated"] += 1
         except Exception:
             pass
