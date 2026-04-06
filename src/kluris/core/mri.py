@@ -1173,9 +1173,9 @@ function tick() {{
       const dx = b.x - a.x;
       const dy = b.y - a.y;
       const dist = Math.max(40, Math.hypot(dx, dy));
-      const minDist = 180;
+      const minDist = 400;
       if (dist < minDist) {{
-        const push = (minDist - dist) * 0.008;
+        const push = (minDist - dist) * 0.02;
         const ux = dx / dist;
         const uy = dy / dist;
         const membersA = sublobeGroups.get(slKeys[i]);
