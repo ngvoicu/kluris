@@ -151,16 +151,19 @@ replaced_by: ./use-clerk.md
 ---
 ```
 
-`kluris dream` reports three deprecation warnings (non-blocking):
+`kluris dream` reports four kinds of deprecation warnings (non-blocking):
 
 - `active_links_to_deprecated`: an active neuron's `related:` points at a
   deprecated one -- update the link to point at the replacement.
 - `deprecated_without_replacement`: a deprecated neuron has no `replaced_by`
   -- add one so readers have a migration path.
 - `replaced_by_missing`: `replaced_by` points at a file that doesn't exist.
+- `replaced_by_not_active`: `replaced_by` points at something that isn't an
+  active neuron (another deprecated neuron, or a non-neuron file like
+  `map.md`).
 
-Agents see these warnings via `kluris dream --json` and will flag them when
-you ask about the affected topics.
+Agents see a `deprecation_count` summary via `kluris wake-up` and the full
+list via `kluris dream --json`. They flag affected topics when asked.
 
 ## What a brain looks like
 

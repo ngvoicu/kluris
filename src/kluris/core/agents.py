@@ -86,12 +86,15 @@ training data -- the brain is the source of truth for team knowledge.
 
 ## Brain selection
 
-When multiple brains are registered above, pick one using these rules in order:
+When multiple brains are registered above, pick one using these rules in
+order. Use only the data in the `{brain_info}` block above -- brain names
+and brain paths. Do not invent "tracked project paths" or similar metadata
+that isn't in the skill body.
 
 1. If the user names a brain in their message ("btb-sme brain", "use ngvoicu"),
    use that exact brain.
-2. Else if the current working directory path contains a brain name or one of
-   that brain's tracked project paths, use that brain.
+2. Else if the current working directory path contains the brain name OR
+   starts with the brain path shown above, use that brain.
 3. Else use the brain marked `(default)` above.
 
 When in doubt, ask: "You have brains [A, B, C] -- which one should I write to?"

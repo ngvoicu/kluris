@@ -263,3 +263,56 @@ def test_active_status_is_ok_without_frontmatter(tmp_path):
     # None of the existing neurons should cause deprecation issues
     assert all(i["kind"] not in ("deprecated_without_replacement", "replaced_by_missing")
                for i in issues)
+
+
+def test_replaced_by_pointing_to_deprecated_is_flagged(tmp_path):
+    """Chain: A deprecated → B, but B itself is deprecated → C. A's migration
+    target is dead, readers end up on another deprecated page."""
+    brain = tmp_path / "brain"
+    brain.mkdir()
+    (brain / "knowledge").mkdir()
+    (brain / "knowledge" / "map.md").write_text(
+        "---\nauto_generated: true\n---\n# K\n", encoding="utf-8"
+    )
+    _write_neuron(
+        brain, "knowledge/a.md", "A",
+        status="deprecated",
+        deprecated_at="2026-02-01",
+        replaced_by="./b.md",
+    )
+    _write_neuron(
+        brain, "knowledge/b.md", "B",
+        status="deprecated",
+        deprecated_at="2026-03-01",
+        replaced_by="./c.md",
+    )
+    _write_neuron(brain, "knowledge/c.md", "C")
+
+    issues = detect_deprecation_issues(brain)
+    kinds = [i["kind"] for i in issues]
+    # A is the one with a dead chain — B's deprecation is tracked via its own
+    # replaced_by (which is fine: C is active).
+    assert "replaced_by_not_active" in kinds
+    a_issue = next(i for i in issues if i["kind"] == "replaced_by_not_active"
+                   and "a.md" in i["file"])
+    assert "b.md" in a_issue["target"]
+
+
+def test_replaced_by_pointing_to_non_neuron_is_flagged(tmp_path):
+    """`replaced_by: ./map.md` points readers to a generated index instead of
+    a replacement record. That's not a migration path — it's noise."""
+    brain = tmp_path / "brain"
+    brain.mkdir()
+    (brain / "knowledge").mkdir()
+    (brain / "knowledge" / "map.md").write_text(
+        "---\nauto_generated: true\n---\n# K\n", encoding="utf-8"
+    )
+    _write_neuron(
+        brain, "knowledge/old.md", "Old",
+        status="deprecated",
+        deprecated_at="2026-03-01",
+        replaced_by="./map.md",
+    )
+    issues = detect_deprecation_issues(brain)
+    kinds = [i["kind"] for i in issues]
+    assert "replaced_by_not_active" in kinds

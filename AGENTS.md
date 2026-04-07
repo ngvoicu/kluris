@@ -9,7 +9,7 @@ Published to PyPI as `kluris`. Source: `ngvoicu/kluris-cli`.
 
 ```bash
 pip install -e ".[dev]"          # dev install
-pytest tests/ -v                 # 255 tests
+pytest tests/ -v                 # 261 tests
 pytest tests/ --cov=kluris -q    # 90%+ coverage
 ```
 
@@ -43,9 +43,11 @@ is baked into SKILL_BODY's Bootstrap section.
 
 Neurons may opt into deprecation with `status: deprecated`, `deprecated_at: YYYY-MM-DD`,
 and `replaced_by: ./path/to/new.md`. `linker.detect_deprecation_issues()` reports
-three kinds: `active_links_to_deprecated`, `deprecated_without_replacement`,
-`replaced_by_missing`. `kluris dream` surfaces them as non-blocking warnings
-(text + `--json`).
+four kinds: `active_links_to_deprecated`, `deprecated_without_replacement`,
+`replaced_by_missing`, `replaced_by_not_active` (replaced_by points to a
+deprecated neuron or a non-neuron file). `kluris dream` surfaces them as
+non-blocking warnings (text + `--json`). `kluris wake-up --json` exposes a
+`deprecation_count` summary for agent bootstrap.
 
 ## Constraints
 

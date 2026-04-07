@@ -201,7 +201,7 @@ def check_frontmatter(brain_path: Path) -> list[dict]:
 def detect_deprecation_issues(brain_path: Path) -> list[dict]:
     """Find deprecation-frontmatter inconsistencies.
 
-    Three issue kinds are reported:
+    Four issue kinds are reported:
 
     - `active_links_to_deprecated`: an active neuron has `related:` pointing
       at a deprecated neuron. The active neuron probably needs updating to
@@ -210,6 +210,9 @@ def detect_deprecation_issues(brain_path: Path) -> list[dict]:
       no `replaced_by`, so readers have no migration path.
     - `replaced_by_missing`: a `replaced_by` path doesn't resolve to an
       existing file in the brain.
+    - `replaced_by_not_active`: a `replaced_by` path resolves to something
+      that is not an active neuron — either another deprecated neuron
+      (dead migration chain) or a non-neuron file like `map.md`.
 
     Neurons without a `status` field are treated as active.
     References from `map.md` files are ignored — maps are auto-generated
@@ -221,13 +224,17 @@ def detect_deprecation_issues(brain_path: Path) -> list[dict]:
     # Build a status map: {resolved_path: "active"|"deprecated"}
     status_by_path: dict[Path, str] = {}
     meta_by_path: dict[Path, dict] = {}
+    neuron_paths: set[Path] = set()
     for neuron in neurons:
         meta, _ = read_frontmatter(neuron)
         status = str(meta.get("status", "active")).lower()
-        status_by_path[neuron.resolve()] = status
-        meta_by_path[neuron.resolve()] = meta
+        resolved = neuron.resolve()
+        status_by_path[resolved] = status
+        meta_by_path[resolved] = meta
+        neuron_paths.add(resolved)
 
-    # Per-neuron checks: deprecated_without_replacement, replaced_by_missing
+    # Per-neuron checks: deprecated_without_replacement, replaced_by_missing,
+    # replaced_by_not_active
     for neuron in neurons:
         resolved = neuron.resolve()
         meta = meta_by_path[resolved]
@@ -251,6 +258,17 @@ def detect_deprecation_issues(brain_path: Path) -> list[dict]:
         if not target.exists():
             issues.append({
                 "kind": "replaced_by_missing",
+                "file": rel,
+                "target": replaced_by,
+            })
+            continue
+
+        # Target exists but is not an active neuron: either it's a non-neuron
+        # file (map.md, brain.md, README.md, glossary.md) or it's another
+        # deprecated neuron (dead migration chain).
+        if target not in neuron_paths or status_by_path.get(target) != "active":
+            issues.append({
+                "kind": "replaced_by_not_active",
                 "file": rel,
                 "target": replaced_by,
             })

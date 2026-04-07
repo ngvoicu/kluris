@@ -433,12 +433,21 @@ updated: 2026-04-01
 ---
 ```
 
-`kluris dream` reports deprecation warnings: active neurons still linking to
-deprecated ones (you should update the link to the replacement), deprecated
-neurons without `replaced_by` (add one so readers have a migration path), and
-`replaced_by` pointing to missing files. These are non-blocking warnings --
-dream still exits clean, but the agent sees them via `kluris wake-up` and
-`kluris dream --json`.
+`kluris dream` reports four kinds of deprecation warnings (non-blocking):
+
+- `active_links_to_deprecated` -- an active neuron's `related:` points at a
+  deprecated neuron; update the link to the replacement.
+- `deprecated_without_replacement` -- a deprecated neuron has no
+  `replaced_by`; add one so readers have a migration path.
+- `replaced_by_missing` -- `replaced_by` points at a file that does not
+  exist.
+- `replaced_by_not_active` -- `replaced_by` points at something that is not
+  an active neuron (another deprecated neuron -- a dead chain -- or a
+  non-neuron file like `map.md`).
+
+Dream still exits clean on deprecation warnings alone. `kluris wake-up`
+shows a `deprecation_count` summary; `kluris dream --json` returns the full
+`deprecation[]` list with each issue's `kind`, `file`, and optional `target`.
 
 ## Local config (kluris.yml)
 

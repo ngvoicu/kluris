@@ -343,3 +343,41 @@ def test_dream_no_deprecation_issues_on_clean_brain(tmp_path, monkeypatch):
     result = runner.invoke(cli, ["dream", "--json"])
     data = json.loads(result.output)
     assert data["deprecation_issues"] == 0
+
+
+def test_dream_mixed_structural_and_deprecation_issues(tmp_path, monkeypatch):
+    """A brain with both structural issues (broken link) and deprecation
+    warnings must still set healthy=false for the structural issue while
+    also surfacing the deprecation list. Deprecation warnings alone don't
+    break healthy, but they also must not suppress real breakage."""
+    monkeypatch.setenv("KLURIS_CONFIG", str(tmp_path / "config.yml"))
+    monkeypatch.setenv("HOME", str(tmp_path))
+    runner = CliRunner()
+    create_test_brain(runner, "my-brain", tmp_path)
+
+    # Structural issue: broken inline markdown link
+    (tmp_path / "my-brain" / "projects" / "broken.md").write_text(
+        "---\nparent: ./map.md\ntags: []\ncreated: 2026-04-01\nupdated: 2026-04-01\n---\n"
+        "# Broken\n\nSee [missing](./missing.md)\n",
+        encoding="utf-8",
+    )
+    # Deprecation issue: deprecated neuron without replacement
+    (tmp_path / "my-brain" / "knowledge" / "old.md").write_text(
+        "---\nparent: ./map.md\nstatus: deprecated\ndeprecated_at: 2026-03-01\n"
+        "tags: []\ncreated: 2026-01-01\nupdated: 2026-04-01\n---\n# Old\n",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(cli, ["dream", "--json"])
+    data = json.loads(result.output)
+
+    # Structural issue dominates exit/healthy
+    assert result.exit_code == 1
+    assert data["healthy"] is False
+    assert data["broken_synapses"] >= 1
+    # Deprecation warnings are still reported, not swallowed
+    assert data["deprecation_issues"] >= 1
+    assert any(
+        item.get("kind") == "deprecated_without_replacement"
+        for item in data["deprecation"]
+    )

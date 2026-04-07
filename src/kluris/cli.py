@@ -200,9 +200,20 @@ class KlurisGroup(click.Group):
     def invoke(self, ctx):
         # Capture raw subcommand args before Click consumes them so we can
         # detect --json even under CliRunner where sys.argv is pytest's argv.
-        raw_args: list[str] = []
-        raw_args.extend(ctx.protected_args or [])
-        raw_args.extend(ctx.args or [])
+        # `ctx.args` holds remaining unparsed tokens in Click 8.2+; older
+        # Click releases (8.0, 8.1) keep them in `ctx.protected_args`. We
+        # consult both so we work across the 8.x → 9.x transition without
+        # pinning a specific minor version.
+        import warnings
+        raw_args: list[str] = list(ctx.args or [])
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore",
+                message=".*protected_args.*",
+                category=DeprecationWarning,
+            )
+            legacy = getattr(ctx, "protected_args", None) or []
+        raw_args.extend(legacy)
         try:
             return super().invoke(ctx)
         except click.ClickException as e:
@@ -607,11 +618,23 @@ def wake_up(brain_name: str | None, as_json: bool):
     brains = _resolve_brains(brain_name, multi=False)
     name, entry = brains[0]
     brain_path = Path(entry["path"])
+    if not brain_path.exists() or not brain_path.is_dir():
+        raise click.ClickException(
+            f"Brain '{name}' is registered at {brain_path}, but that path no "
+            f"longer exists or is not a directory. Re-register it with "
+            f"'kluris remove {name}' and 'kluris clone'/'kluris create', or "
+            f"move the directory back."
+        )
     default_brain = read_global_config().default_brain
 
     lobes = _wake_up_collect_lobes(brain_path)
     recent = _wake_up_collect_recent(brain_path)
     total_neurons = sum(lobe["neurons"] for lobe in lobes)
+    try:
+        deprecation_issues = detect_deprecation_issues(brain_path)
+    except Exception:
+        deprecation_issues = []
+    deprecation_count = len(deprecation_issues)
 
     data = {
         "ok": True,
@@ -622,6 +645,7 @@ def wake_up(brain_name: str | None, as_json: bool):
         "lobes": lobes,
         "total_neurons": total_neurons,
         "recent": recent,
+        "deprecation_count": deprecation_count,
     }
 
     if as_json:
@@ -637,6 +661,11 @@ def wake_up(brain_name: str | None, as_json: bool):
     for lobe in lobes:
         console.print(f"  - {lobe['name']}/: {lobe['neurons']} neurons")
     console.print(f"\n[bold]Total neurons:[/bold] {total_neurons}")
+    if deprecation_count:
+        console.print(
+            f"\n[bold yellow]Deprecation warnings:[/bold yellow] {deprecation_count} "
+            f"(run `kluris dream` for details)"
+        )
     if recent:
         console.print(f"\n[bold]Recently updated ({len(recent)})[/bold]")
         for item in recent:

@@ -12,7 +12,7 @@ Kluris turns AI agents into team subject matter experts by giving them shared, h
 cd kluris-cli
 source .venv/bin/activate        # or: pipx install -e .
 pip install -e ".[dev]"          # dev install with pytest
-pytest tests/ -v                 # run all tests (255 tests)
+pytest tests/ -v                 # run all tests (261 tests)
 pytest tests/ --cov=kluris -q    # with coverage (90%+)
 pytest tests/test_create.py -v   # single test file
 ```
@@ -46,7 +46,7 @@ src/kluris/
 - **MRI uses inline canvas JS** -- no vendored Cytoscape.js. Standalone HTML with search, inspector, and interactive graph navigation.
 - **Cross-platform** -- all file I/O uses `encoding="utf-8"`, all paths use `pathlib.Path`.
 - **wake-up bootstrap protocol** -- SKILL.md instructs the agent to run `kluris wake-up --json` on the first `/kluris` of a session (via Bash), cache the snapshot, and refresh only after brain-mutating commands. This replaces walking brain.md -> map.md -> neurons on every turn.
-- **Deprecation frontmatter is opt-in** -- neurons may set `status: deprecated` + `deprecated_at` + `replaced_by`. Absence of `status` means active. `linker.detect_deprecation_issues()` surfaces 3 kinds of warnings through `kluris dream`; they are non-blocking (do not break `healthy`).
+- **Deprecation frontmatter is opt-in** -- neurons may set `status: deprecated` + `deprecated_at` + `replaced_by`. Absence of `status` means active. `linker.detect_deprecation_issues()` surfaces 4 kinds of warnings (`active_links_to_deprecated`, `deprecated_without_replacement`, `replaced_by_missing`, `replaced_by_not_active`) through `kluris dream`; they are non-blocking (do not break `healthy`). `kluris wake-up` exposes a `deprecation_count` summary.
 - **KlurisGroup detects --json via ctx args** -- scans `ctx.protected_args + ctx.args` in addition to `sys.argv` so JSON error output works under CliRunner (tests) as well as shell.
 
 ## Config Paths
@@ -111,11 +111,11 @@ create, clone, list, status, wake-up, neuron, lobe, dream, push, mri, templates,
 - **KlurisGroup** -- custom Click group that outputs JSON errors when --json is in args (scans ctx args + sys.argv)
 - **All commands support --json** -- structured output for scripting
 - **Deprecation frontmatter** -- optional `status`, `deprecated_at`, `replaced_by` on neurons; dream reports warnings, doesn't break healthy
-- **wake-up output schema** -- `{ok, name, path, is_default, description, lobes[{name, neurons}], total_neurons, recent[{path, updated}]}`
+- **wake-up output schema** -- `{ok, name, path, is_default, description, lobes[{name, neurons}], total_neurons, recent[{path, updated}], deprecation_count}`
 
 ## Testing
 
-- 255 tests across 28 test files
+- 261 tests across 28 test files
 - conftest.py has 5 fixtures: cli_runner, temp_config, temp_home, temp_brain, bare_remote
 - Tests use monkeypatch for KLURIS_CONFIG and HOME env vars
 - Git tests use real git in tmp_path (not mocked)

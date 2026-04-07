@@ -129,3 +129,46 @@ def test_wake_up_text_includes_recent(temp_brain, cli_runner):
     result = cli_runner.invoke(cli, ["wake-up"])
     assert result.exit_code == 0
     assert "use-raw-sql" in result.output
+
+
+def test_wake_up_reports_deprecation_count(temp_brain, cli_runner):
+    """Wake-up payload must surface a deprecation_count so the agent can
+    decide whether to dig into deprecation issues before answering."""
+    # One deprecated neuron with no replacement (triggers
+    # deprecated_without_replacement)
+    (temp_brain / "knowledge" / "old.md").write_text(
+        "---\nparent: ./map.md\nstatus: deprecated\ndeprecated_at: 2026-03-01\n"
+        "tags: []\ncreated: 2026-01-01\nupdated: 2026-04-01\n---\n# Old\n",
+        encoding="utf-8",
+    )
+
+    result = cli_runner.invoke(cli, ["wake-up", "--json"])
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    assert "deprecation_count" in data
+    assert data["deprecation_count"] >= 1
+
+
+def test_wake_up_deprecation_count_zero_on_clean_brain(temp_brain, cli_runner):
+    """Clean brain must report deprecation_count == 0, not omit the field."""
+    result = cli_runner.invoke(cli, ["wake-up", "--json"])
+    data = json.loads(result.output)
+    assert data["deprecation_count"] == 0
+
+
+def test_wake_up_stale_brain_path_returns_json_error(tmp_path, temp_config, cli_runner, monkeypatch):
+    """If a registered brain's filesystem path no longer exists, wake-up must
+    return a structured JSON error envelope — not crash with FileNotFoundError
+    and empty stdout. Agents rely on the envelope to recover gracefully."""
+    import shutil
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    create_test_brain(cli_runner, "ghost-brain", tmp_path)
+    # Delete the brain directory out from under the registration
+    shutil.rmtree(tmp_path / "ghost-brain")
+
+    result = cli_runner.invoke(cli, ["wake-up", "--json"])
+    assert result.exit_code != 0
+    data = json.loads(result.output)
+    assert data["ok"] is False
+    assert "ghost-brain" in data["error"] or "path" in data["error"].lower()
