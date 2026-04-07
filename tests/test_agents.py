@@ -75,3 +75,31 @@ def test_skill_tells_agent_to_run_wake_up():
     """Skill must tell the agent to bootstrap with kluris wake-up at session start."""
     content = render_skill()
     assert "kluris wake-up" in content
+
+
+def test_skill_bootstrap_instruction_is_deterministic():
+    """Bootstrap instruction must be deterministic, not ambiguous.
+
+    'at session start' is too vague — an agent reading it mid-conversation
+    could decide the session already started and skip wake-up. The instruction
+    must anchor to 'first /kluris call of the session' which the agent can
+    observe directly.
+    """
+    content = render_skill()
+    assert "Bootstrap" in content
+    assert "first" in content.lower() and "/kluris" in content
+    # Cache guidance: agent should reuse wake-up output, not re-run every turn
+    assert "cache" in content.lower() or "trust" in content.lower()
+
+
+def test_skill_bootstrap_lists_refresh_triggers():
+    """Skill tells the agent when to re-run wake-up after the brain changes."""
+    content = render_skill()
+    # When the brain mutates (neuron/lobe/remember/learn/dream/push), the
+    # cached snapshot is stale and wake-up must be re-run.
+    lowered = content.lower()
+    assert "re-run" in lowered or "refresh" in lowered
+    # Must mention at least two mutation triggers so the rule is unambiguous
+    triggers = ["neuron", "lobe", "dream", "push", "remember", "learn"]
+    hits = sum(1 for t in triggers if t in lowered)
+    assert hits >= 2

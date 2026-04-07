@@ -295,6 +295,17 @@ Everything goes through one slash command. The agent detects your intent.
 Search and guided documentation happen in `/kluris`; the CLI is for mechanical
 operations like `dream`, `push`, and `status`.
 
+### Bootstrap (automatic)
+
+On the first `/kluris` call of each session, the agent runs
+`kluris wake-up --json` via its shell and caches a compact snapshot of the
+brain: lobes with neuron counts, the 5 most recently updated neurons, default
+brain marker. You never run it manually. The agent refreshes the snapshot
+after mutating commands (`/kluris remember`, `/kluris learn`, `kluris neuron`,
+`kluris lobe`, `kluris dream`, `kluris push`).
+
+If you want to peek at what the agent sees, run `kluris wake-up` yourself.
+
 ### Search -- ask the SME
 
 ```
@@ -370,6 +381,7 @@ through sections one at a time so you can review each part.
 
 ```bash
 kluris status          # Brain tree, recent changes, neuron counts
+kluris wake-up         # Compact snapshot for agent bootstrap (--json for machines)
 kluris use <name>      # Switch the active brain
 kluris templates       # List available neuron templates
 kluris dream           # Regenerate maps, auto-fix safe issues, validate remaining links
@@ -403,6 +415,30 @@ updated: 2026-03-31
 
 Content here.
 ```
+
+### Deprecating a decision
+
+When a decision is superseded, mark the old neuron instead of deleting it --
+history matters. Add these optional frontmatter fields:
+
+```yaml
+---
+parent: ../map.md
+status: deprecated
+deprecated_at: 2026-04-01
+replaced_by: ./use-clerk.md
+tags: [auth]
+created: 2025-11-12
+updated: 2026-04-01
+---
+```
+
+`kluris dream` reports deprecation warnings: active neurons still linking to
+deprecated ones (you should update the link to the replacement), deprecated
+neurons without `replaced_by` (add one so readers have a migration path), and
+`replaced_by` pointing to missing files. These are non-blocking warnings --
+dream still exits clean, but the agent sees them via `kluris wake-up` and
+`kluris dream --json`.
 
 ## Local config (kluris.yml)
 

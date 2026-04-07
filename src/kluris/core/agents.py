@@ -43,17 +43,41 @@ or needs context from other projects. The brain paths are baked in below \
 SKILL_BODY = """\
 {brain_info}
 
+## Bootstrap
+
+On the FIRST `/kluris` call of the session, run `kluris wake-up --json` via
+your Bash tool before doing anything else. The output is your index for
+the rest of the session:
+
+- `name`, `path`, `description`, `is_default`
+- `lobes[]` with neuron counts per top-level lobe
+- `recent[]`: the 5 most recently updated neurons (use these as your starting
+  points for "what's hot" questions)
+- `total_neurons`
+
+Cache the wake-up output mentally for the rest of the session. Do NOT re-run
+`kluris wake-up` on every subsequent `/kluris` call -- trust the snapshot
+you already loaded.
+
+Re-run `kluris wake-up --json` only when the brain actually changes during
+the session. Concretely, refresh the snapshot after any of these:
+`/kluris remember`, `/kluris learn`, `kluris neuron`, `kluris lobe`,
+`kluris dream`, or `kluris push`. If the user edits files directly and
+tells you about it, refresh then too.
+
+If `kluris wake-up` fails (no brain registered, CLI not installed), report
+the failure plainly and ask the user to run `kluris doctor`.
+
 ## Query first -- never guess
 
 Before answering any question about decisions, conventions, architecture,
 deployments, or past work, you MUST check the brain first. Never guess from
 training data -- the brain is the source of truth for team knowledge.
 
-- Run `kluris wake-up --json` (or `--brain <name>` to target a specific brain)
-  at session start to load a compact snapshot of brain state: lobe counts,
-  recently updated neurons, deprecated items. Use it as your index.
 - When the user asks "what do we know about X", "how does Y work", "why did
   we choose Z": navigate the brain FIRST, then answer from what you find.
+  Start from the wake-up snapshot (lobes + recent neurons) and drill down
+  through `brain.md` -> `map.md` -> specific neuron files.
 - If you check and nothing is documented, say so explicitly: "Nothing documented
   about X yet." Do NOT fabricate brain content. Do NOT fill gaps with training
   knowledge and pretend it came from the brain.

@@ -83,6 +83,24 @@ def test_creates_readme(tmp_path):
     assert "auto-fix safe issues" in readme
 
 
+def test_readme_mentions_wake_up(tmp_path):
+    """Generated brain README must mention `kluris wake-up` so new team
+    members know how the agent bootstraps its brain snapshot."""
+    scaffold_brain(tmp_path / "brain", "brain", "Test", "product-group")
+    readme = (tmp_path / "brain" / "README.md").read_text()
+    assert "kluris wake-up" in readme
+
+
+def test_readme_documents_deprecation_frontmatter(tmp_path):
+    """Generated brain README must explain the deprecation frontmatter
+    fields so humans know how to mark superseded decisions."""
+    scaffold_brain(tmp_path / "brain", "brain", "Test", "product-group")
+    readme = (tmp_path / "brain" / "README.md").read_text()
+    assert "status:" in readme
+    assert "deprecated" in readme.lower()
+    assert "replaced_by" in readme
+
+
 def test_team_has_neuron_templates(tmp_path):
     """Templates are built into kluris per brain type, not stored in kluris.yml."""
     

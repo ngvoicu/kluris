@@ -68,6 +68,23 @@ The agent analyzes your code and walks you through each finding one at a
 time. You see a small preview before anything is written, and you approve, edit,
 or skip every piece.
 
+### How the agent bootstraps (automatic)
+
+On the first `/kluris` call of a session, the agent runs `kluris wake-up --json`
+through its shell to load a compact snapshot of the brain: name, lobes with
+neuron counts, the 5 most recently updated neurons, and a default marker.
+You never call it manually. The agent refreshes the snapshot after mutating
+commands (`/kluris remember`, `/kluris learn`, `kluris neuron`, `kluris lobe`,
+`kluris dream`, `kluris push`).
+
+If you want to see what the agent sees, run it yourself:
+
+```bash
+kluris wake-up            # pretty text
+kluris wake-up --json     # machine-readable
+kluris wake-up --brain X  # target a non-default brain
+```
+
 ### Joining an existing brain
 
 ```bash
@@ -119,6 +136,31 @@ kluris push          # commit and push to git (if brain uses git)
 kluris status        # brain tree, neuron counts, recent changes
 kluris mri --open    # generate and open in browser
 ```
+
+### Deprecating a decision
+
+When a decision is superseded, mark the old neuron instead of deleting it --
+the history is valuable. Add these optional frontmatter fields to the old
+neuron:
+
+```yaml
+---
+status: deprecated
+deprecated_at: 2026-04-01
+replaced_by: ./use-clerk.md
+---
+```
+
+`kluris dream` reports three deprecation warnings (non-blocking):
+
+- `active_links_to_deprecated`: an active neuron's `related:` points at a
+  deprecated one -- update the link to point at the replacement.
+- `deprecated_without_replacement`: a deprecated neuron has no `replaced_by`
+  -- add one so readers have a migration path.
+- `replaced_by_missing`: `replaced_by` points at a file that doesn't exist.
+
+Agents see these warnings via `kluris dream --json` and will flag them when
+you ask about the affected topics.
 
 ## What a brain looks like
 
