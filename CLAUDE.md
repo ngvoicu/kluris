@@ -12,7 +12,7 @@ Kluris turns AI agents into team subject matter experts by giving them shared, h
 cd kluris-cli
 source .venv/bin/activate        # or: pipx install -e .
 pip install -e ".[dev]"          # dev install with pytest
-pytest tests/ -v                 # run all tests (229 tests)
+pytest tests/ -v                 # run all tests (251 tests)
 pytest tests/ --cov=kluris -q    # with coverage (90%+)
 pytest tests/test_create.py -v   # single test file
 ```
@@ -70,9 +70,9 @@ One `kluris` skill is installed across supported agents.
 Windsurf also gets a `kluris.md` workflow for manual invocation.
 Search and guided documentation happen through `/kluris` in the agent, not a separate CLI search command.
 
-## CLI Commands (16)
+## CLI Commands (17)
 
-create, clone, list, status, neuron, lobe, dream, push, mri, templates, install-skills, uninstall-skills, remove, doctor, help, use
+create, clone, list, status, wake-up, neuron, lobe, dream, push, mri, templates, install-skills, uninstall-skills, remove, doctor, help, use
 
 ## Brain File Structure
 
@@ -102,7 +102,7 @@ create, clone, list, status, neuron, lobe, dream, push, mri, templates, install-
 
 ## Testing
 
-- 229 tests across 27 test files
+- 251 tests across 28 test files
 - conftest.py has 5 fixtures: cli_runner, temp_config, temp_home, temp_brain, bare_remote
 - Tests use monkeypatch for KLURIS_CONFIG and HOME env vars
 - Git tests use real git in tmp_path (not mocked)

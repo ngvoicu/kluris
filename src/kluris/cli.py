@@ -40,6 +40,7 @@ from kluris.core.git import (
 )
 from kluris.core.linker import (
     check_frontmatter,
+    detect_deprecation_issues,
     detect_orphans,
     fix_bidirectional_synapses,
     fix_missing_frontmatter,
@@ -197,11 +198,16 @@ class KlurisGroup(click.Group):
     """Custom group that outputs JSON errors when --json is in args."""
 
     def invoke(self, ctx):
+        # Capture raw subcommand args before Click consumes them so we can
+        # detect --json even under CliRunner where sys.argv is pytest's argv.
+        raw_args: list[str] = []
+        raw_args.extend(ctx.protected_args or [])
+        raw_args.extend(ctx.args or [])
         try:
             return super().invoke(ctx)
         except click.ClickException as e:
             import sys
-            if "--json" in sys.argv:
+            if "--json" in raw_args or "--json" in sys.argv:
                 click.echo(json_lib.dumps({"ok": False, "error": e.format_message()}))
                 raise SystemExit(1)
             raise
@@ -538,6 +544,105 @@ def list_cmd(as_json: bool):
     console.print(table)
 
 
+_WAKE_UP_SKIP_DIRS = {".git", ".github", ".vscode", ".idea", "node_modules", "__pycache__"}
+_WAKE_UP_SKIP_FILES = {"map.md", "brain.md", "index.md", "glossary.md", "README.md"}
+
+
+def _wake_up_collect_lobes(brain_path: Path) -> list[dict]:
+    """Return top-level lobes with neuron counts (sorted by name)."""
+    lobes = []
+    for child in sorted(brain_path.iterdir()):
+        if not child.is_dir():
+            continue
+        if child.name in _WAKE_UP_SKIP_DIRS or child.name.startswith("."):
+            continue
+        neurons = [
+            md for md in child.rglob("*.md")
+            if md.name not in _WAKE_UP_SKIP_FILES
+            and not any(part in _WAKE_UP_SKIP_DIRS for part in md.parts)
+        ]
+        lobes.append({"name": child.name, "neurons": len(neurons)})
+    return lobes
+
+
+def _wake_up_collect_recent(brain_path: Path, limit: int = 5) -> list[dict]:
+    """Return up to `limit` most-recently-updated neurons, newest first."""
+    candidates = []
+    for md in brain_path.rglob("*.md"):
+        if md.name in _WAKE_UP_SKIP_FILES:
+            continue
+        if any(part in _WAKE_UP_SKIP_DIRS for part in md.parts):
+            continue
+        try:
+            meta, _ = read_frontmatter(md)
+        except Exception:
+            continue
+        updated = meta.get("updated")
+        if updated is None:
+            continue
+        candidates.append({
+            "path": str(md.relative_to(brain_path)).replace("\\", "/"),
+            "updated": str(updated),
+        })
+    candidates.sort(key=lambda item: item["updated"], reverse=True)
+    return candidates[:limit]
+
+
+@cli.command("wake-up")
+@click.option("--brain", "brain_name", help="Specific brain")
+@click.option("--json", "as_json", is_flag=True, help="JSON output")
+def wake_up(brain_name: str | None, as_json: bool):
+    """Compact brain snapshot for agent session bootstrap.
+
+    Emits a tight view of the brain's live state: lobes with neuron counts,
+    the most recently updated neurons, and which brain is default. Designed
+    to be called by the /kluris skill at session start so the agent has a
+    fast index without walking brain.md and every map.md.
+
+    \b
+      kluris wake-up                 # default brain, text output
+      kluris wake-up --brain ngvoicu # target a specific brain
+      kluris wake-up --json          # machine-readable (for agents)
+    """
+    brains = _resolve_brains(brain_name, multi=False)
+    name, entry = brains[0]
+    brain_path = Path(entry["path"])
+    default_brain = read_global_config().default_brain
+
+    lobes = _wake_up_collect_lobes(brain_path)
+    recent = _wake_up_collect_recent(brain_path)
+    total_neurons = sum(lobe["neurons"] for lobe in lobes)
+
+    data = {
+        "ok": True,
+        "name": name,
+        "path": str(brain_path),
+        "is_default": name == default_brain,
+        "description": entry.get("description", ""),
+        "lobes": lobes,
+        "total_neurons": total_neurons,
+        "recent": recent,
+    }
+
+    if as_json:
+        click.echo(json_lib.dumps(data))
+        return
+
+    marker = " (default)" if data["is_default"] else ""
+    console.print(f"\n[bold]Brain: {name}[/bold]{marker}")
+    console.print(f"  Path: {brain_path}")
+    if data["description"]:
+        console.print(f"  {data['description']}")
+    console.print(f"\n[bold]Lobes ({len(lobes)})[/bold]")
+    for lobe in lobes:
+        console.print(f"  - {lobe['name']}/: {lobe['neurons']} neurons")
+    console.print(f"\n[bold]Total neurons:[/bold] {total_neurons}")
+    if recent:
+        console.print(f"\n[bold]Recently updated ({len(recent)})[/bold]")
+        for item in recent:
+            console.print(f"  {item['updated']} {item['path']}")
+
+
 @cli.command()
 @click.option("--brain", "brain_name", help="Specific brain")
 @click.option("--json", "as_json", is_flag=True, help="JSON output")
@@ -688,7 +793,8 @@ def dream(brain_name: str | None, as_json: bool):
     """Brain maintenance — regenerate maps, update dates, auto-fix safe issues, validate remaining links."""
     brains = _resolve_brains(brain_name)
     all_issues = {"broken_synapses": 0, "one_way_synapses": 0, "orphans": 0,
-                  "frontmatter_issues": 0, "dates_updated": 0}
+                  "frontmatter_issues": 0, "dates_updated": 0,
+                  "deprecation_issues": 0}
     all_fixes = {
         "dates_updated": 0,
         "parents_inferred": 0,
@@ -696,6 +802,7 @@ def dream(brain_name: str | None, as_json: bool):
         "orphan_references_added": 0,
         "total": 0,
     }
+    all_deprecation: list[dict] = []
     healthy = True
 
     for name, entry in brains:
@@ -711,15 +818,20 @@ def dream(brain_name: str | None, as_json: bool):
         one_way = validate_bidirectional(brain_path)
         orphans = detect_orphans(brain_path)
         fm_issues = check_frontmatter(brain_path)
+        deprecation = detect_deprecation_issues(brain_path)
 
         all_issues["dates_updated"] += brain_fixes["dates_updated"]
         all_issues["broken_synapses"] += len(broken)
         all_issues["one_way_synapses"] += len(one_way)
         all_issues["orphans"] += len(orphans)
         all_issues["frontmatter_issues"] += len(fm_issues)
+        all_issues["deprecation_issues"] += len(deprecation)
+        for entry_ in deprecation:
+            all_deprecation.append({"brain": name, **entry_})
         for key, value in brain_fixes.items():
             all_fixes[key] += value
 
+        # Deprecation issues are warnings — they don't break healthy status.
         if broken or one_way or orphans or fm_issues:
             healthy = False
 
@@ -731,6 +843,20 @@ def dream(brain_name: str | None, as_json: bool):
             console.print(f"  {'[green]OK[/green]' if not one_way else f'[yellow]{len(one_way)} one-way[/yellow]'} bidirectional")
             console.print(f"  {'[green]OK[/green]' if not orphans else f'[yellow]{len(orphans)} orphans[/yellow]'}")
             console.print(f"  {'[green]OK[/green]' if not fm_issues else f'[yellow]{len(fm_issues)} issues[/yellow]'} frontmatter")
+            console.print(f"  {'[green]OK[/green]' if not deprecation else f'[yellow]{len(deprecation)} deprecation warnings[/yellow]'}")
+            for item in deprecation:
+                if item["kind"] == "active_links_to_deprecated":
+                    console.print(
+                        f"    - {item['source']} links to deprecated {item['target']}"
+                    )
+                elif item["kind"] == "deprecated_without_replacement":
+                    console.print(
+                        f"    - {item['file']} is deprecated but has no replaced_by"
+                    )
+                elif item["kind"] == "replaced_by_missing":
+                    console.print(
+                        f"    - {item['file']} replaced_by points to missing {item['target']}"
+                    )
             console.print(f"  {brain_fixes['total']} automatic fixes applied")
             console.print(f"  {brain_fixes['dates_updated']} neuron dates refreshed from git")
             console.print(f"  {brain_fixes['parents_inferred']} missing parent frontmatter values inferred")
@@ -738,7 +864,12 @@ def dream(brain_name: str | None, as_json: bool):
             console.print(f"  {brain_fixes['orphan_references_added']} missing neuron references added to parent map.md files")
 
     if as_json:
-        click.echo(json_lib.dumps({"ok": True, "healthy": healthy, **all_issues, "fixes": all_fixes}))
+        click.echo(json_lib.dumps({
+            "ok": True, "healthy": healthy,
+            **all_issues,
+            "deprecation": all_deprecation,
+            "fixes": all_fixes,
+        }))
 
     if not as_json:
         if all_fixes["total"]:
@@ -1166,6 +1297,7 @@ def help_cmd(command: str | None, as_json: bool):
         ("clone", "Clone a brain from a git remote"),
         ("list", "List registered brains"),
         ("status", "Show brain tree, recent changes, and neuron counts"),
+        ("wake-up", "Compact brain snapshot for agent session bootstrap"),
         ("neuron", "Create a new neuron (--template for structured formats)"),
         ("lobe", "Create a new lobe (knowledge region)"),
         ("dream", "Regenerate maps, auto-fix safe issues, and validate links"),

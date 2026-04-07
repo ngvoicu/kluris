@@ -198,6 +198,89 @@ def check_frontmatter(brain_path: Path) -> list[dict]:
     return issues
 
 
+def detect_deprecation_issues(brain_path: Path) -> list[dict]:
+    """Find deprecation-frontmatter inconsistencies.
+
+    Three issue kinds are reported:
+
+    - `active_links_to_deprecated`: an active neuron has `related:` pointing
+      at a deprecated neuron. The active neuron probably needs updating to
+      point at the replacement.
+    - `deprecated_without_replacement`: a neuron is marked deprecated but has
+      no `replaced_by`, so readers have no migration path.
+    - `replaced_by_missing`: a `replaced_by` path doesn't resolve to an
+      existing file in the brain.
+
+    Neurons without a `status` field are treated as active.
+    References from `map.md` files are ignored — maps are auto-generated
+    indexes, not editorial endorsements.
+    """
+    issues: list[dict] = []
+    neurons = _neuron_files(brain_path)
+
+    # Build a status map: {resolved_path: "active"|"deprecated"}
+    status_by_path: dict[Path, str] = {}
+    meta_by_path: dict[Path, dict] = {}
+    for neuron in neurons:
+        meta, _ = read_frontmatter(neuron)
+        status = str(meta.get("status", "active")).lower()
+        status_by_path[neuron.resolve()] = status
+        meta_by_path[neuron.resolve()] = meta
+
+    # Per-neuron checks: deprecated_without_replacement, replaced_by_missing
+    for neuron in neurons:
+        resolved = neuron.resolve()
+        meta = meta_by_path[resolved]
+        rel = str(neuron.relative_to(brain_path))
+
+        if status_by_path[resolved] != "deprecated":
+            continue
+
+        replaced_by = meta.get("replaced_by")
+        if replaced_by is None or replaced_by == "":
+            issues.append({
+                "kind": "deprecated_without_replacement",
+                "file": rel,
+            })
+            continue
+
+        if not isinstance(replaced_by, str):
+            continue
+
+        target = (neuron.parent / replaced_by).resolve()
+        if not target.exists():
+            issues.append({
+                "kind": "replaced_by_missing",
+                "file": rel,
+                "target": replaced_by,
+            })
+
+    # Cross-neuron check: active neurons linking to deprecated ones via
+    # `related:` frontmatter.
+    for neuron in neurons:
+        resolved = neuron.resolve()
+        if status_by_path[resolved] == "deprecated":
+            continue
+
+        meta = meta_by_path[resolved]
+        related = meta.get("related", [])
+        if not isinstance(related, list):
+            continue
+
+        for rel_link in related:
+            if not isinstance(rel_link, str):
+                continue
+            target = (neuron.parent / rel_link).resolve()
+            if status_by_path.get(target) == "deprecated":
+                issues.append({
+                    "kind": "active_links_to_deprecated",
+                    "source": str(neuron.relative_to(brain_path)),
+                    "target": str(target.relative_to(brain_path)),
+                })
+
+    return issues
+
+
 def fix_missing_frontmatter(brain_path: Path) -> int:
     """Infer missing parent frontmatter for neurons from their directory."""
     fixed = 0

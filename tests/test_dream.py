@@ -281,3 +281,65 @@ def test_dream_sibling_sub_lobes_see_each_other(tmp_path, monkeypatch):
     web_map = (tmp_path / "my-brain" / "projects" / "web" / "map.md").read_text(encoding="utf-8")
     assert "web" in api_map, "api/map.md should list web as sibling"
     assert "api" in web_map, "web/map.md should list api as sibling"
+
+
+def test_dream_reports_deprecation_warnings_json(tmp_path, monkeypatch):
+    """Dream's JSON output surfaces deprecation_issues count and a list."""
+    monkeypatch.setenv("KLURIS_CONFIG", str(tmp_path / "config.yml"))
+    monkeypatch.setenv("HOME", str(tmp_path))
+    runner = CliRunner()
+    create_test_brain(runner, "my-brain", tmp_path)
+
+    # Active neuron references a deprecated one
+    (tmp_path / "my-brain" / "knowledge" / "new.md").write_text(
+        "---\nparent: ./map.md\nrelated:\n  - ./old.md\n"
+        "tags: []\ncreated: 2026-04-01\nupdated: 2026-04-01\n---\n# New\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "my-brain" / "knowledge" / "old.md").write_text(
+        "---\nparent: ./map.md\nstatus: deprecated\ndeprecated_at: 2026-03-01\n"
+        "replaced_by: ./new.md\nrelated:\n  - ./new.md\n"
+        "tags: []\ncreated: 2026-01-01\nupdated: 2026-04-01\n---\n# Old\n",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(cli, ["dream", "--json"])
+    data = json.loads(result.output)
+
+    assert "deprecation_issues" in data
+    assert data["deprecation_issues"] >= 1
+    assert "deprecation" in data
+    assert any(
+        item.get("kind") == "active_links_to_deprecated"
+        for item in data["deprecation"]
+    )
+
+
+def test_dream_deprecation_warnings_do_not_fail_healthy(tmp_path, monkeypatch):
+    """Deprecation issues are warnings — dream still exits 0 when they are
+    the only finding (so CI pipelines don't break on legitimate migrations)."""
+    monkeypatch.setenv("KLURIS_CONFIG", str(tmp_path / "config.yml"))
+    monkeypatch.setenv("HOME", str(tmp_path))
+    runner = CliRunner()
+    create_test_brain(runner, "my-brain", tmp_path)
+
+    (tmp_path / "my-brain" / "knowledge" / "old.md").write_text(
+        "---\nparent: ./map.md\nstatus: deprecated\ndeprecated_at: 2026-03-01\n"
+        "tags: []\ncreated: 2026-01-01\nupdated: 2026-04-01\n---\n# Old\n",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(cli, ["dream"])
+    assert result.exit_code == 0
+    assert "deprecat" in result.output.lower()
+
+
+def test_dream_no_deprecation_issues_on_clean_brain(tmp_path, monkeypatch):
+    """Clean brain shows deprecation_issues == 0."""
+    monkeypatch.setenv("KLURIS_CONFIG", str(tmp_path / "config.yml"))
+    monkeypatch.setenv("HOME", str(tmp_path))
+    runner = CliRunner()
+    create_test_brain(runner, "my-brain", tmp_path)
+    result = runner.invoke(cli, ["dream", "--json"])
+    data = json.loads(result.output)
+    assert data["deprecation_issues"] == 0

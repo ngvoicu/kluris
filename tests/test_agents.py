@@ -52,3 +52,26 @@ def test_render_same_format_all_agents(tmp_path):
         assert files[0].name == "SKILL.md"
         content = files[0].read_text()
         assert "name: kluris" in content
+
+
+def test_skill_has_query_first_protocol():
+    """Skill must instruct the agent to query the brain before answering."""
+    content = render_skill()
+    assert "Query first" in content
+    assert "Never guess" in content
+
+
+def test_skill_has_brain_selection_rules():
+    """Skill must explain how to pick a brain when multiple are registered."""
+    content = render_skill()
+    assert "Brain selection" in content
+    # Three-tier rule: exact name > path hint > default
+    assert "names a brain" in content
+    assert "current working directory" in content
+    assert "(default)" in content
+
+
+def test_skill_tells_agent_to_run_wake_up():
+    """Skill must tell the agent to bootstrap with kluris wake-up at session start."""
+    content = render_skill()
+    assert "kluris wake-up" in content

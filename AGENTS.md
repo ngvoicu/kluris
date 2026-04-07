@@ -9,7 +9,7 @@ Published to PyPI as `kluris`. Source: `ngvoicu/kluris-cli`.
 
 ```bash
 pip install -e ".[dev]"          # dev install
-pytest tests/ -v                 # 229 tests
+pytest tests/ -v                 # 251 tests
 pytest tests/ --cov=kluris -q    # 90%+ coverage
 ```
 

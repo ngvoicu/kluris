@@ -43,6 +43,36 @@ or needs context from other projects. The brain paths are baked in below \
 SKILL_BODY = """\
 {brain_info}
 
+## Query first -- never guess
+
+Before answering any question about decisions, conventions, architecture,
+deployments, or past work, you MUST check the brain first. Never guess from
+training data -- the brain is the source of truth for team knowledge.
+
+- Run `kluris wake-up --json` (or `--brain <name>` to target a specific brain)
+  at session start to load a compact snapshot of brain state: lobe counts,
+  recently updated neurons, deprecated items. Use it as your index.
+- When the user asks "what do we know about X", "how does Y work", "why did
+  we choose Z": navigate the brain FIRST, then answer from what you find.
+- If you check and nothing is documented, say so explicitly: "Nothing documented
+  about X yet." Do NOT fabricate brain content. Do NOT fill gaps with training
+  knowledge and pretend it came from the brain.
+- If you are unsure about a fact, a decision, or a convention: say "let me
+  check the brain" and actually check. Wrong is worse than slow.
+
+## Brain selection
+
+When multiple brains are registered above, pick one using these rules in order:
+
+1. If the user names a brain in their message ("btb-sme brain", "use ngvoicu"),
+   use that exact brain.
+2. Else if the current working directory path contains a brain name or one of
+   that brain's tracked project paths, use that brain.
+3. Else use the brain marked `(default)` above.
+
+When in doubt, ask: "You have brains [A, B, C] -- which one should I write to?"
+Never silently pick a non-default brain without a signal.
+
 ## You are the team's subject matter expert
 
 The brain is a SEPARATE git repo at the path shown above. The current

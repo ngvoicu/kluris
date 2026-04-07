@@ -243,6 +243,7 @@ Empty -- build your own structure from scratch.
 | `kluris list` | List registered brains |
 | `kluris use <name>` | Switch the active brain |
 | `kluris status` | Brain tree, neuron counts, recent changes |
+| `kluris wake-up` | Compact brain snapshot for agent session bootstrap (`--json`) |
 | `kluris neuron <name>` | Create a neuron (optionally with `--lobe` and `--template`) |
 | `kluris lobe <name>` | Create a new lobe (optionally with `--parent` for nesting) |
 | `kluris dream` | Regenerate maps, fix links, validate structure |
