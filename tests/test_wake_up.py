@@ -156,6 +156,114 @@ def test_wake_up_deprecation_count_zero_on_clean_brain(temp_brain, cli_runner):
     assert data["deprecation_count"] == 0
 
 
+def test_wake_up_includes_brain_md_body(temp_brain, cli_runner):
+    """brain.md body is returned in the snapshot so the agent doesn't re-read it."""
+    # temp_brain's brain.md already contains `# Test Brain`
+    result = cli_runner.invoke(cli, ["wake-up", "--json"])
+    data = json.loads(result.output)
+    assert "brain_md" in data
+    assert isinstance(data["brain_md"], str)
+    assert "Test Brain" in data["brain_md"]
+    # Frontmatter must be stripped
+    assert "auto_generated" not in data["brain_md"]
+    assert "---" not in data["brain_md"].split("\n")[0]
+
+
+def test_wake_up_brain_md_absent_returns_empty_string(temp_brain, cli_runner):
+    """Missing brain.md must not crash wake-up; return empty string."""
+    (temp_brain / "brain.md").unlink()
+    result = cli_runner.invoke(cli, ["wake-up", "--json"])
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    assert data["brain_md"] == ""
+
+
+def test_wake_up_brain_md_is_truncated_when_huge(temp_brain, cli_runner):
+    """brain.md is capped so a pathological 100 KB brain.md can't blow up the bootstrap payload."""
+    huge = "---\nauto_generated: true\nupdated: 2026-04-01\n---\n"
+    huge += "# Test Brain\n\n"
+    huge += "x" * 10000  # 10 KB of body content
+    (temp_brain / "brain.md").write_text(huge, encoding="utf-8")
+    result = cli_runner.invoke(cli, ["wake-up", "--json"])
+    data = json.loads(result.output)
+    # Body capped at 4000 bytes + a small truncation marker
+    assert len(data["brain_md"].encode("utf-8")) < 4200
+    assert "truncated" in data["brain_md"]
+
+
+def test_wake_up_includes_glossary_table_format(temp_brain, cli_runner):
+    """Glossary terms in the default markdown-table format are parsed and returned."""
+    (temp_brain / "glossary.md").write_text(
+        "---\nauto_generated: false\nupdated: 2026-04-01\n---\n"
+        "# Glossary\n\n"
+        "| Term | Meaning |\n"
+        "|------|---------|\n"
+        "| SIT | System integration testing environment |\n"
+        "| UAT | User acceptance testing environment |\n",
+        encoding="utf-8",
+    )
+    result = cli_runner.invoke(cli, ["wake-up", "--json"])
+    data = json.loads(result.output)
+    assert "glossary" in data
+    terms = {e["term"]: e["definition"] for e in data["glossary"]}
+    assert terms.get("SIT", "").startswith("System integration")
+    assert terms.get("UAT", "").startswith("User acceptance")
+    # Header/separator rows must not leak in
+    assert "Term" not in terms
+    assert "------" not in terms
+
+
+def test_wake_up_includes_glossary_bold_dash_format(temp_brain, cli_runner):
+    """Glossary terms in the SKILL.md-recommended **Term** -- Definition format are parsed."""
+    (temp_brain / "glossary.md").write_text(
+        "---\nauto_generated: false\nupdated: 2026-04-01\n---\n"
+        "# Glossary\n\n"
+        "**Synapse** -- a link between two neurons (bidirectional).\n"
+        "**Lobe** -- a top-level folder in the brain.\n",
+        encoding="utf-8",
+    )
+    result = cli_runner.invoke(cli, ["wake-up", "--json"])
+    data = json.loads(result.output)
+    terms = {e["term"]: e["definition"] for e in data["glossary"]}
+    assert "Synapse" in terms
+    assert "Lobe" in terms
+    assert "link between two neurons" in terms["Synapse"]
+
+
+def test_wake_up_glossary_empty_when_no_entries(temp_brain, cli_runner):
+    """Brain with only the scaffolded glossary (no entries) returns an empty list, not an error."""
+    result = cli_runner.invoke(cli, ["wake-up", "--json"])
+    data = json.loads(result.output)
+    assert "glossary" in data
+    assert isinstance(data["glossary"], list)
+    assert data["glossary"] == []
+
+
+def test_wake_up_includes_deprecation_list(temp_brain, cli_runner):
+    """deprecation_count is preserved and deprecation[] now carries the full list."""
+    (temp_brain / "knowledge" / "old.md").write_text(
+        "---\nparent: ./map.md\nstatus: deprecated\ndeprecated_at: 2026-03-01\n"
+        "tags: []\ncreated: 2026-01-01\nupdated: 2026-04-01\n---\n# Old\n",
+        encoding="utf-8",
+    )
+    result = cli_runner.invoke(cli, ["wake-up", "--json"])
+    data = json.loads(result.output)
+    assert "deprecation" in data
+    assert isinstance(data["deprecation"], list)
+    assert len(data["deprecation"]) == data["deprecation_count"]
+    # Each entry has at least kind + file
+    assert all("kind" in e for e in data["deprecation"])
+    assert any(e["kind"] == "deprecated_without_replacement" for e in data["deprecation"])
+
+
+def test_wake_up_deprecation_list_empty_on_clean_brain(temp_brain, cli_runner):
+    """Clean brain returns deprecation: [] AND deprecation_count: 0 (both fields present)."""
+    result = cli_runner.invoke(cli, ["wake-up", "--json"])
+    data = json.loads(result.output)
+    assert data["deprecation"] == []
+    assert data["deprecation_count"] == 0
+
+
 def test_wake_up_stale_brain_path_returns_json_error(tmp_path, temp_config, cli_runner, monkeypatch):
     """If a registered brain's filesystem path no longer exists, wake-up must
     return a structured JSON error envelope — not crash with FileNotFoundError

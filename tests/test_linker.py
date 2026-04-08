@@ -316,3 +316,120 @@ def test_replaced_by_pointing_to_non_neuron_is_flagged(tmp_path):
     issues = detect_deprecation_issues(brain)
     kinds = [i["kind"] for i in issues]
     assert "replaced_by_not_active" in kinds
+
+
+def test_link_that_escapes_brain_is_broken(tmp_path):
+    """A relative link that resolves outside the brain is reported broken,
+    even if the target file happens to exist on disk. Brains must be
+    self-contained."""
+    brain = tmp_path / "brain"
+    brain.mkdir()
+    (brain / "knowledge").mkdir()
+    (brain / "knowledge" / "map.md").write_text(
+        "---\nauto_generated: true\n---\n# K\n", encoding="utf-8"
+    )
+    # A file OUTSIDE the brain that exists on disk
+    (tmp_path / "outside.md").write_text("# Outside\n", encoding="utf-8")
+    (brain / "knowledge" / "escape.md").write_text(
+        "---\nparent: ./map.md\ntags: []\n"
+        "created: 2026-01-01\nupdated: 2026-04-01\n---\n"
+        "# Escape\n\n"
+        "See [outside](../../outside.md) for details.\n",
+        encoding="utf-8",
+    )
+    broken = validate_synapses(brain)
+    assert any("escape.md" in b["file"] for b in broken)
+
+
+def test_related_that_escapes_brain_is_broken(tmp_path):
+    """Same escape check applies to `related:` frontmatter."""
+    brain = tmp_path / "brain"
+    brain.mkdir()
+    (brain / "knowledge").mkdir()
+    (brain / "knowledge" / "map.md").write_text(
+        "---\nauto_generated: true\n---\n# K\n", encoding="utf-8"
+    )
+    (tmp_path / "outside.md").write_text("# Outside\n", encoding="utf-8")
+    _write_neuron(
+        brain, "knowledge/escape.md", "Escape",
+        related=["../../outside.md"],
+    )
+    broken = validate_synapses(brain)
+    assert any(b["target"] == "../../outside.md" for b in broken)
+
+
+def test_replaced_by_escaping_brain_is_flagged(tmp_path):
+    """A deprecated neuron whose replaced_by resolves outside the brain is
+    reported as replaced_by_missing (same envelope)."""
+    brain = tmp_path / "brain"
+    brain.mkdir()
+    (brain / "knowledge").mkdir()
+    (brain / "knowledge" / "map.md").write_text(
+        "---\nauto_generated: true\n---\n# K\n", encoding="utf-8"
+    )
+    (tmp_path / "outside.md").write_text(
+        "---\ncreated: 2026-01-01\nupdated: 2026-04-01\ntags: []\nparent: ./map.md\n---\n# Outside\n",
+        encoding="utf-8",
+    )
+    _write_neuron(
+        brain, "knowledge/old.md", "Old",
+        status="deprecated",
+        deprecated_at="2026-03-01",
+        replaced_by="../../outside.md",
+    )
+    issues = detect_deprecation_issues(brain)
+    assert any(i["kind"] == "replaced_by_missing" for i in issues)
+
+
+def test_check_frontmatter_flags_wrong_types(tmp_path):
+    """`related:` as a string, `tags:` as a string, `replaced_by:` as a list
+    are all type errors that should surface, not be silently skipped."""
+    brain = tmp_path / "brain"
+    brain.mkdir()
+    (brain / "knowledge").mkdir()
+    (brain / "knowledge" / "map.md").write_text(
+        "---\nauto_generated: true\n---\n# K\n", encoding="utf-8"
+    )
+    (brain / "knowledge" / "bad.md").write_text(
+        "---\n"
+        "parent: ./map.md\n"
+        "related: 'just-a-string.md'\n"       # wrong: should be list
+        "tags: 'also-a-string'\n"              # wrong: should be list
+        "created: 2026-01-01\n"
+        "updated: 2026-04-01\n"
+        "---\n"
+        "# Bad\n",
+        encoding="utf-8",
+    )
+    issues = check_frontmatter(brain)
+    fields_with_type_errors = [
+        i["field"] for i in issues if i.get("kind") == "type"
+    ]
+    assert "related" in fields_with_type_errors
+    assert "tags" in fields_with_type_errors
+
+
+def test_check_frontmatter_flags_replaced_by_wrong_type(tmp_path):
+    """`replaced_by:` must be a string; a list value is flagged."""
+    brain = tmp_path / "brain"
+    brain.mkdir()
+    (brain / "knowledge").mkdir()
+    (brain / "knowledge" / "map.md").write_text(
+        "---\nauto_generated: true\n---\n# K\n", encoding="utf-8"
+    )
+    (brain / "knowledge" / "bad.md").write_text(
+        "---\n"
+        "parent: ./map.md\n"
+        "status: deprecated\n"
+        "replaced_by:\n  - './new.md'\n"    # wrong: should be a single string
+        "created: 2026-01-01\n"
+        "updated: 2026-04-01\n"
+        "---\n"
+        "# Bad\n",
+        encoding="utf-8",
+    )
+    issues = check_frontmatter(brain)
+    assert any(
+        i.get("field") == "replaced_by" and i.get("kind") == "type"
+        for i in issues
+    )

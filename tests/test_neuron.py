@@ -85,3 +85,41 @@ def test_neuron_rejects_paths_outside_brain(tmp_path, monkeypatch):
     assert result.exit_code != 0
     assert "Path escapes the brain directory" in result.output
     assert not (tmp_path / "my-brain-escape" / "pwn.md").exists()
+
+
+def test_neuron_rejects_overwriting_existing(tmp_path, monkeypatch):
+    """A second `kluris neuron foo.md --lobe projects` must fail to protect user content."""
+    monkeypatch.setenv("KLURIS_CONFIG", str(tmp_path / "config.yml"))
+    monkeypatch.setenv("HOME", str(tmp_path))
+    runner = CliRunner()
+    create_test_brain(runner, "my-brain", tmp_path)
+
+    # First create succeeds
+    runner.invoke(cli, ["neuron", "auth.md", "--lobe", "projects"])
+    # Hand-edit it to have unique content
+    target = tmp_path / "my-brain" / "projects" / "auth.md"
+    target.write_text(target.read_text() + "\nhuman wrote this\n", encoding="utf-8")
+
+    # Second create with the same path must fail with a clear error
+    result = runner.invoke(cli, ["neuron", "auth.md", "--lobe", "projects"])
+    assert result.exit_code != 0
+    assert "already exists" in result.output
+    # And the user's content must be untouched
+    assert "human wrote this" in target.read_text()
+
+
+def test_neuron_force_overwrites(tmp_path, monkeypatch):
+    """--force bypasses the overwrite guard (explicit user intent)."""
+    monkeypatch.setenv("KLURIS_CONFIG", str(tmp_path / "config.yml"))
+    monkeypatch.setenv("HOME", str(tmp_path))
+    runner = CliRunner()
+    create_test_brain(runner, "my-brain", tmp_path)
+
+    runner.invoke(cli, ["neuron", "auth.md", "--lobe", "projects"])
+    target = tmp_path / "my-brain" / "projects" / "auth.md"
+    target.write_text(target.read_text() + "\nhuman wrote this\n", encoding="utf-8")
+
+    result = runner.invoke(cli, ["neuron", "auth.md", "--lobe", "projects", "--force"])
+    assert result.exit_code == 0
+    # With --force, the user's content is gone (user explicitly asked)
+    assert "human wrote this" not in target.read_text()

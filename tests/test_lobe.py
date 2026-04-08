@@ -61,3 +61,30 @@ def test_lobe_rejects_paths_outside_brain(tmp_path, monkeypatch):
     assert result.exit_code != 0
     assert "Path escapes the brain directory" in result.output
     assert not (tmp_path / "my-brain-escape" / "secret").exists()
+
+
+def test_lobe_rejects_existing_directory(tmp_path, monkeypatch):
+    """Creating a lobe where one already exists must fail without --force."""
+    monkeypatch.setenv("KLURIS_CONFIG", str(tmp_path / "config.yml"))
+    monkeypatch.setenv("HOME", str(tmp_path))
+    runner = CliRunner()
+    create_test_brain(runner, "my-brain", tmp_path)
+
+    # The scaffolded product-group brain already has a `projects` lobe
+    result = runner.invoke(cli, ["lobe", "projects"])
+    assert result.exit_code != 0
+    assert "already exists" in result.output
+
+
+def test_lobe_force_allows_existing_directory(tmp_path, monkeypatch):
+    """--force lets the user add a description to an existing lobe."""
+    monkeypatch.setenv("KLURIS_CONFIG", str(tmp_path / "config.yml"))
+    monkeypatch.setenv("HOME", str(tmp_path))
+    runner = CliRunner()
+    create_test_brain(runner, "my-brain", tmp_path)
+
+    result = runner.invoke(
+        cli,
+        ["lobe", "projects", "--description", "Project knowledge", "--force"],
+    )
+    assert result.exit_code == 0

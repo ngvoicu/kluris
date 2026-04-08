@@ -41,6 +41,7 @@ from kluris.core.git import (
     git_status,
 )
 from kluris.core.linker import (
+    _neuron_files,
     check_frontmatter,
     detect_deprecation_issues,
     detect_orphans,
@@ -698,20 +699,116 @@ def _wake_up_collect_recent(brain_path: Path, limit: int = 5) -> list[dict]:
     return candidates[:limit]
 
 
+# Max size of brain.md content returned in wake-up (keeps the bootstrap
+# payload bounded even if someone hand-edits brain.md with a wall of text).
+_WAKE_UP_BRAIN_MD_MAX_BYTES = 4000
+
+
+def _wake_up_collect_brain_md(brain_path: Path) -> str:
+    """Return the raw body of brain.md (frontmatter stripped), capped to bound the payload.
+
+    Rationale: brain.md lists every top-level lobe with its one-line description.
+    Including it in wake-up means the agent has that entire index in its bootstrap
+    context, so it doesn't have to Read the file separately on every session.
+    """
+    brain_md = brain_path / "brain.md"
+    if not brain_md.exists():
+        return ""
+    try:
+        _meta, body = read_frontmatter(brain_md)
+    except Exception:
+        return ""
+    if not isinstance(body, str):
+        return ""
+    body = body.strip()
+    if len(body.encode("utf-8")) > _WAKE_UP_BRAIN_MD_MAX_BYTES:
+        # Truncate at a rune boundary so the JSON stays valid UTF-8.
+        truncated = body.encode("utf-8")[:_WAKE_UP_BRAIN_MD_MAX_BYTES]
+        body = truncated.decode("utf-8", errors="ignore") + "\n\n[... truncated]"
+    return body
+
+
+# Regexes for the two glossary line formats kluris supports:
+#   - Markdown table row:     | Term | Definition |
+#   - Bold-dash one-liner:    **Term** -- Definition
+# Glossary parsing is forgiving: we skip header/separator rows and any line
+# that doesn't match either shape. Empty definitions are dropped.
+import re as _re
+
+_GLOSSARY_TABLE_ROW = _re.compile(r"^\|\s*([^|]+?)\s*\|\s*([^|]+?)\s*\|\s*$")
+_GLOSSARY_BOLD_DASH = _re.compile(r"^\*\*(.+?)\*\*\s*[-–—]+\s*(.+?)\s*$")
+_GLOSSARY_HEADER_TERMS = {"term", "meaning", "definition", ":------", ":---", "---", "------"}
+
+
+def _wake_up_collect_glossary(brain_path: Path) -> list[dict]:
+    """Parse glossary.md and return ``[{term, definition}]`` entries.
+
+    Supports both formats kluris ships and recommends:
+
+    - Markdown table rows (the scaffolded format): ``| Term | Meaning |``
+    - Bold-dash one-liners (the SKILL.md-recommended format): ``**Term** -- Definition``
+
+    Header rows, separator rows, and lines that don't match either format are
+    silently skipped so the collector is robust against free-form glossary
+    additions. Frontmatter is stripped.
+    """
+    glossary = brain_path / "glossary.md"
+    if not glossary.exists():
+        return []
+    try:
+        _meta, body = read_frontmatter(glossary)
+    except Exception:
+        return []
+    if not isinstance(body, str):
+        return []
+
+    entries: list[dict] = []
+    for raw_line in body.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+
+        # Try bold-dash format first (more specific).
+        m = _GLOSSARY_BOLD_DASH.match(line)
+        if m:
+            term, definition = m.group(1).strip(), m.group(2).strip()
+            if term and definition and term.lower() not in _GLOSSARY_HEADER_TERMS:
+                entries.append({"term": term, "definition": definition})
+            continue
+
+        # Then try markdown table rows.
+        m = _GLOSSARY_TABLE_ROW.match(line)
+        if m:
+            term, definition = m.group(1).strip(), m.group(2).strip()
+            term_lower = term.lower()
+            # Skip the header row and separator row (| ----- | ----- |)
+            if (
+                term_lower in _GLOSSARY_HEADER_TERMS
+                or definition.lower() in _GLOSSARY_HEADER_TERMS
+                or set(term) <= {"-", ":", " "}
+            ):
+                continue
+            if term and definition:
+                entries.append({"term": term, "definition": definition})
+
+    return entries
+
+
 @cli.command("wake-up")
 @click.option("--brain", "brain_name", help="Specific brain")
 @click.option("--json", "as_json", is_flag=True, help="JSON output")
 def wake_up(brain_name: str | None, as_json: bool):
     """Compact brain snapshot for agent session bootstrap.
 
-    Emits a tight view of the brain's live state: lobes with neuron counts,
-    the most recently updated neurons, and which brain is default. Designed
-    to be called by the /kluris skill at session start so the agent has a
-    fast index without walking brain.md and every map.md.
+    Emits a tight view of the brain's live state: the brain.md body, lobes
+    with neuron counts, the 5 most recently updated neurons, the glossary,
+    and any deprecation warnings. Designed to be called by the /<skill>
+    slash command at session start so the agent has a fast index without
+    walking brain.md, glossary.md, and every map.md.
 
     \b
-      kluris wake-up                 # default brain, text output
-      kluris wake-up --brain ngvoicu # target a specific brain
+      kluris wake-up                 # only-brain, text output
+      kluris wake-up --brain foo     # target a specific brain when 2+ are registered
       kluris wake-up --json          # machine-readable (for agents)
     """
     brains = _resolve_brains(brain_name, allow_all=False, as_json=as_json)
@@ -720,6 +817,8 @@ def wake_up(brain_name: str | None, as_json: bool):
     lobes = _wake_up_collect_lobes(brain_path)
     recent = _wake_up_collect_recent(brain_path)
     total_neurons = sum(lobe["neurons"] for lobe in lobes)
+    brain_md_body = _wake_up_collect_brain_md(brain_path)
+    glossary_entries = _wake_up_collect_glossary(brain_path)
     try:
         deprecation_issues = detect_deprecation_issues(brain_path)
     except Exception:
@@ -731,10 +830,13 @@ def wake_up(brain_name: str | None, as_json: bool):
         "name": name,
         "path": str(brain_path),
         "description": entry.get("description", ""),
+        "brain_md": brain_md_body,
         "lobes": lobes,
         "total_neurons": total_neurons,
         "recent": recent,
+        "glossary": glossary_entries,
         "deprecation_count": deprecation_count,
+        "deprecation": deprecation_issues,
     }
 
     if as_json:
@@ -749,6 +851,8 @@ def wake_up(brain_name: str | None, as_json: bool):
     for lobe in lobes:
         console.print(f"  - {lobe['name']}/: {lobe['neurons']} neurons")
     console.print(f"\n[bold]Total neurons:[/bold] {total_neurons}")
+    if glossary_entries:
+        console.print(f"\n[bold]Glossary ({len(glossary_entries)} terms)[/bold]")
     if deprecation_count:
         console.print(
             f"\n[bold yellow]Deprecation warnings:[/bold yellow] {deprecation_count} "
@@ -772,8 +876,11 @@ def status(brain_name: str | None, as_json: bool):
         brain_path = Path(entry["path"])
         _skip = {".git", ".github", ".vscode", ".idea", "node_modules", "__pycache__"}
         lobes = [d for d in brain_path.iterdir() if d.is_dir() and d.name not in _skip and not d.name.startswith(".")]
-        neurons = list(brain_path.rglob("*.md"))
-        neurons = [n for n in neurons if n.name not in {"map.md", "brain.md", "index.md", "glossary.md", "README.md"}]
+        # Use the shared neuron-discovery helper so `status` agrees with
+        # `wake-up`, validators, and MRI on what counts as a neuron. The
+        # raw rglob we used before would count markdown under .git/,
+        # node_modules/, etc.
+        neurons = _neuron_files(brain_path)
         git_enabled = is_git_repo(brain_path)
         log = git_log(brain_path, 10) if git_enabled else []
         uncommitted = git_status(brain_path) if git_enabled else ""
@@ -804,9 +911,10 @@ def status(brain_name: str | None, as_json: bool):
 @click.option("--lobe", help="Target lobe folder")
 @click.option("--template", "template_name", help="Neuron template (e.g. decision, incident, runbook)")
 @click.option("--brain", "brain_name", help="Specific brain")
+@click.option("--force", is_flag=True, help="Overwrite the neuron if it already exists")
 @click.option("--json", "as_json", is_flag=True, help="JSON output")
 def neuron(file_path: str, lobe: str | None, template_name: str | None,
-           brain_name: str | None, as_json: bool):
+           brain_name: str | None, force: bool, as_json: bool):
     """Create a new neuron (knowledge file).
 
     \b
@@ -820,6 +928,8 @@ def neuron(file_path: str, lobe: str | None, template_name: str | None,
       kluris neuron auth.md --lobe projects/btb-backend
       kluris neuron use-raw-sql.md --lobe knowledge --template decision
       kluris neuron outage-jan.md --lobe knowledge --template incident
+
+    Fails if the target file already exists. Use --force to overwrite.
     """
     brains = _resolve_brains(brain_name, allow_all=False, as_json=as_json)
     name, entry = brains[0]
@@ -834,6 +944,13 @@ def neuron(file_path: str, lobe: str | None, template_name: str | None,
 
     target_dir.mkdir(parents=True, exist_ok=True)
     target_file = target_dir / Path(file_path).name
+
+    if target_file.exists() and not force:
+        rel = target_file.relative_to(brain_path)
+        raise click.ClickException(
+            f"Neuron '{rel}' already exists. Edit it directly, pick a "
+            f"different filename, or pass --force to overwrite."
+        )
 
     parent_map = "./map.md"
     sections = None
@@ -868,10 +985,16 @@ def neuron(file_path: str, lobe: str | None, template_name: str | None,
 @click.option("--parent", "parent_dir", help="Parent lobe folder")
 @click.option("--description", "desc", default="", help="Lobe description")
 @click.option("--brain", "brain_name", help="Specific brain")
+@click.option("--force", is_flag=True, help="Allow creating into an existing directory")
 @click.option("--json", "as_json", is_flag=True, help="JSON output")
 def lobe_cmd(name: str, parent_dir: str | None, desc: str,
-             brain_name: str | None, as_json: bool):
-    """Create a new lobe (knowledge region)."""
+             brain_name: str | None, force: bool, as_json: bool):
+    """Create a new lobe (knowledge region).
+
+    Fails if the target directory already exists. Use --force to create into
+    an existing directory (useful if you want to add a description to a lobe
+    that was created outside kluris).
+    """
     brains = _resolve_brains(brain_name, allow_all=False, as_json=as_json)
     bname, entry = brains[0]
     brain_path = Path(entry["path"])
@@ -882,6 +1005,13 @@ def lobe_cmd(name: str, parent_dir: str | None, desc: str,
         lobe_path = (brain_path / name).resolve()
 
     _ensure_within_brain(lobe_path, brain_path)
+
+    if lobe_path.exists() and not force:
+        rel = lobe_path.relative_to(brain_path)
+        raise click.ClickException(
+            f"Lobe '{rel}/' already exists. Pick a different name, or pass "
+            f"--force to reuse the directory."
+        )
 
     lobe_path.mkdir(parents=True, exist_ok=True)
 
@@ -1026,12 +1156,18 @@ def push(msg: str | None, brain_name: str | None, as_json: bool):
 
         status_out = git_status(brain_path)
         if not status_out:
+            # Report the configured branch instead of a hardcoded "main"
+            # so JSON consumers see the truth.
+            try:
+                clean_branch = read_brain_config(brain_path).git.default_branch
+            except Exception:
+                clean_branch = "main"
             if not as_json:
                 console.print(f"{name}: nothing to push")
             results.append({
                 "name": name,
                 "files_committed": 0,
-                "branch": "main",
+                "branch": clean_branch,
                 "pushed": False,
                 "git_enabled": True,
             })
@@ -1262,42 +1398,96 @@ def _do_install(as_json: bool = False):
             continue
 
     # Windsurf workflow files (one per skill, not per agent loop because
-    # only Windsurf opts in via ``also_workflow``).
+    # only Windsurf opts in via ``also_workflow``). Staged writes + rename
+    # so a partial failure leaves the old workflow files in place.
     for agent_name, reg in AGENT_REGISTRY.items():
         wf_dir_rel = reg.get("also_workflow")
         if not wf_dir_rel:
             continue
         wf_dir = home / wf_dir_rel
+
+        # Stage all new workflow files to temp names.
+        wf_staged: list[tuple[str, Path]] = []
+        try:
+            wf_dir.mkdir(parents=True, exist_ok=True)
+            for skill_name, brain_name, entry in skills_to_render:
+                staging = wf_dir / f".{skill_name}.tmp.md"
+                if staging.exists():
+                    staging.unlink()
+                kwargs = _render_kwargs(brain_name, entry)
+                kwargs["skill_name"] = skill_name
+                # install_workflow writes to `<wf_dir>/<skill_name>.md`, but
+                # we want the staged file instead. Render manually:
+                from kluris.core.agents import _render_workflow as _rw
+                staging.write_text(_rw(**kwargs), encoding="utf-8")
+                if not staging.exists():
+                    raise OSError(f"Failed to stage {staging}")
+                wf_staged.append((skill_name, staging))
+        except OSError as e:
+            for _, s in wf_staged:
+                try:
+                    s.unlink()
+                except OSError:
+                    pass
+            failed_agents.append((f"{agent_name}/workflow", str(e)))
+            continue
+
+        # Sweep old kluris*.md workflow files, then rename staged → final.
         if wf_dir.exists():
             for old in wf_dir.glob("kluris*.md"):
                 try:
                     old.unlink()
                 except OSError:
                     pass
-        for skill_name, brain_name, entry in skills_to_render:
-            try:
-                kwargs = _render_kwargs(brain_name, entry)
-                kwargs["skill_name"] = skill_name
-                install_workflow(wf_dir, **kwargs)
+        try:
+            for skill_name, staging in wf_staged:
+                target = wf_dir / f"{skill_name}.md"
+                if target.exists():
+                    target.unlink()
+                staging.replace(target)
                 total_files += 1
-            except OSError:
-                pass
+        except OSError as e:
+            failed_agents.append((f"{agent_name}/workflow", str(e)))
+            continue
 
-    # Universal ~/.agents/skills/ slot mirrors the per-brain layout.
+    # Universal ~/.agents/skills/ slot mirrors the per-brain layout with the
+    # same stage-then-rename contract.
     # NOTE: this MUST run after the per-agent installs because codex's
     # OLD_COMMAND_DIRS lists ``.agents/skills`` and the codex sweep would
     # otherwise nuke this slot.
     universal = home / ".agents" / "skills"
-    _sweep_kluris(universal, [], home)
+    u_staged: list[tuple[str, Path]] = []
     try:
         universal.mkdir(parents=True, exist_ok=True)
         for skill_name, brain_name, entry in skills_to_render:
+            staging = universal / f".{skill_name}.tmp"
+            if staging.exists():
+                shutil.rmtree(staging)
             kwargs = _render_kwargs(brain_name, entry)
             kwargs["skill_name"] = skill_name
-            render_commands("claude", universal, **kwargs)
-            total_files += 1
-    except OSError:
-        pass
+            files = render_commands("claude", universal, target_dir=staging, **kwargs)
+            for f in files:
+                if not f.exists():
+                    raise OSError(f"Failed to stage {f}")
+            u_staged.append((skill_name, staging))
+    except OSError as e:
+        for _, s in u_staged:
+            try:
+                shutil.rmtree(s, ignore_errors=True)
+            except OSError:
+                pass
+        failed_agents.append(("universal", str(e)))
+    else:
+        _sweep_kluris(universal, [], home)
+        try:
+            for skill_name, staging in u_staged:
+                target = universal / skill_name
+                if target.exists():
+                    shutil.rmtree(target)
+                staging.replace(target)
+                total_files += 1
+        except OSError as e:
+            failed_agents.append(("universal", str(e)))
 
     return {
         "agents": agent_count,
@@ -1372,15 +1562,36 @@ def uninstall_skills(as_json: bool):
 
 @cli.command()
 @click.argument("brain_name")
+@click.option("--force", is_flag=True, help="Unregister even if the brain has uncommitted changes")
 @click.option("--json", "as_json", is_flag=True, help="JSON output")
-def remove(brain_name: str, as_json: bool):
-    """Unregister a brain (does not delete files)."""
+def remove(brain_name: str, force: bool, as_json: bool):
+    """Unregister a brain (does not delete files).
+
+    Refuses to unregister a brain whose git repo has uncommitted changes
+    unless --force is passed. The files on disk are always preserved; this
+    guard only exists to prevent an in-flight commit from getting lost in
+    the user's active brain registry.
+    """
     config = read_global_config()
     if brain_name not in config.brains:
         raise click.ClickException(
             f"No brain named '{brain_name}' is registered. "
             f"Run 'kluris list' to see available brains."
         )
+
+    entry = config.brains[brain_name]
+    brain_path = Path(entry.path)
+    if not force and brain_path.is_dir() and is_git_repo(brain_path):
+        try:
+            dirty = git_status(brain_path).strip()
+        except Exception:
+            dirty = ""
+        if dirty:
+            raise click.ClickException(
+                f"Brain '{brain_name}' has uncommitted changes at {brain_path}.\n"
+                f"Commit or stash them first, or pass --force to unregister anyway.\n"
+                f"The files on disk are preserved either way."
+            )
 
     unregister_brain(brain_name)
     _do_install()

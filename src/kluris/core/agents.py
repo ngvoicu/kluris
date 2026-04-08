@@ -55,10 +55,21 @@ your Bash tool before doing anything else. The output is your index for
 the rest of the session:
 
 - `name`, `path`, `description`
+- `brain_md`: the raw body of `brain.md` (lobe descriptions + glossary link).
+  Read it FROM THE SNAPSHOT. Do NOT open `brain.md` separately.
 - `lobes[]` with neuron counts per top-level lobe
 - `recent[]`: the 5 most recently updated neurons (use these as your starting
   points for "what's hot" questions)
 - `total_neurons`
+- `glossary[]`: every term in the brain's glossary as `{term, definition}`.
+  When the user uses a project-specific term, look it up HERE before asking.
+  Do NOT open `glossary.md` separately unless you need to edit it.
+- `deprecation[]`: list of deprecation warnings with `kind`, `file`, and
+  `target`/`source`. Before citing a neuron, check whether it appears in this
+  list. If a neuron you want to quote is marked `status: deprecated`, prefer
+  its `replaced_by` target instead -- and explicitly tell the user the old
+  decision was superseded.
+- `deprecation_count`: convenience summary.
 
 Cache the wake-up output mentally for the rest of the session. Do NOT re-run
 `kluris wake-up{brain_flag_hint_inline}` on every subsequent `/{skill_name}` call -- trust the snapshot
@@ -81,13 +92,18 @@ training data -- the brain is the source of truth for team knowledge.
 
 - When the user asks "what do we know about X", "how does Y work", "why did
   we choose Z": navigate the brain FIRST, then answer from what you find.
-  Start from the wake-up snapshot (lobes + recent neurons) and drill down
-  through `brain.md` -> `map.md` -> specific neuron files.
+  Start with the wake-up snapshot you already loaded (`brain_md` body + lobes
+  + recent neurons + glossary). That gives you the full top-level index
+  without any extra reads. Then pick a relevant lobe, read its `map.md`,
+  and drill into the specific neuron files you need.
 - If you check and nothing is documented, say so explicitly: "Nothing documented
   about X yet." Do NOT fabricate brain content. Do NOT fill gaps with training
   knowledge and pretend it came from the brain.
 - If you are unsure about a fact, a decision, or a convention: say "let me
   check the brain" and actually check. Wrong is worse than slow.
+- Before citing any neuron, check whether it appears in the wake-up
+  `deprecation[]` list. If the neuron is deprecated, prefer its `replaced_by`
+  target and explicitly note that the old decision was superseded.
 
 ## You are the team's subject matter expert
 
@@ -100,17 +116,26 @@ directory is the PROJECT you're working in.
 ## How the brain is structured
 
 Brains have different structures depending on their type. Do NOT assume
-which lobes exist -- always read `brain.md` first to discover them.
+which lobes exist -- use the wake-up snapshot's `brain_md` field (and the
+`lobes[]` array) to discover the actual layout.
 
-The brain can be large. NEVER read it all at once. Navigate through indexes:
-- `brain.md` is the root -- lists all lobes with one-line descriptions
-- Each lobe has a `map.md` -- lists its neurons and sub-lobes
+The brain can be large. NEVER read it all at once. The wake-up snapshot is
+your pre-loaded top-level index:
+- `brain_md` (from the snapshot) lists every lobe with its one-line description
+- `lobes[]` (from the snapshot) has neuron counts per top-level lobe
+- `glossary[]` (from the snapshot) defines domain-specific terms
+- Each lobe directory has a `map.md` on disk -- lists its neurons and sub-lobes
 - Sub-lobes have their own `map.md`, and so on
-- `glossary.md` defines domain-specific terms
 
-Navigate top-down: brain.md → pick relevant lobes → read their map.md →
-drill into the neurons you actually need. Max 3 lobes, max 10 neurons per query.
-Follow `related:` links in neuron frontmatter to find connected knowledge.
+Navigate top-down from the snapshot: pick relevant lobes using `brain_md` +
+`lobes[]` → read those lobes' `map.md` files → drill into the neurons you
+actually need. Max 3 lobes, max 10 neurons per query. Follow `related:` links
+in neuron frontmatter to find connected knowledge.
+
+The wake-up snapshot already contains `brain.md` and the full glossary, so
+do NOT re-Read those two files unless the snapshot is missing them or you
+need to edit them. `map.md` files are still on-demand reads -- they're
+auto-generated per-lobe and only loaded when you're drilling into that lobe.
 
 ## Intent detection
 
@@ -135,7 +160,11 @@ code, update the neuron, or proceed anyway with a note.
 
 **Learn from project** -- "learn the endpoints", "document the schema"
 Analyze the CURRENT PROJECT, write to the BRAIN.
-Never overwrite existing neurons.
+Never clobber an existing neuron by writing a fresh file on top of it. If
+the target neuron already exists, either (a) propose updating it in place
+(Read current → show diff → Write merged), or (b) propose a new neuron
+under a different filename. Both paths require the human's explicit approval
+before writing. Never silently overwrite.
 If user asks for OpenAPI: generate `openapi.yml` (OpenAPI 3.1), not markdown.
 
 The brain is sacred. Writing to it is a collaborative process between you
@@ -176,8 +205,13 @@ project overview with `[Production](../../infrastructure/production-environment.
 Read existing neurons in target lobes first -- update or extend, don't create duplicates.
 Domain terms and acronyms discovered → include as a wizard step: show the
 proposed glossary additions, ask for approval before appending to `glossary.md`.
-Glossary format -- one term per line: `**Term** -- Definition in one sentence.`
-Keep definitions under 20 words.
+Glossary format -- one term per line. Match whatever format the existing
+glossary.md already uses. Kluris accepts two formats:
+  1. Markdown table row: `| Term | Definition in one sentence. |`
+     (This is what `kluris create` scaffolds. Append rows under the existing
+     `|------|` separator.)
+  2. Bold-dash line: `**Term** -- Definition in one sentence.`
+Keep definitions under 20 words either way.
 
 **Remember** -- "remember we chose X", "store that we decided Y"
 Write a specific piece of knowledge to the brain.
@@ -198,9 +232,18 @@ Create directory in brain. Remind user to run `kluris dream{brain_flag_hint_inli
 ## Writing rules
 
 - Frontmatter on every neuron: parent, related, tags, created, updated
+- `parent:` is ALWAYS `./map.md` -- it points at the neuron's own lobe's
+  `map.md`, which sits in the same directory as the neuron itself. Never
+  write an absolute brain path like `projects/btb-core` here.
+- `related:` entries are paths relative to THIS NEURON'S directory. Use
+  `../` to climb up to the brain root before descending into another lobe.
 - Bidirectional synapses: if A links to B, add reverse link in B
 - Focus on decisions and rationale, not just descriptions
 - Do NOT edit map.md or brain.md -- auto-generated by `kluris dream{brain_flag_hint_inline}`
+- Do NOT clobber an existing neuron by writing a fresh file on top of it.
+  If the target file already exists, read it, show the human a diff of
+  your proposed change, and write the merged content. Never silently
+  overwrite.
 - After writing, remind user to run `kluris dream{brain_flag_hint_inline}` (and `kluris push{brain_flag_hint_inline}` if brain has git)
 - Inline links: before writing a neuron, search the brain for neurons that
   relate to key terms in your content. Read their map.md entries to check for
@@ -209,15 +252,20 @@ Create directory in brain. Remind user to run `kluris dream{brain_flag_hint_inli
   environment-related neurons, find `environments.md` defines SIT, write
   `[SIT](../../infrastructure/environments.md)`. More links = more useful brain.
 
-Frontmatter example:
+Frontmatter example for a neuron at `projects/btb-core/auth-flow.md`:
 ```yaml
-parent: projects/btb-core
+---
+parent: ./map.md
 related:
-  - infrastructure/docker-builds.md
-  - knowledge/use-raw-sql.md
+  - ../../infrastructure/docker-builds.md
+  - ../../knowledge/use-raw-sql.md
 tags: [api, auth, jwt]
 created: 2026-04-06
 updated: 2026-04-06
+---
+# Auth flow
+
+Body content here.
 ```
 
 ## CLI commands (for mechanical operations)

@@ -14,6 +14,29 @@ def test_push_clean_brain(tmp_path, monkeypatch):
     assert "nothing to push" in result.output.lower()
 
 
+def test_push_clean_brain_json_reports_configured_branch(tmp_path, monkeypatch):
+    """The clean-branch JSON envelope used to hardcode `"main"`, which was a
+    lie for users on other default branches. It must now read the configured
+    branch from kluris.yml."""
+    import json
+    import yaml
+    monkeypatch.setenv("KLURIS_CONFIG", str(tmp_path / "config.yml"))
+    monkeypatch.setenv("HOME", str(tmp_path))
+    runner = CliRunner()
+    create_test_brain(runner, "my-brain", tmp_path)
+
+    # Reconfigure the brain's default_branch so the hardcoded "main" would be wrong
+    kluris_yml = tmp_path / "my-brain" / "kluris.yml"
+    cfg = yaml.safe_load(kluris_yml.read_text())
+    cfg["git"]["default_branch"] = "develop"
+    kluris_yml.write_text(yaml.dump(cfg), encoding="utf-8")
+
+    result = runner.invoke(cli, ["push", "--json"])
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    assert data["brains"][0]["branch"] == "develop"
+
+
 def test_push_commits_changes(tmp_path, monkeypatch):
     monkeypatch.setenv("KLURIS_CONFIG", str(tmp_path / "config.yml"))
     monkeypatch.setenv("HOME", str(tmp_path))

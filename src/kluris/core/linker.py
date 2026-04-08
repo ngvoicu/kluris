@@ -8,17 +8,27 @@ from pathlib import Path
 
 from kluris.core.frontmatter import read_frontmatter, update_frontmatter
 
-SKIP_DIRS = {".git"}
+# Directories to skip when walking the brain for any reason. This must be a
+# superset of anything used by wake-up, mri, status, dream, etc. Keeping it
+# centralized here prevents the "each command walks the brain differently"
+# bug that caused status to count markdown under .github/workflows.
+SKIP_DIRS = {".git", ".github", ".vscode", ".idea", "node_modules", "__pycache__"}
 SKIP_FILES = {"brain.md", "index.md", "glossary.md", "README.md", ".gitignore"}
 VALIDATE_SKIP_FILES = {"README.md"}  # Skip link validation in these (contain example links)
 LINK_PATTERN = re.compile(r"\[([^\]]*)\]\(([^)]+)\)")
 
 
 def _all_md_files(brain_path: Path) -> list[Path]:
-    """Collect all .md files in the brain, excluding .git."""
+    """Collect all .md files in the brain, excluding tooling/hidden dirs.
+
+    Also skips any directory whose name starts with ``.`` -- covers
+    ad-hoc editor state dirs we haven't explicitly enumerated.
+    """
     files = []
     for item in brain_path.rglob("*.md"):
         if any(part in SKIP_DIRS for part in item.parts):
+            continue
+        if any(part.startswith(".") for part in item.parts[:-1]):
             continue
         files.append(item)
     return files
@@ -34,6 +44,19 @@ def _neuron_files(brain_path: Path) -> list[Path]:
     return neurons
 
 
+def _is_within_brain(resolved: Path, brain_root: Path) -> bool:
+    """Return True if ``resolved`` is inside ``brain_root`` (including equal).
+
+    Uses the parents chain rather than is_relative_to so it behaves
+    consistently across Python 3.10+ and on symlink-heavy filesystems.
+    """
+    try:
+        brain_resolved = brain_root.resolve()
+    except OSError:
+        return False
+    return resolved == brain_resolved or brain_resolved in resolved.parents
+
+
 def parse_markdown_links(content: str) -> list[str]:
     """Extract all relative markdown link targets from content."""
     targets = []
@@ -45,7 +68,13 @@ def parse_markdown_links(content: str) -> list[str]:
 
 
 def validate_synapses(brain_path: Path) -> list[dict]:
-    """Find broken markdown links and broken related synapses."""
+    """Find broken markdown links and broken related synapses.
+
+    A link is "broken" if its resolved target does not exist OR if it resolves
+    outside ``brain_path``. The latter keeps brains self-contained — a relative
+    link like ``../../outside/file.md`` that happens to exist on disk is still
+    invalid because it reaches outside the brain's git repo.
+    """
     broken = []
     neurons = {neuron.resolve() for neuron in _neuron_files(brain_path)}
     for md_file in _all_md_files(brain_path):
@@ -55,7 +84,7 @@ def validate_synapses(brain_path: Path) -> list[dict]:
         links = parse_markdown_links(content)
         for target in links:
             resolved = (md_file.parent / target).resolve()
-            if not resolved.exists():
+            if not resolved.exists() or not _is_within_brain(resolved, brain_path):
                 broken.append({
                     "file": str(md_file.relative_to(brain_path)),
                     "target": target,
@@ -72,7 +101,7 @@ def validate_synapses(brain_path: Path) -> list[dict]:
             if not isinstance(target, str):
                 continue
             resolved = (md_file.parent / target).resolve()
-            if not resolved.exists():
+            if not resolved.exists() or not _is_within_brain(resolved, brain_path):
                 broken.append({
                     "file": str(md_file.relative_to(brain_path)),
                     "target": target,
@@ -184,7 +213,19 @@ def detect_orphans(brain_path: Path) -> list[Path]:
 
 
 def check_frontmatter(brain_path: Path) -> list[dict]:
-    """Check neurons for missing required frontmatter fields."""
+    """Check neurons for missing required frontmatter fields and type errors.
+
+    Two kinds of issues are reported, both in the same flat list:
+
+    - ``{file, field}`` — a required field is missing.
+    - ``{file, field, kind: "type"}`` — a field exists but has the wrong
+      type (e.g. ``related:`` is a string instead of a list, ``replaced_by:``
+      is a list instead of a string, ``tags:`` is a string instead of a list).
+
+    Previously the other validators silently skipped malformed values, which
+    meant ``dream`` could report ``healthy`` while the underlying frontmatter
+    was quietly broken. This surfaces those errors as actionable warnings.
+    """
     issues = []
     for neuron in _neuron_files(brain_path):
         meta, _ = read_frontmatter(neuron)
@@ -195,6 +236,17 @@ def check_frontmatter(brain_path: Path) -> list[dict]:
             issues.append({"file": rel, "field": "created"})
         if "updated" not in meta:
             issues.append({"file": rel, "field": "updated"})
+
+        # Type checks for optional fields that downstream code assumes
+        # have specific shapes. If these are wrong, the other validators
+        # silently skip the neuron — which masks the bug.
+        if "related" in meta and not isinstance(meta["related"], list):
+            issues.append({"file": rel, "field": "related", "kind": "type"})
+        if "tags" in meta and not isinstance(meta["tags"], list):
+            issues.append({"file": rel, "field": "tags", "kind": "type"})
+        if "replaced_by" in meta and meta["replaced_by"] is not None \
+                and not isinstance(meta["replaced_by"], str):
+            issues.append({"file": rel, "field": "replaced_by", "kind": "type"})
     return issues
 
 
@@ -255,7 +307,7 @@ def detect_deprecation_issues(brain_path: Path) -> list[dict]:
             continue
 
         target = (neuron.parent / replaced_by).resolve()
-        if not target.exists():
+        if not target.exists() or not _is_within_brain(target, brain_path):
             issues.append({
                 "kind": "replaced_by_missing",
                 "file": rel,
