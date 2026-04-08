@@ -5,7 +5,7 @@ import json
 from click.testing import CliRunner
 
 from kluris.cli import cli
-from conftest import create_test_brain
+from conftest import create_test_brain, create_test_brain_with_neurons
 from kluris.core.frontmatter import read_frontmatter
 
 
@@ -380,4 +380,92 @@ def test_dream_mixed_structural_and_deprecation_issues(tmp_path, monkeypatch):
     assert any(
         item.get("kind") == "deprecated_without_replacement"
         for item in data["deprecation"]
+    )
+
+
+# --- Phase 2: batch git subprocess count ---
+
+
+def test_sync_brain_state_uses_batch_git_with_exact_subprocess_count(
+    tmp_path, monkeypatch, counting_git_run
+):
+    """Dream on a 100-neuron git brain must call core.git._run exactly 2 times:
+    1. is_git_repo() to check the brain has git history
+    2. git_log_file_dates() to fetch all date info in one batch
+
+    Was ~200 before the refactor (one git log per neuron).
+    """
+    monkeypatch.setenv("KLURIS_CONFIG", str(tmp_path / "config.yml"))
+    monkeypatch.setenv("HOME", str(tmp_path))
+    runner = CliRunner()
+    create_test_brain_with_neurons(runner, "big-brain", tmp_path, count=100)
+
+    # Reset the counter (create_test_brain_with_neurons may have triggered git calls)
+    counting_git_run.count = 0
+    counting_git_run.calls = []
+
+    result = runner.invoke(cli, ["dream", "--json"])
+    assert result.exit_code == 0
+
+    # Exactly 2 calls: is_git_repo + git_log_file_dates
+    assert counting_git_run.count == 2, (
+        f"Expected exactly 2 git subprocess calls (is_git_repo + git_log_file_dates), "
+        f"got {counting_git_run.count}: {counting_git_run.calls}"
+    )
+
+
+def test_sync_brain_state_handles_uncommitted_neurons(tmp_path, monkeypatch):
+    """A neuron that exists on disk but isn't committed yet must NOT crash dream
+    and must retain its scaffolded `updated:` field (no batch hit available)."""
+    monkeypatch.setenv("KLURIS_CONFIG", str(tmp_path / "config.yml"))
+    monkeypatch.setenv("HOME", str(tmp_path))
+    runner = CliRunner()
+    create_test_brain(runner, "my-brain", tmp_path)
+
+    # Add a neuron that is NOT committed
+    new = tmp_path / "my-brain" / "projects" / "uncommitted.md"
+    new.write_text(
+        "---\nparent: ./map.md\ntags: []\n"
+        "created: 2025-01-01\nupdated: 2025-06-15\n---\n"
+        "# Uncommitted\n\nbody\n",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(cli, ["dream", "--json"])
+    assert result.exit_code == 0
+
+    # The uncommitted neuron's scaffolded dates must be preserved
+    meta, _ = read_frontmatter(new)
+    assert meta["updated"] == "2025-06-15"
+    assert meta["created"] == "2025-01-01"
+
+
+def test_sync_brain_state_no_git_brain_skips_batch_call(
+    tmp_path, monkeypatch, counting_git_run
+):
+    """A brain without a git repo must short-circuit the batch call.
+
+    Subprocess count: exactly 1 (just is_git_repo, which returns False).
+    """
+    monkeypatch.setenv("KLURIS_CONFIG", str(tmp_path / "config.yml"))
+    monkeypatch.setenv("HOME", str(tmp_path))
+    runner = CliRunner()
+    # Create with --no-git
+    runner.invoke(cli, [
+        "create", "no-git-brain",
+        "--path", str(tmp_path),
+        "--description", "test",
+        "--no-git",
+        "--json",
+    ])
+
+    counting_git_run.count = 0
+    counting_git_run.calls = []
+
+    result = runner.invoke(cli, ["dream", "--json"])
+    assert result.exit_code == 0
+    # Exactly 1 call: is_git_repo returns False, batch is skipped
+    assert counting_git_run.count == 1, (
+        f"Expected exactly 1 git subprocess call (is_git_repo only), "
+        f"got {counting_git_run.count}: {counting_git_run.calls}"
     )

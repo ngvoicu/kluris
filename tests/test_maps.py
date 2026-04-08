@@ -141,3 +141,11 @@ def test_brain_md_lobes_only(tmp_path):
     assert "## Lobes" in content
     assert "glossary.md" in content
     assert "projects" in content
+
+
+def test_get_recent_changes_dead_code_removed():
+    """The unused `_get_recent_changes` helper in core/maps.py was deleted
+    in Phase 2 cleanup. Importing it should now fail."""
+    import pytest
+    with pytest.raises(ImportError):
+        from kluris.core.maps import _get_recent_changes  # noqa: F401

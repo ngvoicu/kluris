@@ -96,24 +96,6 @@ def _get_sub_lobes(lobe_path: Path) -> list[dict]:
     return sub_lobes
 
 
-def _get_recent_changes(brain_path: Path, lobe_path: Path, limit: int = 5) -> list[dict]:
-    """Get recent git changes for a lobe directory."""
-    try:
-        from kluris.core.git import _run
-        result = _run(
-            ["git", "log", f"-{limit}", "--format=%aI|%s", "--", str(lobe_path)],
-            cwd=brain_path,
-        )
-        changes = []
-        for line in result.stdout.strip().splitlines():
-            if "|" in line:
-                date_str, msg = line.split("|", 1)
-                changes.append({"date": date_str[:10], "action": msg})
-        return changes
-    except Exception:
-        return []
-
-
 def _get_siblings(brain_path: Path, lobe_path: Path) -> list[dict]:
     """Find sibling lobes at the same directory level."""
     parent = lobe_path.parent

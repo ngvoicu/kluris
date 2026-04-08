@@ -126,3 +126,57 @@ def git_file_created_date(path: Path, filename: str) -> str | None:
     )
     date = result.stdout.strip()
     return date if date else None
+
+
+def git_log_file_dates(path: Path) -> tuple[dict[str, str], dict[str, str]]:
+    """Return ``(latest_by_path, created_by_path)`` from a single git log walk.
+
+    Replaces N per-file ``git_file_last_modified`` + ``git_file_created_date``
+    calls with one subprocess invocation:
+
+        git log --format="COMMIT %aI" --name-only HEAD
+
+    The output walks commits newest-first. For each file path:
+
+    - ``latest`` is set on the FIRST occurrence (= newest commit that touched it)
+    - ``created`` is overwritten on EVERY occurrence (= oldest commit, since we
+      keep overwriting until the last/oldest occurrence wins)
+
+    Uses ``%aI`` (author ISO date) to match ``git_file_last_modified`` (line 114)
+    and ``git_file_created_date`` (line 124) byte-for-byte.
+
+    Returns ``({}, {})`` if not a git repo or if ``git log`` fails. Caller should
+    typically guard with ``is_git_repo()`` first to short-circuit cleanly.
+    """
+    try:
+        result = _run(
+            ["git", "log", "--format=COMMIT %aI", "--name-only", "HEAD"],
+            cwd=path,
+        )
+    except Exception:
+        return ({}, {})
+
+    if result.returncode != 0:
+        return ({}, {})
+
+    latest: dict[str, str] = {}
+    created: dict[str, str] = {}
+    current_date: str | None = None
+
+    for raw_line in result.stdout.splitlines():
+        line = raw_line.strip()
+        if line.startswith("COMMIT "):
+            current_date = line[len("COMMIT "):].strip()
+            continue
+        if not line:
+            continue
+        # File path line. Defensive: if no current_date, skip.
+        if current_date is None:
+            continue
+        # Newest-first walk: first occurrence is most recent.
+        if line not in latest:
+            latest[line] = current_date
+        # Always overwrite: last occurrence (= oldest commit) wins.
+        created[line] = current_date
+
+    return (latest, created)

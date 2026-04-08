@@ -109,3 +109,59 @@ def bare_remote(tmp_path_factory):
     subprocess.run(["git", "symbolic-ref", "HEAD", "refs/heads/main"],
                    cwd=remote_path, capture_output=True)
     return remote_path
+
+
+def create_test_brain_with_neurons(runner, name, path, count=100):
+    """Scaffold a brain via the CLI and add ``count`` committed neurons.
+
+    Used by Phase 2 tests that need a large brain to verify subprocess
+    counts on dream's batch git path. Each neuron is a minimal frontmatter
+    + body file under ``<brain>/projects/n_NN.md``. All N neurons are
+    committed in a single git commit so the resulting brain has 2 commits
+    total (the kluris create scaffold + the neurons add).
+    """
+    create_test_brain(runner, name, path)
+    brain_path = path / name
+    projects = brain_path / "projects"
+    projects.mkdir(exist_ok=True)
+    for i in range(count):
+        (projects / f"n_{i:04d}.md").write_text(
+            f"---\nparent: ./map.md\ntags: []\n"
+            f"created: 2026-01-01\nupdated: 2026-04-01\n---\n"
+            f"# Neuron {i}\n\nbody {i}\n",
+            encoding="utf-8",
+        )
+    subprocess.run(["git", "add", "-A"], cwd=brain_path, capture_output=True)
+    subprocess.run(
+        ["git", "commit", "-m", f"add {count} neurons"],
+        cwd=brain_path, capture_output=True,
+    )
+    return brain_path
+
+
+@pytest.fixture
+def counting_git_run(monkeypatch):
+    """Wrap ``core.git._run`` so tests can count subprocess invocations.
+
+    Returns a list-like counter object with ``.count`` attribute that
+    increments on every ``_run`` call. Tests can monkeypatch through this
+    fixture to enforce subprocess-count assertions on dream/mri batch behavior.
+    """
+    from kluris.core import git as git_module
+
+    class _Counter:
+        def __init__(self):
+            self.count = 0
+            self.calls: list[list[str]] = []
+
+    counter = _Counter()
+    original = git_module._run
+
+    def _wrapped(*args, **kwargs):
+        counter.count += 1
+        if args and isinstance(args[0], list):
+            counter.calls.append(args[0])
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(git_module, "_run", _wrapped)
+    return counter

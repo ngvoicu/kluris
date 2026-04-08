@@ -31,9 +31,34 @@ def write_frontmatter(path: Path, metadata: dict, content: str) -> None:
     path.write_text(frontmatter.dumps(post) + "\n", encoding="utf-8")
 
 
-def update_frontmatter(path: Path, updates: dict) -> None:
-    """Update specific frontmatter fields without changing the content."""
-    post = frontmatter.load(str(path))
-    for key, value in updates.items():
-        post[key] = value
+def update_frontmatter(
+    path: Path,
+    updates: dict,
+    *,
+    preloaded: tuple[dict, str] | None = None,
+) -> None:
+    """Update specific frontmatter fields without changing the content.
+
+    By default, reads the file via ``frontmatter.load()`` to get the current
+    metadata + body, applies the updates, and writes the result back.
+
+    When ``preloaded=(meta, body)`` is supplied, the function does NOT call
+    ``frontmatter.load()`` — it uses the supplied tuple directly. This
+    eliminates the hidden 2x read cost when callers like ``_sync_brain_state``
+    have already read the file's frontmatter and just need to update one or
+    two fields.
+
+    The caller's metadata dict is NOT mutated (defensive copy).
+    """
+    if preloaded is None:
+        post = frontmatter.load(str(path))
+        for key, value in updates.items():
+            post[key] = value
+        path.write_text(frontmatter.dumps(post) + "\n", encoding="utf-8")
+        return
+
+    meta, body = preloaded
+    new_meta = dict(meta)  # defensive copy so the caller's dict is unchanged
+    new_meta.update(updates)
+    post = frontmatter.Post(body, **new_meta)
     path.write_text(frontmatter.dumps(post) + "\n", encoding="utf-8")

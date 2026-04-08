@@ -76,3 +76,68 @@ def test_missing_frontmatter(tmp_path):
     meta, content = read_frontmatter(f)
     assert meta == {} or meta is not None
     assert "Just markdown" in content
+
+
+# --- preloaded shortcut (Phase 2) ---
+
+
+def test_update_frontmatter_preloaded_skips_disk_read(tmp_path, monkeypatch):
+    """When `preloaded=(meta, body)` is passed, update_frontmatter must NOT
+    call frontmatter.load — it uses the supplied tuple directly. This eliminates
+    the hidden 2x read cost in `_sync_brain_state`."""
+    import frontmatter
+
+    f = tmp_path / "test.md"
+    f.write_text(
+        "---\ntitle: Original\nupdated: 2026-01-01\n---\n# Body\n\nSome content.\n",
+        encoding="utf-8",
+    )
+
+    # Read once via the public API
+    meta, body = read_frontmatter(f)
+
+    # Now monkeypatch frontmatter.load to raise — if update_frontmatter
+    # tries to re-read the file, this assertion fires.
+    def _explode(*args, **kwargs):
+        raise AssertionError("frontmatter.load was called even though preloaded was passed")
+    monkeypatch.setattr(frontmatter, "load", _explode)
+
+    # The preloaded path must NOT call frontmatter.load
+    update_frontmatter(f, {"updated": "2026-04-07"}, preloaded=(meta, body))
+
+    # Un-patch to verify the file was actually updated
+    monkeypatch.undo()
+    new_meta, new_body = read_frontmatter(f)
+    assert new_meta["updated"] == "2026-04-07"
+    assert new_meta["title"] == "Original"  # other fields preserved
+    assert "Some content." in new_body  # body preserved
+
+
+def test_update_frontmatter_legacy_path_still_works(tmp_path):
+    """The non-preloaded call signature still works (backward compatibility)."""
+    f = tmp_path / "test.md"
+    f.write_text(
+        "---\ntitle: Old\nupdated: 2026-01-01\n---\n# Body\n",
+        encoding="utf-8",
+    )
+    update_frontmatter(f, {"updated": "2026-04-07"})
+    meta, _ = read_frontmatter(f)
+    assert meta["updated"] == "2026-04-07"
+    assert meta["title"] == "Old"
+
+
+def test_update_frontmatter_preloaded_does_not_mutate_caller_dict(tmp_path):
+    """update_frontmatter must defensively copy the preloaded meta so the
+    caller's dict is not modified."""
+    f = tmp_path / "test.md"
+    f.write_text(
+        "---\ntitle: T\nupdated: 2026-01-01\n---\n# B\n",
+        encoding="utf-8",
+    )
+    meta, body = read_frontmatter(f)
+    original_title = meta.get("title")
+    update_frontmatter(f, {"updated": "2026-04-07", "title": "NEW"}, preloaded=(meta, body))
+    # The caller's dict must not have been mutated
+    assert meta["title"] == original_title
+    assert "updated" in meta  # the original updated value is still there
+    assert meta["updated"] == "2026-01-01"

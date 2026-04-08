@@ -143,7 +143,7 @@ def test_help_json(tmp_path, monkeypatch):
     data = json.loads(result.output)
     assert data["ok"] is True
     assert "commands" in data
-    assert len(data["commands"]) == 16
+    assert len(data["commands"]) == 17
 
 
 def test_doctor_json(tmp_path, monkeypatch):

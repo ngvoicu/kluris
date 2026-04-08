@@ -142,7 +142,14 @@ def _sync_brain_state(brain_path: Path, brain_config) -> dict:
         "total": 0,
     }
 
-    from kluris.core.git import git_file_last_modified, git_file_created_date
+    from kluris.core.git import git_log_file_dates, is_git_repo
+
+    # One subprocess call to fetch ALL date info (was N per-file calls).
+    # Short-circuit on no-git brains so we don't fork git for nothing.
+    if is_git_repo(brain_path):
+        latest_by_path, created_by_path = git_log_file_dates(brain_path)
+    else:
+        latest_by_path, created_by_path = {}, {}
 
     for md in brain_path.rglob("*.md"):
         if md.name in {"map.md", "brain.md", "index.md", "glossary.md", "README.md"}:
@@ -150,18 +157,20 @@ def _sync_brain_state(brain_path: Path, brain_config) -> dict:
         if ".git" in md.parts:
             continue
         try:
-            meta, _ = read_frontmatter(md)
-            changed = False
-            last_mod = git_file_last_modified(brain_path, str(md.relative_to(brain_path)))
+            meta, body = read_frontmatter(md)
+            rel_path = str(md.relative_to(brain_path)).replace("\\", "/")
+            patch: dict = {}
+            last_mod = latest_by_path.get(rel_path)
             if last_mod and str(meta.get("updated", "")) != last_mod[:10]:
-                update_frontmatter(md, {"updated": last_mod[:10]})
-                changed = True
+                patch["updated"] = last_mod[:10]
             if "created" not in meta:
-                created = git_file_created_date(brain_path, str(md.relative_to(brain_path)))
+                created = created_by_path.get(rel_path)
                 if created:
-                    update_frontmatter(md, {"created": created[:10]})
-                    changed = True
-            if changed:
+                    patch["created"] = created[:10]
+            if patch:
+                # Single write per neuron, single read (no `update_frontmatter`
+                # second-load thanks to `preloaded=(meta, body)`).
+                update_frontmatter(md, patch, preloaded=(meta, body))
                 fixes["dates_updated"] += 1
         except Exception:
             pass
@@ -792,6 +801,71 @@ def _wake_up_collect_glossary(brain_path: Path) -> list[dict]:
                 entries.append({"term": term, "definition": definition})
 
     return entries
+
+
+@cli.command("search")
+@click.argument("query")
+@click.option("--brain", "brain_name", help="Specific brain")
+@click.option("--lobe", help="Filter to neurons under this lobe")
+@click.option("--tag", help="Filter to neurons with this frontmatter tag")
+@click.option("--limit", type=int, default=10, help="Max number of results (default 10)")
+@click.option("--json", "as_json", is_flag=True, help="JSON output")
+def search(query: str, brain_name: str | None, lobe: str | None,
+           tag: str | None, limit: int, as_json: bool):
+    """Search a brain's neurons, glossary, and brain.md for a query string.
+
+    \b
+    Searches:
+      - neuron file paths, titles, and frontmatter tags
+      - neuron body text (with a 200-char snippet around the first match)
+      - glossary terms and definitions
+      - brain.md body content
+
+    \b
+    Examples:
+      kluris search "oauth"
+      kluris search "raw sql" --lobe knowledge --json
+      kluris search "auth" --tag oauth --limit 5
+    """
+    if not query:
+        raise click.ClickException("Query cannot be empty.")
+
+    from kluris.core.search import search_brain
+
+    brains = _resolve_brains(brain_name, allow_all=False, as_json=as_json)
+    name, entry = brains[0]
+    brain_path = Path(entry["path"])
+
+    results = search_brain(
+        brain_path,
+        query,
+        limit=limit,
+        lobe_filter=lobe,
+        tag_filter=tag,
+    )
+
+    if as_json:
+        click.echo(json_lib.dumps({
+            "ok": True,
+            "brain": name,
+            "query": query,
+            "total": len(results),
+            "results": results,
+        }))
+        return
+
+    if not results:
+        console.print(f"[dim]No results for '{query}' in {name}.[/dim]")
+        return
+
+    console.print(f"\n[bold]{len(results)} result(s) for '{query}' in {name}[/bold]\n")
+    for r in results:
+        marker = " [yellow](deprecated)[/yellow]" if r["deprecated"] else ""
+        console.print(f"  [bold]{r['score']:>3}[/bold]  {r['title']}{marker}")
+        console.print(f"        [dim]{r['file']}[/dim]")
+        if r["snippet"]:
+            console.print(f"        {r['snippet']}")
+        console.print()
 
 
 @cli.command("wake-up")
@@ -1681,6 +1755,7 @@ def help_cmd(command: str | None, as_json: bool):
         ("clone", "Clone a brain from a git remote"),
         ("list", "List registered brains"),
         ("status", "Show brain tree, recent changes, and neuron counts"),
+        ("search", "Search a brain for a query string (neurons, glossary, brain.md)"),
         ("wake-up", "Compact brain snapshot for agent session bootstrap"),
         ("neuron", "Create a new neuron (--template for structured formats)"),
         ("lobe", "Create a new lobe (knowledge region)"),
