@@ -584,10 +584,13 @@ def generate_mri_html(brain_path: Path, output_path: Path) -> dict:
     background: rgba(123,247,255,0.06);
     transform: translateX(2px);
   }}
-  .sublobe-card.active {{
-    border-color: rgba(123,247,255,0.50);
-    background: rgba(123,247,255,0.14);
-    transform: translateX(2px);
+  .sublobe-card.dimmed {{
+    opacity: 0.42;
+    background: rgba(255,255,255,0.02);
+    transform: none;
+  }}
+  .sublobe-card.dimmed:hover {{
+    opacity: 0.75;
   }}
   .sublobe-card[disabled] {{
     cursor: default;
@@ -631,10 +634,12 @@ def generate_mri_html(brain_path: Path, output_path: Path) -> dict:
     background: rgba(123,247,255,0.08);
     transform: translateY(-1px);
   }}
-  .lobe-card.active {{
-    border-color: rgba(123,247,255,0.55);
-    background: rgba(123,247,255,0.16);
-    box-shadow: 0 0 0 1px rgba(123,247,255,0.25), 0 8px 24px rgba(123,247,255,0.12);
+  .lobe-card.dimmed {{
+    opacity: 0.42;
+    background: rgba(255,255,255,0.02);
+  }}
+  .lobe-card.dimmed:hover {{
+    opacity: 0.75;
   }}
   .lobe-card[disabled] {{
     cursor: default;
@@ -1162,9 +1167,11 @@ let isPanning = false;
 let dragMoved = false;
 let dragOffset = {{ x: 0, y: 0 }};
 let lastPointer = {{ x: 0, y: 0 }};
-// activeFilter scopes the canvas + results to a single lobe or sub-lobe.
-// Shape: null OR an object with .kind ('lobe' | 'sublobe') and .value (the key).
-let activeFilter = null;
+// Multi-select visibility: each lobe and sub-lobe can be independently
+// hidden from the canvas. Click a lobe / sub-lobe card to toggle it.
+// Default (empty sets) means "show everything".
+const hiddenLobes = new Set();
+const hiddenSublobes = new Set();
 const expandedLobes = new Set();
 
 // --- Color system: two-tier palette ---
@@ -1266,15 +1273,17 @@ function resize() {{
 function buildAnchors(width, height) {{
   const cx = width / 2;
   const cy = height / 2;
-  // Bigger anchor ring -> lobes start much farther apart. The canvas
-  // pans/zooms freely, so anchors near the viewport edge are fine; the
-  // initial render is centered with all anchors visible.
-  const radius = Math.min(width, height) * 0.55;
+  // Elliptical anchor ring so lobes always sit inside the viewport, no
+  // matter the aspect ratio. With a landscape stage the old min-based
+  // radius pushed top/bottom lobes off-canvas. 0.36 leaves ~14% margin
+  // on each side for orbit + hull spread.
+  const rx = width * 0.36;
+  const ry = height * 0.36;
   const nonRootLobes = uniqueLobes.filter(l => l !== 'root');
   lobeAnchors.set('root', {{ x: cx, y: cy * 0.86 }});
   nonRootLobes.forEach((lobe, i) => {{
     const angle = -Math.PI / 2 + (i / Math.max(1, nonRootLobes.length)) * Math.PI * 2;
-    lobeAnchors.set(lobe, {{ x: cx + Math.cos(angle) * radius, y: cy + Math.sin(angle) * radius }});
+    lobeAnchors.set(lobe, {{ x: cx + Math.cos(angle) * rx, y: cy + Math.sin(angle) * ry }});
   }});
 }}
 
@@ -1341,33 +1350,26 @@ function visibleNode(node) {{
   if (node.type === 'brain') return false;
   // Hide all map nodes -- hull labels show lobe/project names
   if (node.type === 'map') return false;
-  // Lobe / sub-lobe filter (set by clicking a lobe or sub-lobe in the left panel)
-  if (activeFilter) {{
-    if (activeFilter.kind === 'lobe' && node.lobe !== activeFilter.value) return false;
-    if (activeFilter.kind === 'sublobe' && node.sublobe !== activeFilter.value) return false;
-  }}
+  // Multi-select visibility: hidden lobes and sub-lobes are excluded.
+  if (hiddenLobes.has(node.lobe)) return false;
+  if (node.sublobe && node.sublobe !== node.lobe && hiddenSublobes.has(node.sublobe)) return false;
   const query = searchInput.value.trim().toLowerCase();
   if (!query) return true;
   return node.searchText.includes(query);
 }}
 
-function activeFilterLabel() {{
-  if (!activeFilter) return '';
-  if (activeFilter.kind === 'lobe') return activeFilter.value;
-  // sublobe key is "lobe/sub" -- the trailing segment is the friendlier name
-  const parts = String(activeFilter.value).split('/');
-  return parts[parts.length - 1] || activeFilter.value;
-}}
-
 function refreshVisibility() {{
   filteredNodes = nodes.filter(visibleNode);
   const query = searchInput.value.trim();
-  const inLabel = activeFilter ? ` in ${{activeFilterLabel()}}` : '';
-  resultCountEl.textContent = query
-    ? `Found ${{filteredNodes.length}} result${{filteredNodes.length === 1 ? '' : 's'}}${{inLabel}}.`
-    : activeFilter
-      ? `Showing ${{filteredNodes.length}} neuron${{filteredNodes.length === 1 ? '' : 's'}} in ${{activeFilterLabel()}}.`
-      : `Showing all ${{filteredNodes.length}} neurons.`;
+  const total = nodes.filter(n => n.type === 'neuron' || n.type === 'glossary' || n.type === 'index').length;
+  const anyHidden = hiddenLobes.size > 0 || hiddenSublobes.size > 0;
+  if (query) {{
+    resultCountEl.textContent = `Found ${{filteredNodes.length}} result${{filteredNodes.length === 1 ? '' : 's'}}.`;
+  }} else if (anyHidden) {{
+    resultCountEl.textContent = `Showing ${{filteredNodes.length}} of ${{total}} neurons.`;
+  }} else {{
+    resultCountEl.textContent = `Showing all ${{filteredNodes.length}} neurons.`;
+  }}
   renderResults();
 }}
 
@@ -1467,11 +1469,12 @@ function renderLobes() {{
     const wrap = document.createElement('div');
     wrap.className = hasSublobes ? 'lobe-card-wrap has-caret' : 'lobe-card-wrap';
 
-    const isLobeFiltered = activeFilter && activeFilter.kind === 'lobe' && activeFilter.value === lobeKey;
+    const isLobeHidden = hiddenLobes.has(lobeKey);
 
     const card = document.createElement('button');
     card.type = 'button';
-    card.className = isLobeFiltered ? 'lobe-card active' : 'lobe-card';
+    card.className = isLobeHidden ? 'lobe-card dimmed' : 'lobe-card';
+    card.title = isLobeHidden ? 'Click to show this lobe' : 'Click to hide this lobe';
     const swatchShadow = `${{info.color}}55`;
     const countLabel = `${{info.neuronCount}} neuron${{info.neuronCount === 1 ? '' : 's'}}`;
     const subCountLabel = hasSublobes
@@ -1485,19 +1488,13 @@ function renderLobes() {{
       </span>
     `;
     card.addEventListener('click', () => {{
-      // Toggle the lobe filter. Clicking the active lobe again clears it.
-      const wasFiltered = isLobeFiltered;
-      if (wasFiltered) {{
-        activeFilter = null;
-      }} else {{
-        activeFilter = {{ kind: 'lobe', value: lobeKey }};
-        // Auto-expand so the user can drill into a sub-lobe right after picking a lobe.
-        if (hasSublobes) expandedLobes.add(lobeKey);
-      }}
+      // Toggle this lobe's visibility. Multi-select: other hidden lobes
+      // stay hidden, other visible lobes stay visible.
+      if (hiddenLobes.has(lobeKey)) hiddenLobes.delete(lobeKey);
+      else hiddenLobes.add(lobeKey);
       renderLobes();
       refreshVisibility();
-      if (wasFiltered) resetCamera();
-      else fitToFilteredNodes();
+      fitToFilteredNodes();
     }});
     wrap.appendChild(card);
 
@@ -1523,10 +1520,11 @@ function renderLobes() {{
       subList.className = 'sublobes-list';
       const sortedSubs = [...info.sublobes.values()].sort((a, b) => a.key.localeCompare(b.key));
       for (const sub of sortedSubs) {{
-        const isSubFiltered = activeFilter && activeFilter.kind === 'sublobe' && activeFilter.value === sub.key;
+        const isSubHidden = hiddenSublobes.has(sub.key);
         const subCard = document.createElement('button');
         subCard.type = 'button';
-        subCard.className = isSubFiltered ? 'sublobe-card active' : 'sublobe-card';
+        subCard.className = isSubHidden ? 'sublobe-card dimmed' : 'sublobe-card';
+        subCard.title = isSubHidden ? 'Click to show this sublobe' : 'Click to hide this sublobe';
         const subCount = `${{sub.neuronCount}} neuron${{sub.neuronCount === 1 ? '' : 's'}}`;
         subCard.innerHTML = `
           <span class="sublobe-tick" style="background:${{info.color}}"></span>
@@ -1537,16 +1535,11 @@ function renderLobes() {{
         `;
         subCard.addEventListener('click', event => {{
           event.stopPropagation();
-          const wasFiltered = isSubFiltered;
-          if (wasFiltered) {{
-            activeFilter = null;
-          }} else {{
-            activeFilter = {{ kind: 'sublobe', value: sub.key }};
-          }}
+          if (hiddenSublobes.has(sub.key)) hiddenSublobes.delete(sub.key);
+          else hiddenSublobes.add(sub.key);
           renderLobes();
           refreshVisibility();
-          if (wasFiltered) resetCamera();
-          else fitToFilteredNodes();
+          fitToFilteredNodes();
         }});
         subList.appendChild(subCard);
       }}
@@ -1856,9 +1849,10 @@ function animateCamera(tx, ty, ts, duration) {{
   cameraAnim = requestAnimationFrame(step);
 }}
 
-function fitToFilteredNodes() {{
+function fitToFilteredNodes(instant = false) {{
   // Frame the camera around whatever is currently visible. Used after a
-  // lobe / sublobe filter is applied so the user actually sees the result.
+  // visibility toggle (and at startup with instant=true) so the user
+  // actually sees the result.
   //
   // Key trick: we use each node's stable targetX/targetY (the anchor-based
   // layout coordinates) instead of live x/y. Physics has not settled at the
@@ -1880,7 +1874,16 @@ function fitToFilteredNodes() {{
   const clampedScale = Math.min(2.4, Math.max(0.42, scale));
   const cx = (minX + maxX) / 2;
   const cy = (minY + maxY) / 2;
-  animateCamera(rect.width / 2 - cx * clampedScale, rect.height / 2 - cy * clampedScale, clampedScale, 320);
+  const tx = rect.width / 2 - cx * clampedScale;
+  const ty = rect.height / 2 - cy * clampedScale;
+  if (instant) {{
+    if (cameraAnim) {{ cancelAnimationFrame(cameraAnim); cameraAnim = null; }}
+    camera.x = tx;
+    camera.y = ty;
+    camera.scale = clampedScale;
+  }} else {{
+    animateCamera(tx, ty, clampedScale, 320);
+  }}
 }}
 
 function resetCamera() {{
@@ -2446,17 +2449,17 @@ canvas.addEventListener('wheel', event => {{
 searchInput.addEventListener('input', refreshVisibility);
 document.getElementById('reset-view').addEventListener('click', () => {{
   const rect = canvas.parentElement.getBoundingClientRect();
-  camera.scale = 1;
-  camera.x = 0;
-  camera.y = 0;
   searchInput.value = '';
-  activeFilter = null;
+  hiddenLobes.clear();
+  hiddenSublobes.clear();
   expandedLobes.clear();
   renderLobes();
   refreshVisibility();
   selectNode(null, false);
   buildAnchors(rect.width, rect.height);
   nodes = initializeNodes();
+  refreshVisibility();
+  fitToFilteredNodes(true);
 }});
 
 // --- Collapsible side panels ---
@@ -2520,6 +2523,9 @@ nodes = initializeNodes();
 renderLobes();
 refreshVisibility();
 updateDetails();
+// Frame the initial layout so the brain is centered regardless of viewport
+// aspect ratio. Uses targetX/targetY so the fit is deterministic.
+fitToFilteredNodes(true);
 loop();
 </script>
 </body>

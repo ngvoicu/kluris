@@ -267,25 +267,29 @@ def test_focus_on_node_zooms_sublobe_members_only(tmp_path):
     assert "n.lobe === node.lobe" in html  # original branch still present for top-level lobes
 
 
-def test_lobes_act_as_filter_not_focus(tmp_path):
-    """Clicking a lobe in the left panel must filter the canvas, not zoom/select.
-
-    visibleNode() must respect activeFilter; renderLobes() must toggle the
-    filter state on click instead of calling selectNode/focusOnNode.
+def test_lobes_act_as_visibility_toggles(tmp_path):
+    """Clicking a lobe in the left panel must toggle its visibility (multi-select),
+    not activate a single-lobe filter. Each lobe and sub-lobe is an independent
+    on/off switch, so the user can hide several at once to reduce clutter.
     """
     brain = _make_brain_with_sublobes(tmp_path)
     output = tmp_path / "brain-mri.html"
     generate_mri_html(brain, output)
     html = output.read_text(encoding="utf-8")
-    # Filter state + visibility wiring
-    assert "let activeFilter" in html
-    assert "activeFilter.kind === 'lobe'" in html
-    assert "activeFilter.kind === 'sublobe'" in html
-    # Active visual state on the cards
-    assert ".lobe-card.active" in html
-    assert ".sublobe-card.active" in html
-    # Reset clears the filter
-    assert "activeFilter = null" in html
+    # Independent hidden-sets for lobes and sublobes
+    assert "const hiddenLobes = new Set()" in html
+    assert "const hiddenSublobes = new Set()" in html
+    # visibleNode() respects both sets
+    assert "hiddenLobes.has(node.lobe)" in html
+    assert "hiddenSublobes.has(node.sublobe)" in html
+    # Dimmed visual state on hidden cards (replaces the old .active state)
+    assert ".lobe-card.dimmed" in html
+    assert ".sublobe-card.dimmed" in html
+    # The old single-filter machinery must be gone
+    assert "activeFilter" not in html
+    # Reset clears both sets
+    assert "hiddenLobes.clear()" in html
+    assert "hiddenSublobes.clear()" in html
 
 
 def test_lobes_have_anti_overlap_physics_and_auto_fit(tmp_path):
@@ -302,15 +306,15 @@ def test_lobes_have_anti_overlap_physics_and_auto_fit(tmp_path):
     generate_mri_html(brain, output)
     html = output.read_text(encoding="utf-8")
     # Bigger initial spacing
-    assert "* 0.55" in html
+    # Elliptical anchor ring so lobes always sit inside the viewport
+    assert "width * 0.36" in html
+    assert "height * 0.36" in html
     # Lobe-vs-lobe centroid repulsion (the "never overlap" pass)
     assert "Push different lobes apart" in html
     assert "lobeCentroids.get(lobeKeys[i])" in html
-    # Auto-fit on filter
+    # Auto-fit helpers
     assert "function fitToFilteredNodes" in html
-    assert "function resetCamera" in html
-    assert "fitToFilteredNodes()" in html
-    assert "resetCamera()" in html
+    assert "fitToFilteredNodes(true)" in html  # instant fit at startup
 
 
 def test_sidebars_are_collapsible_and_long_names_dont_overflow(tmp_path):
