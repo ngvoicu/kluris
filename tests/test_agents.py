@@ -193,3 +193,32 @@ def test_render_skill_posix_path_passthrough():
     assert "/Users/gv/Projects/brain" in content
     # No accidental double slashes or drive letters inserted
     assert "//" not in content.replace("://", "")
+
+
+# --- yaml-neurons SKILL.md template tests ---
+
+
+def test_skill_body_mentions_yaml_neurons():
+    """Rendered SKILL.md must include a yaml-neurons section telling agents
+    how to write opted-in yaml files.
+    """
+    content = _render()
+    lower = content.lower()
+    assert "yaml neuron" in lower
+    assert "openapi.yml" in content
+    assert "#---" in content
+    assert "frontmatter" in lower or "hash" in lower
+
+
+def test_skill_body_yaml_template_has_frontmatter_fields():
+    """The yaml template in SKILL.md must show the expected frontmatter
+    fields and a minimal OpenAPI skeleton.
+    """
+    content = _render()
+    assert "parent:" in content
+    assert "related:" in content
+    assert "tags:" in content
+    assert "title:" in content
+    assert "updated:" in content
+    assert "openapi: 3.1.0" in content
+    assert "info:" in content

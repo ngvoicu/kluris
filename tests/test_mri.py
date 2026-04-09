@@ -3,6 +3,152 @@
 from kluris.core.mri import build_graph, generate_mri_html
 
 
+def _make_brain_with_yaml_neurons(tmp_path):
+    """Copy of the yaml-neurons fixture (per-file helper pattern)."""
+    brain = tmp_path / "brain"
+    brain.mkdir()
+    (brain / "brain.md").write_text(
+        "---\nauto_generated: true\n---\n# Brain\n", encoding="utf-8"
+    )
+    (brain / "glossary.md").write_text("---\n---\n# Glossary\n", encoding="utf-8")
+    (brain / "kluris.yml").write_text(
+        "name: brain\ntype: product\n", encoding="utf-8"
+    )
+
+    lobe = brain / "projects"
+    lobe.mkdir()
+    (lobe / "map.md").write_text(
+        "---\nauto_generated: true\nparent: ../brain.md\n---\n# Projects\n",
+        encoding="utf-8",
+    )
+    (lobe / "auth.md").write_text(
+        "---\nparent: ./map.md\nrelated: [./openapi.yml]\ntags: [auth]\n"
+        "created: 2026-04-01\nupdated: 2026-04-01\n---\n# Auth\n"
+        "\nSee [the API](./openapi.yml) for details.\n",
+        encoding="utf-8",
+    )
+    (lobe / "openapi.yml").write_text(
+        "#---\n"
+        "# parent: ./map.md\n"
+        "# related: [./auth.md]\n"
+        "# tags: [api, openapi]\n"
+        "# title: Payments API\n"
+        "# updated: 2026-04-01\n"
+        "#---\n"
+        "openapi: 3.1.0\n"
+        "info:\n"
+        "  title: Payments API\n"
+        "  version: 1.0.0\n"
+        "paths: {}\n",
+        encoding="utf-8",
+    )
+    (lobe / "ci-config.yml").write_text(
+        "name: ci\non: [push]\njobs:\n  build: {}\n",
+        encoding="utf-8",
+    )
+    return brain
+
+
+def test_build_graph_includes_opted_in_yaml_neurons(tmp_path):
+    """`build_graph` must return nodes for opted-in yaml neurons with the
+    `file_type: yaml` discriminator AND must exclude raw yaml + kluris.yml.
+    """
+    brain = _make_brain_with_yaml_neurons(tmp_path)
+    graph = build_graph(brain)
+    by_path = {n["path"]: n for n in graph["nodes"]}
+
+    assert "projects/openapi.yml" in by_path
+    openapi = by_path["projects/openapi.yml"]
+    assert openapi["type"] == "neuron"
+    assert openapi.get("file_type") == "yaml"
+    assert openapi["title"] == "Payments API"
+
+    assert "projects/auth.md" in by_path
+    auth = by_path["projects/auth.md"]
+    assert auth["type"] == "neuron"
+    assert auth.get("file_type") == "markdown"
+
+    # Opt-out and root config are invisible
+    assert "projects/ci-config.yml" not in by_path
+    assert "kluris.yml" not in by_path
+
+
+def test_build_graph_markdown_to_yaml_creates_edge(tmp_path):
+    """A markdown neuron with a link to a yaml neuron (via frontmatter
+    `related:` or inline `[text](./file.yml)`) must produce an edge in
+    build_graph's edge list. Dedup may collapse related+inline into one
+    edge, so we assert on any edge between them, not specifically inline.
+    """
+    brain = _make_brain_with_yaml_neurons(tmp_path)
+    graph = build_graph(brain)
+    by_path = {n["path"]: n for n in graph["nodes"]}
+    auth_id = by_path["projects/auth.md"]["id"]
+    openapi_id = by_path["projects/openapi.yml"]["id"]
+
+    edges_between = [
+        e for e in graph["edges"]
+        if e["source"] == auth_id and e["target"] == openapi_id
+    ]
+    assert len(edges_between) >= 1, (
+        f"expected at least one edge auth.md -> openapi.yml, got: "
+        f"{[e for e in graph['edges'] if e['source'] == auth_id or e['target'] == auth_id]}"
+    )
+
+
+def test_html_colors_yaml_neurons_with_periwinkle(tmp_path):
+    """Generated MRI HTML must contain the yaml color constant and the
+    colorForNode branch that emits it.
+    """
+    brain = _make_brain_with_yaml_neurons(tmp_path)
+    output = tmp_path / "brain-mri.html"
+    generate_mri_html(brain, output)
+    html = output.read_text(encoding="utf-8")
+    assert "#9ea9ff" in html
+    assert "node.file_type === 'yaml'" in html
+
+
+def test_html_modal_link_regex_matches_yaml(tmp_path):
+    """The modal's body-link regex must match .md, .yml, AND .yaml targets."""
+    brain = _make_brain_with_yaml_neurons(tmp_path)
+    output = tmp_path / "brain-mri.html"
+    generate_mri_html(brain, output)
+    html = output.read_text(encoding="utf-8")
+    # The regex string in the JS source
+    assert r"[^)]+\.(md|yml|yaml)" in html
+
+
+def test_html_search_placeholder_mentions_yaml(tmp_path):
+    """The left-panel search input placeholder must acknowledge yaml as a
+    search dimension."""
+    brain = _make_brain_with_yaml_neurons(tmp_path)
+    output = tmp_path / "brain-mri.html"
+    generate_mri_html(brain, output)
+    html = output.read_text(encoding="utf-8")
+    assert "yaml" in html.lower()
+    # Placeholder attribute specifically
+    assert 'placeholder="Name, path, lobe, tag, or yaml"' in html
+
+
+def test_html_searchtext_builder_includes_file_type(tmp_path):
+    """The JS `searchText` builder in initializeNodes() must include
+    `node.file_type` so searching "yaml" finds yaml neurons.
+    """
+    brain = _make_brain_with_yaml_neurons(tmp_path)
+    output = tmp_path / "brain-mri.html"
+    generate_mri_html(brain, output)
+    html = output.read_text(encoding="utf-8")
+    assert "node.file_type" in html
+
+
+def test_html_under_500kb_with_yaml(tmp_path):
+    """Adding yaml neurons should not regress the HTML-size gate."""
+    brain = _make_brain_with_yaml_neurons(tmp_path)
+    output = tmp_path / "brain-mri.html"
+    generate_mri_html(brain, output)
+    size_kb = output.stat().st_size / 1024
+    assert size_kb < 500
+
+
 def _make_brain_with_neurons(tmp_path):
     brain = tmp_path / "brain"
     brain.mkdir()

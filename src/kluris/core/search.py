@@ -203,13 +203,25 @@ def _collect_searchable(brain_path: Path) -> list[dict]:
     """
     items: list[dict] = []
 
-    # 1. Neurons
+    # 1. Neurons (markdown + opted-in yaml)
     for neuron in _neuron_files(brain_path):
         try:
             meta, body = read_frontmatter(neuron)
         except Exception:
             continue
-        title = extract_neuron_title(neuron, body)
+        is_yaml = neuron.suffix.lower() in {".yml", ".yaml"}
+        file_type = "yaml" if is_yaml else "markdown"
+        if is_yaml:
+            # Yaml neurons: prefer the frontmatter `title` field from the
+            # #--- block; fall back to filename stem. (No markdown heading
+            # to extract from a yaml body.)
+            fm_title = meta.get("title")
+            if isinstance(fm_title, str) and fm_title.strip():
+                title = fm_title.strip()
+            else:
+                title = neuron.stem.replace("-", " ").title()
+        else:
+            title = extract_neuron_title(neuron, body)
         tags = meta.get("tags", [])
         if not isinstance(tags, list):
             tags = []
@@ -217,6 +229,7 @@ def _collect_searchable(brain_path: Path) -> list[dict]:
         items.append({
             "kind": "neuron",
             "file": _rel(brain_path, neuron),
+            "file_type": file_type,
             "title": title,
             "tags": tags,
             "body": body,
@@ -235,6 +248,7 @@ def _collect_searchable(brain_path: Path) -> list[dict]:
                 items.append({
                     "kind": "glossary",
                     "file": "glossary.md",
+                    "file_type": "markdown",
                     "title": term,
                     "tags": [],
                     "body": definition,
@@ -253,6 +267,7 @@ def _collect_searchable(brain_path: Path) -> list[dict]:
             items.append({
                 "kind": "brain_md",
                 "file": "brain.md",
+                "file_type": "markdown",
                 "title": title,
                 "tags": [],
                 "body": brain_md_body,
@@ -339,6 +354,7 @@ def search_brain(
         )
         scored.append((score, item["file"], {
             "file": item["file"],
+            "file_type": item.get("file_type", "markdown"),
             "title": item["title"],
             "matched_fields": fields,
             "snippet": snippet,

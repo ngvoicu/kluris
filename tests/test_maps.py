@@ -3,8 +3,85 @@
 import subprocess
 from pathlib import Path
 
-from kluris.core.maps import generate_brain_md, generate_map_md
+from kluris.core.maps import _get_neurons, generate_brain_md, generate_map_md
 from kluris.core.frontmatter import read_frontmatter
+
+
+def _make_brain_with_yaml_neurons(tmp_path):
+    """Copy of the fixture from test_linker.py (per-file helper pattern)."""
+    brain = tmp_path / "brain"
+    brain.mkdir()
+    (brain / "brain.md").write_text(
+        "---\nauto_generated: true\n---\n# Brain\n", encoding="utf-8"
+    )
+    (brain / "glossary.md").write_text("---\n---\n# Glossary\n", encoding="utf-8")
+    (brain / "kluris.yml").write_text(
+        "name: brain\ntype: product\n", encoding="utf-8"
+    )
+
+    lobe = brain / "projects"
+    lobe.mkdir()
+    (lobe / "map.md").write_text(
+        "---\nauto_generated: true\nparent: ../brain.md\n---\n# Projects\n",
+        encoding="utf-8",
+    )
+    (lobe / "auth.md").write_text(
+        "---\nparent: ./map.md\nrelated: [./openapi.yml]\ntags: [auth]\n"
+        "created: 2026-04-01\nupdated: 2026-04-01\n---\n# Auth\n",
+        encoding="utf-8",
+    )
+    (lobe / "openapi.yml").write_text(
+        "#---\n"
+        "# parent: ./map.md\n"
+        "# related: [./auth.md]\n"
+        "# tags: [api, openapi]\n"
+        "# title: Payments API\n"
+        "# updated: 2026-04-01\n"
+        "#---\n"
+        "openapi: 3.1.0\n"
+        "info:\n"
+        "  title: Payments API\n"
+        "  version: 1.0.0\n"
+        "paths: {}\n",
+        encoding="utf-8",
+    )
+    (lobe / "ci-config.yml").write_text(
+        "name: ci\non: [push]\njobs:\n  build: {}\n",
+        encoding="utf-8",
+    )
+    return brain
+
+
+def test_get_neurons_includes_opted_in_yaml(tmp_path):
+    """`_get_neurons(lobe_path)` must return markdown neurons AND opted-in
+    yaml neurons in the lobe. Raw yaml without a #--- block stays excluded.
+    The yaml neuron's title must resolve to its frontmatter `title` field.
+    """
+    brain = _make_brain_with_yaml_neurons(tmp_path)
+    neurons = _get_neurons(brain / "projects")
+    names = {n["name"] for n in neurons}
+    assert "auth.md" in names
+    assert "openapi.yml" in names
+    assert "ci-config.yml" not in names
+    # Title comes from the yaml frontmatter block
+    openapi = next(n for n in neurons if n["name"] == "openapi.yml")
+    assert openapi["title"] == "Payments API"
+
+
+def test_generate_map_md_lists_yaml_entries(tmp_path):
+    """generate_map_md must emit a list entry for each yaml neuron in the lobe,
+    using the same `- [name](./name) — title` format as markdown neurons.
+    """
+    brain = _make_brain_with_yaml_neurons(tmp_path)
+    generate_map_md(brain, brain / "projects")
+    map_content = (brain / "projects" / "map.md").read_text(encoding="utf-8")
+    # Yaml neuron is listed with its frontmatter title.
+    assert "openapi.yml" in map_content
+    assert "Payments API" in map_content
+    # Raw yaml (no block) is NOT listed.
+    assert "ci-config" not in map_content
+    # Markdown neuron is still there.
+    assert "auth.md" in map_content
 
 
 def _make_brain(tmp_path):

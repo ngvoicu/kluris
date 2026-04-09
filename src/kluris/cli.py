@@ -150,26 +150,34 @@ def _sync_brain_state(brain_path: Path, brain_config) -> dict:
     else:
         latest_by_path, created_by_path = {}, {}
 
-    for md in brain_path.rglob("*.md"):
-        if md.name in {"map.md", "brain.md", "index.md", "glossary.md", "README.md"}:
+    # Walk markdown + opted-in yaml neurons. Delegates to linker's
+    # `_all_neuron_files` which already applies the yaml opt-in gate and
+    # excludes `kluris.yml` from the SKIP_FILES set.
+    from kluris.core.linker import _all_neuron_files as _dream_neuron_files
+    neuron_skip = {"map.md", "brain.md", "index.md", "glossary.md", "README.md", "kluris.yml"}
+    for neuron_file in _dream_neuron_files(brain_path):
+        if neuron_file.name in neuron_skip:
             continue
-        if ".git" in md.parts:
+        if ".git" in neuron_file.parts:
             continue
         try:
-            meta, body = read_frontmatter(md)
-            rel_path = str(md.relative_to(brain_path)).replace("\\", "/")
+            meta, body = read_frontmatter(neuron_file)
+            rel_path = str(neuron_file.relative_to(brain_path)).replace("\\", "/")
+            is_yaml = neuron_file.suffix.lower() in {".yml", ".yaml"}
             patch: dict = {}
             last_mod = latest_by_path.get(rel_path)
             if last_mod and str(meta.get("updated", "")) != last_mod[:10]:
                 patch["updated"] = last_mod[:10]
-            if "created" not in meta:
+            # `created` is only enforced for markdown neurons (the lighter
+            # yaml contract skips it — see linker.check_frontmatter).
+            if not is_yaml and "created" not in meta:
                 created = created_by_path.get(rel_path)
                 if created:
                     patch["created"] = created[:10]
             if patch:
                 # Single write per neuron, single read (no `update_frontmatter`
                 # second-load thanks to `preloaded=(meta, body)`).
-                update_frontmatter(md, patch, preloaded=(meta, body))
+                update_frontmatter(neuron_file, patch, preloaded=(meta, body))
                 fixes["dates_updated"] += 1
         except Exception:
             pass
@@ -663,44 +671,70 @@ def list_cmd(as_json: bool):
 
 
 _WAKE_UP_SKIP_DIRS = {".git", ".github", ".vscode", ".idea", "node_modules", "__pycache__"}
-_WAKE_UP_SKIP_FILES = {"map.md", "brain.md", "index.md", "glossary.md", "README.md"}
+# kluris.yml is the brain's local config; it must NEVER be indexed.
+_WAKE_UP_SKIP_FILES = {"map.md", "brain.md", "index.md", "glossary.md", "README.md", "kluris.yml"}
+
+
+def _wake_up_is_yaml_neuron(path: Path) -> bool:
+    """Return True if a yaml file has the kluris opt-in `#---` block."""
+    from kluris.core.linker import _has_yaml_opt_in_block
+    return _has_yaml_opt_in_block(path)
+
+
+def _wake_up_iter_neurons(root: Path):
+    """Yield neuron files (markdown + opted-in yaml) under `root`, honoring
+    wake-up's skip rules. Raw yaml files without a `#---` block are skipped.
+    """
+    for suffix in ("*.md", "*.yml", "*.yaml"):
+        for item in root.rglob(suffix):
+            if item.name in _WAKE_UP_SKIP_FILES:
+                continue
+            if any(part in _WAKE_UP_SKIP_DIRS for part in item.parts):
+                continue
+            if item.suffix.lower() in {".yml", ".yaml"}:
+                if not _wake_up_is_yaml_neuron(item):
+                    continue
+            yield item
 
 
 def _wake_up_collect_lobes(brain_path: Path) -> list[dict]:
-    """Return top-level lobes with neuron counts (sorted by name)."""
+    """Return top-level lobes with total neuron count AND a per-lobe
+    `yaml_count` that tracks opted-in yaml neurons specifically.
+    """
     lobes = []
     for child in sorted(brain_path.iterdir()):
         if not child.is_dir():
             continue
         if child.name in _WAKE_UP_SKIP_DIRS or child.name.startswith("."):
             continue
-        neurons = [
-            md for md in child.rglob("*.md")
-            if md.name not in _WAKE_UP_SKIP_FILES
-            and not any(part in _WAKE_UP_SKIP_DIRS for part in md.parts)
-        ]
-        lobes.append({"name": child.name, "neurons": len(neurons)})
+        total = 0
+        yaml_count = 0
+        for item in _wake_up_iter_neurons(child):
+            total += 1
+            if item.suffix.lower() in {".yml", ".yaml"}:
+                yaml_count += 1
+        lobes.append({"name": child.name, "neurons": total, "yaml_count": yaml_count})
     return lobes
 
 
 def _wake_up_collect_recent(brain_path: Path, limit: int = 5) -> list[dict]:
-    """Return up to `limit` most-recently-updated neurons, newest first."""
+    """Return up to `limit` most-recently-updated neurons, newest first.
+    Each entry now carries a `file_type` field ('yaml' | 'markdown').
+    """
     candidates = []
-    for md in brain_path.rglob("*.md"):
-        if md.name in _WAKE_UP_SKIP_FILES:
-            continue
-        if any(part in _WAKE_UP_SKIP_DIRS for part in md.parts):
-            continue
+    for item in _wake_up_iter_neurons(brain_path):
         try:
-            meta, _ = read_frontmatter(md)
+            meta, _ = read_frontmatter(item)
         except Exception:
             continue
         updated = meta.get("updated")
         if updated is None:
             continue
+        file_type = "yaml" if item.suffix.lower() in {".yml", ".yaml"} else "markdown"
         candidates.append({
-            "path": str(md.relative_to(brain_path)).replace("\\", "/"),
+            "path": str(item.relative_to(brain_path)).replace("\\", "/"),
             "updated": str(updated),
+            "file_type": file_type,
         })
     candidates.sort(key=lambda item: item["updated"], reverse=True)
     return candidates[:limit]
@@ -889,6 +923,7 @@ def wake_up(brain_name: str | None, as_json: bool):
     lobes = _wake_up_collect_lobes(brain_path)
     recent = _wake_up_collect_recent(brain_path)
     total_neurons = sum(lobe["neurons"] for lobe in lobes)
+    total_yaml_neurons = sum(lobe.get("yaml_count", 0) for lobe in lobes)
     brain_md_body = _wake_up_collect_brain_md(brain_path)
     glossary_entries = _wake_up_collect_glossary(brain_path)
     try:
@@ -905,6 +940,7 @@ def wake_up(brain_name: str | None, as_json: bool):
         "brain_md": brain_md_body,
         "lobes": lobes,
         "total_neurons": total_neurons,
+        "total_yaml_neurons": total_yaml_neurons,
         "recent": recent,
         "glossary": glossary_entries,
         "deprecation_count": deprecation_count,

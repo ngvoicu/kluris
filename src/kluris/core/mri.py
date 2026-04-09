@@ -6,21 +6,42 @@ import json
 from pathlib import Path
 
 from kluris.core.frontmatter import read_frontmatter
-from kluris.core.linker import LINK_PATTERN
+from kluris.core.linker import LINK_PATTERN, _has_yaml_opt_in_block
 
 SKIP_DIRS = {".git"}
-SKIP_FILES = {".gitignore", "README.md"}
+# `kluris.yml` at brain root is the local config; never index it as a node.
+SKIP_FILES = {".gitignore", "README.md", "kluris.yml"}
+YAML_NEURON_SUFFIXES = {".yml", ".yaml"}
 
 
-def _all_md_files(brain_path: Path) -> list[Path]:
-    files = []
+def _all_neuron_files(brain_path: Path) -> list[Path]:
+    """Collect markdown neurons plus opted-in yaml neurons.
+
+    MRI has its own narrower SKIP_FILES (it keeps `glossary.md`, `index.md`,
+    `brain.md`, `map.md` as visible graph nodes — unlike linker/maps which
+    hide them). The yaml opt-in gate is the same.
+    """
+    files: list[Path] = []
     for item in brain_path.rglob("*.md"):
         if any(part in SKIP_DIRS for part in item.parts):
             continue
         if item.name in SKIP_FILES:
             continue
         files.append(item)
+    for suffix in ("*.yml", "*.yaml"):
+        for item in brain_path.rglob(suffix):
+            if any(part in SKIP_DIRS for part in item.parts):
+                continue
+            if item.name in SKIP_FILES:
+                continue
+            if not _has_yaml_opt_in_block(item):
+                continue
+            files.append(item)
     return files
+
+
+# Backward-compat alias for any external caller.
+_all_md_files = _all_neuron_files
 
 
 def _extract_title_and_excerpt(path: Path, content: str) -> tuple[str, str]:
@@ -121,7 +142,20 @@ def build_graph(brain_path: Path) -> dict:
         except Exception:
             pass
 
+        # File flavor: yaml neurons get file_type "yaml", everything else
+        # (including auto-generated brain.md / map.md / glossary.md / index.md)
+        # is "markdown".
+        is_yaml = f.suffix.lower() in YAML_NEURON_SUFFIXES
+        file_type = "yaml" if is_yaml else "markdown"
+
         title, excerpt = _extract_title_and_excerpt(f, content)
+        # Yaml neurons: prefer frontmatter `title` field if the file's title
+        # would otherwise fall back to the filename stem.
+        if is_yaml:
+            fm_title = meta.get("title")
+            if isinstance(fm_title, str) and fm_title.strip():
+                title = fm_title.strip()
+
         content_full, content_preview, preview_truncated = _build_content_preview(content)
         tags = meta.get("tags", [])
         related = meta.get("related", [])
@@ -133,6 +167,7 @@ def build_graph(brain_path: Path) -> dict:
             "lobe": lobe,
             "sublobe": sublobe,
             "type": ntype,
+            "file_type": file_type,
             "file_name": f.name,
             "title": title,
             "excerpt": excerpt,
@@ -1076,7 +1111,7 @@ def generate_mri_html(brain_path: Path, output_path: Path) -> dict:
       <div class="search-wrap">
         <label for="search-input">Search the brain</label>
         <div class="search-row">
-          <input id="search-input" type="search" placeholder="Name, path, lobe, or tag" autocomplete="off">
+          <input id="search-input" type="search" placeholder="Name, path, lobe, tag, or yaml" autocomplete="off">
           <button class="button" id="reset-view" type="button">Reset</button>
         </div>
       </div>
@@ -1245,7 +1280,10 @@ function colorForNode(node) {{
   if (node.type === 'glossary') return '#ffc6f4';
   if (node.type === 'index') return '#ffd28e';
   if (node.type === 'map') return lobeColor(node.lobe);
-  // neuron: desaturated lobe color
+  // Yaml neurons get a distinct periwinkle so they read as "structured spec"
+  // at a glance — independent of lobe color.
+  if (node.file_type === 'yaml') return '#9ea9ff';
+  // markdown neuron: desaturated lobe color
   return desaturate(lobeColor(node.lobe), 0.3);
 }}
 
@@ -1325,7 +1363,8 @@ function initializeNodes() {{
     }}
     const searchText = [
       node.title, node.path, node.file_name, node.lobe,
-      node.type, ...(node.tags || []), node.excerpt || '', node.content_preview || '',
+      node.type, node.file_type || '', ...(node.tags || []),
+      node.excerpt || '', node.content_preview || '',
     ].join(' ').toLowerCase();
     return {{
       ...node,
@@ -1596,7 +1635,7 @@ function updateDetails() {{
     const isLast = i === pathParts.length - 1;
     const targetPath = isLast ? partPath : partPath + '/map.md';
     const target = nodes.find(n => n.path === targetPath);
-    const label = part.replace('.md', '');
+    const label = part.replace(/\.(md|yml|yaml)$/, '');
     if (target && target.id !== node.id) {{
       return `<button type="button" class="breadcrumb-link" data-node-id="${{target.id}}">${{escapeHtml(label)}}</button>`;
     }}
@@ -1734,7 +1773,7 @@ function renderFileTree(activeNodeId) {{
 
 function openModal(node) {{
   const modal = document.getElementById('content-modal');
-  const breadcrumb = node.path.split('/').map(p => p.replace('.md', '')).join(' / ');
+  const breadcrumb = node.path.split('/').map(p => p.replace(/\.(md|yml|yaml)$/, '')).join(' / ');
   document.getElementById('modal-title').innerHTML = `${{escapeHtml(node.title)}} <span style="color:var(--muted);font-size:0.8em;font-weight:400;margin-left:8px">${{escapeHtml(breadcrumb)}}</span>`;
   renderFileTree(node.id);
   // Render content with clickable markdown links
@@ -1742,8 +1781,9 @@ function openModal(node) {{
   // Prefer the untruncated body so the modal shows the full document; fall back to the preview.
   const raw = node.content_full || node.content_preview || 'No content.';
   const nodePath = node.path.replace(/[^/]+$/, '');
-  // Match [text](path.md) markdown links only -- plain text refs are too ambiguous
-  const linkRe = /\[([^\]]+)\]\(([^)]+\.md)\)/g;
+  // Match [text](path.md|.yml|.yaml) markdown links -- yaml neurons can
+  // be link targets from markdown body text too.
+  const linkRe = /\[([^\]]+)\]\(([^)]+\.(md|yml|yaml))\)/g;
   let linkedContent = '';
   let lastIdx = 0;
   let m;

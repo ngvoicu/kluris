@@ -1,13 +1,242 @@
 """Tests for synapse validation, bidirectional checks, and orphan detection."""
 
+from kluris.core.frontmatter import read_frontmatter, update_frontmatter
 from kluris.core.linker import (
+    _neuron_files,
     check_frontmatter,
     detect_deprecation_issues,
     detect_orphans,
+    fix_bidirectional_synapses,
     parse_markdown_links,
     validate_bidirectional,
     validate_synapses,
 )
+
+
+def _make_brain_with_yaml_neurons(tmp_path):
+    """Small brain covering the 4 critical yaml-neurons cases:
+    markdown neuron, opted-in yaml neuron (has #--- block), raw yaml (opt-out,
+    no block — must be invisible), and `kluris.yml` at root (must be invisible).
+    """
+    brain = tmp_path / "brain"
+    brain.mkdir()
+    (brain / "brain.md").write_text(
+        "---\nauto_generated: true\n---\n# Brain\n", encoding="utf-8"
+    )
+    (brain / "glossary.md").write_text("---\n---\n# Glossary\n", encoding="utf-8")
+    # CRITICAL — this file must NEVER appear in any scanner result.
+    (brain / "kluris.yml").write_text(
+        "name: brain\ntype: product\n", encoding="utf-8"
+    )
+
+    lobe = brain / "projects"
+    lobe.mkdir()
+    (lobe / "map.md").write_text(
+        "---\nauto_generated: true\nparent: ../brain.md\n---\n# Projects\n",
+        encoding="utf-8",
+    )
+    (lobe / "auth.md").write_text(
+        "---\nparent: ./map.md\nrelated: [./openapi.yml]\ntags: [auth]\n"
+        "created: 2026-04-01\nupdated: 2026-04-01\n---\n# Auth\n"
+        "\nSee [the API](./openapi.yml) for details.\n",
+        encoding="utf-8",
+    )
+    # Opted-in yaml neuron with hash-style block
+    (lobe / "openapi.yml").write_text(
+        "#---\n"
+        "# parent: ./map.md\n"
+        "# related: [./auth.md]\n"
+        "# tags: [api, openapi]\n"
+        "# title: Payments API\n"
+        "# updated: 2026-04-01\n"
+        "#---\n"
+        "openapi: 3.1.0\n"
+        "info:\n"
+        "  title: Payments API\n"
+        "  version: 1.0.0\n"
+        "paths: {}\n",
+        encoding="utf-8",
+    )
+    # Raw yaml file — NO #--- block. Must be invisible to scanners.
+    (lobe / "ci-config.yml").write_text(
+        "name: ci\non: [push]\njobs:\n  build: {}\n",
+        encoding="utf-8",
+    )
+    return brain
+
+
+def test_neuron_files_includes_opted_in_yaml(tmp_path):
+    """`_neuron_files` must return markdown neurons AND opted-in yaml neurons,
+    but not raw yaml without a block, not `kluris.yml` at brain root, and not
+    auto-generated files (brain.md / map.md / glossary.md).
+    """
+    brain = _make_brain_with_yaml_neurons(tmp_path)
+
+    paths = sorted(f.relative_to(brain).as_posix() for f in _neuron_files(brain))
+
+    assert "projects/auth.md" in paths
+    assert "projects/openapi.yml" in paths
+    # Opt-out: raw yaml without a block
+    assert "projects/ci-config.yml" not in paths
+    # Brain-root config must never leak
+    assert "kluris.yml" not in paths
+    # Auto-generated files stay excluded
+    assert "brain.md" not in paths
+    assert "glossary.md" not in paths
+    assert "projects/map.md" not in paths
+
+
+def test_neuron_files_excludes_kluris_yml_even_with_block(tmp_path):
+    """Adversarial case: `kluris.yml` at the brain root with a `#---` block
+    MUST still be excluded by filename (SKIP_FILES). Defense in depth — the
+    opt-in block alone is not enough to protect the brain's local config.
+    """
+    brain = tmp_path / "brain"
+    brain.mkdir()
+    (brain / "brain.md").write_text(
+        "---\nauto_generated: true\n---\n# Brain\n", encoding="utf-8"
+    )
+    # Adversarial kluris.yml with a hash block — should still be skipped.
+    (brain / "kluris.yml").write_text(
+        "#---\n"
+        "# parent: ./brain.md\n"
+        "# updated: 2026-04-09\n"
+        "#---\n"
+        "name: brain\ntype: product\n",
+        encoding="utf-8",
+    )
+    lobe = brain / "projects"
+    lobe.mkdir()
+    (lobe / "map.md").write_text(
+        "---\nparent: ../brain.md\n---\n# Projects\n", encoding="utf-8"
+    )
+
+    paths = [f.relative_to(brain).as_posix() for f in _neuron_files(brain)]
+    assert "kluris.yml" not in paths
+
+
+def test_validate_synapses_detects_broken_related_in_yaml_neuron(tmp_path):
+    """A yaml neuron with a `related:` entry pointing to a nonexistent file
+    must be flagged by `validate_synapses`.
+    """
+    brain = _make_brain_with_yaml_neurons(tmp_path)
+    # Rewrite openapi.yml's block to point related at a dead file.
+    openapi = brain / "projects" / "openapi.yml"
+    body = (
+        "openapi: 3.1.0\n"
+        "info:\n  title: Payments API\n  version: 1.0.0\n"
+        "paths: {}\n"
+    )
+    openapi.write_text(
+        "#---\n"
+        "# parent: ./map.md\n"
+        "# related: [./deleted.md]\n"
+        "# tags: [api]\n"
+        "# title: Payments API\n"
+        "# updated: 2026-04-01\n"
+        "#---\n" + body,
+        encoding="utf-8",
+    )
+
+    broken = validate_synapses(brain)
+    sources = {b["file"] for b in broken}
+    assert "projects/openapi.yml" in sources
+
+
+def test_fix_bidirectional_synapses_md_to_yaml(tmp_path):
+    """When a markdown neuron's `related:` points at a yaml neuron that does
+    NOT list the markdown neuron back, `fix_bidirectional_synapses` must add
+    the reverse link INTO the yaml neuron's #--- block.
+    """
+    brain = _make_brain_with_yaml_neurons(tmp_path)
+    # Remove `related: [./auth.md]` from the yaml block so it's one-way.
+    openapi = brain / "projects" / "openapi.yml"
+    body = (
+        "openapi: 3.1.0\n"
+        "info:\n  title: Payments API\n  version: 1.0.0\n"
+        "paths: {}\n"
+    )
+    openapi.write_text(
+        "#---\n"
+        "# parent: ./map.md\n"
+        "# tags: [api]\n"
+        "# title: Payments API\n"
+        "# updated: 2026-04-01\n"
+        "#---\n" + body,
+        encoding="utf-8",
+    )
+
+    fixed = fix_bidirectional_synapses(brain)
+    assert fixed >= 1
+
+    meta, _ = read_frontmatter(openapi)
+    related = meta.get("related") or []
+    # The reverse link must now exist. It's relative to the yaml file's dir.
+    assert any("auth.md" in str(r) for r in related), (
+        f"expected auth.md in yaml related list, got {related}"
+    )
+
+
+def test_detect_orphans_flags_yaml_neuron_not_in_map(tmp_path):
+    """A yaml neuron that isn't referenced from its lobe's map.md must be
+    flagged as an orphan by `detect_orphans`.
+    """
+    brain = _make_brain_with_yaml_neurons(tmp_path)
+    # The fixture's map.md doesn't mention openapi.yml at all.
+    # (It's a plain header with no contents list.) So both yaml and md
+    # neurons are orphans unless we add them to the map.
+    orphans = detect_orphans(brain)
+    orphan_paths = {str(o) for o in orphans}
+    assert "projects/openapi.yml" in orphan_paths
+
+    # Now add a link to openapi.yml from map.md and re-run.
+    map_md = brain / "projects" / "map.md"
+    map_md.write_text(
+        "---\nparent: ../brain.md\n---\n# Projects\n\n"
+        "- [api](./openapi.yml) — spec\n"
+        "- [auth](./auth.md) — auth\n",
+        encoding="utf-8",
+    )
+    orphans_after = {str(o) for o in detect_orphans(brain)}
+    assert "projects/openapi.yml" not in orphans_after
+
+
+def test_check_frontmatter_yaml_lighter_contract(tmp_path):
+    """Yaml neurons follow a lighter frontmatter contract: only `updated` is
+    required. Missing `parent` or `created` is allowed for yaml (inferred from
+    filesystem position + git). Missing `updated` IS an error.
+    """
+    brain = tmp_path / "brain"
+    brain.mkdir()
+    (brain / "brain.md").write_text(
+        "---\nauto_generated: true\n---\n# Brain\n", encoding="utf-8"
+    )
+    lobe = brain / "projects"
+    lobe.mkdir()
+    (lobe / "map.md").write_text(
+        "---\nparent: ../brain.md\n---\n# Projects\n", encoding="utf-8"
+    )
+    # Yaml with only `updated` — should be OK
+    (lobe / "ok.yml").write_text(
+        "#---\n# updated: 2026-04-09\n#---\nopenapi: 3.1.0\n",
+        encoding="utf-8",
+    )
+    # Yaml missing `updated` — should be flagged
+    (lobe / "broken.yml").write_text(
+        "#---\n# parent: ./map.md\n#---\nopenapi: 3.1.0\n",
+        encoding="utf-8",
+    )
+
+    issues = check_frontmatter(brain)
+    by_file = {i["file"]: i.get("field") for i in issues}
+    # ok.yml must have no issues (lighter contract: parent/created not required)
+    assert "projects/ok.yml" not in by_file
+    # broken.yml must be flagged for missing updated
+    broken_issues = [i for i in issues if i["file"] == "projects/broken.yml"]
+    assert any(i.get("field") == "updated" for i in broken_issues)
+    # broken.yml must NOT be flagged for missing parent or created (lighter contract)
+    assert not any(i.get("field") == "parent" for i in broken_issues)
+    assert not any(i.get("field") == "created" for i in broken_issues)
 
 
 def _make_linked_brain(tmp_path):

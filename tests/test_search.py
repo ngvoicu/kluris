@@ -5,6 +5,48 @@ import json
 import pytest
 from click.testing import CliRunner
 
+from kluris.core.search import _collect_searchable, search_brain
+
+
+def _make_brain_with_yaml_neurons_search(tmp_path):
+    """Yaml-neurons fixture for search tests."""
+    brain = tmp_path / "brain"
+    brain.mkdir()
+    (brain / "brain.md").write_text(
+        "---\nauto_generated: true\n---\n# Brain\n", encoding="utf-8"
+    )
+    (brain / "glossary.md").write_text(
+        "---\n---\n# Glossary\n", encoding="utf-8"
+    )
+    (brain / "kluris.yml").write_text(
+        "name: brain\ntype: product\n", encoding="utf-8"
+    )
+    lobe = brain / "projects"
+    lobe.mkdir()
+    (lobe / "map.md").write_text(
+        "---\nparent: ../brain.md\n---\n# Projects\n", encoding="utf-8"
+    )
+    (lobe / "auth.md").write_text(
+        "---\nparent: ./map.md\ntags: [auth]\ncreated: 2026-04-01\n"
+        "updated: 2026-04-01\n---\n# Auth\n", encoding="utf-8"
+    )
+    (lobe / "openapi.yml").write_text(
+        "#---\n"
+        "# parent: ./map.md\n"
+        "# tags: [api, payments]\n"
+        "# title: Payments API\n"
+        "# updated: 2026-04-01\n"
+        "#---\n"
+        "openapi: 3.1.0\n"
+        "info:\n  title: Payments API\n  version: 1.0.0\n"
+        "paths:\n  /charge: {}\n",
+        encoding="utf-8",
+    )
+    (lobe / "ci-config.yml").write_text(
+        "name: ci\non: [push]\n", encoding="utf-8"
+    )
+    return brain
+
 
 def _write(path, content):
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -901,3 +943,62 @@ def test_search_command_listed_in_help(tmp_path, monkeypatch):
     names = {c["name"] for c in data["commands"]}
     assert "search" in names
     assert len(data["commands"]) == 17  # was 16 before search was added
+
+
+# --- yaml-neurons search tests ---
+
+
+def test_collect_searchable_includes_yaml_neurons(tmp_path):
+    """_collect_searchable must emit an entry for each opted-in yaml neuron,
+    with `file_type: 'yaml'` and title resolved from the frontmatter `title`
+    field. Raw yaml files without a block must not appear.
+    """
+    brain = _make_brain_with_yaml_neurons_search(tmp_path)
+    items = _collect_searchable(brain)
+    by_file = {item["file"]: item for item in items}
+
+    assert "projects/openapi.yml" in by_file
+    yaml_item = by_file["projects/openapi.yml"]
+    assert yaml_item.get("file_type") == "yaml"
+    assert yaml_item["title"] == "Payments API"
+
+    assert "projects/auth.md" in by_file
+    md_item = by_file["projects/auth.md"]
+    assert md_item.get("file_type") == "markdown"
+
+    # Opt-out yaml must not appear
+    assert "projects/ci-config.yml" not in by_file
+    # Brain-root config must not appear
+    assert "kluris.yml" not in by_file
+
+
+def test_search_brain_returns_yaml_hits_with_file_type(tmp_path):
+    """search_brain must return yaml neurons in results, each with a
+    `file_type` field set to 'yaml'.
+    """
+    brain = _make_brain_with_yaml_neurons_search(tmp_path)
+    results = search_brain(brain, "payments", limit=10)
+    files = {r["file"]: r for r in results}
+    assert "projects/openapi.yml" in files
+    yaml_hit = files["projects/openapi.yml"]
+    assert yaml_hit.get("file_type") == "yaml"
+
+
+def test_search_excludes_kluris_yml_even_with_matching_content(tmp_path):
+    """Adversarial: a `kluris.yml` with matching body content must never
+    appear in search results.
+    """
+    brain = tmp_path / "brain"
+    brain.mkdir()
+    (brain / "brain.md").write_text(
+        "---\nauto_generated: true\n---\n# Brain\n", encoding="utf-8"
+    )
+    # kluris.yml with a block AND body text that matches the query
+    (brain / "kluris.yml").write_text(
+        "#---\n# updated: 2026-04-09\n#---\n"
+        "name: brain\ndescription: payments platform config\n",
+        encoding="utf-8",
+    )
+    results = search_brain(brain, "payments", limit=10)
+    files = [r["file"] for r in results]
+    assert "kluris.yml" not in files

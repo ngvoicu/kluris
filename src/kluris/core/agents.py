@@ -177,7 +177,34 @@ the target neuron already exists, either (a) propose updating it in place
 (Read current → show diff → Write merged), or (b) propose a new neuron
 under a different filename. Both paths require the human's explicit approval
 before writing. Never silently overwrite.
-If user asks for OpenAPI: generate `openapi.yml` (OpenAPI 3.1), not markdown.
+
+Yaml neurons -- when the user asks for OpenAPI, JSON Schema, or any other
+structured machine-readable spec, write a `.yml` / `.yaml` file in the
+matching lobe directory. Kluris will index it as a first-class neuron
+alongside markdown, BUT only if it declares itself via a `#---` hash
+frontmatter block at the very top of the file. Without the block, the
+file is invisible to every kluris scanner. Template (all fields except
+`updated` are optional for yaml neurons):
+
+```
+#---
+# parent: ./map.md
+# related: [./auth.md]
+# tags: [api, openapi]
+# title: Payments API
+# updated: 2026-04-09
+#---
+openapi: 3.1.0
+info:
+  title: Payments API
+  version: 1.0.0
+paths: {{}}
+```
+
+Markdown neurons can link to yaml neurons via inline
+`[API spec](./openapi.yml)` syntax just like `.md` targets. Yaml neurons
+show on the MRI canvas in a distinct periwinkle color so they read as
+"structured spec" at a glance.
 
 The brain is sacred. Writing to it is a collaborative process between you
 and the human. You are partners building shared knowledge together.

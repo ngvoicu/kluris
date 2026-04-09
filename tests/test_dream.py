@@ -469,3 +469,79 @@ def test_sync_brain_state_no_git_brain_skips_batch_call(
         f"Expected exactly 1 git subprocess call (is_git_repo only), "
         f"got {counting_git_run.count}: {counting_git_run.calls}"
     )
+
+
+# --- yaml-neurons dream tests ---
+
+
+def test_dream_discovers_opted_in_yaml_neuron_in_map(tmp_path, monkeypatch):
+    """After `kluris dream`, map.md for the lobe must list the opted-in
+    yaml neuron (with its frontmatter title).
+    """
+    monkeypatch.setenv("KLURIS_CONFIG", str(tmp_path / "config.yml"))
+    monkeypatch.setenv("HOME", str(tmp_path))
+    runner = CliRunner()
+    create_test_brain(runner, "my-brain", tmp_path)
+    brain = tmp_path / "my-brain"
+    lobe = brain / "projects"
+    (lobe / "openapi.yml").write_text(
+        "#---\n"
+        "# parent: ./map.md\n"
+        "# tags: [api]\n"
+        "# title: Payments API\n"
+        "# updated: 2026-04-09\n"
+        "#---\n"
+        "openapi: 3.1.0\n"
+        "info:\n  title: Payments API\n  version: 1.0.0\n"
+        "paths: {}\n",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(cli, ["dream"])
+    assert result.exit_code == 0, result.output
+    map_content = (lobe / "map.md").read_text(encoding="utf-8")
+    assert "openapi.yml" in map_content
+    assert "Payments API" in map_content
+
+
+def test_dream_excludes_kluris_yml_from_sync(tmp_path, monkeypatch):
+    """Adversarial: a `kluris.yml` with a `#---` block must NOT be touched
+    by dream's date-sync path.
+    """
+    monkeypatch.setenv("KLURIS_CONFIG", str(tmp_path / "config.yml"))
+    monkeypatch.setenv("HOME", str(tmp_path))
+    runner = CliRunner()
+    create_test_brain(runner, "my-brain", tmp_path)
+    brain = tmp_path / "my-brain"
+    # Replace the auto-generated kluris.yml with an adversarial one.
+    adversarial = (
+        "#---\n# updated: 2026-01-01\n#---\n"
+        "name: my-brain\ntype: product\n"
+    )
+    (brain / "kluris.yml").write_text(adversarial, encoding="utf-8")
+
+    result = runner.invoke(cli, ["dream"])
+    assert result.exit_code == 0, result.output
+    # The kluris.yml content must still have the original block + body.
+    after = (brain / "kluris.yml").read_text(encoding="utf-8")
+    assert after == adversarial
+
+
+def test_dream_ignores_raw_yaml_without_block(tmp_path, monkeypatch):
+    """A raw yaml file (no #--- block) in a lobe must not be indexed as a
+    neuron. Dream should leave it completely untouched.
+    """
+    monkeypatch.setenv("KLURIS_CONFIG", str(tmp_path / "config.yml"))
+    monkeypatch.setenv("HOME", str(tmp_path))
+    runner = CliRunner()
+    create_test_brain(runner, "my-brain", tmp_path)
+    brain = tmp_path / "my-brain"
+    raw = "name: ci\non: [push]\njobs:\n  build: {}\n"
+    (brain / "projects" / "ci.yml").write_text(raw, encoding="utf-8")
+
+    result = runner.invoke(cli, ["dream"])
+    assert result.exit_code == 0, result.output
+    assert (brain / "projects" / "ci.yml").read_text(encoding="utf-8") == raw
+    # Map.md must not list it.
+    map_content = (brain / "projects" / "map.md").read_text(encoding="utf-8")
+    assert "ci.yml" not in map_content

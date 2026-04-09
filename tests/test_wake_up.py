@@ -280,3 +280,72 @@ def test_wake_up_stale_brain_path_returns_json_error(tmp_path, temp_config, cli_
     data = json.loads(result.output)
     assert data["ok"] is False
     assert "ghost-brain" in data["error"] or "path" in data["error"].lower()
+
+
+# --- yaml-neurons wake-up tests ---
+
+
+def test_wake_up_counts_opted_in_yaml_in_lobes(temp_brain, cli_runner):
+    """Wake-up's lobes[] must include opted-in yaml neurons in `neurons`
+    AND expose a new `yaml_count` field per lobe.
+    """
+    # Add md + opted-in yaml + raw yaml (opt-out) to the knowledge lobe
+    _write_neuron(temp_brain, "knowledge/note.md", "Note")
+    (temp_brain / "knowledge" / "openapi.yml").write_text(
+        "#---\n# title: API\n# updated: 2026-04-09\n#---\n"
+        "openapi: 3.1.0\ninfo:\n  title: API\n  version: 1.0.0\npaths: {}\n",
+        encoding="utf-8",
+    )
+    (temp_brain / "knowledge" / "ci-config.yml").write_text(
+        "name: ci\n", encoding="utf-8"
+    )
+
+    result = cli_runner.invoke(cli, ["wake-up", "--json"])
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.output)
+
+    knowledge = next(l for l in data["lobes"] if l["name"] == "knowledge")
+    # neurons total includes the yaml neuron but not the raw yaml
+    assert knowledge["neurons"] == 2
+    assert knowledge["yaml_count"] == 1
+    # `total_yaml_neurons` is exposed at top level (new additive field)
+    assert data["total_yaml_neurons"] >= 1
+
+
+def test_wake_up_recent_entries_include_file_type(temp_brain, cli_runner):
+    """Each entry in `recent[]` must carry a `file_type` field.
+    """
+    _write_neuron(temp_brain, "knowledge/note.md", "Note", updated="2026-04-10")
+    (temp_brain / "knowledge" / "openapi.yml").write_text(
+        "#---\n# title: API\n# updated: 2026-04-09\n#---\nopenapi: 3.1.0\n",
+        encoding="utf-8",
+    )
+
+    result = cli_runner.invoke(cli, ["wake-up", "--json"])
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.output)
+
+    types = {r.get("file_type") for r in data["recent"]}
+    # Both file types should appear in recent
+    assert "markdown" in types
+    assert "yaml" in types
+
+
+def test_wake_up_excludes_kluris_yml(temp_brain, cli_runner):
+    """Adversarial: a `kluris.yml` with a `#---` block at brain root must
+    NEVER appear in the wake-up snapshot.
+    """
+    # Replace/augment kluris.yml with an adversarial block
+    (temp_brain / "kluris.yml").write_text(
+        "#---\n# updated: 2026-04-09\n#---\nname: brain\n",
+        encoding="utf-8",
+    )
+
+    result = cli_runner.invoke(cli, ["wake-up", "--json"])
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.output)
+    # kluris.yml must not appear in any lobe's contents nor in recent.
+    for lobe in data["lobes"]:
+        assert lobe["name"] != "kluris.yml"
+    for entry in data["recent"]:
+        assert entry["path"] != "kluris.yml"

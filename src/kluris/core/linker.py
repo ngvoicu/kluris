@@ -13,31 +13,114 @@ from kluris.core.frontmatter import read_frontmatter, update_frontmatter
 # centralized here prevents the "each command walks the brain differently"
 # bug that caused status to count markdown under .github/workflows.
 SKIP_DIRS = {".git", ".github", ".vscode", ".idea", "node_modules", "__pycache__"}
-SKIP_FILES = {"brain.md", "index.md", "glossary.md", "README.md", ".gitignore"}
+# kluris.yml is the brain's local config at the root. It must NEVER be indexed
+# as a neuron — defense in depth alongside the opt-in `#---` block gate for
+# yaml files (see `_has_yaml_opt_in_block`).
+SKIP_FILES = {"brain.md", "index.md", "glossary.md", "README.md", ".gitignore", "kluris.yml"}
 VALIDATE_SKIP_FILES = {"README.md"}  # Skip link validation in these (contain example links)
 LINK_PATTERN = re.compile(r"\[([^\]]*)\]\(([^)]+)\)")
+YAML_NEURON_SUFFIXES = {".yml", ".yaml"}
 
 
-def _all_md_files(brain_path: Path) -> list[Path]:
-    """Collect all .md files in the brain, excluding tooling/hidden dirs.
+def _has_yaml_opt_in_block(path: Path) -> bool:
+    """Return True if a yaml file has a complete `#---` / `#---` block at top.
 
-    Also skips any directory whose name starts with ``.`` -- covers
-    ad-hoc editor state dirs we haven't explicitly enumerated.
+    Opt-in invariant: yaml files are only indexed as kluris neurons when they
+    declare themselves via a hash-style frontmatter block. This protects
+    arbitrary yaml files (CI configs, k8s manifests) from being picked up,
+    and makes the agent's authoring intent explicit.
+
+    The gate verifies BOTH the opening sentinel AND a matching closing
+    sentinel, AND that every line in between is a comment (starts with `#`).
+    A file with only an opening `#---` and no closing is rejected — it would
+    be a parse mismatch with `_read_yaml_neuron`, which needs both sentinels
+    to extract metadata.
+
+    Reads up to the first 4 KB so a reasonable frontmatter block (dozens of
+    lines) is always covered. The sentinel must be at the top of the file
+    (only whitespace-only lines allowed before the opening `#---`). Handles
+    a leading UTF-8 BOM.
     """
-    files = []
+    try:
+        with path.open("rb") as f:
+            head = f.read(4096)
+    except OSError:
+        return False
+    try:
+        text = head.decode("utf-8-sig", errors="replace")
+    except Exception:
+        return False
+    lines = text.splitlines()
+    idx = 0
+    # Skip leading blank lines
+    while idx < len(lines) and lines[idx].strip() == "":
+        idx += 1
+    # First non-blank line must be the opening sentinel
+    if idx >= len(lines) or lines[idx].rstrip() != "#---":
+        return False
+    idx += 1
+    # Walk to the closing sentinel; every line in between must be a comment
+    while idx < len(lines):
+        line = lines[idx]
+        if line.rstrip() == "#---":
+            return True
+        if not line.lstrip().startswith("#"):
+            return False
+        idx += 1
+    # Ran off the end before finding the closing sentinel — malformed
+    return False
+
+
+def _all_neuron_files(brain_path: Path) -> list[Path]:
+    """Collect all neuron source files in the brain (markdown + opted-in yaml).
+
+    Walks the brain once per suffix, filtering out tooling / hidden dirs
+    and the SKIP_FILES set. For yaml files, an additional opt-in gate
+    (`_has_yaml_opt_in_block`) ensures only files that declare themselves
+    via a `#---` block are included.
+
+    Skips any directory whose name starts with ``.`` -- covers ad-hoc
+    editor state dirs we haven't explicitly enumerated.
+    """
+    files: list[Path] = []
+    # Markdown
     for item in brain_path.rglob("*.md"):
         if any(part in SKIP_DIRS for part in item.parts):
             continue
         if any(part.startswith(".") for part in item.parts[:-1]):
             continue
         files.append(item)
+    # Yaml (opt-in only)
+    for suffix in ("*.yml", "*.yaml"):
+        for item in brain_path.rglob(suffix):
+            if any(part in SKIP_DIRS for part in item.parts):
+                continue
+            if any(part.startswith(".") for part in item.parts[:-1]):
+                continue
+            # Belt: explicit filename skip (kluris.yml et al.) happens here
+            # too so even an adversarial kluris.yml with a `#---` block is
+            # still rejected.
+            if item.name in SKIP_FILES:
+                continue
+            if not _has_yaml_opt_in_block(item):
+                continue
+            files.append(item)
     return files
 
 
+# Backward-compat alias: legacy callers (including tests) may still import
+# `_all_md_files`. The name is misleading now that yaml is supported, but
+# renaming would break every external consumer.
+_all_md_files = _all_neuron_files
+
+
 def _neuron_files(brain_path: Path) -> list[Path]:
-    """Collect neuron .md files (not map.md, brain.md, index.md, etc.)."""
+    """Collect neuron files (markdown + opted-in yaml), excluding auto-generated
+    and skip-listed files like map.md, brain.md, index.md, glossary.md,
+    kluris.yml, etc.
+    """
     neurons = []
-    for f in _all_md_files(brain_path):
+    for f in _all_neuron_files(brain_path):
         if f.name in SKIP_FILES or f.name == "map.md":
             continue
         neurons.append(f)
@@ -225,15 +308,22 @@ def check_frontmatter(brain_path: Path) -> list[dict]:
     Previously the other validators silently skipped malformed values, which
     meant ``dream`` could report ``healthy`` while the underlying frontmatter
     was quietly broken. This surfaces those errors as actionable warnings.
+
+    Contract is file-type aware:
+      - Markdown neurons: require ``parent``, ``created``, ``updated``.
+      - Yaml neurons: require only ``updated`` (``parent`` is inferred from
+        the containing lobe, ``created`` from git log at dream time).
     """
     issues = []
     for neuron in _neuron_files(brain_path):
         meta, _ = read_frontmatter(neuron)
         rel = str(neuron.relative_to(brain_path))
-        if "parent" not in meta:
-            issues.append({"file": rel, "field": "parent"})
-        if "created" not in meta:
-            issues.append({"file": rel, "field": "created"})
+        is_yaml = neuron.suffix.lower() in YAML_NEURON_SUFFIXES
+        if not is_yaml:
+            if "parent" not in meta:
+                issues.append({"file": rel, "field": "parent"})
+            if "created" not in meta:
+                issues.append({"file": rel, "field": "created"})
         if "updated" not in meta:
             issues.append({"file": rel, "field": "updated"})
 

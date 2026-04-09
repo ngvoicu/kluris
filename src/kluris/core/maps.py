@@ -6,9 +6,13 @@ from datetime import date
 from pathlib import Path
 
 from kluris.core.frontmatter import read_frontmatter, write_frontmatter
+from kluris.core.linker import _has_yaml_opt_in_block
 
-SKIP_FILES = {"map.md", "brain.md", "index.md", "glossary.md", "README.md", ".gitignore"}
+# `kluris.yml` is the brain's local config at the root; it must never be
+# indexed as a neuron. Defense in depth alongside `_has_yaml_opt_in_block`.
+SKIP_FILES = {"map.md", "brain.md", "index.md", "glossary.md", "README.md", ".gitignore", "kluris.yml"}
 SKIP_DIRS = {".git", ".github", ".vscode", ".idea", "node_modules", "__pycache__"}
+NEURON_SUFFIXES = {".md", ".yml", ".yaml"}
 
 
 def _today() -> str:
@@ -59,31 +63,50 @@ def _read_map_description(map_file: Path) -> str:
 
 
 def _get_neurons(lobe_path: Path) -> list[dict]:
-    """Find all .md files in a lobe (excluding map.md and auto-generated files)."""
+    """Find all neuron files in a lobe: markdown neurons plus opted-in yaml
+    neurons (those with a `#---` hash frontmatter block). Excludes map.md,
+    glossary.md, brain.md, README.md, and raw yaml files without the opt-in.
+    """
     neurons = []
     for item in sorted(lobe_path.iterdir()):
-        if item.is_file() and item.suffix == ".md" and item.name not in SKIP_FILES:
-            title = item.stem.replace("-", " ").title()
-            tags = []
-            updated = ""
-            try:
-                meta, content = read_frontmatter(item)
-                # Extract first heading as title
+        if not item.is_file():
+            continue
+        if item.name in SKIP_FILES:
+            continue
+        suffix = item.suffix.lower()
+        if suffix not in NEURON_SUFFIXES:
+            continue
+        # Yaml opt-in gate
+        if suffix in {".yml", ".yaml"} and not _has_yaml_opt_in_block(item):
+            continue
+        title = item.stem.replace("-", " ").title()
+        tags = []
+        updated = ""
+        try:
+            meta, content = read_frontmatter(item)
+            if suffix == ".md":
+                # Title from first markdown heading
                 for line in content.split("\n"):
                     if line.startswith("# "):
                         title = line[2:].strip()
                         break
-                tags = meta.get("tags", [])
-                updated = meta.get("updated", "")
-            except Exception:
-                pass
-            neurons.append({
-                "name": item.name,
-                "title": title,
-                "path": item,
-                "tags": tags if isinstance(tags, list) else [],
-                "updated": str(updated),
-            })
+            else:
+                # Yaml neuron: title comes from frontmatter `title` field
+                # (written into the #--- block), else filename stem.
+                fm_title = meta.get("title")
+                if isinstance(fm_title, str) and fm_title.strip():
+                    title = fm_title.strip()
+            tags = meta.get("tags", [])
+            updated = meta.get("updated", "")
+        except Exception:
+            pass
+        neurons.append({
+            "name": item.name,
+            "title": title,
+            "path": item,
+            "tags": tags if isinstance(tags, list) else [],
+            "updated": str(updated),
+        })
     return neurons
 
 
