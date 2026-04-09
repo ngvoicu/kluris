@@ -193,6 +193,80 @@ def test_html_has_lobes_list_in_left_panel(tmp_path):
     assert "renderLobes();" in html
 
 
+def _make_brain_with_sublobes(tmp_path):
+    """Brain where the 'projects' lobe has 4 sub-lobes (the 'too busy' case)."""
+    brain = tmp_path / "brain"
+    brain.mkdir()
+    (brain / "brain.md").write_text("---\nauto_generated: true\n---\n# Brain\n", encoding="utf-8")
+    (brain / "glossary.md").write_text("---\n---\n# Glossary\n", encoding="utf-8")
+
+    # Top-level lobe map
+    projects = brain / "projects"
+    projects.mkdir()
+    (projects / "map.md").write_text(
+        "---\nauto_generated: true\nparent: ../brain.md\n---\n# Projects\n", encoding="utf-8"
+    )
+
+    # 4 sub-lobes under projects, each with 2 neurons
+    for sub in ["alpha", "beta", "gamma", "delta"]:
+        d = projects / sub
+        d.mkdir()
+        (d / "map.md").write_text(
+            f"---\nauto_generated: true\nparent: ../map.md\n---\n# {sub.title()}\n",
+            encoding="utf-8",
+        )
+        for name in ["one.md", "two.md"]:
+            (d / name).write_text(
+                "---\nparent: ./map.md\nrelated: []\ntags: []\n"
+                "created: 2026-04-01\nupdated: 2026-04-01\n---\n"
+                f"# {sub}/{name}\n",
+                encoding="utf-8",
+            )
+    return brain
+
+
+def test_html_has_sublobes_collapsible_tree(tmp_path):
+    """The Lobes section must support sub-lobes via a collapsible tree.
+
+    Solves the 'too busy canvas' problem when one lobe has many sub-lobes
+    by giving the user a navigation aid in the left panel.
+    """
+    brain = _make_brain_with_sublobes(tmp_path)
+    output = tmp_path / "brain-mri.html"
+    generate_mri_html(brain, output)
+    html = output.read_text(encoding="utf-8")
+
+    # CSS hooks for the new sub-lobe tree style.
+    # Cards stay flush-left; the caret floats on the right of cards that have
+    # sublobes (no left-side alignment spacer that would shift the lobes).
+    assert ".lobe-group" in html
+    assert ".lobe-card-wrap" in html
+    assert ".lobe-caret" in html
+    assert ".sublobes-list" in html
+    assert ".sublobe-card" in html
+    assert ".sublobe-tick" in html
+
+    # JS state + render path for sub-lobes
+    assert "expandedLobes" in html
+    assert "info.sublobes" in html
+
+    # focusOnNode must distinguish sub-lobe map nodes (zoom to sublobe members,
+    # not the whole lobe) so clicking a sublobe in the list zooms tightly.
+    assert "n.sublobe === node.sublobe" in html
+
+
+def test_focus_on_node_zooms_sublobe_members_only(tmp_path):
+    """Sub-lobe map nodes must zoom to their own members, not the parent lobe."""
+    brain = _make_brain_with_sublobes(tmp_path)
+    output = tmp_path / "brain-mri.html"
+    generate_mri_html(brain, output)
+    html = output.read_text(encoding="utf-8")
+    # The fix: filter by sublobe when node.sublobe !== node.lobe
+    assert "isSublobe" in html
+    assert "n.sublobe === node.sublobe" in html
+    assert "n.lobe === node.lobe" in html  # original branch still present for top-level lobes
+
+
 def test_html_under_500kb(tmp_path):
     brain = _make_brain_with_neurons(tmp_path)
     output = tmp_path / "brain-mri.html"

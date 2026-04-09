@@ -455,6 +455,89 @@ def generate_mri_html(brain_path: Path, output_path: Path) -> dict:
     display: grid;
     gap: 8px;
   }}
+  .lobe-group {{
+    display: grid;
+    gap: 6px;
+  }}
+  .lobe-card-wrap {{
+    position: relative;
+  }}
+  .lobe-card-wrap.has-caret .lobe-card {{
+    padding-right: 40px;
+  }}
+  .lobe-caret {{
+    appearance: none;
+    position: absolute;
+    top: 50%;
+    right: 8px;
+    transform: translateY(-50%);
+    width: 24px;
+    height: 24px;
+    border: 1px solid rgba(255,255,255,0.10);
+    border-radius: 8px;
+    background: rgba(8,15,32,0.7);
+    color: var(--muted);
+    font-size: 0.78rem;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 2;
+    transition: border-color 160ms ease, background 160ms ease, color 160ms ease;
+  }}
+  .lobe-caret:hover {{
+    color: var(--text);
+    border-color: rgba(123,247,255,0.45);
+    background: rgba(123,247,255,0.14);
+  }}
+  .sublobes-list {{
+    display: grid;
+    gap: 6px;
+    margin-left: 14px;
+    padding-left: 10px;
+    border-left: 1px dashed rgba(255,255,255,0.10);
+  }}
+  .sublobe-card {{
+    appearance: none;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    text-align: left;
+    padding: 8px 12px;
+    border-radius: 12px;
+    background: rgba(255,255,255,0.03);
+    border: 1px solid rgba(255,255,255,0.06);
+    color: var(--text);
+    font: inherit;
+    cursor: pointer;
+    transition: border-color 160ms ease, background 160ms ease, transform 160ms ease;
+  }}
+  .sublobe-card:hover {{
+    border-color: rgba(123,247,255,0.30);
+    background: rgba(123,247,255,0.06);
+    transform: translateX(2px);
+  }}
+  .sublobe-card[disabled] {{
+    cursor: default;
+    opacity: 0.55;
+    transform: none;
+  }}
+  .sublobe-tick {{
+    width: 3px;
+    height: 22px;
+    border-radius: 999px;
+    flex-shrink: 0;
+  }}
+  .sublobe-name {{
+    font-weight: 600;
+    font-size: 0.78rem;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }}
   .lobe-card {{
     appearance: none;
     display: flex;
@@ -998,6 +1081,7 @@ let dragMoved = false;
 let dragOffset = {{ x: 0, y: 0 }};
 let lastPointer = {{ x: 0, y: 0 }};
 let activeTypes = new Set(['brain', 'index', 'glossary', 'map', 'neuron']);
+const expandedLobes = new Set();
 
 // --- Color system: two-tier palette ---
 const lobePalette = ['#7bf7ff','#ff8bd8','#f8c76d','#7df7b4','#9ea9ff','#ffa06f','#b8f0c1','#f2a8ff'];
@@ -1234,25 +1318,53 @@ function renderResults() {{
 
 function renderLobes() {{
   lobesListEl.innerHTML = '';
-  // Aggregate top-level lobes from the source graph: collect their map node id,
-  // human-readable title, and neuron count. Skip the synthetic 'root' bucket.
+  // Aggregate top-level lobes and their sub-lobes from the source graph.
+  // Each lobe collects: map node id, title, neuron count (incl. sub-lobes),
+  // color, and a Map of sub-lobes keyed by sublobe path. Sub-lobes track
+  // their own map node id, leaf title, and neuron count. The synthetic
+  // 'root' bucket (loose files in brain root) is skipped.
   const lobeInfo = new Map();
-  for (const node of nodes) {{
-    if (!node.lobe || node.lobe === 'root') continue;
-    if (!lobeInfo.has(node.lobe)) {{
-      lobeInfo.set(node.lobe, {{
+  function ensureLobe(lobeKey) {{
+    if (!lobeInfo.has(lobeKey)) {{
+      lobeInfo.set(lobeKey, {{
         mapNodeId: null,
-        title: node.lobe,
+        title: lobeKey,
         neuronCount: 0,
-        color: lobeColor(node.lobe),
+        color: lobeColor(lobeKey),
+        sublobes: new Map(),
       }});
     }}
-    const info = lobeInfo.get(node.lobe);
-    if (node.type === 'map' && node.sublobe === node.lobe) {{
+    return lobeInfo.get(lobeKey);
+  }}
+  function ensureSublobe(info, sublobeKey) {{
+    if (!info.sublobes.has(sublobeKey)) {{
+      info.sublobes.set(sublobeKey, {{
+        key: sublobeKey,
+        mapNodeId: null,
+        // Default to the leaf segment (e.g. "projects/foo" -> "foo") until
+        // a real map.md title is found.
+        title: sublobeKey.split('/').pop() || sublobeKey,
+        neuronCount: 0,
+      }});
+    }}
+    return info.sublobes.get(sublobeKey);
+  }}
+  for (const node of nodes) {{
+    if (!node.lobe || node.lobe === 'root') continue;
+    const info = ensureLobe(node.lobe);
+    const isSublobe = node.sublobe && node.sublobe !== node.lobe;
+    if (node.type === 'map' && !isSublobe) {{
       info.mapNodeId = node.id;
       info.title = node.title || node.lobe;
+    }} else if (node.type === 'map' && isSublobe) {{
+      const sub = ensureSublobe(info, node.sublobe);
+      sub.mapNodeId = node.id;
+      sub.title = node.title || sub.title;
     }} else if (node.type === 'neuron') {{
       info.neuronCount += 1;
+      if (isSublobe) {{
+        ensureSublobe(info, node.sublobe).neuronCount += 1;
+      }}
     }}
   }}
   if (!lobeInfo.size) {{
@@ -1262,25 +1374,84 @@ function renderLobes() {{
     lobesListEl.appendChild(empty);
     return;
   }}
-  const sorted = [...lobeInfo.entries()].sort((a, b) => a[0].localeCompare(b[0]));
-  for (const [, info] of sorted) {{
+  const sortedLobes = [...lobeInfo.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+  for (const [lobeKey, info] of sortedLobes) {{
+    const group = document.createElement('div');
+    group.className = 'lobe-group';
+
+    const hasSublobes = info.sublobes.size > 0;
+    const isExpanded = expandedLobes.has(lobeKey);
+
+    // The card stays flush-left like every other result-card; the caret
+    // (when present) floats over the card's right edge so cards never get
+    // shifted by an alignment spacer.
+    const wrap = document.createElement('div');
+    wrap.className = hasSublobes ? 'lobe-card-wrap has-caret' : 'lobe-card-wrap';
+
     const card = document.createElement('button');
     card.type = 'button';
     card.className = 'lobe-card';
     if (info.mapNodeId == null) card.disabled = true;
     const swatchShadow = `${{info.color}}55`;
     const countLabel = `${{info.neuronCount}} neuron${{info.neuronCount === 1 ? '' : 's'}}`;
+    const subCountLabel = hasSublobes
+      ? ` • ${{info.sublobes.size}} sublobe${{info.sublobes.size === 1 ? '' : 's'}}`
+      : '';
     card.innerHTML = `
       <span class="lobe-swatch" style="background:${{info.color}};box-shadow:0 0 14px ${{swatchShadow}}"></span>
       <span class="lobe-body">
         <span class="lobe-name">${{escapeHtml(String(info.title).toUpperCase())}}</span>
-        <span class="lobe-meta">${{countLabel}}</span>
+        <span class="lobe-meta">${{countLabel}}${{subCountLabel}}</span>
       </span>
     `;
     if (info.mapNodeId != null) {{
       card.addEventListener('click', () => selectNode(info.mapNodeId, true));
     }}
-    lobesListEl.appendChild(card);
+    wrap.appendChild(card);
+
+    if (hasSublobes) {{
+      const caret = document.createElement('button');
+      caret.type = 'button';
+      caret.className = 'lobe-caret';
+      caret.textContent = isExpanded ? '▾' : '▸';
+      caret.setAttribute('aria-label', isExpanded ? 'Collapse sublobes' : 'Expand sublobes');
+      caret.addEventListener('click', event => {{
+        event.stopPropagation();
+        if (expandedLobes.has(lobeKey)) expandedLobes.delete(lobeKey);
+        else expandedLobes.add(lobeKey);
+        renderLobes();
+      }});
+      wrap.appendChild(caret);
+    }}
+
+    group.appendChild(wrap);
+
+    if (hasSublobes && isExpanded) {{
+      const subList = document.createElement('div');
+      subList.className = 'sublobes-list';
+      const sortedSubs = [...info.sublobes.values()].sort((a, b) => a.key.localeCompare(b.key));
+      for (const sub of sortedSubs) {{
+        const subCard = document.createElement('button');
+        subCard.type = 'button';
+        subCard.className = 'sublobe-card';
+        if (sub.mapNodeId == null) subCard.disabled = true;
+        const subCount = `${{sub.neuronCount}} neuron${{sub.neuronCount === 1 ? '' : 's'}}`;
+        subCard.innerHTML = `
+          <span class="sublobe-tick" style="background:${{info.color}}"></span>
+          <span class="lobe-body">
+            <span class="sublobe-name">${{escapeHtml(String(sub.title))}}</span>
+            <span class="lobe-meta">${{subCount}}</span>
+          </span>
+        `;
+        if (sub.mapNodeId != null) {{
+          subCard.addEventListener('click', () => selectNode(sub.mapNodeId, true));
+        }}
+        subList.appendChild(subCard);
+      }}
+      group.appendChild(subList);
+    }}
+
+    lobesListEl.appendChild(group);
   }}
 }}
 
@@ -1588,8 +1759,13 @@ function focusOnNode(id) {{
   if (!node) return;
   const rect = canvas.parentElement.getBoundingClientRect();
   if (node.type === 'map') {{
-    // Zoom to frame the lobe
-    const members = filteredNodes.filter(n => n.lobe === node.lobe);
+    // Zoom to frame the lobe (or sub-lobe). Sub-lobe map nodes have
+    // sublobe !== lobe (e.g. lobe="projects", sublobe="projects/foo");
+    // those should zoom to just their sub-lobe members, not the whole lobe.
+    const isSublobe = node.sublobe && node.sublobe !== node.lobe;
+    const members = isSublobe
+      ? filteredNodes.filter(n => n.sublobe === node.sublobe)
+      : filteredNodes.filter(n => n.lobe === node.lobe);
     if (members.length > 1) {{
       const minX = Math.min(...members.map(n => n.x)) - 60;
       const maxX = Math.max(...members.map(n => n.x)) + 60;
