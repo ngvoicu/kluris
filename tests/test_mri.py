@@ -267,6 +267,43 @@ def test_focus_on_node_zooms_sublobe_members_only(tmp_path):
     assert "n.lobe === node.lobe" in html  # original branch still present for top-level lobes
 
 
+def test_lobes_act_as_filter_not_focus(tmp_path):
+    """Clicking a lobe in the left panel must filter the canvas, not zoom/select.
+
+    visibleNode() must respect activeFilter; renderLobes() must toggle the
+    filter state on click instead of calling selectNode/focusOnNode.
+    """
+    brain = _make_brain_with_sublobes(tmp_path)
+    output = tmp_path / "brain-mri.html"
+    generate_mri_html(brain, output)
+    html = output.read_text(encoding="utf-8")
+    # Filter state + visibility wiring
+    assert "let activeFilter" in html
+    assert "activeFilter.kind === 'lobe'" in html
+    assert "activeFilter.kind === 'sublobe'" in html
+    # Active visual state on the cards
+    assert ".lobe-card.active" in html
+    assert ".sublobe-card.active" in html
+    # Reset clears the filter
+    assert "activeFilter = null" in html
+
+
+def test_search_chips_removed(tmp_path):
+    """The glossary/neurons type-filter chips are gone -- search hits everything."""
+    brain = _make_brain_with_neurons(tmp_path)
+    output = tmp_path / "brain-mri.html"
+    generate_mri_html(brain, output)
+    html = output.read_text(encoding="utf-8")
+    # All chip / type-filter machinery is removed
+    assert 'id="type-filters"' not in html
+    assert "renderFilters" not in html
+    assert "TYPE_LABELS" not in html
+    assert "activeTypes" not in html
+    # Search input is still present and unchanged
+    assert 'id="search-input"' in html
+    assert "Search the brain" in html
+
+
 def test_html_under_500kb(tmp_path):
     brain = _make_brain_with_neurons(tmp_path)
     output = tmp_path / "brain-mri.html"

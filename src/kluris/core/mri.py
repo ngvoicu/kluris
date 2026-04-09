@@ -394,27 +394,6 @@ def generate_mri_html(brain_path: Path, output_path: Path) -> dict:
     transition: transform 160ms ease, border-color 160ms ease, background 160ms ease;
   }}
   .button:hover {{ transform: translateY(-1px); border-color: rgba(123,247,255,0.32); }}
-  .filters {{
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
-    margin-top: 14px;
-  }}
-  .chip {{
-    padding: 8px 12px;
-    border-radius: 999px;
-    background: rgba(255,255,255,0.04);
-    border: 1px solid rgba(255,255,255,0.08);
-    color: var(--muted);
-    cursor: pointer;
-    user-select: none;
-    font-size: 0.88rem;
-  }}
-  .chip.active {{
-    color: var(--text);
-    border-color: rgba(123,247,255,0.4);
-    background: rgba(123,247,255,0.12);
-  }}
   .results {{
     margin-top: 16px;
     display: grid;
@@ -518,6 +497,11 @@ def generate_mri_html(brain_path: Path, output_path: Path) -> dict:
     background: rgba(123,247,255,0.06);
     transform: translateX(2px);
   }}
+  .sublobe-card.active {{
+    border-color: rgba(123,247,255,0.50);
+    background: rgba(123,247,255,0.14);
+    transform: translateX(2px);
+  }}
   .sublobe-card[disabled] {{
     cursor: default;
     opacity: 0.55;
@@ -558,6 +542,11 @@ def generate_mri_html(brain_path: Path, output_path: Path) -> dict:
     border-color: rgba(123,247,255,0.35);
     background: rgba(123,247,255,0.08);
     transform: translateY(-1px);
+  }}
+  .lobe-card.active {{
+    border-color: rgba(123,247,255,0.55);
+    background: rgba(123,247,255,0.16);
+    box-shadow: 0 0 0 1px rgba(123,247,255,0.25), 0 8px 24px rgba(123,247,255,0.12);
   }}
   .lobe-card[disabled] {{
     cursor: default;
@@ -993,7 +982,6 @@ def generate_mri_html(brain_path: Path, output_path: Path) -> dict:
           <input id="search-input" type="search" placeholder="Name, path, lobe, or tag" autocomplete="off">
           <button class="button" id="reset-view" type="button">Reset</button>
         </div>
-        <div class="filters" id="type-filters"></div>
       </div>
       <div class="section-title">Lobes</div>
       <div class="lobes-list" id="lobes-list"></div>
@@ -1060,7 +1048,6 @@ const resultCountEl = document.getElementById('result-count');
 const detailsPanel = document.getElementById('details-panel');
 const detailsEmpty = document.getElementById('details-empty');
 const stageFocus = document.getElementById('stage-focus');
-const typeFiltersEl = document.getElementById('type-filters');
 const lobesListEl = document.getElementById('lobes-list');
 const neighbors = new Map();
 for (const node of graph.nodes) neighbors.set(node.id, new Set());
@@ -1080,7 +1067,9 @@ let isPanning = false;
 let dragMoved = false;
 let dragOffset = {{ x: 0, y: 0 }};
 let lastPointer = {{ x: 0, y: 0 }};
-let activeTypes = new Set(['brain', 'index', 'glossary', 'map', 'neuron']);
+// activeFilter scopes the canvas + results to a single lobe or sub-lobe.
+// Shape: null OR an object with .kind ('lobe' | 'sublobe') and .value (the key).
+let activeFilter = null;
 const expandedLobes = new Set();
 
 // --- Color system: two-tier palette ---
@@ -1254,42 +1243,34 @@ function visibleNode(node) {{
   if (node.type === 'brain') return false;
   // Hide all map nodes -- hull labels show lobe/project names
   if (node.type === 'map') return false;
-  if (!activeTypes.has(node.type)) return false;
+  // Lobe / sub-lobe filter (set by clicking a lobe or sub-lobe in the left panel)
+  if (activeFilter) {{
+    if (activeFilter.kind === 'lobe' && node.lobe !== activeFilter.value) return false;
+    if (activeFilter.kind === 'sublobe' && node.sublobe !== activeFilter.value) return false;
+  }}
   const query = searchInput.value.trim().toLowerCase();
   if (!query) return true;
   return node.searchText.includes(query);
 }}
 
-function refreshVisibility() {{
-  filteredNodes = nodes.filter(visibleNode);
-  resultCountEl.textContent = searchInput.value.trim()
-    ? `Found ${{filteredNodes.length}} results.`
-    : `Showing all ${{filteredNodes.length}} neurons.`;
-  renderResults();
+function activeFilterLabel() {{
+  if (!activeFilter) return '';
+  if (activeFilter.kind === 'lobe') return activeFilter.value;
+  // sublobe key is "lobe/sub" -- the trailing segment is the friendlier name
+  const parts = String(activeFilter.value).split('/');
+  return parts[parts.length - 1] || activeFilter.value;
 }}
 
-const TYPE_LABELS = {{ glossary: 'glossary', neuron: 'neurons' }};
-function renderFilters() {{
-  const counts = graph.nodes.reduce((acc, node) => {{
-    acc[node.type] = (acc[node.type] || 0) + 1;
-    return acc;
-  }}, {{}});
-  typeFiltersEl.innerHTML = '';
-  for (const type of ['glossary', 'neuron']) {{
-    if (!counts[type]) continue;
-    const label = TYPE_LABELS[type] || type;
-    const button = document.createElement('button');
-    button.type = 'button';
-    button.className = `chip${{activeTypes.has(type) ? ' active' : ''}}`;
-    button.textContent = `${{label}} (${{counts[type]}})`;
-    button.addEventListener('click', () => {{
-      if (activeTypes.has(type) && activeTypes.size > 1) activeTypes.delete(type);
-      else activeTypes.add(type);
-      renderFilters();
-      refreshVisibility();
-    }});
-    typeFiltersEl.appendChild(button);
-  }}
+function refreshVisibility() {{
+  filteredNodes = nodes.filter(visibleNode);
+  const query = searchInput.value.trim();
+  const inLabel = activeFilter ? ` in ${{activeFilterLabel()}}` : '';
+  resultCountEl.textContent = query
+    ? `Found ${{filteredNodes.length}} result${{filteredNodes.length === 1 ? '' : 's'}}${{inLabel}}.`
+    : activeFilter
+      ? `Showing ${{filteredNodes.length}} neuron${{filteredNodes.length === 1 ? '' : 's'}} in ${{activeFilterLabel()}}.`
+      : `Showing all ${{filteredNodes.length}} neurons.`;
+  renderResults();
 }}
 
 function renderResults() {{
@@ -1388,10 +1369,11 @@ function renderLobes() {{
     const wrap = document.createElement('div');
     wrap.className = hasSublobes ? 'lobe-card-wrap has-caret' : 'lobe-card-wrap';
 
+    const isLobeFiltered = activeFilter && activeFilter.kind === 'lobe' && activeFilter.value === lobeKey;
+
     const card = document.createElement('button');
     card.type = 'button';
-    card.className = 'lobe-card';
-    if (info.mapNodeId == null) card.disabled = true;
+    card.className = isLobeFiltered ? 'lobe-card active' : 'lobe-card';
     const swatchShadow = `${{info.color}}55`;
     const countLabel = `${{info.neuronCount}} neuron${{info.neuronCount === 1 ? '' : 's'}}`;
     const subCountLabel = hasSublobes
@@ -1404,9 +1386,18 @@ function renderLobes() {{
         <span class="lobe-meta">${{countLabel}}${{subCountLabel}}</span>
       </span>
     `;
-    if (info.mapNodeId != null) {{
-      card.addEventListener('click', () => selectNode(info.mapNodeId, true));
-    }}
+    card.addEventListener('click', () => {{
+      // Toggle the lobe filter. Clicking the active lobe again clears it.
+      if (isLobeFiltered) {{
+        activeFilter = null;
+      }} else {{
+        activeFilter = {{ kind: 'lobe', value: lobeKey }};
+        // Auto-expand so the user can drill into a sub-lobe right after picking a lobe.
+        if (hasSublobes) expandedLobes.add(lobeKey);
+      }}
+      renderLobes();
+      refreshVisibility();
+    }});
     wrap.appendChild(card);
 
     if (hasSublobes) {{
@@ -1431,10 +1422,10 @@ function renderLobes() {{
       subList.className = 'sublobes-list';
       const sortedSubs = [...info.sublobes.values()].sort((a, b) => a.key.localeCompare(b.key));
       for (const sub of sortedSubs) {{
+        const isSubFiltered = activeFilter && activeFilter.kind === 'sublobe' && activeFilter.value === sub.key;
         const subCard = document.createElement('button');
         subCard.type = 'button';
-        subCard.className = 'sublobe-card';
-        if (sub.mapNodeId == null) subCard.disabled = true;
+        subCard.className = isSubFiltered ? 'sublobe-card active' : 'sublobe-card';
         const subCount = `${{sub.neuronCount}} neuron${{sub.neuronCount === 1 ? '' : 's'}}`;
         subCard.innerHTML = `
           <span class="sublobe-tick" style="background:${{info.color}}"></span>
@@ -1443,9 +1434,16 @@ function renderLobes() {{
             <span class="lobe-meta">${{subCount}}</span>
           </span>
         `;
-        if (sub.mapNodeId != null) {{
-          subCard.addEventListener('click', () => selectNode(sub.mapNodeId, true));
-        }}
+        subCard.addEventListener('click', event => {{
+          event.stopPropagation();
+          if (isSubFiltered) {{
+            activeFilter = null;
+          }} else {{
+            activeFilter = {{ kind: 'sublobe', value: sub.key }};
+          }}
+          renderLobes();
+          refreshVisibility();
+        }});
         subList.appendChild(subCard);
       }}
       group.appendChild(subList);
@@ -2290,8 +2288,9 @@ document.getElementById('reset-view').addEventListener('click', () => {{
   camera.x = 0;
   camera.y = 0;
   searchInput.value = '';
-  activeTypes = new Set(['brain', 'index', 'glossary', 'map', 'neuron']);
-  renderFilters();
+  activeFilter = null;
+  expandedLobes.clear();
+  renderLobes();
   refreshVisibility();
   selectNode(null, false);
   buildAnchors(rect.width, rect.height);
@@ -2335,7 +2334,6 @@ addEventListener('resize', () => {{
   updateDetails();
 }});
 nodes = initializeNodes();
-renderFilters();
 renderLobes();
 refreshVisibility();
 updateDetails();
