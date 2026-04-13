@@ -515,3 +515,107 @@ def test_html_under_500kb(tmp_path):
     generate_mri_html(brain, output)
     size_kb = output.stat().st_size / 1024
     assert size_kb < 500
+
+
+# -- Inner sub-lobe (3-level nesting) tests ----------------------------------
+
+def _make_brain_with_inner_sublobes(tmp_path):
+    """Brain with 3-level nesting: projects/backend/endpoints/*.md.
+
+    Mimics btb-sme layout where endpoints is an inner lobe inside a project
+    sub-lobe, alongside sibling neurons (overview.md, database-schema.md).
+    """
+    brain = tmp_path / "brain"
+    brain.mkdir()
+    (brain / "brain.md").write_text(
+        "---\nauto_generated: true\n---\n# Brain\n", encoding="utf-8"
+    )
+    (brain / "glossary.md").write_text("---\n---\n# Glossary\n", encoding="utf-8")
+
+    # Top-level lobe
+    projects = brain / "projects"
+    projects.mkdir()
+    (projects / "map.md").write_text(
+        "---\nauto_generated: true\nparent: ../brain.md\n---\n# Projects\n",
+        encoding="utf-8",
+    )
+
+    # 2nd-level sub-lobe: projects/backend
+    backend = projects / "backend"
+    backend.mkdir()
+    (backend / "map.md").write_text(
+        "---\nauto_generated: true\nparent: ../map.md\n---\n# Backend\n",
+        encoding="utf-8",
+    )
+    (backend / "overview.md").write_text(
+        "---\nparent: ./map.md\nrelated: []\ntags: []\n"
+        "created: 2026-04-01\nupdated: 2026-04-01\n---\n# Backend Overview\n",
+        encoding="utf-8",
+    )
+    (backend / "database-schema.md").write_text(
+        "---\nparent: ./map.md\nrelated: []\ntags: []\n"
+        "created: 2026-04-01\nupdated: 2026-04-01\n---\n# Database Schema\n",
+        encoding="utf-8",
+    )
+
+    # 3rd-level inner lobe: projects/backend/endpoints
+    endpoints = backend / "endpoints"
+    endpoints.mkdir()
+    (endpoints / "map.md").write_text(
+        "---\nauto_generated: true\nparent: ../map.md\n---\n# Endpoints\n",
+        encoding="utf-8",
+    )
+    for name in ["get-users.md", "post-users.md", "get-orders.md"]:
+        (endpoints / name).write_text(
+            "---\nparent: ./map.md\nrelated: []\ntags: [api]\n"
+            "created: 2026-04-01\nupdated: 2026-04-01\n---\n"
+            f"# {name.replace('.md', '').replace('-', ' ').title()}\n",
+            encoding="utf-8",
+        )
+    return brain
+
+
+def test_inner_sublobe_gets_distinct_sublobe_key(tmp_path):
+    """Neurons at depth 3 (projects/backend/endpoints/) must get a different
+    sublobe than neurons at depth 2 (projects/backend/).
+    """
+    brain = _make_brain_with_inner_sublobes(tmp_path)
+    graph = build_graph(brain)
+    by_path = {n["path"]: n for n in graph["nodes"]}
+
+    overview = by_path["projects/backend/overview.md"]
+    get_users = by_path["projects/backend/endpoints/get-users.md"]
+
+    assert overview["sublobe"] == "projects/backend"
+    assert get_users["sublobe"] == "projects/backend/endpoints"
+    assert overview["sublobe"] != get_users["sublobe"]
+
+
+def test_inner_sublobe_map_has_own_sublobe(tmp_path):
+    """The endpoints/map.md must have sublobe 'projects/backend/endpoints',
+    not the same sublobe as backend/map.md. This prevents the title-overwrite
+    bug where 'Endpoints' would replace 'Backend' as the sublobe name.
+    """
+    brain = _make_brain_with_inner_sublobes(tmp_path)
+    graph = build_graph(brain)
+    by_path = {n["path"]: n for n in graph["nodes"]}
+
+    backend_map = by_path["projects/backend/map.md"]
+    endpoints_map = by_path["projects/backend/endpoints/map.md"]
+
+    assert backend_map["sublobe"] == "projects/backend"
+    assert endpoints_map["sublobe"] == "projects/backend/endpoints"
+    assert backend_map["sublobe"] != endpoints_map["sublobe"]
+
+
+def test_inner_sublobe_html_generation_succeeds(tmp_path):
+    """MRI HTML generation must not crash or regress with 3-level nesting."""
+    brain = _make_brain_with_inner_sublobes(tmp_path)
+    output = tmp_path / "brain-mri.html"
+    generate_mri_html(brain, output)
+    assert output.exists()
+    html = output.read_text(encoding="utf-8")
+    assert "<html" in html
+    assert "</html>" in html
+    size_kb = output.stat().st_size / 1024
+    assert size_kb < 500
