@@ -1075,13 +1075,6 @@ def generate_mri_html(brain_path: Path, output_path: Path) -> dict:
     gap: 6px;
     padding: 12px 22px;
     border-bottom: 1px solid rgba(255,255,255,0.06);
-    max-height: 42px;
-    overflow: hidden;
-    position: relative;
-  }}
-  .modal-nav.expanded {{
-    max-height: none;
-    overflow: visible;
   }}
   .modal-nav:empty {{ display: none; }}
   .modal-nav-toggle {{
@@ -2011,42 +2004,36 @@ function openModal(node) {{
       if (target) {{ selectNode(target.id, true); openModal(target); }}
     }});
   }}
-  // Build nav buttons for connected nodes — collapsed to one row by default
+  // Build nav buttons for connected nodes — show first N, expand on demand
   const navEl = document.getElementById('modal-nav');
-  navEl.classList.remove('expanded');
   const connected = [...(neighbors.get(node.id) || [])]
     .map(id => nodes.find(n => n.id === id))
     .filter(n => n && n.type === 'neuron')
     .sort((a, b) => a.title.localeCompare(b.title));
   const NAV_COLLAPSE = 6;
-  const navButtons = connected.map(n => {{
+  const allNavHtml = connected.map(n => {{
     const parts = n.path.split('/');
     const parent = parts.length >= 2 ? parts[parts.length - 2] : '';
     const label = parent ? `${{parent}} / ${{n.title}}` : n.title;
     return `<button type="button" class="modal-nav-btn" data-modal-nav="${{n.id}}">${{escapeHtml(label)}}</button>`;
   }});
-  const toggleBtn = connected.length > NAV_COLLAPSE
-    ? `<button type="button" class="modal-nav-toggle" id="modal-nav-toggle">+${{connected.length - NAV_COLLAPSE}} more</button>`
-    : '';
-  navEl.innerHTML = navButtons.join('') + toggleBtn;
-  for (const btn of navEl.querySelectorAll('[data-modal-nav]')) {{
-    btn.addEventListener('click', () => {{
-      const target = nodes.find(n => n.id === Number(btn.dataset.modalNav));
-      if (target) {{
-        selectNode(target.id, true);
-        openModal(target);
-      }}
-    }});
+  const hasOverflow = connected.length > NAV_COLLAPSE;
+  function renderNav(expanded) {{
+    const btns = expanded ? allNavHtml.join('') : allNavHtml.slice(0, NAV_COLLAPSE).join('');
+    const toggle = hasOverflow
+      ? `<button type="button" class="modal-nav-toggle" id="modal-nav-toggle">${{expanded ? 'show less' : '+' + (connected.length - NAV_COLLAPSE) + ' more'}}</button>`
+      : '';
+    navEl.innerHTML = btns + toggle;
+    for (const btn of navEl.querySelectorAll('[data-modal-nav]')) {{
+      btn.addEventListener('click', () => {{
+        const target = nodes.find(n => n.id === Number(btn.dataset.modalNav));
+        if (target) {{ selectNode(target.id, true); openModal(target); }}
+      }});
+    }}
+    const tog = document.getElementById('modal-nav-toggle');
+    if (tog) tog.addEventListener('click', () => renderNav(!expanded));
   }}
-  const navToggle = document.getElementById('modal-nav-toggle');
-  if (navToggle) {{
-    navToggle.addEventListener('click', () => {{
-      navEl.classList.toggle('expanded');
-      navToggle.textContent = navEl.classList.contains('expanded')
-        ? 'collapse'
-        : `+${{connected.length - NAV_COLLAPSE}} more`;
-    }});
-  }}
+  renderNav(false);
   modal.style.display = 'flex';
 }}
 

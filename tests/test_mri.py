@@ -720,10 +720,8 @@ def test_modal_nav_collapsed_with_toggle(tmp_path):
     generate_mri_html(brain, output)
     html = output.read_text(encoding="utf-8")
 
-    # CSS: collapsed by default, expandable
-    assert "modal-nav-toggle" in html
-    assert ".modal-nav.expanded" in html
-    assert "max-height:" in html
-    # JS: NAV_COLLAPSE constant and toggle logic
+    # CSS + JS for toggle button
+    assert ".modal-nav-toggle" in html
+    # JS: NAV_COLLAPSE constant and renderNav toggle logic
     assert "NAV_COLLAPSE" in html
-    assert "modal-nav-toggle" in html
+    assert "renderNav" in html
