@@ -1075,8 +1075,29 @@ def generate_mri_html(brain_path: Path, output_path: Path) -> dict:
     gap: 6px;
     padding: 12px 22px;
     border-bottom: 1px solid rgba(255,255,255,0.06);
+    max-height: 42px;
+    overflow: hidden;
+    position: relative;
+  }}
+  .modal-nav.expanded {{
+    max-height: none;
+    overflow: visible;
   }}
   .modal-nav:empty {{ display: none; }}
+  .modal-nav-toggle {{
+    appearance: none;
+    background: rgba(123,247,255,0.04);
+    border: 1px dashed rgba(123,247,255,0.25);
+    color: var(--accent);
+    border-radius: 999px;
+    padding: 5px 12px;
+    font-size: 0.78rem;
+    font-family: var(--mono);
+    font-weight: 600;
+    cursor: pointer;
+    flex-shrink: 0;
+  }}
+  .modal-nav-toggle:hover {{ background: rgba(123,247,255,0.10); border-color: rgba(123,247,255,0.50); }}
   .modal-nav-btn {{
     appearance: none;
     background: rgba(255,255,255,0.06);
@@ -1990,18 +2011,24 @@ function openModal(node) {{
       if (target) {{ selectNode(target.id, true); openModal(target); }}
     }});
   }}
-  // Build nav buttons for connected nodes
+  // Build nav buttons for connected nodes — collapsed to one row by default
   const navEl = document.getElementById('modal-nav');
+  navEl.classList.remove('expanded');
   const connected = [...(neighbors.get(node.id) || [])]
     .map(id => nodes.find(n => n.id === id))
     .filter(n => n && n.type === 'neuron')
     .sort((a, b) => a.title.localeCompare(b.title));
-  navEl.innerHTML = connected.map(n => {{
+  const NAV_COLLAPSE = 6;
+  const navButtons = connected.map(n => {{
     const parts = n.path.split('/');
     const parent = parts.length >= 2 ? parts[parts.length - 2] : '';
     const label = parent ? `${{parent}} / ${{n.title}}` : n.title;
     return `<button type="button" class="modal-nav-btn" data-modal-nav="${{n.id}}">${{escapeHtml(label)}}</button>`;
-  }}).join('');
+  }});
+  const toggleBtn = connected.length > NAV_COLLAPSE
+    ? `<button type="button" class="modal-nav-toggle" id="modal-nav-toggle">+${{connected.length - NAV_COLLAPSE}} more</button>`
+    : '';
+  navEl.innerHTML = navButtons.join('') + toggleBtn;
   for (const btn of navEl.querySelectorAll('[data-modal-nav]')) {{
     btn.addEventListener('click', () => {{
       const target = nodes.find(n => n.id === Number(btn.dataset.modalNav));
@@ -2009,6 +2036,15 @@ function openModal(node) {{
         selectNode(target.id, true);
         openModal(target);
       }}
+    }});
+  }}
+  const navToggle = document.getElementById('modal-nav-toggle');
+  if (navToggle) {{
+    navToggle.addEventListener('click', () => {{
+      navEl.classList.toggle('expanded');
+      navToggle.textContent = navEl.classList.contains('expanded')
+        ? 'collapse'
+        : `+${{connected.length - NAV_COLLAPSE}} more`;
     }});
   }}
   modal.style.display = 'flex';

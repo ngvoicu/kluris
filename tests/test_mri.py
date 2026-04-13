@@ -709,3 +709,21 @@ def test_inner_sublobe_included_in_parent_hull(tmp_path):
     assert "n.sublobe.startsWith(sl + '/')" in html
     # Physics merges inner sublobes into parent group
     assert "physicsSublobeKey" in html
+
+
+def test_modal_nav_collapsed_with_toggle(tmp_path):
+    """Modal nav buttons must be collapsed to one row by default with a
+    toggle button to expand when there are many connections.
+    """
+    brain = _make_brain_with_inner_sublobes(tmp_path)
+    output = tmp_path / "brain-mri.html"
+    generate_mri_html(brain, output)
+    html = output.read_text(encoding="utf-8")
+
+    # CSS: collapsed by default, expandable
+    assert "modal-nav-toggle" in html
+    assert ".modal-nav.expanded" in html
+    assert "max-height:" in html
+    # JS: NAV_COLLAPSE constant and toggle logic
+    assert "NAV_COLLAPSE" in html
+    assert "modal-nav-toggle" in html
