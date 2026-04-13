@@ -2426,6 +2426,8 @@ function draw() {{
     if (members.length < 2) continue;
     const topLobe = members[0].lobe;
     if (sl === topLobe) continue; // top-level lobe, already drawn above
+    // Skip inner sublobes (depth 3+): they stay inside their parent hull
+    if (sl.split('/').length > 2) continue;
     const color = lobeColor(topLobe);
     const points = members.map(n => ({{ x: n.x, y: n.y }}));
     if (points.length === 2) {{

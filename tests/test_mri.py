@@ -679,3 +679,17 @@ def test_connections_collapsed_with_show_all(tmp_path):
     assert "conn-show-all" in html
     # CSS for the button
     assert ".conn-show-all" in html
+
+
+def test_inner_sublobe_no_canvas_hull(tmp_path):
+    """3rd-level sublobes must NOT get their own hull or label on the canvas.
+    They stay inside their parent 2nd-level sublobe hull. The skip is based
+    on sublobe key depth (more than 2 segments).
+    """
+    brain = _make_brain_with_inner_sublobes(tmp_path)
+    output = tmp_path / "brain-mri.html"
+    generate_mri_html(brain, output)
+    html = output.read_text(encoding="utf-8")
+
+    # The skip guard for inner sublobes in the canvas hull pass
+    assert "sl.split('/').length > 2" in html
