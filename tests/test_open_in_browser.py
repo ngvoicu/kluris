@@ -3,7 +3,7 @@
 import subprocess
 from unittest.mock import MagicMock, patch
 
-from kluris.cli import _is_wsl, _open_in_browser
+from kluris.cli import _is_wsl, _open_in_browser, _windows_path_if_wsl
 
 
 def test_is_wsl_detects_wsl_distro_name_env(monkeypatch):
@@ -15,6 +15,33 @@ def test_is_wsl_returns_false_without_env_and_without_microsoft_in_proc(monkeypa
     monkeypatch.delenv("WSL_DISTRO_NAME", raising=False)
     with patch("builtins.open", side_effect=OSError("no /proc/version")):
         assert _is_wsl() is False
+
+
+def test_windows_path_if_wsl_returns_translated_path_in_wsl(tmp_path, monkeypatch):
+    monkeypatch.setenv("WSL_DISTRO_NAME", "Ubuntu-24.04")
+    fake = MagicMock(stdout=r"\\wsl.localhost\Ubuntu-24.04\tmp\x.html" + "\n")
+    with patch("subprocess.run", return_value=fake):
+        out = _windows_path_if_wsl(tmp_path / "x.html")
+    assert out == r"\\wsl.localhost\Ubuntu-24.04\tmp\x.html"
+
+
+def test_windows_path_if_wsl_returns_none_outside_wsl(tmp_path, monkeypatch):
+    monkeypatch.delenv("WSL_DISTRO_NAME", raising=False)
+    with patch("builtins.open", side_effect=OSError):
+        assert _windows_path_if_wsl(tmp_path / "x.html") is None
+
+
+def test_windows_path_if_wsl_returns_none_when_wslpath_missing(tmp_path, monkeypatch):
+    monkeypatch.setenv("WSL_DISTRO_NAME", "Ubuntu-24.04")
+    with patch("subprocess.run", side_effect=FileNotFoundError):
+        assert _windows_path_if_wsl(tmp_path / "x.html") is None
+
+
+def test_windows_path_if_wsl_returns_none_when_wslpath_errors(tmp_path, monkeypatch):
+    monkeypatch.setenv("WSL_DISTRO_NAME", "Ubuntu-24.04")
+    err = subprocess.CalledProcessError(1, ["wslpath"])
+    with patch("subprocess.run", side_effect=err):
+        assert _windows_path_if_wsl(tmp_path / "x.html") is None
 
 
 def test_open_in_browser_translates_path_and_uses_cmd_start_in_wsl(tmp_path, monkeypatch):
@@ -39,11 +66,9 @@ def test_open_in_browser_translates_path_and_uses_cmd_start_in_wsl(tmp_path, mon
          patch("webbrowser.open") as wb_open:
         _open_in_browser(html)
 
-    # Two calls to subprocess.run: wslpath, then cmd.exe /c start
+    # Two calls: wslpath (inside _windows_path_if_wsl), cmd.exe /c start
     assert run.call_count == 2
-    wslpath_call, cmd_call = run.call_args_list
-    assert wslpath_call.args[0][0] == "wslpath"
-
+    cmd_call = run.call_args_list[-1]
     cmd_args = cmd_call.args[0]
     assert cmd_args[:4] == ["cmd.exe", "/c", "start", ""]
     assert cmd_args[4] == r"\\wsl.localhost\Ubuntu-24.04\tmp\brain-mri.html"
@@ -69,19 +94,6 @@ def test_open_in_browser_falls_back_to_webbrowser_if_wslpath_missing(tmp_path, m
 
     wb_open.assert_called_once()
     assert wb_open.call_args.args[0].startswith("file://")
-
-
-def test_open_in_browser_falls_back_to_webbrowser_if_wslpath_errors(tmp_path, monkeypatch):
-    monkeypatch.setenv("WSL_DISTRO_NAME", "Ubuntu-24.04")
-    html = tmp_path / "brain-mri.html"
-    html.write_text("<html></html>", encoding="utf-8")
-
-    err = subprocess.CalledProcessError(1, ["wslpath"], stderr="oops")
-    with patch("subprocess.run", side_effect=err), \
-         patch("webbrowser.open") as wb_open:
-        _open_in_browser(html)
-
-    wb_open.assert_called_once()
 
 
 def test_open_in_browser_uses_webbrowser_outside_wsl(tmp_path, monkeypatch):

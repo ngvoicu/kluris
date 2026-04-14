@@ -1361,6 +1361,25 @@ def _is_wsl() -> bool:
         return False
 
 
+def _windows_path_if_wsl(path: Path) -> str | None:
+    """Translate a Linux path to a Windows UNC path via `wslpath -w`.
+
+    Returns the translated path when running under WSL and wslpath succeeds,
+    or ``None`` otherwise. Used both for auto-opening in a Windows browser
+    and for printing a copy-pasteable path for the user.
+    """
+    if not _is_wsl():
+        return None
+    try:
+        result = subprocess.run(
+            ["wslpath", "-w", str(path)],
+            capture_output=True, text=True, check=True,
+        )
+        return result.stdout.strip() or None
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return None
+
+
 def _open_in_browser(path: Path) -> None:
     """Open an HTML file in the user's default browser.
 
@@ -1377,17 +1396,14 @@ def _open_in_browser(path: Path) -> None:
     ``wslpath -w`` and hand to ``start``.
     """
     import webbrowser
-    if _is_wsl():
+    win_path = _windows_path_if_wsl(path)
+    if win_path:
+        # Detach cmd.exe from the bash tty: inherited stdin/stdout/stderr
+        # leaves the terminal in a non-canonical state after cmd.exe exits
+        # (observed as "read failed 5: I/O error" and garbled prompts on
+        # Ubuntu WSL). DEVNULL on all three + start_new_session keeps the
+        # parent shell pristine.
         try:
-            win_path = subprocess.run(
-                ["wslpath", "-w", str(path)],
-                capture_output=True, text=True, check=True,
-            ).stdout.strip()
-            # Detach cmd.exe from the bash tty: inherited stdin/stdout/stderr
-            # leaves the terminal in a non-canonical state after cmd.exe exits
-            # (observed as "read failed 5: I/O error" and garbled prompts on
-            # Ubuntu WSL). DEVNULL on all three + start_new_session keeps the
-            # parent shell pristine.
             subprocess.run(
                 ["cmd.exe", "/c", "start", "", win_path],
                 stdin=subprocess.DEVNULL,
@@ -1434,6 +1450,10 @@ def mri(brain_name: str | None, output_path: str | None, open_browser: bool, as_
 
         if not as_json:
             console.print(f"MRI complete — {out}")
+            win_path = _windows_path_if_wsl(out)
+            if win_path:
+                console.print(f"  Windows path: [bold]{win_path}[/bold]")
+                console.print("  [dim]Click the path above or paste it into your Windows browser's address bar.[/dim]")
             console.print(f"  {stats['nodes']} nodes, {stats['edges']} edges")
             if sync_result["fixes"]["total"]:
                 console.print(f"  MRI preflight applied {sync_result['fixes']['total']} automatic fixes")
