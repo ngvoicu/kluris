@@ -578,60 +578,76 @@ def clone_cmd(url: str | None, path: str | None, branch_name: str | None, as_jso
             default_path = str(Path.home() / url.rstrip("/").split("/")[-1].replace(".git", ""))
             path = click.prompt("  Clone to", default=default_path, type=str)
         if not branch_name:
-            branch_name = click.prompt("  Branch (Enter for default)", default="", type=str) or None
+            branch_name = click.prompt(
+                "  Branch (Enter = remote default; name an existing branch to track, or a new one to create)",
+                default="", type=str,
+            ) or None
         console.print()
     dest = Path(path) if path else Path(url.rstrip("/").split("/")[-1].replace(".git", ""))
     dest = dest.resolve()
 
     git_clone(url, dest)
 
-    if branch_name:
-        from kluris.core.git import _run
-        _run(["git", "checkout", branch_name], cwd=dest)
+    try:
+        if branch_name:
+            from kluris.core.git import checkout_or_create_branch
+            checkout_or_create_branch(dest, branch_name)
 
-    # Verify this is a brain (has brain.md -- kluris.yml is local-only now)
-    if not (dest / "brain.md").exists():
-        raise click.ClickException(
-            "Cloned repository does not contain brain.md. This is not a Kluris brain."
-        )
-
-    fallback_name = dest.name
-    if not validate_brain_name(fallback_name):
-        fallback_name = dest.name.lower().replace(" ", "-")
-    name, description = _read_brain_identity(dest, fallback_name)
-
-    existing_config = read_global_config()
-    if name in existing_config.brains:
-        existing_path = Path(existing_config.brains[name].path).resolve()
-        if existing_path != dest:
+        # Verify this is a brain (has brain.md -- kluris.yml is local-only now)
+        if not (dest / "brain.md").exists():
             raise click.ClickException(
-                f"A brain named '{name}' is already registered at {existing_path}. "
-                "Use a different clone destination name only after removing or renaming the existing brain."
+                "Cloned repository does not contain brain.md. This is not a Kluris brain."
             )
 
-    # Create local kluris.yml (not in repo -- it's gitignored)
-    inferred_type = infer_brain_type(dest)
-    if not (dest / "kluris.yml").exists():
-        from kluris.core.config import BrainConfig, GitConfig, write_brain_config
-        from kluris.core.git import _run
+        fallback_name = dest.name
+        if not validate_brain_name(fallback_name):
+            fallback_name = dest.name.lower().replace(" ", "-")
+        name, description = _read_brain_identity(dest, fallback_name)
 
-        actual_branch = _run(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=dest).stdout.strip()
-        local_config = BrainConfig(
-            name=name,
-            description=description,
-            git=GitConfig(default_branch=actual_branch or branch_name or "main"),
+        existing_config = read_global_config()
+        if name in existing_config.brains:
+            existing_path = Path(existing_config.brains[name].path).resolve()
+            if existing_path != dest:
+                raise click.ClickException(
+                    f"A brain named '{name}' is already registered at {existing_path}. "
+                    "Use a different clone destination name only after removing or renaming the existing brain."
+                )
+
+        # Create local kluris.yml (not in repo -- it's gitignored)
+        inferred_type = infer_brain_type(dest)
+        if not (dest / "kluris.yml").exists():
+            from kluris.core.config import BrainConfig, GitConfig, write_brain_config
+            from kluris.core.git import _run
+
+            actual_branch = _run(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=dest).stdout.strip()
+            local_config = BrainConfig(
+                name=name,
+                description=description,
+                git=GitConfig(default_branch=actual_branch or branch_name or "main"),
+            )
+            write_brain_config(local_config, dest)
+
+        brain_config = read_brain_config(dest)
+        entry = BrainEntry(
+            path=str(dest),
+            repo=url,
+            description=brain_config.description or description,
+            type=inferred_type,
         )
-        write_brain_config(local_config, dest)
-
-    brain_config = read_brain_config(dest)
-    entry = BrainEntry(
-        path=str(dest),
-        repo=url,
-        description=brain_config.description or description,
-        type=inferred_type,
-    )
-    register_brain(name, entry)
-    _do_install()
+        register_brain(name, entry)
+        _do_install()
+    except Exception as exc:
+        # Clone succeeded but a later step failed (bad branch, not a brain,
+        # duplicate name). Remove the partial clone so the user can retry
+        # with a different argument instead of having to rm -rf manually.
+        import shutil
+        shutil.rmtree(dest, ignore_errors=True)
+        if isinstance(exc, click.ClickException):
+            raise
+        if isinstance(exc, subprocess.CalledProcessError):
+            stderr = (exc.stderr or "").strip() or str(exc)
+            raise click.ClickException(f"Clone setup failed: {stderr}") from exc
+        raise click.ClickException(f"Clone setup failed: {exc}") from exc
 
     if as_json:
         click.echo(json_lib.dumps({"ok": True, "name": name, "path": str(dest), "remote": url}))

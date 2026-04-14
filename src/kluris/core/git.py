@@ -108,6 +108,24 @@ def git_clone(url: str, dest: Path) -> None:
     _run(["git", "clone", url, str(dest)], cwd=dest.parent)
 
 
+def checkout_or_create_branch(dest: Path, branch: str) -> None:
+    """Checkout ``branch`` inside ``dest``.
+
+    If the branch exists on ``origin``, check it out (tracks the remote).
+    Otherwise create a new local branch from the current HEAD -- this lets
+    a user clone from main and name a new branch to push to in the future
+    without the clone failing on a non-existent branch.
+    """
+    result = subprocess.run(
+        ["git", "ls-remote", "--heads", "origin", branch],
+        cwd=dest, capture_output=True, text=True, check=False,
+    )
+    if result.returncode == 0 and result.stdout.strip():
+        _run(["git", "checkout", branch], cwd=dest)
+    else:
+        _run(["git", "checkout", "-b", branch], cwd=dest)
+
+
 def git_log_file_dates(path: Path) -> tuple[dict[str, str], dict[str, str]]:
     """Return ``(latest_by_path, created_by_path)`` from a single git log walk.
 

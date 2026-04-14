@@ -166,3 +166,72 @@ def test_clone_records_checked_out_branch_when_remote_default_is_not_main(tmp_pa
     assert result.exit_code == 0
     brain_config = read_brain_config(dest)
     assert brain_config.git.default_branch == "develop"
+
+
+def test_clone_creates_local_branch_when_name_not_on_remote(tmp_path, monkeypatch):
+    """User clones from main but asks for a new local branch to push to later.
+
+    Previously this crashed with a raw subprocess error because
+    `git checkout <nonexistent>` failed. The fix creates the branch from
+    the current HEAD so the user can start committing on it immediately.
+    """
+    bare = _create_remote_brain(tmp_path, monkeypatch)
+    _use_fresh_clone_registry(tmp_path, monkeypatch)
+    runner = CliRunner()
+    dest = tmp_path / "cloned-new-branch"
+
+    result = runner.invoke(cli, ["clone", str(bare), str(dest), "--branch", "feature-x"])
+
+    assert result.exit_code == 0, result.output
+    actual_branch = subprocess.run(
+        ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+        cwd=dest, capture_output=True, text=True,
+    ).stdout.strip()
+    assert actual_branch == "feature-x"
+
+    brain_config = read_brain_config(dest)
+    assert brain_config.git.default_branch == "feature-x"
+
+
+def test_clone_checks_out_existing_remote_branch(tmp_path, monkeypatch):
+    """When the user names a branch that exists on origin, check it out (track remote)."""
+    bare = _create_remote_brain_on_branch(tmp_path, monkeypatch, "develop")
+    _use_fresh_clone_registry(tmp_path, monkeypatch)
+    runner = CliRunner()
+    dest = tmp_path / "cloned-existing-branch"
+
+    result = runner.invoke(cli, ["clone", str(bare), str(dest), "--branch", "develop"])
+
+    assert result.exit_code == 0, result.output
+    actual_branch = subprocess.run(
+        ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+        cwd=dest, capture_output=True, text=True,
+    ).stdout.strip()
+    assert actual_branch == "develop"
+
+
+def test_clone_cleans_up_partial_clone_on_non_brain_repo(tmp_path, monkeypatch):
+    """If the cloned repo is not a brain, remove the clone so the user can retry."""
+    monkeypatch.setenv("KLURIS_CONFIG", str(tmp_path / "config.yml"))
+    monkeypatch.setenv("HOME", str(tmp_path))
+    bare = tmp_path / "not-brain.git"
+    subprocess.run(["git", "init", "--bare", str(bare)], capture_output=True)
+    src = tmp_path / "not-brain-src"
+    src.mkdir()
+    subprocess.run(["git", "init"], cwd=src, capture_output=True)
+    subprocess.run(["git", "checkout", "-b", "main"], cwd=src, capture_output=True)
+    subprocess.run(["git", "config", "user.email", "x@x"], cwd=src, capture_output=True)
+    subprocess.run(["git", "config", "user.name", "x"], cwd=src, capture_output=True)
+    (src / "readme.md").write_text("not a brain\n", encoding="utf-8")
+    subprocess.run(["git", "add", "-A"], cwd=src, capture_output=True)
+    subprocess.run(["git", "commit", "-m", "init"], cwd=src, capture_output=True)
+    subprocess.run(["git", "remote", "add", "origin", str(bare)], cwd=src, capture_output=True)
+    subprocess.run(["git", "push", "origin", "main"], cwd=src, capture_output=True)
+
+    dest = tmp_path / "dest"
+    runner = CliRunner()
+    result = runner.invoke(cli, ["clone", str(bare), str(dest)])
+
+    assert result.exit_code != 0
+    assert "not a Kluris brain" in result.output
+    assert not dest.exists(), "partial clone should be removed on failure"
