@@ -210,6 +210,26 @@ def test_clone_checks_out_existing_remote_branch(tmp_path, monkeypatch):
     assert actual_branch == "develop"
 
 
+def test_clone_surfaces_git_stderr_when_remote_unreachable(tmp_path, monkeypatch):
+    """git clone failures must show the actual git error (not a Python traceback).
+
+    Previously the user saw a CalledProcessError stack with the raw `git clone`
+    exit code and no hint at WHY (auth? network? repo missing?). Surfacing
+    stderr lets the user act: configure a PAT, fix the URL, check connectivity.
+    """
+    monkeypatch.setenv("KLURIS_CONFIG", str(tmp_path / "config.yml"))
+    monkeypatch.setenv("HOME", str(tmp_path))
+    runner = CliRunner()
+    bogus_url = str(tmp_path / "does-not-exist.git")
+    dest = tmp_path / "dest"
+
+    result = runner.invoke(cli, ["clone", bogus_url, str(dest)])
+
+    assert result.exit_code != 0
+    assert "git clone failed" in result.output
+    assert "missing credentials" in result.output or "does not exist" in result.output.lower() or "not a git repository" in result.output.lower()
+
+
 def test_clone_cleans_up_partial_clone_on_non_brain_repo(tmp_path, monkeypatch):
     """If the cloned repo is not a brain, remove the clone so the user can retry."""
     monkeypatch.setenv("KLURIS_CONFIG", str(tmp_path / "config.yml"))

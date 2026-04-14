@@ -578,15 +578,26 @@ def clone_cmd(url: str | None, path: str | None, branch_name: str | None, as_jso
             default_path = str(Path.home() / url.rstrip("/").split("/")[-1].replace(".git", ""))
             path = click.prompt("  Clone to", default=default_path, type=str)
         if not branch_name:
-            branch_name = click.prompt(
-                "  Branch (Enter = remote default; name an existing branch to track, or a new one to create)",
-                default="", type=str,
-            ) or None
+            console.print(
+                "  [dim]Tip: leave blank to use the remote default branch. "
+                "Or type any name -- if it exists on the remote we'll track it, "
+                "otherwise we'll create it locally so you can push to it later.[/dim]"
+            )
+            branch_name = click.prompt("  Branch name", default="", show_default=False, type=str) or None
         console.print()
     dest = Path(path) if path else Path(url.rstrip("/").split("/")[-1].replace(".git", ""))
     dest = dest.resolve()
 
-    git_clone(url, dest)
+    try:
+        git_clone(url, dest)
+    except subprocess.CalledProcessError as exc:
+        stderr = (exc.stderr or "").strip()
+        detail = stderr or f"git exited with status {exc.returncode}"
+        raise click.ClickException(
+            f"git clone failed for {url}\n{detail}\n\n"
+            "Common causes: missing credentials (set up a PAT, SSH key, or "
+            "git-credential-manager), unreachable host, or the repository does not exist."
+        ) from exc
 
     try:
         if branch_name:
