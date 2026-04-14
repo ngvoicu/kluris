@@ -157,7 +157,7 @@ contradicts a documented decision, it flags the conflict.
 kluris dream         # regenerate maps, fix links, validate structure
 kluris push          # commit and push to git (if brain uses git)
 kluris status        # brain tree, neuron counts, recent changes
-kluris mri --open    # generate and open in browser
+kluris mri           # generate visualization, prints the link to open in your browser
 ```
 
 ### Deprecating a decision

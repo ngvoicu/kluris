@@ -417,7 +417,7 @@ kluris wake-up --brain {name}            # Compact snapshot for agent bootstrap 
 kluris templates                          # List available neuron templates
 kluris dream --brain {name}               # Regenerate maps, auto-fix safe issues, validate remaining links
 kluris push --brain {name}                # Commit and push to git
-kluris mri --brain {name} --open          # Generate visualization and open in browser
+kluris mri --brain {name}                 # Generate visualization (prints link to open in browser)
 kluris help                               # All commands
 ```
 

@@ -84,7 +84,7 @@ def test_mri_brain_all_emits_single_json_envelope(tmp_path, monkeypatch):
     create_test_brain(runner, "brain-a", tmp_path)
     create_test_brain(runner, "brain-b", tmp_path)
 
-    result = runner.invoke(cli, ["mri", "--brain", "all", "--json", "--no-open"])
+    result = runner.invoke(cli, ["mri", "--brain", "all", "--json"])
     assert result.exit_code == 0
     # Must parse as a single JSON document (no concatenated objects)
     data = json.loads(result.output)
@@ -105,7 +105,7 @@ def test_mri_output_with_brain_all_rejected(tmp_path, monkeypatch):
 
     result = runner.invoke(
         cli,
-        ["mri", "--brain", "all", "--output", str(tmp_path / "shared.html"), "--no-open"],
+        ["mri", "--brain", "all", "--output", str(tmp_path / "shared.html")],
     )
     assert result.exit_code != 0
     assert "--output" in result.output and "all" in result.output
@@ -130,12 +130,10 @@ def test_mri_prints_windows_path_in_wsl(tmp_path, monkeypatch):
     def side_effect(args, **kwargs):
         if isinstance(args, list) and args[:2] == ["wslpath", "-w"]:
             return fake_wslpath
-        if isinstance(args, list) and args[:1] == ["cmd.exe"]:
-            return MagicMock(returncode=0)
         return real_run(args, **kwargs)
 
     with patch("subprocess.run", side_effect=side_effect):
-        result = runner.invoke(cli, ["mri", "--no-open"])
+        result = runner.invoke(cli, ["mri"])
 
     assert result.exit_code == 0, result.output
     assert "Windows path" in result.output
@@ -148,6 +146,6 @@ def test_mri_does_not_print_windows_path_outside_wsl(tmp_path, monkeypatch):
     monkeypatch.delenv("WSL_DISTRO_NAME", raising=False)
     runner = CliRunner()
     create_test_brain(runner, "my-brain", tmp_path)
-    result = runner.invoke(cli, ["mri", "--no-open"])
+    result = runner.invoke(cli, ["mri"])
     assert result.exit_code == 0
     assert "Windows path" not in result.output

@@ -1365,8 +1365,8 @@ def _windows_path_if_wsl(path: Path) -> str | None:
     """Translate a Linux path to a Windows UNC path via `wslpath -w`.
 
     Returns the translated path when running under WSL and wslpath succeeds,
-    or ``None`` otherwise. Used both for auto-opening in a Windows browser
-    and for printing a copy-pasteable path for the user.
+    or ``None`` otherwise. Lets us print a copy-pasteable Windows path for
+    WSL users so they can open the MRI in their host browser.
     """
     if not _is_wsl():
         return None
@@ -1380,50 +1380,11 @@ def _windows_path_if_wsl(path: Path) -> str | None:
         return None
 
 
-def _open_in_browser(path: Path) -> None:
-    """Open an HTML file in the user's default browser.
-
-    Non-WSL Linux/mac: plain ``webbrowser.open``.
-
-    WSL is fiddly. ``webbrowser.open`` falls through to ``xdg-open`` which is
-    rarely wired. ``explorer.exe <path>`` doesn't understand Linux paths like
-    ``/home/colin/x.html`` and opens a blank File Explorer window. Even after
-    translating to a UNC path like ``\\\\wsl.localhost\\...\\x.html`` explorer.exe
-    will open the containing folder instead of launching the default app,
-    because UNC paths hit the "show folder" branch. The Windows-canonical
-    "open this with the default app" invocation is ``cmd.exe /c start "" <path>``
-    and it handles UNC paths correctly -- so for WSL we translate with
-    ``wslpath -w`` and hand to ``start``.
-    """
-    import webbrowser
-    win_path = _windows_path_if_wsl(path)
-    if win_path:
-        # Detach cmd.exe from the bash tty: inherited stdin/stdout/stderr
-        # leaves the terminal in a non-canonical state after cmd.exe exits
-        # (observed as "read failed 5: I/O error" and garbled prompts on
-        # Ubuntu WSL). DEVNULL on all three + start_new_session keeps the
-        # parent shell pristine.
-        try:
-            subprocess.run(
-                ["cmd.exe", "/c", "start", "", win_path],
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                start_new_session=True,
-                check=False,
-            )
-            return
-        except (subprocess.CalledProcessError, FileNotFoundError):
-            pass
-    webbrowser.open(path.resolve().as_uri())
-
-
 @cli.command()
 @click.option("--brain", "brain_name", help="Specific brain")
 @click.option("--output", "output_path", help="Output HTML file path")
-@click.option("--open/--no-open", "open_browser", default=True, help="Open in browser (default: yes)")
 @click.option("--json", "as_json", is_flag=True, help="JSON output")
-def mri(brain_name: str | None, output_path: str | None, open_browser: bool, as_json: bool):
+def mri(brain_name: str | None, output_path: str | None, as_json: bool):
     """Generate interactive brain visualization."""
     brains = _resolve_brains(brain_name, allow_all=True, as_json=as_json)
 
@@ -1449,16 +1410,15 @@ def mri(brain_name: str | None, output_path: str | None, open_browser: bool, as_
         })
 
         if not as_json:
-            console.print(f"MRI complete — {out}")
+            uri = out.resolve().as_uri()
+            console.print(f"MRI complete — [link={uri}]{out}[/link]")
             win_path = _windows_path_if_wsl(out)
             if win_path:
                 console.print(f"  Windows path: [bold]{win_path}[/bold]")
-                console.print("  [dim]Click the path above or paste it into your Windows browser's address bar.[/dim]")
+            console.print("  [dim]Open the link above in your browser to view the visualization.[/dim]")
             console.print(f"  {stats['nodes']} nodes, {stats['edges']} edges")
             if sync_result["fixes"]["total"]:
                 console.print(f"  MRI preflight applied {sync_result['fixes']['total']} automatic fixes")
-            if open_browser:
-                _open_in_browser(out)
 
     if as_json:
         click.echo(json_lib.dumps({"ok": True, "brains": results}))
