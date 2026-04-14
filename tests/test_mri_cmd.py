@@ -111,9 +111,10 @@ def test_mri_output_with_brain_all_rejected(tmp_path, monkeypatch):
     assert "--output" in result.output and "all" in result.output
 
 
-def test_mri_prints_windows_path_in_wsl(tmp_path, monkeypatch):
-    """In WSL, the mri command prints the Windows UNC path so the user can
-    click or paste it into their browser even when auto-open misbehaves.
+def test_mri_prints_wsl_file_url_in_wsl(tmp_path, monkeypatch):
+    """In WSL, the "Open:" line must be a Windows-accessible file:// URL
+    (file://wsl.localhost/...) rather than the Linux form, so Windows
+    Terminal's Ctrl+click actually opens the file in the host browser.
     """
     from unittest.mock import MagicMock, patch
     import subprocess as _subprocess
@@ -136,11 +137,11 @@ def test_mri_prints_windows_path_in_wsl(tmp_path, monkeypatch):
         result = runner.invoke(cli, ["mri"])
 
     assert result.exit_code == 0, result.output
-    assert "Windows path" in result.output
-    assert r"\\wsl.localhost\Ubuntu-24.04\tmp\brain-mri.html" in result.output
+    assert "file://wsl.localhost/Ubuntu-24.04/tmp/brain-mri.html" in result.output
 
 
-def test_mri_does_not_print_windows_path_outside_wsl(tmp_path, monkeypatch):
+def test_mri_prints_plain_file_url_outside_wsl(tmp_path, monkeypatch):
+    """Outside WSL, the URL is just Path.as_uri() -- file:///... without a host."""
     monkeypatch.setenv("KLURIS_CONFIG", str(tmp_path / "config.yml"))
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.delenv("WSL_DISTRO_NAME", raising=False)
@@ -148,4 +149,6 @@ def test_mri_does_not_print_windows_path_outside_wsl(tmp_path, monkeypatch):
     create_test_brain(runner, "my-brain", tmp_path)
     result = runner.invoke(cli, ["mri"])
     assert result.exit_code == 0
-    assert "Windows path" not in result.output
+    assert "file://wsl.localhost" not in result.output
+    # Linux/macOS path as URI: file:///...
+    assert "file:///" in result.output

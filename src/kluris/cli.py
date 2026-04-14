@@ -1410,12 +1410,19 @@ def mri(brain_name: str | None, output_path: str | None, as_json: bool):
         })
 
         if not as_json:
-            uri = out.resolve().as_uri()
-            console.print(f"MRI complete — [link={uri}]{out}[/link]")
+            console.print(f"MRI complete — {out}")
+            # Build the right file:// URL for the platform. In WSL the Linux
+            # file:// URI (file:///home/...) isn't openable from the Windows
+            # host -- convert the wslpath-translated UNC form into a file://
+            # URL (file://wsl.localhost/...) that Windows Terminal can Ctrl-
+            # click through. Terminals auto-detect file:// URLs and make them
+            # click-openable; a bare path would be ignored.
             win_path = _windows_path_if_wsl(out)
             if win_path:
-                console.print(f"  Windows path: [bold]{win_path}[/bold]")
-            console.print("  [dim]Open the link above in your browser to view the visualization.[/dim]")
+                uri = "file://" + win_path.lstrip("\\").replace("\\", "/")
+            else:
+                uri = out.resolve().as_uri()
+            console.print(f"  Open: [link={uri}]{uri}[/link]")
             console.print(f"  {stats['nodes']} nodes, {stats['edges']} edges")
             if sync_result["fixes"]["total"]:
                 console.print(f"  MRI preflight applied {sync_result['fixes']['total']} automatic fixes")
