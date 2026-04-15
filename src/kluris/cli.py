@@ -2024,6 +2024,7 @@ def help_cmd(command: str | None, as_json: bool):
         ("lobe", "Create a new lobe (knowledge region)"),
         ("dream", "Regenerate maps, auto-fix safe issues, and validate links"),
         ("push", "Commit and push brain changes to git"),
+        ("pull", "Pull remote changes; ask to merge origin/<default> when on another branch"),
         ("mri", "Generate interactive brain visualization and open in browser"),
         ("install-skills", "Install the /kluris skill for your AI agents"),
         ("uninstall-skills", "Remove the /kluris skill from AI agent directories"),

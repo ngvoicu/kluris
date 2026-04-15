@@ -22,7 +22,7 @@ No Jinja2 templates -- dependency was removed.
 
 ## Key Files
 
-- `src/kluris/cli.py` -- all 17 Click commands, wizard logic, KlurisGroup error handler, `search` + `wake-up` commands and collectors, `_resolve_brains` (picker + non-TTY guard + `--brain all`), `_do_install` (per-destination atomic stage-then-rename), `_sync_brain_state` (batch git log + `update_frontmatter(preloaded=...)`)
+- `src/kluris/cli.py` -- all 18 Click commands, wizard logic, KlurisGroup error handler, `search` + `wake-up` commands and collectors, `_resolve_brains` (picker + non-TTY guard + `--brain all`), `_do_install` (per-destination atomic stage-then-rename), `_sync_brain_state` (batch git log + `update_frontmatter(preloaded=...)`)
 - `src/kluris/core/agents.py` -- AGENT_REGISTRY (8 agents), per-brain SKILL.md renderer (`render_skill(skill_name, brain_name, brain_path, has_git, brain_description)`). With 1 brain registered the skill is named `kluris`; with N brains each gets `kluris-<name>`. SKILL_BODY contains a single-brain header, Bootstrap, Query first, Intent detection (uses `kluris search` as the primary search path), Writing rules, and CLI commands sections. Brain paths are emitted in POSIX form via `_posix_path()` so bash on Windows handles them correctly.
 - `src/kluris/core/brain.py` -- BRAIN_TYPES, NEURON_TEMPLATES, scaffold_brain(), _generate_readme(), validate_brain_name() (rejects reserved word `all`, max 48 chars)
 - `src/kluris/core/config.py` -- Pydantic models, config read/write (with legacy `default_brain` shim), register/unregister

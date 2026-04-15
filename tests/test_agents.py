@@ -247,3 +247,11 @@ def test_skill_create_neuron_forbids_prefill():
 
 def test_skill_learn_has_explicit_stop():
     assert 'STOP. NEVER write until the human explicitly says yes' in _render()
+
+
+def test_skill_cli_section_mentions_pull():
+    """Regression guard: the CLI commands section must reference `kluris pull`
+    so agents know about the fetch-remote-changes primitive.
+    """
+    c = _render()
+    assert "kluris pull" in c

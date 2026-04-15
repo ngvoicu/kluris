@@ -21,7 +21,7 @@ pytest tests/test_create.py -v   # single test file
 
 ```
 src/kluris/
-  cli.py              # Click CLI -- all 17 commands in one file (incl. search, wake-up)
+  cli.py              # Click CLI -- all 18 commands in one file (incl. search, wake-up, pull)
   core/
     config.py          # Pydantic models (GlobalConfig, BrainConfig, BrainEntry)
     brain.py           # BRAIN_TYPES, NEURON_TEMPLATES, scaffold_brain(), validate_brain_name()
@@ -97,13 +97,13 @@ The skill body contains six load-bearing sections (in order):
 
 - **0 brains** → resolver errors with a hint to run `kluris create`.
 - **1 brain** → auto-resolves; no `--brain` flag needed; skill installed as `kluris`.
-- **2+ brains + TTY** → interactive picker `[1] foo [2] bar [3] all` for fan-out commands (dream/push/status/mri); `[1] foo [2] bar` (no `all`) for single-brain commands (wake-up/neuron/lobe).
+- **2+ brains + TTY** → interactive picker `[1] foo [2] bar [3] all` for fan-out commands (dream/push/pull/status/mri); `[1] foo [2] bar` (no `all`) for single-brain commands (wake-up/neuron/lobe).
 - **2+ brains + non-interactive** (`--json`, no TTY, or `KLURIS_NO_PROMPT=1`) → resolver errors with the available brains listed and a hint to pass `--brain NAME` or `--brain all`.
 - **Stale brain paths** → annotated `(missing)` in the picker; resolver raises `ClickException` if the user actually tries to use one.
 
-## CLI Commands (17)
+## CLI Commands (18)
 
-create, clone, list, status, search, wake-up, neuron, lobe, dream, push, mri, templates, install-skills, uninstall-skills, remove, doctor, help
+create, clone, list, status, search, wake-up, neuron, lobe, dream, push, pull, mri, templates, install-skills, uninstall-skills, remove, doctor, help
 
 ## Brain File Structure
 
