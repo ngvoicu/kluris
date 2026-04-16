@@ -289,8 +289,13 @@ kluris clone <this-repo-url>
 
 ### Start building your team knowledge
 
-One command does everything: `/kluris-{name} <natural language>`. The agent
-reads your intent and acts accordingly.
+One command does everything: `/kluris-{name} <natural language>`.
+
+**Important:** `/kluris-{name}` is a slash command for coding agents -- use it
+inside Claude Code, Codex, Cursor, Windsurf, Cline, Devin, Gemini CLI, or any
+AI coding tool that supports skills. It is NOT a terminal command. For terminal
+operations, use the `kluris` CLI directly (see [CLI commands](#cli-commands)
+below).
 
 {lobe_section}
 
@@ -302,10 +307,12 @@ reads your intent and acts accordingly.
 
 ## How to use /kluris-{name}
 
-Everything goes through `/kluris-{name}`. The agent detects your intent and
+`/kluris-{name}` is a slash command for AI coding agents (Claude Code, Codex,
+Cursor, Windsurf, Cline, Devin, Gemini CLI, and others). Type it inside your
+coding agent -- not in a regular terminal. The agent detects your intent and
 acts accordingly. Search and guided documentation happen through the slash
-command; the CLI is for mechanical operations like `dream`, `push`, and
-`status`.
+command; the `kluris` CLI is for mechanical operations like `dream`, `push`,
+and `status` that you run in a terminal.
 
 If `{name}` is the only kluris brain registered on your machine, kluris also
 exposes a bare `/kluris` slash command as an alias -- both forms produce the

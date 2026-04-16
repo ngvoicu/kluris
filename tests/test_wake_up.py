@@ -48,6 +48,13 @@ def test_wake_up_json_schema(temp_brain, cli_runner):
     assert "is_default" not in data  # field removed in multi-brain refactor
     assert str(temp_brain) == data["path"]
 
+    # Brain type and structure
+    assert data["type"] == "product-group"
+    assert isinstance(data["type_structure"], dict)
+    assert "projects" in data["type_structure"]
+    assert "infrastructure" in data["type_structure"]
+    assert "knowledge" in data["type_structure"]
+
     # Lobes: list of {name, neurons} dicts
     assert isinstance(data["lobes"], list)
     lobe_names = {lobe["name"] for lobe in data["lobes"]}
@@ -90,6 +97,52 @@ def test_wake_up_recent_limited_to_five(temp_brain, cli_runner):
     assert len(data["recent"]) == 5
     # Newest (day 10) should be first
     assert data["recent"][0]["path"] == "knowledge/neuron-09.md"
+
+
+def test_wake_up_type_structure_matches_brain_type(tmp_path, temp_config, cli_runner, monkeypatch):
+    """type_structure reflects the brain's registered type, not just the default."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    create_test_brain(cli_runner, "research-brain", tmp_path, type="research")
+
+    result = cli_runner.invoke(cli, ["wake-up", "--brain", "research-brain", "--json"])
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    assert data["type"] == "research"
+    assert "literature" in data["type_structure"]
+    assert "experiments" in data["type_structure"]
+    assert "projects" not in data["type_structure"]
+
+
+def test_wake_up_lobes_include_description(tmp_path, temp_config, cli_runner, monkeypatch):
+    """Each lobe in lobes[] carries its description from map.md."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    create_test_brain(cli_runner, "desc-brain", tmp_path)
+
+    result = cli_runner.invoke(cli, ["wake-up", "--json"])
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    descs = {l["name"]: l["description"] for l in data["lobes"]}
+    assert "Hosting" in descs.get("infrastructure", "")
+    assert "Decisions" in descs.get("knowledge", "")
+    assert "Per-project" in descs.get("projects", "")
+
+
+def test_wake_up_lobes_description_legacy_body_only(temp_brain, cli_runner):
+    """Lobes with legacy map.md (no frontmatter description) still surface
+    a description by falling back to body parsing."""
+    map_file = temp_brain / "knowledge" / "map.md"
+    map_file.write_text(
+        "---\nauto_generated: true\nparent: ../brain.md\nupdated: 2026-04-01\n---\n"
+        "# Knowledge\n\nDecisions and learnings for the team.\n\n## Contents\n\n(empty)\n",
+        encoding="utf-8",
+    )
+    result = cli_runner.invoke(cli, ["wake-up", "--json"])
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    knowledge = next(l for l in data["lobes"] if l["name"] == "knowledge")
+    assert "Decisions" in knowledge["description"]
 
 
 def test_wake_up_targets_named_brain(tmp_path, temp_config, cli_runner, monkeypatch):

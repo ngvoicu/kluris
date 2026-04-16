@@ -134,6 +134,25 @@ def _get_siblings(brain_path: Path, lobe_path: Path) -> list[dict]:
     return siblings
 
 
+def _write_if_changed(path: Path, metadata: dict, content: str) -> bool:
+    """Write frontmatter + content only if the body actually changed.
+
+    Compares the new body against the existing file's body (ignoring
+    frontmatter metadata like ``updated``). Returns True if the file was
+    written, False if skipped because the body was identical.
+    """
+    if path.exists():
+        try:
+            _, existing_body = read_frontmatter(path)
+            if existing_body.strip() == content.strip():
+                return False
+        except Exception:
+            pass
+    metadata["updated"] = _today()
+    write_frontmatter(path, metadata, content)
+    return True
+
+
 def generate_brain_md(brain_path: Path, name: str, description: str) -> None:
     """Generate the root brain.md — root lobes and glossary link only."""
     lobes = _get_lobes(brain_path)
@@ -150,8 +169,8 @@ def generate_brain_md(brain_path: Path, name: str, description: str) -> None:
         f"- [glossary.md](./glossary.md) — Domain-specific terms, acronyms, and conventions\n"
     )
 
-    metadata = {"auto_generated": True, "updated": _today()}
-    write_frontmatter(brain_path / "brain.md", metadata, content)
+    metadata = {"auto_generated": True}
+    _write_if_changed(brain_path / "brain.md", metadata, content)
 
 
 def generate_map_md(brain_path: Path, lobe_path: Path) -> None:
@@ -197,8 +216,7 @@ def generate_map_md(brain_path: Path, lobe_path: Path) -> None:
         "auto_generated": True,
         "parent": parent_path,
         "siblings": [s["path"] for s in siblings],
-        "updated": _today(),
     }
     if description:
         metadata["description"] = description
-    write_frontmatter(lobe_path / "map.md", metadata, content)
+    _write_if_changed(lobe_path / "map.md", metadata, content)

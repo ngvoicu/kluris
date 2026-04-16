@@ -730,9 +730,46 @@ def _wake_up_iter_neurons(root: Path):
             yield item
 
 
+def _wake_up_lobe_description(lobe_path: Path) -> str:
+    """Read a lobe's description from its map.md.
+
+    Checks frontmatter ``description`` first. Falls back to the first
+    non-heading, non-navigation body line (same heuristic maps.py uses)
+    so legacy map.md files without the frontmatter field still surface
+    a description in wake-up.
+    """
+    map_file = lobe_path / "map.md"
+    if not map_file.exists():
+        return ""
+    try:
+        meta, content = read_frontmatter(map_file)
+        desc = meta.get("description", "")
+        if isinstance(desc, str) and desc.strip():
+            return desc.strip()
+    except Exception:
+        try:
+            content = map_file.read_text(encoding="utf-8")
+        except OSError:
+            return ""
+    title_seen = False
+    for raw_line in content.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        if line.startswith("# "):
+            title_seen = True
+            continue
+        if not title_seen:
+            continue
+        if line.startswith(("up ", "sideways ", "## ", "- [")):
+            continue
+        return line
+    return ""
+
+
 def _wake_up_collect_lobes(brain_path: Path) -> list[dict]:
-    """Return top-level lobes with total neuron count AND a per-lobe
-    `yaml_count` that tracks opted-in yaml neurons specifically.
+    """Return top-level lobes with total neuron count, per-lobe
+    `yaml_count`, and the lobe's `description` from its map.md.
     """
     lobes = []
     for child in sorted(brain_path.iterdir()):
@@ -746,7 +783,12 @@ def _wake_up_collect_lobes(brain_path: Path) -> list[dict]:
             total += 1
             if item.suffix.lower() in {".yml", ".yaml"}:
                 yaml_count += 1
-        lobes.append({"name": child.name, "neurons": total, "yaml_count": yaml_count})
+        lobes.append({
+            "name": child.name,
+            "description": _wake_up_lobe_description(child),
+            "neurons": total,
+            "yaml_count": yaml_count,
+        })
     return lobes
 
 
@@ -965,11 +1007,16 @@ def wake_up(brain_name: str | None, as_json: bool):
         deprecation_issues = []
     deprecation_count = len(deprecation_issues)
 
+    brain_type = entry.get("type", "product-group")
+    type_structure = BRAIN_TYPES.get(brain_type, {}).get("structure", {})
+
     data = {
         "ok": True,
         "name": name,
         "path": str(brain_path),
         "description": entry.get("description", ""),
+        "type": brain_type,
+        "type_structure": type_structure,
         "brain_md": brain_md_body,
         "lobes": lobes,
         "total_neurons": total_neurons,

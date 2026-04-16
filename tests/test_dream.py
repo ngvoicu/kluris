@@ -57,6 +57,29 @@ def test_dream_regenerates_brain_md(tmp_path, monkeypatch):
     assert "experiments" in brain_md
 
 
+def test_dream_noop_does_not_bump_dates(tmp_path, monkeypatch):
+    """Running dream twice with no changes must not update map.md or brain.md
+    dates, avoiding git noise from meaningless timestamp churn."""
+    monkeypatch.setenv("KLURIS_CONFIG", str(tmp_path / "config.yml"))
+    monkeypatch.setenv("HOME", str(tmp_path))
+    runner = CliRunner()
+    create_test_brain(runner, "my-brain", tmp_path)
+    bp = tmp_path / "my-brain"
+
+    runner.invoke(cli, ["dream"])
+    meta1_brain, _ = read_frontmatter(bp / "brain.md")
+    meta1_map, body1_map = read_frontmatter(bp / "knowledge" / "map.md")
+    raw1_brain = (bp / "brain.md").read_text(encoding="utf-8")
+    raw1_map = (bp / "knowledge" / "map.md").read_text(encoding="utf-8")
+
+    runner.invoke(cli, ["dream"])
+    raw2_brain = (bp / "brain.md").read_text(encoding="utf-8")
+    raw2_map = (bp / "knowledge" / "map.md").read_text(encoding="utf-8")
+
+    assert raw1_brain == raw2_brain, "brain.md changed on no-op dream"
+    assert raw1_map == raw2_map, "knowledge/map.md changed on no-op dream"
+
+
 def test_dream_updates_map_with_neuron(tmp_path, monkeypatch):
     """After adding a neuron, dream should update the lobe's map.md (not brain.md)."""
     monkeypatch.setenv("KLURIS_CONFIG", str(tmp_path / "config.yml"))

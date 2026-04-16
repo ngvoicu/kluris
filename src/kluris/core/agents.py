@@ -55,9 +55,20 @@ your Bash tool before doing anything else. The output is your index for
 the rest of the session:
 
 - `name`, `path`, `description`
+- `type`: the brain's architecture type (e.g. `product-group`, `personal`,
+  `product`, `research`, `blank`). Tells you what KIND of brain this is.
+- `type_structure`: a dict mapping each scaffold lobe name to its purpose
+  (e.g. `{{"projects": "Per-project sub-folders...", "infrastructure": "Hosting, CI/CD..."}}`).
+  This is a HINT only — it covers the lobes the brain was scaffolded with,
+  but the brain may have custom lobes or a custom structure that
+  `type_structure` doesn't know about. Always prefer `lobes[].description`
+  (below) as the authoritative source for what each lobe is for.
 - `brain_md`: the raw body of `brain.md` (lobe descriptions + glossary link).
   Read it FROM THE SNAPSHOT. Do NOT open `brain.md` separately.
-- `lobes[]` with neuron counts per top-level lobe
+- `lobes[]` with `name`, `description` (from map.md), and neuron counts per
+  top-level lobe. Use `description` to understand what each lobe is actually
+  for — this is authoritative for ALL lobes, including custom ones added after
+  brain creation that are not in `type_structure`.
 - `recent[]`: the 5 most recently updated neurons (use these as your starting
   points for "what's hot" questions)
 - `total_neurons`
@@ -116,12 +127,23 @@ directory is the PROJECT you're working in.
 
 ## How the brain is structured
 
-Brains have different structures depending on their type. Do NOT assume
-which lobes exist -- use the wake-up snapshot's `brain_md` field (and the
-`lobes[]` array) to discover the actual layout.
+Brains have different structures depending on their type. The wake-up
+snapshot tells you the brain's `type` (e.g. `product-group`, `personal`,
+`product`, `research`) and `type_structure` (what each lobe is FOR).
+Use `lobes[]` to discover what lobes actually exist and `type_structure`
+to understand each lobe's intended purpose when routing content.
+
+**CRITICAL: Lobes are directories, neurons are files inside them.** Every
+neuron (`.md` or `.yml`) MUST live inside a lobe directory. NEVER create
+files directly at the brain root. The only root-level files are the
+auto-managed `brain.md`, `glossary.md`, `README.md`, and `.gitignore`.
+If you want to write about "infrastructure" and an `infrastructure/` lobe
+exists, the content goes INSIDE that lobe as a neuron -- not as a flat
+`infrastructure.md` at the root.
 
 The brain can be large. NEVER read it all at once. The wake-up snapshot is
 your pre-loaded top-level index:
+- `type` + `type_structure` — brain architecture and lobe purposes
 - `brain_md` (from the snapshot) lists every lobe with its one-line description
 - `lobes[]` (from the snapshot) has neuron counts per top-level lobe
 - `glossary[]` (from the snapshot) defines domain-specific terms
@@ -230,19 +252,35 @@ Step 4 -- Wizard (one topic at a time, this is the core loop):
 Step 5 -- Recap. What was written, what was skipped. Remind: `kluris dream{brain_flag_hint_inline}`
 to regenerate maps. If the brain has git (shown above), also `kluris push{brain_flag_hint_inline}`.
 
-Lobe routing -- when learning a single project, default to putting everything
-under that project's folder (e.g. projects/<name>/). Only route to other lobes
-when something is genuinely cross-cutting -- shared infrastructure used by
-multiple projects, or a decision that affects ALL projects, not just this one.
-If unsure, ask: "This could go in [other lobe] since it's cross-cutting,
-or stay in projects/<name>/ since it's specific to this project. Which do
+Lobe routing -- use the brain's `type_structure` (from wake-up) to understand
+what each lobe is FOR, then actively evaluate every topic against the full
+lobe set. This is architecture-aware routing, not just name-matching.
+
+When learning a single project, default to `projects/<name>/` for
+project-specific content. But for each topic, ask yourself: does this belong
+in another lobe based on its PURPOSE? Consult `type_structure` to decide.
+Examples for a `product-group` brain:
+- Docker build pipeline → `infrastructure/` (it's hosting/CI/CD)
+- "We chose raw SQL over JPA" → `knowledge/` (it's a cross-cutting decision)
+- API endpoint details → `projects/<name>/` (project-specific)
+- Shared environment variables → `infrastructure/` (cross-cutting infra)
+
+When routing cross-cutting content to another lobe, add a `related:` synapse
+back to the project neuron so both sides are linked. Example: move production
+environment details to `infrastructure/production-environment.md` and add a
+`related:` link from the project overview to that neuron.
+
+If a topic doesn't fit any existing lobe, propose creating a new lobe or
+sub-lobe: "This doesn't fit the current lobes. Want me to create a
+`monitoring/` lobe for observability content?" Lobe creation is always a
+discussion -- the human decides the brain's architecture.
+
+If unsure where something goes, ask: "This could go in [lobe A] since it's
+cross-cutting, or stay in projects/<name>/ since it's specific. Which do
 you prefer?"
-When you find cross-cutting content (environments, CI/CD, hosting), propose
-creating a dedicated neuron in the right lobe and replacing the inline content
-with a link. Example: move production environment details to
-`infrastructure/production-environment.md` and replace the section in the
-project overview with `[Production](../../infrastructure/production-environment.md)`.
-Read existing neurons in target lobes first -- update or extend, don't create duplicates.
+
+Read existing neurons in target lobes first -- update or extend, don't create
+duplicates.
 Domain terms and acronyms discovered → include as a wizard step: show the
 proposed glossary additions, ask for approval before appending to `glossary.md`.
 Glossary format -- one term per line. Match whatever format the existing
@@ -276,6 +314,9 @@ Create directory in brain. Remind user to run `kluris dream{brain_flag_hint_inli
 
 ## Writing rules
 
+- NEVER create `.md` or `.yml` files directly at the brain root. All neurons
+  go inside lobe directories. The brain root contains only `brain.md`,
+  `glossary.md`, `README.md`, `kluris.yml`, and `.gitignore` — nothing else.
 - Frontmatter on every neuron: parent, related, tags, created, updated
 - `parent:` is ALWAYS `./map.md` -- it points at the neuron's own lobe's
   `map.md`, which sits in the same directory as the neuron itself. Never
