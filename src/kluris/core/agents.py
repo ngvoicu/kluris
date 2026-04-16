@@ -360,8 +360,9 @@ These are terminal commands, not skill actions:
 - `kluris search "<query>"{brain_flag_hint_inline} --json` -- ranked search across neurons, glossary, brain.md (the FIRST thing to run for a "what do we know about X" question)
 - `kluris wake-up{brain_flag_hint_inline} --json` -- compact brain snapshot (already cached from the Bootstrap step)
 - `kluris dream{brain_flag_hint_inline}` -- regenerate maps, auto-fix safe issues, validate remaining links
-- `kluris push{brain_flag_hint_inline}` -- commit and push brain changes to git
-- `kluris pull{brain_flag_hint_inline}` -- pull remote changes; asks to merge `origin/<default>` when on another branch
+- `kluris branch{brain_flag_hint_inline}` -- show, switch, or create a git branch
+- `kluris push{brain_flag_hint_inline}` -- commit and push to the current branch
+- `kluris pull{brain_flag_hint_inline}` -- pull remote changes for the current branch
 - `kluris mri{brain_flag_hint_inline}` -- run preflight fixes, then generate interactive visualization
 - `kluris templates` -- list neuron templates
 """

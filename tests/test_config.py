@@ -69,7 +69,6 @@ def test_brain_config_defaults():
 
 def test_git_config_defaults():
     cfg = GitConfig()
-    assert cfg.default_branch == "main"
     assert cfg.commit_prefix == "brain:"
 
 

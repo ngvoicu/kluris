@@ -638,11 +638,10 @@ def clone_cmd(url: str | None, path: str | None, branch_name: str | None, as_jso
             from kluris.core.config import BrainConfig, GitConfig, write_brain_config
             from kluris.core.git import _run
 
-            actual_branch = _run(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=dest).stdout.strip()
             local_config = BrainConfig(
                 name=name,
                 description=description,
-                git=GitConfig(default_branch=actual_branch or branch_name or "main"),
+                git=GitConfig(),
             )
             write_brain_config(local_config, dest)
 
@@ -1480,15 +1479,10 @@ def push(msg: str | None, brain_name: str | None, as_json: bool):
 @click.option("--brain", "brain_name", help="Specific brain")
 @click.option("--json", "as_json", is_flag=True, help="JSON output")
 def pull(brain_name: str | None, as_json: bool):
-    """Pull remote changes; optionally merge origin/<default> into current branch."""
-    import os
-
+    """Pull remote changes for the current branch."""
     brains = _resolve_brains(brain_name, allow_all=True, as_json=as_json)
     results: list[dict] = []
     any_conflict = False
-
-    no_prompt = os.environ.get("KLURIS_NO_PROMPT") == "1"
-    can_prompt = _is_interactive() and not as_json and not no_prompt
 
     for name, entry in brains:
         brain_path = Path(entry["path"])
@@ -1500,7 +1494,6 @@ def pull(brain_name: str | None, as_json: bool):
                 "branch": None,
                 "pulled": False,
                 "files_changed": 0,
-                "merged_default": False,
                 "conflicts": [],
             }
             results.append(result)
@@ -1513,9 +1506,6 @@ def pull(brain_name: str | None, as_json: bool):
                 f"{name}: brain has uncommitted changes. "
                 "Commit with 'kluris push' or stash them first."
             )
-
-        brain_config = read_brain_config(brain_path)
-        default = brain_config.git.default_branch
 
         try:
             git_fetch(brain_path)
@@ -1530,7 +1520,6 @@ def pull(brain_name: str | None, as_json: bool):
         ).stdout.strip()
 
         pulled = False
-        merged_default = False
         conflicts: list[str] = []
 
         if git_has_upstream(brain_path):
@@ -1539,17 +1528,6 @@ def pull(brain_name: str | None, as_json: bool):
                 pulled = True
             except subprocess.CalledProcessError:
                 conflicts = git_conflicted_files(brain_path)
-
-        if not conflicts and current != default and can_prompt:
-            if click.confirm(
-                f"  {name}: also merge origin/{default} into {current}?",
-                default=True,
-            ):
-                try:
-                    git_merge(brain_path, f"origin/{default}")
-                    merged_default = True
-                except subprocess.CalledProcessError:
-                    conflicts = git_conflicted_files(brain_path)
 
         head_after = subprocess.run(
             ["git", "rev-parse", "HEAD"], cwd=brain_path,
@@ -1570,7 +1548,6 @@ def pull(brain_name: str | None, as_json: bool):
             "branch": current,
             "pulled": pulled,
             "files_changed": files_changed,
-            "merged_default": merged_default,
             "conflicts": conflicts,
         })
 
@@ -1590,14 +1567,10 @@ def pull(brain_name: str | None, as_json: bool):
             continue
 
         if not as_json:
-            parts = []
             if pulled:
-                parts.append(f"pulled from origin/{current}")
-            if merged_default:
-                parts.append(f"merged origin/{default}")
-            if not parts:
-                parts.append("nothing to pull")
-            console.print(f"{name}: {', '.join(parts)} ({files_changed} files changed)")
+                console.print(f"{name}: pulled from origin/{current} ({files_changed} files changed)")
+            else:
+                console.print(f"{name}: nothing to pull")
 
     if as_json:
         click.echo(json_lib.dumps({"ok": not any_conflict, "brains": results}))
@@ -2146,7 +2119,7 @@ def help_cmd(command: str | None, as_json: bool):
         ("dream", "Regenerate maps, auto-fix safe issues, and validate links"),
         ("branch", "Show, switch, or create a git branch in the brain"),
         ("push", "Commit and push brain changes to the current branch"),
-        ("pull", "Pull remote changes; ask to merge origin/<default> when on another branch"),
+        ("pull", "Pull remote changes for the current branch"),
         ("mri", "Generate interactive brain visualization and open in browser"),
         ("install-skills", "Install the /kluris skill for your AI agents"),
         ("uninstall-skills", "Remove the /kluris skill from AI agent directories"),

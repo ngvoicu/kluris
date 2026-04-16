@@ -111,60 +111,6 @@ def test_pull_on_default_branch_does_not_prompt(tmp_path, monkeypatch):
     assert "also merge" not in result.output.lower()
 
 
-def test_pull_asks_to_merge_default_when_on_other_branch(tmp_path, monkeypatch):
-    """On a non-default branch, user says 'y' -> origin/main is merged in."""
-    from kluris import cli as cli_module
-    monkeypatch.setattr(cli_module, "_is_interactive", lambda: True)
-    brain, bare = _bootstrap_brain_with_remote(tmp_path, monkeypatch)
-
-    # Create a local branch off main (no upstream -> git pull skipped)
-    subprocess.run(
-        ["git", "checkout", "-b", "colin-work"],
-        cwd=brain, capture_output=True, check=True,
-    )
-
-    # Remote gets a new commit on main via a separate clone
-    _push_change_via_scratch_clone(bare, tmp_path, "projects/from-main.md", "# Main\n")
-
-    result = CliRunner().invoke(cli, ["pull"], input="y\n")
-    assert result.exit_code == 0, result.output
-    assert "also merge origin/main into colin-work" in result.output.lower()
-    assert (brain / "projects" / "from-main.md").exists()
-
-
-def test_pull_merge_prompt_answered_no_skips_merge(tmp_path, monkeypatch):
-    from kluris import cli as cli_module
-    monkeypatch.setattr(cli_module, "_is_interactive", lambda: True)
-    brain, bare = _bootstrap_brain_with_remote(tmp_path, monkeypatch)
-    subprocess.run(
-        ["git", "checkout", "-b", "colin-work"],
-        cwd=brain, capture_output=True, check=True,
-    )
-    _push_change_via_scratch_clone(bare, tmp_path, "projects/from-main.md", "# Main\n")
-
-    result = CliRunner().invoke(cli, ["pull"], input="n\n")
-    assert result.exit_code == 0
-    assert not (brain / "projects" / "from-main.md").exists(), "merge should have been skipped"
-
-
-def test_pull_json_skips_merge_prompt(tmp_path, monkeypatch):
-    """--json never prompts, even on a non-default branch."""
-    from kluris import cli as cli_module
-    monkeypatch.setattr(cli_module, "_is_interactive", lambda: True)
-    brain, bare = _bootstrap_brain_with_remote(tmp_path, monkeypatch)
-    subprocess.run(
-        ["git", "checkout", "-b", "colin-work"],
-        cwd=brain, capture_output=True, check=True,
-    )
-    _push_change_via_scratch_clone(bare, tmp_path, "projects/from-main.md", "# Main\n")
-
-    result = CliRunner().invoke(cli, ["pull", "--json"])
-    assert result.exit_code == 0
-    data = json.loads(result.output)
-    assert data["brains"][0]["merged_default"] is False
-    assert not (brain / "projects" / "from-main.md").exists()
-
-
 def test_pull_detects_conflicts_and_reports_them(tmp_path, monkeypatch):
     """Overlapping edits on the same file -> pull surfaces a conflict block."""
     brain, bare = _bootstrap_brain_with_remote(tmp_path, monkeypatch)

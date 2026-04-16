@@ -210,7 +210,7 @@ def scaffold_brain(
     config = BrainConfig(
         name=name,
         description=description,
-        git=GitConfig(default_branch=branch),
+        git=GitConfig(),
         agents=AgentsConfig(),
     )
     config_data = config.model_dump(exclude_none=True)
@@ -423,8 +423,9 @@ kluris status --brain {name}             # Brain tree, recent changes, neuron co
 kluris wake-up --brain {name}            # Compact snapshot for agent bootstrap (--json for machines)
 kluris templates                          # List available neuron templates
 kluris dream --brain {name}               # Regenerate maps, auto-fix safe issues, validate remaining links
-kluris push --brain {name}                # Commit and push to git
-kluris pull --brain {name}                # Pull remote changes; ask to merge origin/<default> when on another branch
+kluris branch --brain {name}              # Show, switch, or create branches
+kluris push --brain {name}                # Commit and push to the current branch
+kluris pull --brain {name}                # Pull remote changes for the current branch
 kluris mri --brain {name}                 # Generate visualization (prints link to open in browser)
 kluris help                               # All commands
 ```
@@ -500,7 +501,6 @@ not shared. Each team member can have different settings.
 name: my-brain
 description: my-brain knowledge base
 git:
-  default_branch: main
   commit_prefix: "brain:"
 ```
 

@@ -155,8 +155,9 @@ contradicts a documented decision, it flags the conflict.
 
 ```bash
 kluris dream         # regenerate maps, fix links, validate structure
-kluris push          # commit and push to git (if brain uses git)
-kluris pull          # fetch remote changes; asks to merge origin/main if on another branch
+kluris branch        # show, switch, or create branches
+kluris push          # commit and push to the current branch
+kluris pull          # pull remote changes for the current branch
 kluris status        # brain tree, neuron counts, recent changes
 kluris mri           # generate visualization, prints the link to open in your browser
 ```
@@ -316,8 +317,9 @@ Empty -- build your own structure from scratch.
 | `kluris neuron <name>` | Create a neuron (optionally with `--lobe` and `--template`) |
 | `kluris lobe <name>` | Create a new lobe (optionally with `--parent` for nesting) |
 | `kluris dream` | Regenerate maps, fix links, validate structure |
-| `kluris push` | Commit and push brain changes to git |
-| `kluris pull` | Pull remote changes; ask to merge `origin/<default>` when on another branch |
+| `kluris branch [name]` | Show, switch, or create a git branch (`--list` to see all) |
+| `kluris push` | Commit and push to the current branch |
+| `kluris pull` | Pull remote changes for the current branch |
 | `kluris mri` | Visualize the brain (opens in browser by default) |
 | `kluris templates` | List available neuron templates |
 | `kluris install-skills` | Install the `/kluris` (or `/kluris-<name>`) skill for your AI agents |
@@ -348,7 +350,6 @@ not shared. Each team member can have different settings.
 name: my-brain
 description: my-brain knowledge base
 git:
-  default_branch: main
   commit_prefix: "brain:"
 ```
 

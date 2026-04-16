@@ -55,8 +55,7 @@ def temp_brain(tmp_path, temp_config):
         "name": "test-brain",
         "description": "Test brain",
         "type": "product-group",
-        "git": {"default_branch": "main",
-                "commit_prefix": "brain:"},
+        "git": {"commit_prefix": "brain:"},
         "agents": {"commands_for": ["claude"]},
     }), encoding="utf-8")
 
