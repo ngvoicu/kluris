@@ -1366,6 +1366,7 @@ def branch(name: str | None, brain_name: str | None, list_branches: bool, as_jso
             }))
         else:
             console.print(f"{bname}: on branch [bold]{current}[/bold]")
+            console.print(f"  switch: kluris branch <name>    list: kluris branch --list")
         return
 
     if name == current:
