@@ -288,7 +288,9 @@ subject matter experts. Curated by humans, read by every agent on the team.
 
 ```bash
 pipx install kluris
-kluris clone <this-repo-url>
+kluris clone <this-repo-url>               # if the brain lives at a git remote
+kluris register ~/path/to/brain            # if the brain is already on your disk
+kluris register ~/Downloads/brain.zip      # if a teammate shared it as a zip
 ```
 
 ### Start building your team knowledge

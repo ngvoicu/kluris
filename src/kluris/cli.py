@@ -674,6 +674,224 @@ def clone_cmd(url: str | None, path: str | None, branch_name: str | None, as_jso
         console.print(f"  Path: {dest}")
 
 
+def _locate_brain_root(dest: Path) -> Path | None:
+    """Return the directory inside ``dest`` that contains ``brain.md``.
+
+    Two shapes are accepted:
+    - ``dest/brain.md`` -- zip was packed from inside the brain.
+    - ``dest/<onedir>/brain.md`` -- zip was packed from the brain's parent.
+      This is the shape you get from ``git archive`` or most GitHub zip exports.
+
+    Returns None when neither shape matches.
+    """
+    if (dest / "brain.md").exists():
+        return dest
+    subdirs = [p for p in dest.iterdir() if p.is_dir() and p.name != "__MACOSX"]
+    if len(subdirs) == 1 and (subdirs[0] / "brain.md").exists():
+        return subdirs[0]
+    return None
+
+
+def _get_git_origin_url(brain_root: Path) -> str | None:
+    """Return ``git remote get-url origin`` or None when unavailable.
+
+    Silent no-op when the directory is not a git repo or has no origin remote.
+    """
+    if not (brain_root / ".git").exists():
+        return None
+    try:
+        result = subprocess.run(
+            ["git", "remote", "get-url", "origin"],
+            cwd=brain_root,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except (OSError, FileNotFoundError):
+        return None
+    if result.returncode != 0:
+        return None
+    url = result.stdout.strip()
+    return url or None
+
+
+@cli.command("register")
+@click.argument("source", required=False)
+@click.option("--dest", "extract_dest", help="Where to extract a zip (default: ~/<basename>)")
+@click.option("--json", "as_json", is_flag=True, help="JSON output")
+def register_cmd(source: str | None, extract_dest: str | None, as_json: bool):
+    """Register an existing brain already on disk, or extract a brain zip and register it.
+
+    Counterpart to ``kluris clone``. Use clone when the brain lives at a git
+    remote. Use register when the brain is already a directory on your disk
+    (e.g. a teammate handed you a zip or you restored from backup).
+
+    The brain stays where it is -- directory registration is in-place, no copy.
+    Zip sources are extracted first, then registered the same way.
+
+    \b
+      kluris register ~/brains/acme-sme
+      kluris register ~/Downloads/acme-sme.zip
+      kluris register ~/Downloads/acme-sme.zip --dest ~/work/acme-sme
+    """
+    import shutil
+    import zipfile
+
+    if not source:
+        console.print("\n[bold]Register a brain[/bold]\n")
+        source = click.prompt("  Path to brain directory or .zip", type=str)
+        console.print()
+
+    source_path = Path(source).expanduser()
+    is_zip = source_path.suffix.lower() == ".zip"
+    extracted_dest: Path | None = None
+
+    try:
+        if is_zip:
+            if not source_path.exists() or not source_path.is_file():
+                raise click.ClickException(f"Zip file not found: {source_path}")
+
+            if extract_dest:
+                dest = Path(extract_dest).expanduser().resolve()
+            else:
+                dest = (Path.home() / source_path.stem).resolve()
+
+            if dest.exists() and dest.is_dir() and any(dest.iterdir()):
+                raise click.ClickException(
+                    f"Destination {dest} already exists and is not empty. "
+                    "Pass --dest with an empty or non-existent directory."
+                )
+            if dest.exists() and not dest.is_dir():
+                raise click.ClickException(
+                    f"Destination {dest} exists and is not a directory."
+                )
+
+            dest.mkdir(parents=True, exist_ok=True)
+            extracted_dest = dest
+
+            # Zip slip defense: extractall() on Python < 3.12 does not validate
+            # member paths. Walk members first, reject any that escape ``dest``.
+            resolved_dest = dest.resolve()
+            with zipfile.ZipFile(source_path) as zf:
+                for member in zf.namelist():
+                    member_path = (resolved_dest / member).resolve()
+                    try:
+                        member_path.relative_to(resolved_dest)
+                    except ValueError:
+                        raise click.ClickException(
+                            f"Zip contains unsafe path outside destination: {member}"
+                        )
+                zf.extractall(dest)
+
+            brain_root = _locate_brain_root(dest)
+            if brain_root is None:
+                raise click.ClickException(
+                    "Zip does not contain a Kluris brain (missing brain.md)."
+                )
+        else:
+            if not source_path.exists():
+                raise click.ClickException(f"Path not found: {source_path}")
+            if not source_path.is_dir():
+                raise click.ClickException(
+                    f"{source_path} is not a directory or .zip file."
+                )
+            brain_root = source_path.resolve()
+            if not (brain_root / "brain.md").exists():
+                raise click.ClickException(
+                    f"{brain_root} is not a Kluris brain (missing brain.md)."
+                )
+
+        # brain_root is now a real brain directory. Identity comes from brain.md.
+        fallback_name = brain_root.name
+        if not validate_brain_name(fallback_name):
+            fallback_name = fallback_name.lower().replace(" ", "-")
+        name, description = _read_brain_identity(brain_root, fallback_name)
+
+        if not validate_brain_name(name):
+            raise click.ClickException(
+                f"Brain name '{name}' (from brain.md) is not a valid kluris brain name. "
+                "Edit brain.md so the H1 heading is lowercase alphanumeric + hyphens (max 48 chars, not 'all')."
+            )
+
+        existing_config = read_global_config()
+        if name in existing_config.brains:
+            existing_path = Path(existing_config.brains[name].path).resolve()
+            if existing_path == brain_root:
+                # Same name, same path -> no-op success (idempotent re-register).
+                if as_json:
+                    click.echo(json_lib.dumps({
+                        "ok": True,
+                        "name": name,
+                        "path": str(brain_root),
+                        "already_registered": True,
+                    }))
+                else:
+                    console.print(f"Brain [bold]{name}[/bold] is already registered at {brain_root}")
+                return
+            raise click.ClickException(
+                f"A brain named '{name}' is already registered at {existing_path}. "
+                f"Run 'kluris remove {name}' first if you want to re-register it from {brain_root}."
+            )
+
+        # Reject path-collision under a different name.
+        for existing_name, existing_entry in existing_config.brains.items():
+            if Path(existing_entry.path).resolve() == brain_root:
+                raise click.ClickException(
+                    f"The directory {brain_root} is already registered as brain "
+                    f"'{existing_name}'. Run 'kluris remove {existing_name}' first "
+                    "to re-register it under a different name."
+                )
+
+        inferred_type = infer_brain_type(brain_root)
+
+        # Author a local kluris.yml when the brain doesn't already have one.
+        # (kluris.yml is gitignored, so a fresh brain from a teammate won't
+        # carry one; we bootstrap it here so future commands work cleanly.)
+        if not (brain_root / "kluris.yml").exists():
+            from kluris.core.config import BrainConfig, GitConfig, write_brain_config
+
+            local_config = BrainConfig(
+                name=name,
+                description=description,
+                git=GitConfig(),
+            )
+            write_brain_config(local_config, brain_root)
+
+        brain_config = read_brain_config(brain_root)
+        remote_url = _get_git_origin_url(brain_root)
+
+        entry = BrainEntry(
+            path=str(brain_root),
+            repo=remote_url,
+            description=brain_config.description or description,
+            type=inferred_type,
+        )
+        register_brain(name, entry)
+        _do_install()
+    except Exception as exc:
+        # Cleanup contract:
+        # - zip source  -> remove the dir WE extracted (we created it, we own it)
+        # - dir source  -> NEVER delete; the user's brain lives there
+        if extracted_dest is not None:
+            shutil.rmtree(extracted_dest, ignore_errors=True)
+        if isinstance(exc, click.ClickException):
+            raise
+        raise click.ClickException(f"Register failed: {exc}") from exc
+
+    if as_json:
+        click.echo(json_lib.dumps({
+            "ok": True,
+            "name": name,
+            "path": str(brain_root),
+            "remote": remote_url,
+        }))
+    else:
+        console.print(f"Brain registered: [bold]{name}[/bold]")
+        console.print(f"  Path: {brain_root}")
+        if remote_url:
+            console.print(f"  Remote: {remote_url}")
+
+
 @cli.command("list")
 @click.option("--json", "as_json", is_flag=True, help="JSON output")
 def list_cmd(as_json: bool):

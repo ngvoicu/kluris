@@ -12,7 +12,7 @@ Kluris turns AI agents into team subject matter experts by giving them shared, h
 cd kluris-cli
 source .venv/bin/activate        # or: pipx install -e .
 pip install -e ".[dev]"          # dev install with pytest
-pytest tests/ -v                 # run all tests (290 tests)
+pytest tests/ -v                 # run all tests (473 tests)
 pytest tests/ --cov=kluris -q    # with coverage (90%+)
 pytest tests/test_create.py -v   # single test file
 ```
@@ -21,7 +21,7 @@ pytest tests/test_create.py -v   # single test file
 
 ```
 src/kluris/
-  cli.py              # Click CLI -- all 19 commands in one file (incl. search, wake-up, branch, pull)
+  cli.py              # Click CLI -- all 20 commands in one file (incl. search, wake-up, branch, pull, register)
   core/
     config.py          # Pydantic models (GlobalConfig, BrainConfig, BrainEntry)
     brain.py           # BRAIN_TYPES, NEURON_TEMPLATES, scaffold_brain(), validate_brain_name()
@@ -101,9 +101,11 @@ The skill body contains six load-bearing sections (in order):
 - **2+ brains + non-interactive** (`--json`, no TTY, or `KLURIS_NO_PROMPT=1`) → resolver errors with the available brains listed and a hint to pass `--brain NAME` or `--brain all`.
 - **Stale brain paths** → annotated `(missing)` in the picker; resolver raises `ClickException` if the user actually tries to use one.
 
-## CLI Commands (19)
+## CLI Commands (20)
 
-create, clone, list, status, search, wake-up, neuron, lobe, dream, branch, push, pull, mri, templates, install-skills, uninstall-skills, remove, doctor, help
+create, clone, register, list, status, search, wake-up, neuron, lobe, dream, branch, push, pull, mri, templates, install-skills, uninstall-skills, remove, doctor, help
+
+- **`register` (v2.9.0)** -- register a brain already on disk (in-place, no copy) or extract a `.zip` and register the extracted tree. Sibling to `clone` for the non-git-remote path: on-disk directories, teammate-shared zips, restored backups. Identity comes from `brain.md` H1. Auto-detects `git remote get-url origin` to populate `repo` when the directory already has a git remote. Zip extraction defends against zip-slip by resolving each member and rejecting anything outside the extraction root. Cleanup contract: zip source -> rmtree(extracted dir) on any failure (we created it); directory source -> NEVER delete (the user's real brain lives there). Calls `_do_install()` on success so agent skills refresh to include the new brain.
 
 ## Brain File Structure
 
@@ -135,7 +137,7 @@ create, clone, list, status, search, wake-up, neuron, lobe, dream, branch, push,
 - **search output schema** -- `{ok, brain, query, total, results[{file, title, matched_fields[], snippet, score, deprecated}]}`
 - **dream uses batch git** -- `_sync_brain_state` calls `is_git_repo()` once, then `git_log_file_dates()` once to fetch `(latest_by_path, created_by_path)`. For a 100-neuron brain that's exactly 2 subprocess calls (was ~200). Uses `%aI` (author date).
 - **mri output schema (unified)** -- always `{ok, brains: [{name, output_path, preflight_fixes, nodes, edges}, ...]}` regardless of brain count.
-- **`_do_install` callers** -- five commands rewrite installed SKILL.md files: `create`, `clone`, `remove`, `install-skills`, and `doctor` (added in v2.2.2). `doctor` is the muscle-memory refresh path after `pipx upgrade kluris` -- it runs prerequisite checks AND `_do_install`. Pass `--no-refresh` to skip the refresh.
+- **`_do_install` callers** -- six commands rewrite installed SKILL.md files: `create`, `clone`, `register` (v2.9.0), `remove`, `install-skills`, and `doctor` (added in v2.2.2). `doctor` is the muscle-memory refresh path after `pipx upgrade kluris` -- it runs prerequisite checks AND `_do_install`. Pass `--no-refresh` to skip the refresh.
 - **`_is_interactive()`** helper wraps `sys.stdin.isatty()` so tests can monkeypatch it (CliRunner replaces sys.stdin during invoke and `monkeypatch.setattr("sys.stdin.isatty", ...)` does not survive the swap)
 
 ## Migration from kluris ≤ 1.6.x
@@ -146,7 +148,7 @@ create, clone, list, status, search, wake-up, neuron, lobe, dream, branch, push,
 
 ## Testing
 
-- 290 tests across 28 test files
+- 473 tests across 34 test files (test_register.py adds 19 tests for the v2.9.0 register command)
 - conftest.py has 5 fixtures: cli_runner, temp_config, temp_home, temp_brain, bare_remote
 - Tests use monkeypatch for KLURIS_CONFIG and HOME env vars
 - Git tests use real git in tmp_path (not mocked)

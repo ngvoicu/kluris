@@ -1,6 +1,6 @@
 # Kluris
 
-> Turn your AI agents into team subject matter experts.
+> Kluris turns a git repository into a brain — making your AI coding agent your team's SME.
 
 *When your best engineer sleeps, Kluris doesn't. When they leave, Kluris stays.*
 
@@ -16,6 +16,41 @@ Knowledge is stored in a **brain**: a git-backed repo of structured markdown
 that agents read, search, and apply automatically. The human and agent curate
 the brain together -- the agent proposes what to document, the human reviews
 and approves every piece.
+
+## Why it saves tokens
+
+A brain is a pre-digested summary your agent reads instead of the raw files.
+Without it, the agent crawls the whole repo (and every sibling repo it needs
+context from) on every new chat. With a brain, it loads one compact snapshot
+and jumps straight to the neuron it needs.
+
+**Without kluris** — illustrative cold-start on a medium repo:
+
+```text
+tree + README + CLAUDE.md         ~3,000 tokens
+grep for related symbols          ~2,000 tokens
+read 4-8 relevant files           ~15,000 tokens
+read 2-3 sibling-project files    ~8,000 tokens
+                                  ─────────────
+                                  ~28,000 tokens just to orient
+```
+
+**With kluris** — same task, brain-backed:
+
+```text
+kluris wake-up --json snapshot    ~1,200 tokens (brain.md + lobes + recent + glossary)
+kluris search "<query>" --json    ~400 tokens   (ranked hits with snippets)
+read 1-2 matching neurons         ~1,500 tokens
+                                  ─────────────
+                                  ~3,100 tokens — ~9x less context burned on orientation
+```
+
+Rough estimates, not a benchmark — actual numbers depend on repo size, agent,
+and prompt style. The shape holds: the brain replaces a wide crawl with a
+targeted lookup. Savings compound the more projects you touch. Agents that
+would have re-read five repos' worth of source per morning read one brain
+snapshot instead -- same answers, a fraction of the context window, which
+means more room for the actual work.
 
 ### Why not a wiki, Notion, or CLAUDE.md?
 
@@ -137,8 +172,17 @@ Code that inherit a terminal but cannot block on prompts).
 **In your terminal:**
 
 ```bash
-kluris clone git@github.com:team/brain.git    # clone and register
+kluris clone git@github.com:team/brain.git    # fetch from a git remote and register
+kluris register ~/brains/acme-sme             # register a brain that is already on disk
+kluris register ~/Downloads/acme-sme.zip      # unpack a brain zip and register it
 ```
+
+Use `clone` when the brain lives at a git remote. Use `register` when a
+teammate handed you a zip, the brain is sitting in a backup folder, or the
+brain is already on disk for any other reason. Directory registration is
+in-place -- Kluris does not copy or move the source. Zip registration
+extracts into `~/<zip-basename>` by default, or `--dest <path>` if you want
+it elsewhere.
 
 ### Learning a project
 
@@ -349,6 +393,7 @@ Run these in bash, zsh, fish, or PowerShell. They handle setup, git, maintenance
 |---------|-------------|
 | `kluris create` | Create a new brain (interactive wizard) |
 | `kluris clone <url>` | Clone a brain from git |
+| `kluris register <path-or-zip>` | Register an existing brain on disk, or extract a brain zip and register it |
 | `kluris list` | List registered brains |
 | `kluris status` | Brain tree, neuron counts, recent changes |
 | `kluris search <query>` | Ranked search across neurons, glossary, brain.md (`--lobe`, `--tag`, `--limit`, `--json`) |

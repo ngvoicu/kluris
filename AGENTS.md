@@ -9,7 +9,7 @@ Published to PyPI as `kluris`. Source: `ngvoicu/kluris-cli`.
 
 ```bash
 pip install -e ".[dev]"          # dev install
-pytest tests/ -v                 # 290 tests
+pytest tests/ -v                 # 473 tests
 pytest tests/ --cov=kluris -q    # 90%+ coverage
 ```
 
@@ -22,7 +22,7 @@ No Jinja2 templates -- dependency was removed.
 
 ## Key Files
 
-- `src/kluris/cli.py` -- all 18 Click commands, wizard logic, KlurisGroup error handler, `search` + `wake-up` commands and collectors, `_resolve_brains` (picker + non-TTY guard + `--brain all`), `_do_install` (per-destination atomic stage-then-rename), `_sync_brain_state` (batch git log + `update_frontmatter(preloaded=...)`)
+- `src/kluris/cli.py` -- all 20 Click commands (incl. `register` added in v2.9.0), wizard logic, KlurisGroup error handler, `search` + `wake-up` commands and collectors, `_resolve_brains` (picker + non-TTY guard + `--brain all`), `_do_install` (per-destination atomic stage-then-rename), `_sync_brain_state` (batch git log + `update_frontmatter(preloaded=...)`), `_locate_brain_root` + `_get_git_origin_url` helpers used by register
 - `src/kluris/core/agents.py` -- AGENT_REGISTRY (8 agents), per-brain SKILL.md renderer (`render_skill(skill_name, brain_name, brain_path, has_git, brain_description)`). With 1 brain registered the skill is named `kluris`; with N brains each gets `kluris-<name>`. SKILL_BODY contains a single-brain header, Bootstrap, Query first, Intent detection (uses `kluris search` as the primary search path), Writing rules, and CLI commands sections. Brain paths are emitted in POSIX form via `_posix_path()` so bash on Windows handles them correctly.
 - `src/kluris/core/brain.py` -- BRAIN_TYPES, NEURON_TEMPLATES, scaffold_brain(), _generate_readme(), validate_brain_name() (rejects reserved word `all`, max 48 chars)
 - `src/kluris/core/config.py` -- Pydantic models, config read/write (with legacy `default_brain` shim), register/unregister
@@ -63,7 +63,8 @@ non-blocking warnings (text + `--json`). `kluris wake-up --json` exposes a
 - brain.md is lightweight (root lobes only, no neuron index)
 - Agents navigate hierarchically: wake-up snapshot -> brain.md -> map.md -> neurons
 - Slash command: one per registered brain. With 1 brain → `/kluris`. With 2+ brains → `/kluris-<name>` per brain. Each handles search, learn, remember, and create -- push and dream are CLI-only. The search intent tells the agent to call `kluris search "<query>" --brain <name> --json` via Bash as the fast path and fall back to manual brain.md → map.md navigation only if the CLI returns zero results.
-- `_do_install()` is called by five commands: `create`, `clone`, `remove`, `install-skills`, and `doctor` (added in v2.2.2). `doctor` is the post-`pipx upgrade kluris` refresh path -- run it once after every kluris version bump to refresh the skill files baked into `~/.<agent>/skills/kluris*`. Pass `--no-refresh` to keep doctor read-only.
+- `_do_install()` is called by six commands: `create`, `clone`, `register` (v2.9.0), `remove`, `install-skills`, and `doctor` (added in v2.2.2). `doctor` is the post-`pipx upgrade kluris` refresh path -- run it once after every kluris version bump to refresh the skill files baked into `~/.<agent>/skills/kluris*`. Pass `--no-refresh` to keep doctor read-only.
+- `register` (v2.9.0) is the sibling of `clone` for non-git sources. Takes a directory path (registers in-place, no copy) or a `.zip` file (extracts to `~/<basename>` or `--dest`, then registers). Identity comes from `brain.md` H1 via `_read_brain_identity`. Auto-detects `git remote get-url origin` via `_get_git_origin_url` to populate `repo`. Zip handling validates each member's resolved path stays inside the extraction root (zip-slip defense; Python < 3.12's `extractall` does not do this). Cleanup: zip source → remove extracted dir on failure; directory source → NEVER delete.
 - Version must be updated in both pyproject.toml and src/kluris/__init__.py
 - Tests must pass before pushing: `pytest tests/ -q`
 - CI runs on PR only (ubuntu, macos, windows x Python 3.10-3.13)
