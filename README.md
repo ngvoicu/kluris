@@ -4,6 +4,8 @@
 
 *When your best engineer sleeps, Kluris doesn't. When they leave, Kluris stays.*
 
+> 🎥 **New here?** Take the [10-slide guided tour at kluris.io](https://kluris.io/presentation.html) — install, first brain, agent workflows, multi-brain, git collaboration, and the MRI visualization, end to end.
+
 ## What is Kluris?
 
 Kluris gives every AI agent on your team shared knowledge -- architecture,
