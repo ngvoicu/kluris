@@ -294,6 +294,18 @@ Folders are **lobes** (knowledge regions). Files are **neurons** (knowledge
 units). Links between neurons are **synapses**. Auto-generated `map.md` files
 keep everything navigable.
 
+## Visualize with `kluris mri`
+
+Run `kluris mri` to generate a self-contained HTML file that renders the whole
+brain as an interactive map — lobes as coloured clusters, neurons as nodes,
+synapses as the lines between them. Click any neuron to open its rendered
+markdown and related-neuron tabs.
+
+![kluris mri — overview of the ngvoicu-sme brain, with coloured lobes and synapse links](https://kluris.io/mri-overview.png)
+
+The HTML file is yours — no server, no account, no external calls. Commit it
+to the brain repo, email it, drop it in Slack.
+
 ## Brain types (scaffolding only)
 
 Types determine the initial folder structure. After creation, every brain
