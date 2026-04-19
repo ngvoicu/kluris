@@ -472,6 +472,47 @@ git:
 
 Claude Code, Cursor, Windsurf, GitHub Copilot, Codex, Gemini CLI, Kilo Code, Junie
 
+## Pair with Specmint
+
+Kluris is the brain. [Specmint](https://specmint.io) turns a feature request
+into a persistent spec built from deep research and iterative interviews.
+Pair them and the research phase starts half-done — grounded in your code
+*and* the knowledge your team already agreed to.
+
+**Inside your AI coding agent:**
+
+```text
+> /specmint-core:forge add OAuth sign-in with GitHub
+```
+
+Phase 1a reads your codebase. Phase 1b consults the brain
+(`/kluris what do we know about auth`). Phase 2 asks only the questions
+neither can answer. Phase 3 writes a spec where every decision references
+a neuron.
+
+Two flavors — both installable like the kluris skill:
+
+| Plugin | What it is |
+|--------|-----------|
+| [`specmint-core`](https://github.com/ngvoicu/specmint-core) | Spec-first workflow — Research · Interview · Spec · Implement |
+| [`specmint-tdd`](https://github.com/ngvoicu/specmint-tdd) | Same forge flow with strict TDD — a failing test before any implementation |
+
+**Install — Claude Code:**
+
+```bash
+/plugin marketplace add ngvoicu/specmint-core
+/plugin marketplace add ngvoicu/specmint-tdd
+```
+
+**Install — any AI tool** (Codex, Cursor, Windsurf, Cline, Gemini CLI, …):
+
+```bash
+npx skills add ngvoicu/specmint-core
+npx skills add ngvoicu/specmint-tdd
+```
+
+More at [specmint.io](https://specmint.io).
+
 ## License
 
 MIT
