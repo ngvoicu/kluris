@@ -317,40 +317,92 @@ returned by the CLI, not from memory.
 **Review the brain** -- "review the brain", "audit the brain",
 "make the brain nice", "check brain health", "what's wrong with the brain".
 
-This is a read-mostly diagnostic pass. Goal: produce a grouped findings
-report, then offer to fix items one category at a time under the approval
-protocol. Do NOT auto-edit anything during the review step itself.
+Goal: produce a grouped findings report covering both what's broken AND
+what could be better organised. Read-mostly during the review itself;
+Do NOT auto-edit anything. Propose fixes and restructures one category
+at a time under the approval protocol.
 
 1. **Run the diagnostics.** Via Bash, in this order:
-   - `kluris dream{brain_flag_hint_inline} --json` -- full validator
-     output: `broken_synapses`, `one_way_synapses`, `orphans`, `deprecation`.
+   - `kluris dream{brain_flag_hint_inline} --json` -- validator output:
+     `broken_synapses`, `one_way_synapses`, `orphans`, `deprecation`.
    - `kluris wake-up{brain_flag_hint_inline} --json` -- lobe inventory,
      neuron totals per lobe, glossary terms.
-2. **Categorise findings by severity:**
+2. **Read representative content.** Diagnostics alone don't surface
+   missing inline links, undefined glossary terms, overlapping neurons,
+   or missing-endpoint gaps. Read every lobe's `map.md` plus each
+   neuron's body. Yes this is a lot of reads -- a review that skips
+   reading is not a review.
+3. **Categorise findings into four buckets:**
    - **Broken (must fix):** broken synapses, frontmatter type errors,
      neurons whose declared `parent:` file doesn't exist.
-   - **Drift (should fix):** one-way synapses, inline markdown links not
-     mirrored in `related:` (or vice versa), deprecated neurons still
-     referenced by active neurons, deprecated neurons with no `replaced_by`.
-   - **Gaps (nice to have):** orphan neurons (no incoming or outgoing
-     edges), stub neurons (bodies with fewer than 10 non-empty lines),
-     neurons with no tags, lobes with no neurons, missing standard files
-     in `projects/<prj>/` lobes (overview / architecture / apis /
-     data-model / conventions / deployment — only flag the ones that
-     fit the project's actual shape), REST-API projects missing
-     `openapi.yml` + `endpoints/`, glossary terms used inline but not
-     defined in `glossary.md`, glossary entries never referenced.
-3. **Produce the report.** One compact grouped list. For each category
-   show the count and up to 5 sample entries with their file paths; if
-   there are more, say "N more — ask to see the full list". Do not dump
-   200 items at once.
-4. **Offer to fix, by category.** Ask which category the user wants to
-   start with. Then walk through items one at a time, proposing a fix
-   for each under the approval protocol. Never batch-fix without consent.
-5. **Do not invent findings.** Every item must point at a real file or
-   a real missing entry surfaced by the diagnostic output or a read of
-   the file. If the brain is clean, say so -- an empty report is the
-   correct answer when nothing is broken.
+   - **Drift (should fix):** one-way synapses, inline markdown links
+     not mirrored in `related:` (or vice versa), deprecated neurons
+     still referenced by active ones, deprecated neurons with no
+     `replaced_by`.
+   - **Gaps (content missing that should exist):**
+     * Orphan neurons (no incoming or outgoing edges).
+     * Stub neurons (bodies with fewer than 10 non-empty lines).
+     * Neurons with no tags.
+     * Neurons that mention another neuron's topic in prose but have
+       no inline `[text](path)` link to it -- propose the missing link.
+     * Neurons that link to siblings inline but don't list them in
+       `related:` (or vice versa) -- the two layers should stay in
+       sync on every edge.
+     * Domain terms used inline (acronyms, jargon, product names) that
+       are NOT defined in `glossary.md` -- propose additions.
+     * Glossary entries never referenced anywhere (dead terms).
+     * REST-API projects (evidence: API docs, controllers, route
+       files) missing the `openapi.yml` + `endpoints/` pair defined
+       in the OpenAPI -> endpoints convention above.
+     * `projects/<prj>/` lobes missing standard neurons that peer
+       projects have (overview / architecture / apis / data-model /
+       conventions / deployment) -- only flag the ones whose peers
+       actually wrote them.
+     * Lobes that exist but contain no neurons (empty scaffolding).
+   - **Restructure (proposals to make the brain nicer):**
+     * Overlapping neurons -- two+ neurons covering substantially the
+       same topic. Propose merge (pick the canonical) or split (by
+       scope) as appropriate.
+     * Repeated patterns across projects -- the same CI/CD flow,
+       deployment topology, or team convention documented verbatim
+       in multiple project lobes. Propose extracting the shared piece
+       into `knowledge/` (or equivalent cross-cutting lobe) and
+       linking from each project.
+     * Sublobe candidates -- a flat lobe with a visible cluster of
+       related neurons (e.g. 8 auth-related neurons in a single
+       `projects/foo/` directory). Propose grouping them under a
+       sublobe (`projects/foo/auth/`).
+     * New-lobe candidates -- dominant themes scattered across the
+       brain with no matching lobe (e.g. many incident postmortems
+       spread across project lobes -> propose an `incidents/` lobe).
+     * Bloated neurons -- a single file past ~200 lines or covering
+       many distinct sub-topics. Propose splitting by H2 section into
+       siblings, with the original as an index.
+4. **Produce the report.** One compact grouped list. For each category,
+   show the count and up to 5 sample entries with file paths. For
+   Restructure items, add a one-line rationale per entry explaining
+   *why* the change is worth it. If there are more than 5, say
+   "N more -- ask to see the full list". Do not dump 200 items at once.
+5. **Offer to act, by category.** Ask which category to start with.
+   Then walk through items one at a time:
+   - Broken / Drift / Gaps -> propose the concrete fix under the
+     approval protocol.
+   - Restructure -> propose the structural change (list the neurons
+     involved, the new file layout, every `related:` edge and inline
+     link that must be updated as a consequence), get approval, then
+     walk the batch with the same create-neuron / move-file protocol
+     used during learning. After each multi-file restructure, run
+     `kluris dream{brain_flag_hint_inline}` and resolve anything it
+     flags before moving to the next item.
+   Never batch-fix without consent. Restructures especially: one
+   proposal at a time -- multi-file moves that weren't reviewed can
+   cascade into broken synapses on the very pass that was supposed to
+   clean them up.
+6. **Do not invent findings or proposals.** Every item must point at
+   real files, real content, or real missing entries surfaced by
+   diagnostics or by reading the brain. If the brain is clean and
+   well-organised, say so -- an empty report is the correct answer
+   when nothing is broken.
 
 ## Writing rules
 

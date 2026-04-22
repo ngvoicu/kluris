@@ -38,8 +38,10 @@ def _install(tmp_path, agent_name="claude", skill_name="kluris", brain_name="tes
 def test_skill_has_review_intent():
     """Review is a distinct read-mostly intent so agents know what to do when
     the user says "review the brain" or "make the brain nice". Must categorise
-    findings (broken/drift/gaps) and NOT auto-edit — propose fixes under the
-    approval protocol instead."""
+    findings into four buckets (broken/drift/gaps/restructure) and NOT
+    auto-edit — propose fixes and restructures under the approval protocol.
+    Must also cover organisation proposals (pattern extraction, new lobes,
+    sublobe grouping) so the review actually makes the brain nicer."""
     body = _render()
     assert "Review the brain" in body
     assert "review the brain" in body
@@ -48,11 +50,20 @@ def test_skill_has_review_intent():
     # Must explicitly forbid auto-editing — review is a diagnostic, fixes
     # go through the approval protocol.
     assert "Do NOT auto-edit" in body
-    # Must reference the three severity buckets by name so agents group
-    # the findings consistently.
+    # Four severity/category buckets, in order.
     assert "Broken (must fix):" in body
     assert "Drift (should fix):" in body
-    assert "Gaps (nice to have):" in body
+    assert "Gaps (content missing that should exist):" in body
+    assert "Restructure (proposals to make the brain nicer):" in body
+    # Gaps must cover the specific items the user called out.
+    assert "inline `[text](path)` link" in body
+    assert "`glossary.md`" in body
+    assert "`openapi.yml` + `endpoints/`" in body
+    # Restructure must cover organisation moves.
+    assert "Overlapping neurons" in body
+    assert "Repeated patterns across projects" in body
+    assert "Sublobe candidates" in body
+    assert "New-lobe candidates" in body
 
 
 def test_skill_has_openapi_endpoints_convention():
