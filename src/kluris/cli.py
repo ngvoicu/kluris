@@ -645,7 +645,7 @@ def create(name: str | None, desc: str | None, base_path: str | None,
         console.print(f"  Lobes: {lobe_count}")
         console.print()
         console.print(
-            "[bold green]Run /kluris in any project to start populating your brain.[/bold green]"
+            "[bold green]Run /kluris in any AI agent to start populating your brain.[/bold green]"
         )
 
 

@@ -482,13 +482,13 @@ Pair them and the research phase starts half-done — grounded in your code
 **Inside your AI coding agent:**
 
 ```text
-> /specmint-core:forge add OAuth sign-in with GitHub
+> /kluris let's spec out adding OAuth sign-in with GitHub
 ```
 
-Phase 1a reads your codebase. Phase 1b consults the brain
-(`/kluris what do we know about auth`). Phase 2 asks only the questions
-neither can answer. Phase 3 writes a spec where every decision references
-a neuron.
+The `/kluris` skill sees this is multi-step work and follows the embedded
+specmint playbook. Phase 1a reads your codebase. Phase 1b consults the brain.
+Phase 2 asks only the questions neither can answer. Phase 3 writes a spec
+where every decision references a neuron.
 
 Two flavors — both installable per brain as Kluris companions:
 
