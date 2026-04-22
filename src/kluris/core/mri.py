@@ -2023,11 +2023,17 @@ function openModal(node) {{
     .filter(n => n && n.type === 'neuron')
     .sort((a, b) => a.title.localeCompare(b.title));
   const NAV_COLLAPSE = 6;
+  // Disambiguator: only prefix a nav button with its parent folder when that
+  // parent differs from the current node's parent. In a same-project cluster
+  // every button would otherwise read "btb / X" and the repeated prefix
+  // hides the actual neuron name.
+  const currentParts = node.path.split('/');
+  const currentParent = currentParts.length >= 2 ? currentParts[currentParts.length - 2] : '';
   const allNavHtml = connected.map(n => {{
     const parts = n.path.split('/');
     const parent = parts.length >= 2 ? parts[parts.length - 2] : '';
-    const label = parent ? `${{parent}} / ${{n.title}}` : n.title;
-    return `<button type="button" class="modal-nav-btn" data-modal-nav="${{n.id}}">${{escapeHtml(label)}}</button>`;
+    const label = parent && parent !== currentParent ? `${{parent}} / ${{n.title}}` : n.title;
+    return `<button type="button" class="modal-nav-btn" data-modal-nav="${{n.id}}" title="${{escapeHtml(n.path)}}">${{escapeHtml(label)}}</button>`;
   }});
   const hasOverflow = connected.length > NAV_COLLAPSE;
   function renderNav(expanded) {{

@@ -107,6 +107,21 @@ def test_html_colors_yaml_neurons_with_periwinkle(tmp_path):
     assert "node.file_type === 'yaml'" in html
 
 
+def test_html_nav_buttons_omit_parent_prefix_when_same_folder(tmp_path):
+    """The modal's "Connected nodes" buttons must only prefix with the parent
+    folder when it differs from the current node's parent. Otherwise every
+    sibling in a single-project cluster reads "btb / X" and the prefix just
+    hides the actual neuron name."""
+    brain = _make_brain_with_yaml_neurons(tmp_path)
+    output = tmp_path / "brain-mri.html"
+    generate_mri_html(brain, output)
+    html = output.read_text(encoding="utf-8")
+    # New disambiguator check — label is prefixed only when parents differ.
+    assert "parent && parent !== currentParent" in html
+    # currentParent is computed from the open node's own path.
+    assert "const currentParent" in html
+
+
 def test_html_modal_link_regex_matches_yaml(tmp_path):
     """The modal's body-link regex must match .md, .yml, AND .yaml targets."""
     brain = _make_brain_with_yaml_neurons(tmp_path)
