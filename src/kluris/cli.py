@@ -1026,21 +1026,84 @@ def companion():
     """Manage embedded companion playbooks per brain."""
 
 
+def _enabled_union(brains: list[tuple[str, dict]]) -> list[str]:
+    """Return companions currently enabled on any of the resolved brains."""
+    seen: set[str] = set()
+    for _, entry in brains:
+        try:
+            cfg = read_brain_config(Path(entry["path"]))
+        except Exception:
+            continue
+        seen.update(cfg.companions)
+    return companions.normalize(list(seen))
+
+
+def _prompt_companions_to_remove(enabled: list[str]) -> list[str]:
+    """Interactive picker listing only currently-enabled companions."""
+    if not enabled:
+        return []
+    if len(enabled) == 1:
+        only = enabled[0]
+        if click.confirm(f"  Remove {only}?", default=True):
+            return [only]
+        return []
+    console.print("  Which companion(s) to remove?")
+    for i, n in enumerate(enabled, start=1):
+        console.print(f"    [{i}] {n}")
+    console.print(f"    [{len(enabled) + 1}] all")
+    console.print(f"    [{len(enabled) + 2}] cancel")
+    raw = click.prompt(
+        "  Choice",
+        type=click.IntRange(1, len(enabled) + 2),
+        show_choices=False,
+    )
+    if raw == len(enabled) + 2:
+        return []
+    if raw == len(enabled) + 1:
+        return list(enabled)
+    return [enabled[raw - 1]]
+
+
 @companion.command("add")
-@click.argument("name", type=click.Choice(list(companions.KNOWN)))
+@click.argument("name", type=click.Choice(list(companions.KNOWN)), required=False)
 @click.option("--brain", "brain_name", help="Brain name or 'all'")
 @click.option("--json", "as_json", is_flag=True, help="JSON output")
-def companion_add(name: str, brain_name: str | None, as_json: bool):
-    """Opt one or more brains into an embedded companion playbook."""
+def companion_add(name: str | None, brain_name: str | None, as_json: bool):
+    """Opt one or more brains into an embedded companion playbook.
+
+    Runs an interactive picker when no NAME is given. Pass NAME (or use --json)
+    to skip the wizard.
+    """
     brains = _resolve_brains(brain_name, allow_all=True, as_json=as_json)
+
+    if name:
+        selected = [name]
+    elif _wizard_can_prompt(as_json):
+        selected = _prompt_for_companions()
+    else:
+        raise click.ClickException(
+            "Companion name is required in non-interactive mode. "
+            f"Pass one of: {', '.join(companions.KNOWN)}"
+        )
+
+    if not selected:
+        payload = {"ok": True, "names": [], "brains": [b for b, _ in brains],
+                   "opted_in": True, "files_copied": False}
+        if as_json:
+            click.echo(json_lib.dumps(payload))
+        else:
+            console.print("No companion selected. Nothing to do.")
+        return
+
     home = _home_path()
-    companions.install(name, home)
+    for cname in selected:
+        companions.install(cname, home)
 
     changed: list[str] = []
     for brain, entry in brains:
         brain_path = Path(entry["path"])
         cfg = read_brain_config(brain_path)
-        cfg.companions = companions.normalize([*cfg.companions, name])
+        cfg.companions = companions.normalize([*cfg.companions, *selected])
         write_brain_config(cfg, brain_path)
         changed.append(brain)
 
@@ -1048,34 +1111,64 @@ def companion_add(name: str, brain_name: str | None, as_json: bool):
 
     payload = {
         "ok": True,
-        "name": name,
+        "names": selected,
         "brains": changed,
         "opted_in": True,
         "files_copied": True,
     }
+    if len(selected) == 1:
+        payload["name"] = selected[0]
     if as_json:
         click.echo(json_lib.dumps(payload))
     else:
-        console.print(f"Added companion [bold]{name}[/bold] to: {', '.join(changed)}")
+        label = ", ".join(selected)
+        console.print(f"Added companion(s) [bold]{label}[/bold] to: {', '.join(changed)}")
 
 
 @companion.command("remove")
-@click.argument("name", type=click.Choice(list(companions.KNOWN)))
+@click.argument("name", type=click.Choice(list(companions.KNOWN)), required=False)
 @click.option("--brain", "brain_name", help="Brain name or 'all'")
 @click.option("--json", "as_json", is_flag=True, help="JSON output")
-def companion_remove(name: str, brain_name: str | None, as_json: bool):
+def companion_remove(name: str | None, brain_name: str | None, as_json: bool):
     """Remove a companion opt-in from one or more brains.
 
-    This updates brain config and regenerates SKILL.md files. The global
-    companion copy under ~/.kluris/companions is kept for cheap reuse.
+    Runs an interactive picker listing currently-enabled companions when no
+    NAME is given. The global companion copy under ~/.kluris/companions is
+    kept for cheap reuse.
     """
     brains = _resolve_brains(brain_name, allow_all=True, as_json=as_json)
+
+    if name:
+        selected = [name]
+    elif _wizard_can_prompt(as_json):
+        enabled = _enabled_union(brains)
+        if not enabled:
+            raise click.ClickException(
+                "No companions are enabled on the selected brain(s)."
+            )
+        selected = _prompt_companions_to_remove(enabled)
+    else:
+        raise click.ClickException(
+            "Companion name is required in non-interactive mode. "
+            f"Pass one of: {', '.join(companions.KNOWN)}"
+        )
+
+    if not selected:
+        payload = {"ok": True, "names": [], "brains": [b for b, _ in brains],
+                   "opted_in": False, "files_kept": True}
+        if as_json:
+            click.echo(json_lib.dumps(payload))
+        else:
+            console.print("No companion selected. Nothing to do.")
+        return
 
     changed: list[str] = []
     for brain, entry in brains:
         brain_path = Path(entry["path"])
         cfg = read_brain_config(brain_path)
-        cfg.companions = companions.normalize([c for c in cfg.companions if c != name])
+        cfg.companions = companions.normalize(
+            [c for c in cfg.companions if c not in selected]
+        )
         write_brain_config(cfg, brain_path)
         changed.append(brain)
 
@@ -1083,16 +1176,19 @@ def companion_remove(name: str, brain_name: str | None, as_json: bool):
 
     payload = {
         "ok": True,
-        "name": name,
+        "names": selected,
         "brains": changed,
         "opted_in": False,
         "files_kept": True,
     }
+    if len(selected) == 1:
+        payload["name"] = selected[0]
     if as_json:
         click.echo(json_lib.dumps(payload))
     else:
+        label = ", ".join(selected)
         console.print(
-            f"Removed companion [bold]{name}[/bold] from: {', '.join(changed)}"
+            f"Removed companion(s) [bold]{label}[/bold] from: {', '.join(changed)}"
         )
         console.print("Runtime companion files were kept under ~/.kluris/companions.")
 
