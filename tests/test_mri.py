@@ -113,8 +113,11 @@ def test_html_modal_link_regex_matches_yaml(tmp_path):
     output = tmp_path / "brain-mri.html"
     generate_mri_html(brain, output)
     html = output.read_text(encoding="utf-8")
-    # The regex string in the JS source
-    assert r"[^)]+\.(md|yml|yaml)" in html
+    # The regex string in the JS source — the path portion accepts
+    # .md/.yml/.yaml and may be followed by an optional #anchor or ?query.
+    assert r"\.(md|yml|yaml)" in html
+    assert "(#[^)" in html  # anchor group present
+    assert "(\\?[^)" in html  # query group present
 
 
 def test_html_search_placeholder_mentions_yaml(tmp_path):

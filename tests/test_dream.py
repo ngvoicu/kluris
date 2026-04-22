@@ -120,6 +120,46 @@ def test_dream_reports_broken_links(tmp_path, monkeypatch):
     result = runner.invoke(cli, ["dream", "--json"])
     data = json.loads(result.output)
     assert data["broken_synapses"] >= 1
+    # --json payload now also carries the per-entry detail agents use to repair.
+    assert data["broken_synapses_detail"]
+    assert any(
+        e["file"].endswith("bad.md") and e["target"] == "./nonexistent.md"
+        for e in data["broken_synapses_detail"]
+    )
+
+
+def test_dream_broken_only_json_returns_filtered_payload(tmp_path, monkeypatch):
+    """--broken-only --json returns a minimal payload with just the entries
+    the agent needs to walk through."""
+    monkeypatch.setenv("KLURIS_CONFIG", str(tmp_path / "config.yml"))
+    monkeypatch.setenv("HOME", str(tmp_path))
+    runner = CliRunner()
+    create_test_brain(runner, "my-brain", tmp_path)
+    (tmp_path / "my-brain" / "projects" / "bad.md").write_text(
+        "---\nparent: ./map.md\ntags: []\ncreated: 2026-04-01\nupdated: 2026-04-01\n---\n"
+        "# Bad\n\n[broken](./nonexistent.md)\n", encoding="utf-8"
+    )
+    result = runner.invoke(cli, ["dream", "--json", "--broken-only"])
+    data = json.loads(result.output)
+    assert data["ok"] is True
+    assert data["broken_synapses_count"] >= 1
+    assert data["broken_synapses"]
+    entry = data["broken_synapses"][0]
+    assert "brain" in entry and "file" in entry and "target" in entry
+    # The filtered payload omits the verbose fields of the full report.
+    assert "healthy" not in data
+    assert "fixes" not in data
+
+
+def test_dream_broken_only_requires_json_flag(tmp_path, monkeypatch):
+    """--broken-only without --json is rejected (no TTY output mode)."""
+    monkeypatch.setenv("KLURIS_CONFIG", str(tmp_path / "config.yml"))
+    monkeypatch.setenv("HOME", str(tmp_path))
+    runner = CliRunner()
+    create_test_brain(runner, "my-brain", tmp_path)
+    result = runner.invoke(cli, ["dream", "--broken-only"])
+    assert result.exit_code != 0
+    assert "--json" in result.output
 
 
 def test_dream_fixes_one_way_synapse(tmp_path, monkeypatch):

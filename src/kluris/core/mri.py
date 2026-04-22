@@ -227,8 +227,12 @@ def build_graph(brain_path: Path) -> dict:
             target = match.group(2)
             if target.startswith("http"):
                 continue
+            # Strip #anchor / ?query so `glossary.md#jwt` still resolves to glossary.md.
+            target_path = target.split("#", 1)[0].split("?", 1)[0]
+            if not target_path:
+                continue
             try:
-                t_resolved = (f.parent / target).resolve().relative_to(brain_path.resolve()).as_posix()
+                t_resolved = (f.parent / target_path).resolve().relative_to(brain_path.resolve()).as_posix()
                 if t_resolved in node_ids and t_resolved != rel:
                     # Avoid duplicating parent/related edges
                     existing = {(e["source"], e["target"]) for e in edges}
@@ -1115,6 +1119,12 @@ def generate_mri_html(brain_path: Path, output_path: Path) -> dict:
     text-underline-offset: 2px;
   }}
   .content-link:hover {{ text-decoration-color: var(--accent); }}
+  .content-link-broken {{
+    color: #ff8a8a;
+    text-decoration: line-through;
+    text-decoration-color: rgba(255, 138, 138, 0.55);
+    cursor: help;
+  }}
   .modal-content {{
     flex: 1;
     overflow: auto;
@@ -1964,9 +1974,11 @@ function openModal(node) {{
   // Prefer the untruncated body so the modal shows the full document; fall back to the preview.
   const raw = node.content_full || node.content_preview || 'No content.';
   const nodePath = node.path.replace(/[^/]+$/, '');
-  // Match [text](path.md|.yml|.yaml) markdown links -- yaml neurons can
-  // be link targets from markdown body text too.
-  const linkRe = /\[([^\]]+)\]\(([^)]+\.(md|yml|yaml))\)/g;
+  // Match [text](path.md|.yml|.yaml[#anchor][?query]) markdown links —
+  // yaml neurons can be link targets from markdown body text too, and
+  // glossary links routinely carry a trailing #anchor (strip it before
+  // resolving so the target node is still found).
+  const linkRe = /\[([^\]]+)\]\(([^)\s]+?\.(md|yml|yaml))(#[^)\s]*)?(\?[^)\s]*)?\)/g;
   let linkedContent = '';
   let lastIdx = 0;
   let m;
@@ -1974,11 +1986,13 @@ function openModal(node) {{
     // Escape text before this match
     linkedContent += escapeHtml(raw.slice(lastIdx, m.index));
     const text = m[1] || '';
-    const href = m[2] || '';
-    if (!href || href.startsWith('http')) {{
+    const pathPart = m[2] || '';
+    const anchor = m[4] || '';
+    const href = pathPart + anchor + (m[5] || '');
+    if (!pathPart || pathPart.startsWith('http')) {{
       linkedContent += escapeHtml(m[0]);
     }} else {{
-      const parts = (nodePath + href).split('/');
+      const parts = (nodePath + pathPart).split('/');
       const resolved = [];
       for (const p of parts) {{
         if (p === '..') resolved.pop();
@@ -1987,9 +2001,9 @@ function openModal(node) {{
       const resolvedPath = resolved.join('/');
       const target = nodes.find(n => n.path === resolvedPath);
       if (target) {{
-        linkedContent += `<button type="button" class="content-link" data-modal-nav="${{target.id}}" title="${{escapeHtml(target.path)}}">${{escapeHtml(text)}}</button>`;
+        linkedContent += `<button type="button" class="content-link" data-modal-nav="${{target.id}}" title="${{escapeHtml(target.path + anchor)}}">${{escapeHtml(text)}}</button>`;
       }} else {{
-        linkedContent += `${{escapeHtml(text)}} (${{escapeHtml(href)}})`;
+        linkedContent += `<span class="content-link-broken" title="broken link: ${{escapeHtml(href)}}">${{escapeHtml(text)}}</span>`;
       }}
     }}
     lastIdx = m.index + m[0].length;

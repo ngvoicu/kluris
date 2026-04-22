@@ -141,12 +141,20 @@ def _is_within_brain(resolved: Path, brain_root: Path) -> bool:
 
 
 def parse_markdown_links(content: str) -> list[str]:
-    """Extract all relative markdown link targets from content."""
+    """Extract all relative markdown link targets from content.
+
+    Strips ``#anchor`` and ``?query`` so callers that resolve the target as
+    a filesystem path (e.g. broken-link detection) don't mistake a real
+    file with an anchor like ``glossary.md#jwt`` for a missing file.
+    """
     targets = []
     for match in LINK_PATTERN.finditer(content):
         target = match.group(2)
-        if not target.startswith("http://") and not target.startswith("https://"):
-            targets.append(target)
+        if target.startswith("http://") or target.startswith("https://"):
+            continue
+        target_path = target.split("#", 1)[0].split("?", 1)[0]
+        if target_path:
+            targets.append(target_path)
     return targets
 
 

@@ -1587,8 +1587,12 @@ def status(brain_name: str | None, as_json: bool):
 @cli.command()
 @click.option("--brain", "brain_name", help="Specific brain")
 @click.option("--json", "as_json", is_flag=True, help="JSON output")
-def dream(brain_name: str | None, as_json: bool):
+@click.option("--broken-only", "broken_only", is_flag=True,
+              help="In --json mode, return only broken-synapse entries for the agent to repair.")
+def dream(brain_name: str | None, as_json: bool, broken_only: bool):
     """Brain maintenance — regenerate maps, update dates, auto-fix safe issues, validate remaining links."""
+    if broken_only and not as_json:
+        raise click.ClickException("--broken-only requires --json")
     brains = _resolve_brains(brain_name, allow_all=True, as_json=as_json)
     all_issues = {"broken_synapses": 0, "one_way_synapses": 0, "orphans": 0,
                   "frontmatter_issues": 0, "dates_updated": 0,
@@ -1601,6 +1605,7 @@ def dream(brain_name: str | None, as_json: bool):
         "total": 0,
     }
     all_deprecation: list[dict] = []
+    all_broken: list[dict] = []
     healthy = True
 
     for name, entry in brains:
@@ -1626,6 +1631,8 @@ def dream(brain_name: str | None, as_json: bool):
         all_issues["deprecation_issues"] += len(deprecation)
         for entry_ in deprecation:
             all_deprecation.append({"brain": name, **entry_})
+        for entry_ in broken:
+            all_broken.append({"brain": name, **entry_})
         for key, value in brain_fixes.items():
             all_fixes[key] += value
 
@@ -1662,12 +1669,20 @@ def dream(brain_name: str | None, as_json: bool):
             console.print(f"  {brain_fixes['orphan_references_added']} missing neuron references added to parent map.md files")
 
     if as_json:
-        click.echo(json_lib.dumps({
-            "ok": True, "healthy": healthy,
-            **all_issues,
-            "deprecation": all_deprecation,
-            "fixes": all_fixes,
-        }))
+        if broken_only:
+            click.echo(json_lib.dumps({
+                "ok": True,
+                "broken_synapses_count": len(all_broken),
+                "broken_synapses": all_broken,
+            }))
+        else:
+            click.echo(json_lib.dumps({
+                "ok": True, "healthy": healthy,
+                **all_issues,
+                "deprecation": all_deprecation,
+                "broken_synapses_detail": all_broken,
+                "fixes": all_fixes,
+            }))
 
     if not as_json:
         if all_fixes["total"]:

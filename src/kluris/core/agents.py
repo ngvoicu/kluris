@@ -243,6 +243,53 @@ record), match their shape instead of inventing a new one.
 Discuss the lobe name and purpose with the user, then create the directory only
 after approval. Remind the user to run `kluris dream{brain_flag_hint_inline}`.
 
+**Fix broken synapses** -- "fix the broken synapses", "repair the brain",
+"clean up broken links", "the brain has N broken, fix them".
+
+This is a repair workflow, not a learning one. Work from the authoritative list
+returned by the CLI, not from memory.
+
+1. **List the damage.** Run `kluris dream{brain_flag_hint_inline} --broken-only
+   --json` via Bash. The JSON has `broken_synapses_count` and `broken_synapses`:
+   a list of `{{brain, file, target}}` entries. `file` is the neuron that holds
+   the broken reference (in either frontmatter `related:` or an inline markdown
+   link); `target` is the unresolved path as written. Show the user how many
+   entries were found and offer to work through them.
+2. **Diagnose each entry, one at a time.** For every broken entry:
+   a. Read the source file (`{brain_path}/<file>`) and find where `target`
+      appears -- it lives either in frontmatter `related:` or in an inline
+      `[text](target)` link in the body. Show that context to the user.
+   b. Run `kluris search "<keywords-from-target-filename>"{brain_flag_hint_inline}
+      --json` to find likely correct targets. Draw the keywords from the
+      filename in `target` (for example, if the target was
+      `../../knowledge/auth-flow.md`, search for "auth flow"). If the filename
+      is generic (`overview.md`, `map.md`), also search for the source neuron's
+      topic so the suggestions stay relevant.
+   c. Classify and propose ONE of these fixes (show the proposed change, then
+      apply the approval protocol):
+      - **Rename** -- the target was renamed or moved. Replace the broken path
+        with the actual current path. Verify the new path with `ls
+        {brain_path}/<new-path>` before proposing it.
+      - **Retarget** -- the broken path never existed but the user clearly
+        meant a different neuron that does exist (surfaced by search).
+        Replace with that path.
+      - **Drop** -- the target is stale and has no replacement. Remove the
+        entry from `related:` or delete the inline link entirely (keep the
+        prose, drop only the `[...](target)` wrapper if it's an inline link).
+      - **Create** -- the target SHOULD exist but was never written. Only
+        propose this when the user agrees the neuron is worth creating; then
+        switch to the Create neuron flow for that one file and come back to
+        the repair list after.
+   d. If fixing a `related:` entry, also update the target's `related:` to
+      keep the synapse bidirectional (or confirm it's already there).
+3. **Re-validate after every N fixes.** After each batch of fixes (or after
+   the full list, if it's small), run `kluris dream{brain_flag_hint_inline}
+   --broken-only --json` again. Report the new count so the user sees progress.
+4. **Do not batch-write.** Even when the list is long, confirm each fix
+   individually with the approval protocol. Invented paths caused the damage
+   in the first place -- fixing them with more guesses just rewrites the
+   problem.
+
 ## Writing rules
 
 ### Approval protocol

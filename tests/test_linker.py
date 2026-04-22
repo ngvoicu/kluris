@@ -662,3 +662,47 @@ def test_check_frontmatter_flags_replaced_by_wrong_type(tmp_path):
         i.get("field") == "replaced_by" and i.get("kind") == "type"
         for i in issues
     )
+
+
+def test_parse_markdown_links_strips_anchors_and_queries():
+    """Anchors like `#jwt` and queries must be stripped so filesystem
+    resolution sees the bare file path — otherwise `glossary.md#jwt`
+    looks like a missing file."""
+    content = (
+        "See [JWT](../../glossary.md#jwt) and "
+        "[query](../notes.md?v=2) and "
+        "[plain](./local.md) and "
+        "[web](https://example.com/x.md) and "
+        "[bare anchor](#section-only)."
+    )
+    targets = parse_markdown_links(content)
+    assert "../../glossary.md" in targets
+    assert "../notes.md" in targets
+    assert "./local.md" in targets
+    # Anchor-only and web links are excluded
+    assert not any("#" in t for t in targets)
+    assert not any("?" in t for t in targets)
+    assert not any(t.startswith("http") for t in targets)
+    assert "" not in targets
+
+
+def test_validate_synapses_accepts_glossary_anchor_links(tmp_path):
+    """A link to `glossary.md#jwt` must not be reported as broken when
+    glossary.md exists — the #anchor is a navigation hint, not part of
+    the filename."""
+    brain = tmp_path / "brain"
+    brain.mkdir()
+    (brain / "glossary.md").write_text("---\n---\n# Glossary\n\n## JWT\n", encoding="utf-8")
+    (brain / "knowledge").mkdir()
+    (brain / "knowledge" / "map.md").write_text(
+        "---\nauto_generated: true\n---\n# K\n", encoding="utf-8"
+    )
+    (brain / "knowledge" / "auth.md").write_text(
+        "---\nparent: ./map.md\ntags: []\n"
+        "created: 2026-01-01\nupdated: 2026-04-01\n---\n"
+        "# Auth\n\n"
+        "Uses [JWT](../glossary.md#jwt) for sessions.\n",
+        encoding="utf-8",
+    )
+    broken = validate_synapses(brain)
+    assert not any("auth.md" in b["file"] for b in broken)
