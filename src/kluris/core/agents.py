@@ -228,6 +228,30 @@ paths: []
 Markdown neurons can link to yaml neurons with normal markdown links such as
 `[API spec](./openapi.yml)`.
 
+**OpenAPI -> endpoints convention** -- when learning a project that exposes a
+REST API (an `openapi.yml`, Swagger doc, controller classes, or route files),
+write the knowledge in this exact shape:
+
+- `projects/<prj>/openapi.yml` -- the spec itself as a yaml neuron (hash
+  frontmatter with `title`, `tags: [api, openapi]`, `parent: ./map.md`, and
+  `related:` pointing at every `./endpoints/*.md` below).
+- `projects/<prj>/endpoints/<method>-<slug>.md` -- one markdown neuron per
+  route (e.g. `get-users.md`, `post-auth-login.md`). Each neuron's frontmatter
+  has `parent: ./map.md`, `related: [../openapi.yml]`, and tags that include
+  at least `api` plus the resource name. The body explains: what the endpoint
+  does in plain language, the auth/permissions it requires, request shape,
+  response shape, and any business rules that aren't obvious from the spec.
+- `projects/<prj>/endpoints/map.md` -- regenerated automatically by
+  `kluris dream{brain_flag_hint_inline}`; do not hand-write it.
+- Bidirectional synapses: the openapi.yml neuron lists each endpoint in its
+  `related:`, AND every endpoint neuron lists `../openapi.yml` in its
+  `related:`. Run `kluris dream{brain_flag_hint_inline}` afterwards -- it
+  flags any one-way synapses so fix them before stopping.
+
+Apply this whenever the user says "document the endpoints", "learn the API",
+or "capture the routes". Do not invent endpoints -- walk the real spec or
+real route code, and one route = one neuron.
+
 **Remember** -- "remember we chose X", "store that we decided Y".
 Find the right lobe, check for existing neurons, show a full preview, then use
 the approval protocol.

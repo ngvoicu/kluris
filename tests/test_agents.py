@@ -35,6 +35,18 @@ def _install(tmp_path, agent_name="claude", skill_name="kluris", brain_name="tes
     )
 
 
+def test_skill_has_openapi_endpoints_convention():
+    """When learning a project with a REST API, the agent should split the
+    knowledge into one openapi.yml neuron plus one markdown neuron per route
+    under `projects/<prj>/endpoints/`, with bidirectional synapses. The skill
+    body must carry that contract so agents don't invent their own layout."""
+    body = _render()
+    assert "OpenAPI -> endpoints convention" in body
+    assert "projects/<prj>/openapi.yml" in body
+    assert "projects/<prj>/endpoints/<method>-<slug>.md" in body
+    assert "Bidirectional synapses" in body
+
+
 def test_registry_8_agents():
     assert len(AGENT_REGISTRY) == 8
 
