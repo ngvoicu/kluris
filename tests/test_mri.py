@@ -191,6 +191,33 @@ def test_map_nodes_use_h1_as_title(tmp_path):
     assert by_path["infrastructure/map.md"]["authored_title"] == ""
 
 
+def test_empty_html_anchors_stripped_from_content_preview(tmp_path):
+    """Glossary files use `<a id="term"></a>term` jump-target pairs so
+    links like `glossary.md#term` resolve in browsers. The MRI preview
+    `escapeHtml`s content before rendering, which surfaces those tags as
+    literal markup noise. Strip the empty-anchor pattern from the preview
+    and excerpt so only the human-readable text remains."""
+    brain = tmp_path / "brain"
+    brain.mkdir()
+    (brain / "brain.md").write_text("---\n---\n# Brain\n", encoding="utf-8")
+    (brain / "glossary.md").write_text(
+        "---\n---\n# Glossary\n\n"
+        "Project-specific terms.\n\n"
+        "| Term | Meaning |\n"
+        "|------|---------|\n"
+        '| <a id="jwt"></a>JWT | JSON Web Token. |\n'
+        '| <a id="base-template"></a>base template | An `email_template` row. |\n',
+        encoding="utf-8",
+    )
+    graph = build_graph(brain)
+    node = next(n for n in graph["nodes"] if n["path"] == "glossary.md")
+    assert "<a id=" not in node["content_preview"]
+    assert "<a id=" not in node["content_full"]
+    assert "<a id=" not in node["excerpt"]
+    assert "JWT | JSON Web Token." in node["content_preview"]
+    assert "base template | An" in node["content_preview"]
+
+
 def test_yaml_neuron_prefers_frontmatter_title(tmp_path):
     """Yaml neurons keep using the frontmatter `title:` as the display
     title (filename stems like `openapi.yml` title-case poorly)."""

@@ -3,10 +3,21 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 from kluris.core.frontmatter import read_frontmatter
 from kluris.core.linker import LINK_PATTERN, _has_yaml_opt_in_block
+
+# Empty HTML anchor tags used as jump targets (`<a id="foo"></a>term`) show
+# up as literal markup in the MRI preview because content is `escapeHtml`'d.
+# Strip them from the preview text — the jump-target role is a markdown
+# feature, not something a human reading the preview needs to see.
+_EMPTY_HTML_ANCHOR = re.compile(r'<a\s+id=["\'][^"\']*["\']\s*>\s*</a>', re.IGNORECASE)
+
+
+def _strip_empty_html_anchors(text: str) -> str:
+    return _EMPTY_HTML_ANCHOR.sub("", text)
 
 SKIP_DIRS = {".git"}
 # `kluris.yml` at brain root is the local config; never index it as a node.
@@ -58,7 +69,7 @@ def _extract_title_and_excerpt(path: Path, content: str) -> tuple[str, str, str]
     excerpt = ""
 
     for raw_line in content.splitlines():
-        line = raw_line.strip()
+        line = _strip_empty_html_anchors(raw_line).strip()
         if not line:
             continue
         if line.startswith("# ") and not authored_title:
@@ -85,7 +96,7 @@ def _build_content_preview(content: str) -> tuple[str, str, bool]:
     skipped_title = False
 
     for raw_line in content.splitlines():
-        line = raw_line.rstrip()
+        line = _strip_empty_html_anchors(raw_line).rstrip()
         if not skipped_title and line.strip().startswith("# "):
             skipped_title = True
             continue
