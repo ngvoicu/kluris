@@ -160,6 +160,37 @@ def test_authored_title_hidden_when_same_as_stem(tmp_path):
     assert node["authored_title"] == ""
 
 
+def test_map_nodes_use_h1_as_title(tmp_path):
+    """map.md / brain.md / glossary.md nodes must use their H1 as the
+    display title — not the filename stem, because every lobe's map
+    file is literally `map.md` and the stem would collapse every lobe
+    to the same label ("Map") in the left sidebar."""
+    brain = tmp_path / "brain"
+    brain.mkdir()
+    (brain / "brain.md").write_text(
+        "---\nauto_generated: true\n---\n# My Brain\n", encoding="utf-8"
+    )
+    (brain / "glossary.md").write_text(
+        "---\n---\n# Shared Glossary\n", encoding="utf-8"
+    )
+    (brain / "infrastructure").mkdir()
+    (brain / "infrastructure" / "map.md").write_text(
+        "---\nauto_generated: true\n---\n# Infrastructure\n", encoding="utf-8"
+    )
+    (brain / "knowledge").mkdir()
+    (brain / "knowledge" / "map.md").write_text(
+        "---\nauto_generated: true\n---\n# Knowledge\n", encoding="utf-8"
+    )
+    graph = build_graph(brain)
+    by_path = {n["path"]: n for n in graph["nodes"]}
+    assert by_path["brain.md"]["title"] == "My Brain"
+    assert by_path["glossary.md"]["title"] == "Shared Glossary"
+    assert by_path["infrastructure/map.md"]["title"] == "Infrastructure"
+    assert by_path["knowledge/map.md"]["title"] == "Knowledge"
+    # authored_title is not double-surfaced as a subtitle for these nodes
+    assert by_path["infrastructure/map.md"]["authored_title"] == ""
+
+
 def test_yaml_neuron_prefers_frontmatter_title(tmp_path):
     """Yaml neurons keep using the frontmatter `title:` as the display
     title (filename stems like `openapi.yml` title-case poorly)."""

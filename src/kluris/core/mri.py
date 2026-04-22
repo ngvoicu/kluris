@@ -157,6 +157,14 @@ def build_graph(brain_path: Path) -> dict:
         file_type = "yaml" if is_yaml else "markdown"
 
         title, authored_title, excerpt = _extract_title_and_excerpt(f, content)
+        # Non-neuron nodes (map, brain, glossary, index) use the H1 as their
+        # title because their filenames are always the same across every lobe
+        # — `map.md`, `brain.md`, `glossary.md` — so the stem collapses every
+        # lobe's map node to "Map" in sidebars. The H1 carries the real name
+        # (the lobe name) for these nodes.
+        if ntype != "neuron" and authored_title:
+            title = authored_title
+            authored_title = ""
         # Yaml neurons: prefer frontmatter `title` as the display title.
         # Stems like `openapi.yml` title-case poorly ("Openapi"), and the
         # frontmatter title is the author's canonical name for the spec.
