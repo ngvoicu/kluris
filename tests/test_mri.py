@@ -191,34 +191,6 @@ def test_map_nodes_use_h1_as_title(tmp_path):
     assert by_path["infrastructure/map.md"]["authored_title"] == ""
 
 
-def test_html_sidebar_surfaces_glossary_as_pinned_card(tmp_path):
-    """The LOBES sidebar skips the 'root' bucket, so glossary.md — which
-    lives at brain root — is invisible there by default. Verify the
-    renderLobes JS emits a pinned glossary card (not brain, not index)."""
-    brain = tmp_path / "brain"
-    brain.mkdir()
-    (brain / "brain.md").write_text("---\n---\n# Brain\n", encoding="utf-8")
-    (brain / "glossary.md").write_text(
-        "---\n---\n# Glossary\n\nTerms.\n", encoding="utf-8"
-    )
-    (brain / "projects").mkdir()
-    (brain / "projects" / "map.md").write_text(
-        "---\nauto_generated: true\n---\n# Projects\n", encoding="utf-8"
-    )
-    output = tmp_path / "mri.html"
-    generate_mri_html(brain, output)
-    html = output.read_text(encoding="utf-8")
-    # The sidebar emits a class-tagged card that selectNode()s the glossary.
-    assert "root-card" in html
-    assert "root-swatch" in html
-    # Pinned card is glossary-only — brain/index singletons are NOT surfaced
-    # because the user only asked for the glossary to be reachable from the
-    # left sidebar. The sidebar filter in renderLobes looks for only the
-    # glossary type (not `type === 'brain' || type === 'index'`).
-    assert "n.type === 'glossary'" in html
-    assert "n.type === 'brain' || n.type === 'glossary'" not in html
-
-
 def test_empty_html_anchors_stripped_from_content_preview(tmp_path):
     """Glossary files use `<a id="term"></a>term` jump-target pairs so
     links like `glossary.md#term` resolve in browsers. The MRI preview

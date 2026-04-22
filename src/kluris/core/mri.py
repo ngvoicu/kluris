@@ -765,10 +765,6 @@ def generate_mri_html(brain_path: Path, output_path: Path) -> dict:
     border-radius: 50%;
     flex-shrink: 0;
   }}
-  .root-swatch {{
-    border-radius: 2px;
-    transform: rotate(45deg);
-  }}
   .lobe-body {{
     display: flex;
     flex-direction: column;
@@ -1597,38 +1593,7 @@ function renderLobes() {{
       }}
     }}
   }}
-  // The glossary lives at brain root, so the lobe aggregation above skips
-  // it (the 'root' bucket is not a lobe). Surface it here as a pinned card
-  // above the lobes list so users can jump to it from the sidebar. Click =
-  // select + recenter. brain.md and index.md are NOT surfaced here —
-  // hitting the glossary from the sidebar is the one real request; brain
-  // is reachable through any breadcrumb and index is internal.
-  const glossaryNode = nodes.find(n => n.type === 'glossary' && (!n.lobe || n.lobe === 'root'));
-  if (glossaryNode) {{
-    const card = document.createElement('button');
-    card.type = 'button';
-    card.className = 'lobe-card root-card';
-    card.title = `Click to focus ${{glossaryNode.title}}`;
-    const swatchColor = glossaryNode.color || '#ffc6f4';
-    const swatchShadow = `${{swatchColor}}55`;
-    card.innerHTML = `
-      <span class="lobe-swatch root-swatch" style="background:${{swatchColor}};box-shadow:0 0 14px ${{swatchShadow}}"></span>
-      <span class="lobe-body">
-        <span class="lobe-name">${{escapeHtml(String(glossaryNode.title).toUpperCase())}}</span>
-        <span class="lobe-meta">glossary</span>
-      </span>
-    `;
-    card.addEventListener('click', () => selectNode(glossaryNode.id, true));
-    const wrap = document.createElement('div');
-    wrap.className = 'lobe-card-wrap';
-    wrap.appendChild(card);
-    const group = document.createElement('div');
-    group.className = 'lobe-group';
-    group.appendChild(wrap);
-    lobesListEl.appendChild(group);
-  }}
   if (!lobeInfo.size) {{
-    if (glossaryNode) return;
     const empty = document.createElement('div');
     empty.className = 'details-empty';
     empty.textContent = 'No lobes in this brain yet. Ask your agent to create one, then run kluris dream.';
