@@ -1939,8 +1939,13 @@ let collapsedTreePaths = new Set();
 function buildFileTree() {{
   treeRoot.folders = new Map();
   treeRoot.files = [];
+  // Include neurons + the glossary so the modal's left file tree mirrors
+  // what's actually on disk — glossary.md is a real file users want to
+  // click to open. brain.md and index.md stay hidden (they're
+  // auto-generated and don't carry hand-written content worth navigating
+  // to from this tree).
   const entries = nodes
-    .filter(n => n.type === 'neuron' && n.path)
+    .filter(n => (n.type === 'neuron' || n.type === 'glossary') && n.path)
     .sort((a, b) => a.path.localeCompare(b.path));
   for (const node of entries) {{
     const parts = node.path.split('/');

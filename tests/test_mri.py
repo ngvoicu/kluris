@@ -191,6 +191,29 @@ def test_map_nodes_use_h1_as_title(tmp_path):
     assert by_path["infrastructure/map.md"]["authored_title"] == ""
 
 
+def test_modal_file_tree_includes_glossary(tmp_path):
+    """The modal's left file tree used to filter to `type === 'neuron'`
+    only, which hid glossary.md — a real file users want to open from
+    the tree. Widen the filter to include glossary. brain.md / index.md
+    stay out because they're auto-generated."""
+    brain = tmp_path / "brain"
+    brain.mkdir()
+    (brain / "brain.md").write_text("---\n---\n# Brain\n", encoding="utf-8")
+    (brain / "glossary.md").write_text(
+        "---\n---\n# Glossary\n\nTerms.\n", encoding="utf-8"
+    )
+    (brain / "projects").mkdir()
+    (brain / "projects" / "map.md").write_text(
+        "---\nauto_generated: true\n---\n# Projects\n", encoding="utf-8"
+    )
+    output = tmp_path / "mri.html"
+    generate_mri_html(brain, output)
+    html = output.read_text(encoding="utf-8")
+    # Filter must include glossary; the exact string "'glossary'" appears
+    # inside the buildFileTree filter.
+    assert "n.type === 'neuron' || n.type === 'glossary'" in html
+
+
 def test_empty_html_anchors_stripped_from_content_preview(tmp_path):
     """Glossary files use `<a id="term"></a>term` jump-target pairs so
     links like `glossary.md#term` resolve in browsers. The MRI preview
