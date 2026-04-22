@@ -107,6 +107,19 @@ def test_html_colors_yaml_neurons_with_periwinkle(tmp_path):
     assert "node.file_type === 'yaml'" in html
 
 
+def test_html_connection_cards_omit_section_chip_when_same_folder(tmp_path):
+    """Left-panel "Connected nodes" cards must drop the sublobe/lobe chip
+    when the connection is in the same section as the currently-selected
+    node — otherwise every card in a same-project cluster repeats the
+    project name and hides the actual titles."""
+    brain = _make_brain_with_yaml_neurons(tmp_path)
+    output = tmp_path / "brain-mri.html"
+    generate_mri_html(brain, output)
+    html = output.read_text(encoding="utf-8")
+    assert "const currentSection" in html
+    assert "targetSection !== currentSection" in html
+
+
 def test_html_nav_buttons_omit_parent_prefix_when_same_folder(tmp_path):
     """The modal's "Connected nodes" buttons must only prefix with the parent
     folder when it differs from the current node's parent. Otherwise every

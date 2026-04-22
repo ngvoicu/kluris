@@ -1796,13 +1796,25 @@ function updateDetails() {{
     ? '<div class="content-preview-note">Preview truncated for readability. Click expand to read the full document.</div>'
     : '';
   const CONN_LIMIT = 3;
-  const connectionCards = connected.map(target => `
+  // Meta line dedupe: drop the sublobe/lobe chip when the connected neuron
+  // lives in the same section as the currently-selected node — otherwise
+  // every card in a same-project cluster repeats "neuron • btb" and the
+  // useful info (the title) competes with boilerplate.
+  const currentSection = node.sublobe || node.lobe || '';
+  const connectionCards = connected.map(target => {{
+    const targetSection = target.sublobe || target.lobe || '';
+    const typeLabel = target.type === 'map' ? 'lobe' : target.type;
+    const sectionChip = targetSection && targetSection !== currentSection
+      ? ` • ${{escapeHtml(targetSection)}}`
+      : '';
+    return `
         <button type="button" class="connection-card" data-node-id="${{target.id}}">
           <div class="result-title">${{escapeHtml(target.title)}}</div>
-          <div class="result-meta">${{target.type === 'map' ? 'lobe' : escapeHtml(target.type)}} • ${{escapeHtml(target.sublobe || target.lobe)}}</div>
+          <div class="result-meta">${{escapeHtml(typeLabel)}}${{sectionChip}}</div>
           <div class="result-path">${{escapeHtml(target.path)}}</div>
         </button>
-      `);
+      `;
+  }});
   const connections = connected.length
     ? connectionCards.slice(0, CONN_LIMIT).join('')
       + (connected.length > CONN_LIMIT
