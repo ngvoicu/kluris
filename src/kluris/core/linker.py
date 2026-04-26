@@ -1,4 +1,12 @@
-"""Synapse validation, bidirectional checks, orphan detection, frontmatter checks."""
+"""Synapse validation, bidirectional checks, orphan detection, frontmatter checks.
+
+Read-only primitives (``_has_yaml_opt_in_block``, ``_all_neuron_files``,
+``_neuron_files``, ``_is_within_brain``, ``detect_deprecation_issues``,
+``SKIP_DIRS``, ``SKIP_FILES``, ``YAML_NEURON_SUFFIXES``) are re-exported
+from :mod:`kluris_runtime.neuron_index` and :mod:`kluris_runtime.deprecation`.
+The runtime is the single source of truth — this module only owns
+write/fix flows.
+"""
 
 from __future__ import annotations
 
@@ -7,137 +15,27 @@ import re
 from pathlib import Path
 
 from kluris.core.frontmatter import read_frontmatter, update_frontmatter
+from kluris_runtime.deprecation import (  # noqa: F401  (re-export)
+    detect_deprecation_issues,
+)
+from kluris_runtime.neuron_index import (  # noqa: F401  (re-exports)
+    SKIP_DIRS,
+    SKIP_FILES,
+    YAML_NEURON_SUFFIXES,
+    all_neuron_files as _all_neuron_files,
+    has_yaml_opt_in_block as _has_yaml_opt_in_block,
+    is_within_brain as _is_within_brain,
+    neuron_files as _neuron_files,
+)
 
-# Directories to skip when walking the brain for any reason. This must be a
-# superset of anything used by wake-up, mri, status, dream, etc. Keeping it
-# centralized here prevents the "each command walks the brain differently"
-# bug that caused status to count markdown under .github/workflows.
-SKIP_DIRS = {".git", ".github", ".vscode", ".idea", "node_modules", "__pycache__"}
-# kluris.yml is the brain's local config at the root. It must NEVER be indexed
-# as a neuron — defense in depth alongside the opt-in `#---` block gate for
-# yaml files (see `_has_yaml_opt_in_block`).
-SKIP_FILES = {"brain.md", "index.md", "glossary.md", "README.md", ".gitignore", "kluris.yml"}
 VALIDATE_SKIP_FILES = {"README.md"}  # Skip link validation in these (contain example links)
 LINK_PATTERN = re.compile(r"\[([^\]]*)\]\(([^)]+)\)")
-YAML_NEURON_SUFFIXES = {".yml", ".yaml"}
-
-
-def _has_yaml_opt_in_block(path: Path) -> bool:
-    """Return True if a yaml file has a complete `#---` / `#---` block at top.
-
-    Opt-in invariant: yaml files are only indexed as kluris neurons when they
-    declare themselves via a hash-style frontmatter block. This protects
-    arbitrary yaml files (CI configs, k8s manifests) from being picked up,
-    and makes the agent's authoring intent explicit.
-
-    The gate verifies BOTH the opening sentinel AND a matching closing
-    sentinel, AND that every line in between is a comment (starts with `#`).
-    A file with only an opening `#---` and no closing is rejected — it would
-    be a parse mismatch with `_read_yaml_neuron`, which needs both sentinels
-    to extract metadata.
-
-    Reads up to the first 4 KB so a reasonable frontmatter block (dozens of
-    lines) is always covered. The sentinel must be at the top of the file
-    (only whitespace-only lines allowed before the opening `#---`). Handles
-    a leading UTF-8 BOM.
-    """
-    try:
-        with path.open("rb") as f:
-            head = f.read(4096)
-    except OSError:
-        return False
-    try:
-        text = head.decode("utf-8-sig", errors="replace")
-    except Exception:
-        return False
-    lines = text.splitlines()
-    idx = 0
-    # Skip leading blank lines
-    while idx < len(lines) and lines[idx].strip() == "":
-        idx += 1
-    # First non-blank line must be the opening sentinel
-    if idx >= len(lines) or lines[idx].rstrip() != "#---":
-        return False
-    idx += 1
-    # Walk to the closing sentinel; every line in between must be a comment
-    while idx < len(lines):
-        line = lines[idx]
-        if line.rstrip() == "#---":
-            return True
-        if not line.lstrip().startswith("#"):
-            return False
-        idx += 1
-    # Ran off the end before finding the closing sentinel — malformed
-    return False
-
-
-def _all_neuron_files(brain_path: Path) -> list[Path]:
-    """Collect all neuron source files in the brain (markdown + opted-in yaml).
-
-    Walks the brain once per suffix, filtering out tooling / hidden dirs
-    and the SKIP_FILES set. For yaml files, an additional opt-in gate
-    (`_has_yaml_opt_in_block`) ensures only files that declare themselves
-    via a `#---` block are included.
-
-    Skips any directory whose name starts with ``.`` -- covers ad-hoc
-    editor state dirs we haven't explicitly enumerated.
-    """
-    files: list[Path] = []
-    # Markdown
-    for item in brain_path.rglob("*.md"):
-        if any(part in SKIP_DIRS for part in item.parts):
-            continue
-        if any(part.startswith(".") for part in item.parts[:-1]):
-            continue
-        files.append(item)
-    # Yaml (opt-in only)
-    for suffix in ("*.yml", "*.yaml"):
-        for item in brain_path.rglob(suffix):
-            if any(part in SKIP_DIRS for part in item.parts):
-                continue
-            if any(part.startswith(".") for part in item.parts[:-1]):
-                continue
-            # Belt: explicit filename skip (kluris.yml et al.) happens here
-            # too so even an adversarial kluris.yml with a `#---` block is
-            # still rejected.
-            if item.name in SKIP_FILES:
-                continue
-            if not _has_yaml_opt_in_block(item):
-                continue
-            files.append(item)
-    return files
 
 
 # Backward-compat alias: legacy callers (including tests) may still import
 # `_all_md_files`. The name is misleading now that yaml is supported, but
 # renaming would break every external consumer.
 _all_md_files = _all_neuron_files
-
-
-def _neuron_files(brain_path: Path) -> list[Path]:
-    """Collect neuron files (markdown + opted-in yaml), excluding auto-generated
-    and skip-listed files like map.md, brain.md, index.md, glossary.md,
-    kluris.yml, etc.
-    """
-    neurons = []
-    for f in _all_neuron_files(brain_path):
-        if f.name in SKIP_FILES or f.name == "map.md":
-            continue
-        neurons.append(f)
-    return neurons
-
-
-def _is_within_brain(resolved: Path, brain_root: Path) -> bool:
-    """Return True if ``resolved`` is inside ``brain_root`` (including equal).
-
-    Uses the parents chain rather than is_relative_to so it behaves
-    consistently across Python 3.10+ and on symlink-heavy filesystems.
-    """
-    try:
-        brain_resolved = brain_root.resolve()
-    except OSError:
-        return False
-    return resolved == brain_resolved or brain_resolved in resolved.parents
 
 
 def parse_markdown_links(content: str) -> list[str]:
@@ -345,107 +243,6 @@ def check_frontmatter(brain_path: Path) -> list[dict]:
         if "replaced_by" in meta and meta["replaced_by"] is not None \
                 and not isinstance(meta["replaced_by"], str):
             issues.append({"file": rel, "field": "replaced_by", "kind": "type"})
-    return issues
-
-
-def detect_deprecation_issues(brain_path: Path) -> list[dict]:
-    """Find deprecation-frontmatter inconsistencies.
-
-    Four issue kinds are reported:
-
-    - `active_links_to_deprecated`: an active neuron has `related:` pointing
-      at a deprecated neuron. The active neuron probably needs updating to
-      point at the replacement.
-    - `deprecated_without_replacement`: a neuron is marked deprecated but has
-      no `replaced_by`, so readers have no migration path.
-    - `replaced_by_missing`: a `replaced_by` path doesn't resolve to an
-      existing file in the brain.
-    - `replaced_by_not_active`: a `replaced_by` path resolves to something
-      that is not an active neuron — either another deprecated neuron
-      (dead migration chain) or a non-neuron file like `map.md`.
-
-    Neurons without a `status` field are treated as active.
-    References from `map.md` files are ignored — maps are auto-generated
-    indexes, not editorial endorsements.
-    """
-    issues: list[dict] = []
-    neurons = _neuron_files(brain_path)
-
-    # Build a status map: {resolved_path: "active"|"deprecated"}
-    status_by_path: dict[Path, str] = {}
-    meta_by_path: dict[Path, dict] = {}
-    neuron_paths: set[Path] = set()
-    for neuron in neurons:
-        meta, _ = read_frontmatter(neuron)
-        status = str(meta.get("status", "active")).lower()
-        resolved = neuron.resolve()
-        status_by_path[resolved] = status
-        meta_by_path[resolved] = meta
-        neuron_paths.add(resolved)
-
-    # Per-neuron checks: deprecated_without_replacement, replaced_by_missing,
-    # replaced_by_not_active
-    for neuron in neurons:
-        resolved = neuron.resolve()
-        meta = meta_by_path[resolved]
-        rel = str(neuron.relative_to(brain_path))
-
-        if status_by_path[resolved] != "deprecated":
-            continue
-
-        replaced_by = meta.get("replaced_by")
-        if replaced_by is None or replaced_by == "":
-            issues.append({
-                "kind": "deprecated_without_replacement",
-                "file": rel,
-            })
-            continue
-
-        if not isinstance(replaced_by, str):
-            continue
-
-        target = (neuron.parent / replaced_by).resolve()
-        if not target.exists() or not _is_within_brain(target, brain_path):
-            issues.append({
-                "kind": "replaced_by_missing",
-                "file": rel,
-                "target": replaced_by,
-            })
-            continue
-
-        # Target exists but is not an active neuron: either it's a non-neuron
-        # file (map.md, brain.md, README.md, glossary.md) or it's another
-        # deprecated neuron (dead migration chain).
-        if target not in neuron_paths or status_by_path.get(target) != "active":
-            issues.append({
-                "kind": "replaced_by_not_active",
-                "file": rel,
-                "target": replaced_by,
-            })
-
-    # Cross-neuron check: active neurons linking to deprecated ones via
-    # `related:` frontmatter.
-    for neuron in neurons:
-        resolved = neuron.resolve()
-        if status_by_path[resolved] == "deprecated":
-            continue
-
-        meta = meta_by_path[resolved]
-        related = meta.get("related", [])
-        if not isinstance(related, list):
-            continue
-
-        for rel_link in related:
-            if not isinstance(rel_link, str):
-                continue
-            target = (neuron.parent / rel_link).resolve()
-            if status_by_path.get(target) == "deprecated":
-                issues.append({
-                    "kind": "active_links_to_deprecated",
-                    "source": str(neuron.relative_to(brain_path)),
-                    "target": str(target.relative_to(brain_path)),
-                })
-
     return issues
 
 

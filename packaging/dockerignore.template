@@ -1,0 +1,14 @@
+# Allow-list the files the Dockerfile actually COPYs. The brain is
+# baked into the image, so it must be in the build context. The stager
+# already excludes .git/, __pycache__/, *.pyc, kluris.yml, and
+# brain-mri.html when populating <output>/brain/, so they never reach
+# this step.
+*
+!app/
+!app/**
+!kluris_runtime/
+!kluris_runtime/**
+!brain/
+!brain/**
+!Dockerfile
+!.dockerignore

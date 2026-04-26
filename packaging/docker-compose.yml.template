@@ -1,0 +1,18 @@
+services:
+  kluris-pack:
+    build: .
+    image: ${KLURIS_IMAGE:-kluris-pack/{brain_name}:latest}
+    container_name: {brain_name}-pack
+    ports:
+      # Loopback by default. Edit to "0.0.0.0:8765:8765" for public
+      # exposure — and put the app behind external auth (reverse
+      # proxy, VPN, cloud IAM) before doing so.
+      - "127.0.0.1:8765:8765"
+    volumes:
+      - kluris-data:/data
+    env_file:
+      - .env
+    restart: unless-stopped
+
+volumes:
+  kluris-data:

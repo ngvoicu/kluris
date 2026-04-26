@@ -8,6 +8,7 @@ from pathlib import Path
 
 from kluris.core.frontmatter import read_frontmatter
 from kluris.core.linker import LINK_PATTERN, _has_yaml_opt_in_block
+from kluris.core.neuron_excerpt import extract as _runtime_extract
 
 # Empty HTML anchor tags used as jump targets (`<a id="foo"></a>term`) show
 # up as literal markup in the MRI preview because content is `escapeHtml`'d.
@@ -63,24 +64,20 @@ def _extract_title_and_excerpt(path: Path, content: str) -> tuple[str, str, str]
     — no matter what H1 the author wrote. The authored H1 is returned
     separately so the modal can still surface it as a subtitle when it
     adds information beyond the filename.
+
+    Excerpt extraction itself is delegated to the read-only runtime
+    (:func:`kluris_runtime.neuron_excerpt.extract`) so the MRI viewer
+    and the packed chat server's ``lobe_overview`` tool agree on what
+    counts as the first non-trivial body line.
     """
     display_title = path.stem.replace("-", " ").title()
-    authored_title = ""
-    excerpt = ""
-
-    for raw_line in content.splitlines():
-        line = _strip_empty_html_anchors(raw_line).strip()
-        if not line:
-            continue
-        if line.startswith("# ") and not authored_title:
-            authored_title = line[2:].strip()
-            continue
-        if line.startswith(("## ", "- ", "* ", "```", "---", "up ", "sideways ")):
-            continue
-        excerpt = line
-        break
-
-    return display_title, authored_title, excerpt[:220]
+    authored_title, excerpt = _runtime_extract(path, content)
+    # The runtime falls back to a stem-titleized title when no H1 is
+    # present; mri only wants the *authored* H1 here so it can decide
+    # whether to surface it as a modal subtitle.
+    if authored_title == display_title:
+        authored_title = ""
+    return display_title, authored_title, excerpt
 
 
 def _build_content_preview(content: str) -> tuple[str, str, bool]:

@@ -1193,211 +1193,10 @@ def companion_remove(name: str | None, brain_name: str | None, as_json: bool):
         console.print("Runtime companion files were kept under ~/.kluris/companions.")
 
 
-_WAKE_UP_SKIP_DIRS = {".git", ".github", ".vscode", ".idea", "node_modules", "__pycache__"}
-# kluris.yml is the brain's local config; it must NEVER be indexed.
-_WAKE_UP_SKIP_FILES = {"map.md", "brain.md", "index.md", "glossary.md", "README.md", "kluris.yml"}
-
-
-def _wake_up_is_yaml_neuron(path: Path) -> bool:
-    """Return True if a yaml file has the kluris opt-in `#---` block."""
-    from kluris.core.linker import _has_yaml_opt_in_block
-    return _has_yaml_opt_in_block(path)
-
-
-def _wake_up_iter_neurons(root: Path):
-    """Yield neuron files (markdown + opted-in yaml) under `root`, honoring
-    wake-up's skip rules. Raw yaml files without a `#---` block are skipped.
-    """
-    for suffix in ("*.md", "*.yml", "*.yaml"):
-        for item in root.rglob(suffix):
-            if item.name in _WAKE_UP_SKIP_FILES:
-                continue
-            if any(part in _WAKE_UP_SKIP_DIRS for part in item.parts):
-                continue
-            if item.suffix.lower() in {".yml", ".yaml"}:
-                if not _wake_up_is_yaml_neuron(item):
-                    continue
-            yield item
-
-
-def _wake_up_lobe_description(lobe_path: Path) -> str:
-    """Read a lobe's description from its map.md.
-
-    Checks frontmatter ``description`` first. Falls back to the first
-    non-heading, non-navigation body line (same heuristic maps.py uses)
-    so legacy map.md files without the frontmatter field still surface
-    a description in wake-up.
-    """
-    map_file = lobe_path / "map.md"
-    if not map_file.exists():
-        return ""
-    try:
-        meta, content = read_frontmatter(map_file)
-        desc = meta.get("description", "")
-        if isinstance(desc, str) and desc.strip():
-            return desc.strip()
-    except Exception:
-        try:
-            content = map_file.read_text(encoding="utf-8")
-        except OSError:
-            return ""
-    title_seen = False
-    for raw_line in content.splitlines():
-        line = raw_line.strip()
-        if not line:
-            continue
-        if line.startswith("# "):
-            title_seen = True
-            continue
-        if not title_seen:
-            continue
-        if line.startswith(("up ", "sideways ", "## ", "- [")):
-            continue
-        return line
-    return ""
-
-
-def _wake_up_collect_lobes(brain_path: Path) -> list[dict]:
-    """Return top-level lobes with total neuron count, per-lobe
-    `yaml_count`, and the lobe's `description` from its map.md.
-    """
-    lobes = []
-    for child in sorted(brain_path.iterdir()):
-        if not child.is_dir():
-            continue
-        if child.name in _WAKE_UP_SKIP_DIRS or child.name.startswith("."):
-            continue
-        total = 0
-        yaml_count = 0
-        for item in _wake_up_iter_neurons(child):
-            total += 1
-            if item.suffix.lower() in {".yml", ".yaml"}:
-                yaml_count += 1
-        lobes.append({
-            "name": child.name,
-            "description": _wake_up_lobe_description(child),
-            "neurons": total,
-            "yaml_count": yaml_count,
-        })
-    return lobes
-
-
-def _wake_up_collect_recent(brain_path: Path, limit: int = 5) -> list[dict]:
-    """Return up to `limit` most-recently-updated neurons, newest first.
-    Each entry now carries a `file_type` field ('yaml' | 'markdown').
-    """
-    candidates = []
-    for item in _wake_up_iter_neurons(brain_path):
-        try:
-            meta, _ = read_frontmatter(item)
-        except Exception:
-            continue
-        updated = meta.get("updated")
-        if updated is None:
-            continue
-        file_type = "yaml" if item.suffix.lower() in {".yml", ".yaml"} else "markdown"
-        candidates.append({
-            "path": str(item.relative_to(brain_path)).replace("\\", "/"),
-            "updated": str(updated),
-            "file_type": file_type,
-        })
-    candidates.sort(key=lambda item: item["updated"], reverse=True)
-    return candidates[:limit]
-
-
-# Max size of brain.md content returned in wake-up (keeps the bootstrap
-# payload bounded even if someone hand-edits brain.md with a wall of text).
-_WAKE_UP_BRAIN_MD_MAX_BYTES = 4000
-
-
-def _wake_up_collect_brain_md(brain_path: Path) -> str:
-    """Return the raw body of brain.md (frontmatter stripped), capped to bound the payload.
-
-    Rationale: brain.md lists every top-level lobe with its one-line description.
-    Including it in wake-up means the agent has that entire index in its bootstrap
-    context, so it doesn't have to Read the file separately on every session.
-    """
-    brain_md = brain_path / "brain.md"
-    if not brain_md.exists():
-        return ""
-    try:
-        _meta, body = read_frontmatter(brain_md)
-    except Exception:
-        return ""
-    if not isinstance(body, str):
-        return ""
-    body = body.strip()
-    if len(body.encode("utf-8")) > _WAKE_UP_BRAIN_MD_MAX_BYTES:
-        # Truncate at a rune boundary so the JSON stays valid UTF-8.
-        truncated = body.encode("utf-8")[:_WAKE_UP_BRAIN_MD_MAX_BYTES]
-        body = truncated.decode("utf-8", errors="ignore") + "\n\n[... truncated]"
-    return body
-
-
-# Regexes for the two glossary line formats kluris supports:
-#   - Markdown table row:     | Term | Definition |
-#   - Bold-dash one-liner:    **Term** -- Definition
-# Glossary parsing is forgiving: we skip header/separator rows and any line
-# that doesn't match either shape. Empty definitions are dropped.
-import re as _re
-
-_GLOSSARY_TABLE_ROW = _re.compile(r"^\|\s*([^|]+?)\s*\|\s*([^|]+?)\s*\|\s*$")
-_GLOSSARY_BOLD_DASH = _re.compile(r"^\*\*(.+?)\*\*\s*[-–—]+\s*(.+?)\s*$")
-_GLOSSARY_HEADER_TERMS = {"term", "meaning", "definition", ":------", ":---", "---", "------"}
-
-
-def _wake_up_collect_glossary(brain_path: Path) -> list[dict]:
-    """Parse glossary.md and return ``[{term, definition}]`` entries.
-
-    Supports both formats kluris ships and recommends:
-
-    - Markdown table rows (the scaffolded format): ``| Term | Meaning |``
-    - Bold-dash one-liners (the SKILL.md-recommended format): ``**Term** -- Definition``
-
-    Header rows, separator rows, and lines that don't match either format are
-    silently skipped so the collector is robust against free-form glossary
-    additions. Frontmatter is stripped.
-    """
-    glossary = brain_path / "glossary.md"
-    if not glossary.exists():
-        return []
-    try:
-        _meta, body = read_frontmatter(glossary)
-    except Exception:
-        return []
-    if not isinstance(body, str):
-        return []
-
-    entries: list[dict] = []
-    for raw_line in body.splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#"):
-            continue
-
-        # Try bold-dash format first (more specific).
-        m = _GLOSSARY_BOLD_DASH.match(line)
-        if m:
-            term, definition = m.group(1).strip(), m.group(2).strip()
-            if term and definition and term.lower() not in _GLOSSARY_HEADER_TERMS:
-                entries.append({"term": term, "definition": definition})
-            continue
-
-        # Then try markdown table rows.
-        m = _GLOSSARY_TABLE_ROW.match(line)
-        if m:
-            term, definition = m.group(1).strip(), m.group(2).strip()
-            term_lower = term.lower()
-            # Skip the header row and separator row (| ----- | ----- |)
-            if (
-                term_lower in _GLOSSARY_HEADER_TERMS
-                or definition.lower() in _GLOSSARY_HEADER_TERMS
-                or set(term) <= {"-", ":", " "}
-            ):
-                continue
-            if term and definition:
-                entries.append({"term": term, "definition": definition})
-
-    return entries
+# Wake-up implementation lives in kluris_runtime.wake_up.build_payload.
+# The CLI command (`kluris wake-up`) wraps it to add brain registration
+# context and scaffold-type metadata that the runtime intentionally does
+# not know about.
 
 
 @cli.command("search")
@@ -1482,44 +1281,45 @@ def wake_up(brain_name: str | None, as_json: bool):
       kluris wake-up --brain foo     # target a specific brain when 2+ are registered
       kluris wake-up --json          # machine-readable (for agents)
     """
+    from kluris_runtime.wake_up import build_payload
+
     brains = _resolve_brains(brain_name, allow_all=False, as_json=as_json)
     name, entry = brains[0]
     brain_path = Path(entry["path"])
-    lobes = _wake_up_collect_lobes(brain_path)
-    recent = _wake_up_collect_recent(brain_path)
-    total_neurons = sum(lobe["neurons"] for lobe in lobes)
-    total_yaml_neurons = sum(lobe.get("yaml_count", 0) for lobe in lobes)
-    brain_md_body = _wake_up_collect_brain_md(brain_path)
-    glossary_entries = _wake_up_collect_glossary(brain_path)
-    try:
-        deprecation_issues = detect_deprecation_issues(brain_path)
-    except Exception:
-        deprecation_issues = []
-    deprecation_count = len(deprecation_issues)
 
+    if not brain_path.exists():
+        message = (
+            f"brain '{name}' path no longer exists: {brain_path}"
+        )
+        if as_json:
+            click.echo(json_lib.dumps({"ok": False, "error": message}))
+            sys.exit(1)
+        raise click.ClickException(message)
+
+    payload = build_payload(
+        brain_path,
+        name=name,
+        description=entry.get("description", ""),
+    )
+
+    # Layer scaffold-type metadata back on top — the runtime intentionally
+    # does not know about ``BRAIN_TYPES`` because the packed Docker image
+    # has no scaffold concept (real brains can diverge from their original
+    # scaffold).
     brain_type = entry.get("type", "product-group")
     type_structure = BRAIN_TYPES.get(brain_type, {}).get("structure", {})
-
-    data = {
-        "ok": True,
-        "name": name,
-        "path": str(brain_path),
-        "description": entry.get("description", ""),
-        "type": brain_type,
-        "type_structure": type_structure,
-        "brain_md": brain_md_body,
-        "lobes": lobes,
-        "total_neurons": total_neurons,
-        "total_yaml_neurons": total_yaml_neurons,
-        "recent": recent,
-        "glossary": glossary_entries,
-        "deprecation_count": deprecation_count,
-        "deprecation": deprecation_issues,
-    }
+    data = dict(payload)
+    data["type"] = brain_type
+    data["type_structure"] = type_structure
 
     if as_json:
         click.echo(json_lib.dumps(data))
         return
+
+    lobes = data["lobes"]
+    recent = data["recent"]
+    glossary_entries = data["glossary"]
+    deprecation_count = data["deprecation_count"]
 
     console.print(f"\n[bold]Brain: {name}[/bold]")
     console.print(f"  Path: {brain_path}")
@@ -1528,7 +1328,7 @@ def wake_up(brain_name: str | None, as_json: bool):
     console.print(f"\n[bold]Lobes ({len(lobes)})[/bold]")
     for lobe in lobes:
         console.print(f"  - {lobe['name']}/: {lobe['neurons']} neurons")
-    console.print(f"\n[bold]Total neurons:[/bold] {total_neurons}")
+    console.print(f"\n[bold]Total neurons:[/bold] {data['total_neurons']}")
     if glossary_entries:
         console.print(f"\n[bold]Glossary ({len(glossary_entries)} terms)[/bold]")
     if deprecation_count:
@@ -1540,6 +1340,66 @@ def wake_up(brain_name: str | None, as_json: bool):
         console.print(f"\n[bold]Recently updated ({len(recent)})[/bold]")
         for item in recent:
             console.print(f"  {item['updated']} {item['path']}")
+
+
+@cli.command("pack")
+@click.option("--brain", "brain_name", help="Specific brain")
+@click.option("--output", "output_dir", type=click.Path(), help="Output directory (default: ./<brain-name>-pack)")
+@click.option("--exclude", "excludes", multiple=True, help="Gitignore-style glob to exclude from the bundled brain (repeatable)")
+@click.option("--json", "as_json", is_flag=True, help="JSON output (never prompts)")
+def pack_cmd(brain_name: str | None, output_dir: str | None,
+             excludes: tuple[str, ...], as_json: bool):
+    """Produce a self-contained Docker chat-server bundle for a brain.
+
+    \b
+      kluris pack                       # one brain → ./<brain-name>-pack/
+      kluris pack --brain foo           # target a specific brain
+      kluris pack --output ./build/foo  # custom output directory
+      kluris pack --exclude '*.pdf'     # extra brain-side excludes
+      kluris pack --json                # machine-readable; never prompts
+    """
+    from kluris.core.pack import stage_pack
+
+    brains = _resolve_brains(brain_name, allow_all=False, as_json=as_json)
+    name, entry = brains[0]
+    brain_path = Path(entry["path"])
+
+    if output_dir is None:
+        output_path = Path.cwd() / f"{name}-pack"
+    else:
+        output_path = Path(output_dir).expanduser().resolve()
+
+    try:
+        manifest = stage_pack(
+            brain_path,
+            output_path,
+            brain_name=name,
+            excludes=excludes,
+        )
+    except FileExistsError as exc:
+        if as_json:
+            click.echo(json_lib.dumps({"ok": False, "error": str(exc)}))
+            sys.exit(1)
+        raise click.ClickException(str(exc)) from exc
+    except FileNotFoundError as exc:
+        if as_json:
+            click.echo(json_lib.dumps({"ok": False, "error": str(exc)}))
+            sys.exit(1)
+        raise click.ClickException(str(exc)) from exc
+
+    if as_json:
+        click.echo(json_lib.dumps(manifest))
+        return
+
+    console.print(
+        f"\n[bold]Packed[/bold] [green]{name}[/green] -> {manifest['output']}"
+    )
+    console.print(f"  Neurons bundled: {manifest['neuron_count']}")
+    console.print(f"  Files written:   {len(manifest['files'])}")
+    console.print(
+        "\nNext: edit [bold].env[/bold] in that directory, then "
+        "[bold]docker compose up[/bold]."
+    )
 
 
 @cli.command()

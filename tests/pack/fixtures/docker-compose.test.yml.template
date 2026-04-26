@@ -1,0 +1,14 @@
+services:
+  mock-llm:
+    image: kluris-pack-mock-llm:test
+    container_name: kluris-pack-mock-llm
+    ports:
+      - "127.0.0.1:8080:8080"
+    networks:
+      default: {}
+
+  kluris-pack:
+    depends_on:
+      - mock-llm
+    networks:
+      default: {}

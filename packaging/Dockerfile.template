@@ -1,0 +1,49 @@
+FROM python:3.12-slim
+
+WORKDIR /app
+
+# Pinned runtime deps for reproducible builds.
+RUN pip install --no-cache-dir \
+    fastapi==0.115.0 \
+    "uvicorn[standard]==0.30.6" \
+    jinja2==3.1.4 \
+    sse-starlette==2.1.3 \
+    httpx==0.27.2 \
+    pyyaml==6.0.2 \
+    python-frontmatter==1.1.0 \
+    pydantic==2.9.2
+
+# Copy the chat server, the read-only Kluris runtime, and the brain.
+COPY app/ /app/app/
+COPY kluris_runtime/ /app/kluris_runtime/
+COPY brain/ /app/brain/
+
+# Run as a non-root user. /app (including /app/brain) is root-owned and
+# made non-writable via `chmod -R a-w` after the COPYs. /data is the
+# only writable application path.
+#
+# ORDERING MATTERS: chmod runs as root in this RUN layer; USER kluris
+# below only takes effect for subsequent layers. Reversing the order
+# would either block the chmod or leave /app writable.
+RUN groupadd --system kluris \
+    && useradd --system --gid kluris --home-dir /app --shell /usr/sbin/nologin kluris \
+    && mkdir -p /data \
+    && chown -R kluris:kluris /data \
+    && chmod -R a-w /app
+
+# /app/brain is read-only by image construction (no runtime mount).
+# /data is the only writable path: chat history (sessions.db) +
+# system_prompt.md.
+VOLUME ["/data"]
+
+EXPOSE 8765
+
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV KLURIS_BRAIN_DIR=/app/brain
+ENV KLURIS_DATA_DIR=/data
+ENV HOME=/data
+
+USER kluris
+
+CMD ["python", "-m", "uvicorn", "app.main:create_app", "--factory", "--host", "0.0.0.0", "--port", "8765"]

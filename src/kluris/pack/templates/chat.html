@@ -1,0 +1,107 @@
+{% extends "base.html" %}
+{% block body %}
+<header class="chat-header">
+  <h1>{{ brain_name }}</h1>
+  <button id="new-conversation" type="button">New conversation</button>
+</header>
+
+<main class="chat-main">
+  <div id="messages" class="messages">
+    {% for msg in history %}
+      <div class="msg msg-{{ msg.role }}">
+        <div class="msg-role">{{ msg.role }}</div>
+        <div class="msg-body">{{ msg.content }}</div>
+      </div>
+    {% endfor %}
+  </div>
+</main>
+
+<form id="chat-form" class="chat-form" autocomplete="off">
+  <textarea id="chat-input" placeholder="Ask the brain anything..." rows="2" required></textarea>
+  <button type="submit">Send</button>
+</form>
+
+<footer class="chat-footer">
+  <span id="usage-totals" data-input="0" data-output="0">
+    Tokens this session: <strong id="usage-input">0</strong> in /
+    <strong id="usage-output">0</strong> out
+  </span>
+</footer>
+
+<script src="/static/sse.js"></script>
+<script>
+  (function () {
+    const form = document.getElementById("chat-form");
+    const input = document.getElementById("chat-input");
+    const messages = document.getElementById("messages");
+    const newBtn = document.getElementById("new-conversation");
+    const usageIn = document.getElementById("usage-input");
+    const usageOut = document.getElementById("usage-output");
+    let totalIn = 0, totalOut = 0;
+
+    function appendMessage(role, body) {
+      const div = document.createElement("div");
+      div.className = "msg msg-" + role;
+      div.innerHTML =
+        '<div class="msg-role">' + role + "</div>" +
+        '<div class="msg-body"></div>';
+      div.querySelector(".msg-body").textContent = body;
+      messages.appendChild(div);
+      div.scrollIntoView({behavior: "smooth"});
+      return div.querySelector(".msg-body");
+    }
+
+    function appendToolCard(name, args) {
+      const div = document.createElement("div");
+      div.className = "msg msg-tool";
+      const summary = JSON.stringify(args || {});
+      div.innerHTML =
+        '<details><summary>' + name + " — " + summary + "</summary>" +
+        '<div class="tool-result"></div></details>';
+      messages.appendChild(div);
+      return div;
+    }
+
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const message = input.value.trim();
+      if (!message) return;
+      appendMessage("user", message);
+      input.value = "";
+      const assistantBody = appendMessage("assistant", "");
+      let lastToolCard = null;
+      kluris.streamChat({
+        url: "/chat",
+        body: {message: message},
+        onEvent: (frame) => {
+          if (frame.type === "token") {
+            assistantBody.textContent += frame.text;
+          } else if (frame.type === "tool") {
+            lastToolCard = appendToolCard(frame.name, frame.args);
+          } else if (frame.type === "tool_result") {
+            if (lastToolCard) {
+              lastToolCard.querySelector(".tool-result").textContent =
+                frame.summary;
+            }
+          } else if (frame.type === "usage") {
+            totalIn += frame.input || 0;
+            totalOut += frame.output || 0;
+            usageIn.textContent = totalIn;
+            usageOut.textContent = totalOut;
+          } else if (frame.type === "error") {
+            assistantBody.textContent +=
+              "\n\n[error: " + frame.message + "]";
+          }
+        },
+      });
+    });
+
+    newBtn.addEventListener("click", async () => {
+      await fetch("/chat/new", {method: "POST"});
+      messages.innerHTML = "";
+      totalIn = 0; totalOut = 0;
+      usageIn.textContent = "0"; usageOut.textContent = "0";
+    });
+  })();
+</script>
+{% endblock %}
