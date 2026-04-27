@@ -200,6 +200,43 @@
     }
   }
 
+  // ---- Path resolution --------------------------------------------
+
+  // Brain-relative path of whatever the modal is currently showing.
+  // Used as the base directory when an inline markdown link uses a
+  // relative path like ``../projects/foo/bar.md``. Without this, the
+  // link gets sent to the API as-is, escapes the brain root, and the
+  // sandbox returns 400.
+  let currentNeuronPath = null;
+
+  function resolveBrainPath(baseDir, target) {
+    // Resolve a posix-style relative path. ``baseDir`` is the
+    // directory part of the currently-open neuron's brain-relative
+    // path (no trailing slash, may be ``""``). ``target`` is the
+    // raw href from a markdown link, including any ``./`` / ``../``
+    // segments and an optional ``#anchor``.
+    const noAnchor = String(target).split("#")[0];
+    if (!noAnchor) return null;
+    // Absolute paths inside the API: leading slash means "from the
+    // brain root"; the API sandbox strips one leading slash anyway.
+    if (noAnchor.startsWith("/")) {
+      return noAnchor.replace(/^\/+/, "");
+    }
+    const baseSegs = baseDir ? baseDir.split("/").filter(Boolean) : [];
+    const targetSegs = noAnchor.split("/");
+    const out = baseSegs.slice();
+    for (const seg of targetSegs) {
+      if (seg === "" || seg === ".") continue;
+      if (seg === "..") {
+        if (out.length === 0) return null; // escapes brain root
+        out.pop();
+      } else {
+        out.push(seg);
+      }
+    }
+    return out.join("/");
+  }
+
   // ---- Modal -------------------------------------------------------
 
   const modal = $("modal");
@@ -259,6 +296,9 @@
         return;
       }
       const data = await resp.json();
+      // Track the brain-relative path of the open neuron so inline
+      // markdown links using ``./`` or ``../`` resolve correctly.
+      currentNeuronPath = data.path || path;
       const meta = data.frontmatter || {};
       const updated = meta.updated || "";
       const created = meta.created || "";
@@ -293,6 +333,11 @@
   }
 
   async function showLobe(name) {
+    // A lobe modal isn't itself a neuron, so reset the relative-link
+    // base. The neuron-link cards inside the lobe already use full
+    // brain-relative paths in their ``data-path`` attribute, so they
+    // don't need a base.
+    currentNeuronPath = null;
     try {
       const resp = await fetch("/api/brain/lobe?lobe=" +
                                 encodeURIComponent(name));
@@ -478,7 +523,11 @@
     });
 
     // In-modal markdown links: navigate to a neuron path if it's
-    // brain-relative; ignore http(s) and #anchors.
+    // brain-relative; ignore http(s) and #anchors. Relative paths
+    // (``./foo``, ``../bar``) resolve against the directory of the
+    // currently-open neuron, NOT the brain root — otherwise a link
+    // like ``[BTB frontend](../projects/btb-frontend-core/overview.md)``
+    // would escape the brain root and 400.
     $("modal-body").addEventListener("click", (event) => {
       const link = event.target.closest("[data-md-link]");
       if (!link) {
@@ -495,12 +544,32 @@
         window.open(target, "_blank", "noopener");
         return;
       }
-      // Strip leading ./ and split off any anchor.
-      const cleaned = target.replace(/^\.\//, "").split("#")[0];
-      if (cleaned.endsWith(".md") || cleaned.endsWith(".yml") ||
-          cleaned.endsWith(".yaml")) {
-        showNeuron(cleaned);
+      const noAnchor = target.split("#")[0];
+      if (
+        !(noAnchor.endsWith(".md") || noAnchor.endsWith(".yml") ||
+          noAnchor.endsWith(".yaml"))
+      ) {
+        return;
       }
+      const baseDir = currentNeuronPath
+        ? currentNeuronPath.split("/").slice(0, -1).join("/")
+        : "";
+      const resolved = resolveBrainPath(baseDir, target);
+      if (!resolved) {
+        // ``../..`` escapes the brain root — show a helpful error
+        // instead of letting the API return a generic 400.
+        openModal({
+          eyebrow: target,
+          title: "Link points outside the brain",
+          meta: "",
+          bodyHtml:
+            "<p class='modal-error'>This link uses ``..`` to escape " +
+            "the brain root. Fix the source neuron's link to point " +
+            "at a brain-relative path.</p>",
+        });
+        return;
+      }
+      showNeuron(resolved);
     });
 
     // Filter input.

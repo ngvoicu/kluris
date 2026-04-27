@@ -466,12 +466,17 @@ a { color: var(--accent); }
   z-index: 20;
 }
 .modal {
+  /* Fixed 90vw × 90vh centered with the standard <dialog> idiom:
+     ``inset: 5vh 5vw`` + ``margin: 0`` overrides the user-agent
+     ``margin: auto`` styling that some browsers apply to top-layer
+     dialogs and that fought our previous transform centering. */
   position: fixed;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  width: min(880px, 90vw);
-  max-height: 86vh;
+  inset: 5vh 5vw;
+  margin: 0;
+  width: 90vw;
+  height: 90vh;
+  max-width: none;
+  max-height: none;
   background: var(--panel-2);
   color: var(--text);
   border: 1px solid var(--border);
@@ -488,6 +493,7 @@ a { color: var(--accent); }
 .modal:not([open]) { display: none; }
 .modal::backdrop { background: transparent; }
 .modal-header {
+  flex-shrink: 0;
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
