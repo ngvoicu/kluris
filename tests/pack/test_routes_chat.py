@@ -75,6 +75,40 @@ def test_post_chat_persists_history(api_key_config: Config):
         assert "first" in resp.text
 
 
+def test_post_chat_persists_agent_error_when_no_text(api_key_config: Config):
+    """If the agent emitted only an error (no tokens), the route must
+    still persist something to history so a page reload shows the
+    user that this turn failed — instead of a blank assistant block.
+    """
+    from kluris.pack.providers.base import LLMProvider
+
+    class _EmptyResponseProvider(LLMProvider):
+        """Provider that returns a bare ``end`` event — no tokens, no
+        tool_use. The agent loop turns that into an error.
+        """
+
+        model = "empty"
+
+        async def smoke_test(self) -> None:
+            return None
+
+        async def complete_stream(self, messages, tools):
+            yield {"kind": "end"}
+
+    app = create_app(
+        config=api_key_config,
+        provider=_EmptyResponseProvider(),
+        allow_writable_brain=True,
+    )
+    with TestClient(app) as client:
+        client.get("/")
+        client.post("/chat", json={"message": "what is x?"})
+        resp = client.get("/")
+        # The error must be visible in the replayed history.
+        assert "[error:" in resp.text
+        assert "no content" in resp.text.lower()
+
+
 def test_post_chat_empty_message_400(api_key_config: Config):
     app = _build_app(api_key_config)
     with TestClient(app) as client:

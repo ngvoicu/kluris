@@ -307,6 +307,48 @@ async def test_agent_stops_when_provider_emits_no_tool_calls(
     assert events[-1]["kind"] == "end"
 
 
+async def test_agent_surfaces_empty_response_as_recoverable_error(
+    fixture_brain, tmp_path
+):
+    """If the provider returns a round with NO tokens AND NO tool_uses
+    (a bare ``end`` event from a gateway that truncated mid-thought),
+    the agent must emit a recoverable error so the user doesn't see a
+    blank assistant block.
+    """
+    cfg = _config(fixture_brain, KLURIS_DATA_DIR=str(tmp_path / "data"))
+    (tmp_path / "data").mkdir()
+    provider = _ScriptedProvider([
+        # Round 1: nothing but end. No content, no tool_use.
+        [{"kind": "end"}],
+    ])
+    events = await _drain(run_agent(
+        config=cfg, provider=provider, history=[], user_message="hi",
+    ))
+    errors = [e for e in events if e["kind"] == "error"]
+    assert errors, "empty round must surface a recoverable error"
+    assert errors[0]["recoverable"] is True
+    assert "no content" in errors[0]["message"].lower()
+    assert events[-1]["kind"] == "end"
+
+
+async def test_agent_does_not_error_when_round_has_text(
+    fixture_brain, tmp_path
+):
+    """Sanity: the empty-round detector must NOT trigger when the
+    provider actually returned tokens (the normal happy path).
+    """
+    cfg = _config(fixture_brain, KLURIS_DATA_DIR=str(tmp_path / "data"))
+    (tmp_path / "data").mkdir()
+    provider = _ScriptedProvider([
+        [{"kind": "token", "text": "real answer"}, {"kind": "end"}],
+    ])
+    events = await _drain(run_agent(
+        config=cfg, provider=provider, history=[], user_message="hi",
+    ))
+    errors = [e for e in events if e["kind"] == "error"]
+    assert errors == []
+
+
 async def test_agent_max_rounds_cap_respected(fixture_brain, tmp_path):
     cfg = _config(
         fixture_brain,

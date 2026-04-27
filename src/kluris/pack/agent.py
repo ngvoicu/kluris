@@ -225,6 +225,27 @@ async def run_agent(
             return
 
         if not pending_tools:
+            # No more tools requested. If the round produced ANY text,
+            # we have a real answer — emit end and return cleanly.
+            #
+            # If the round produced ZERO tokens AND ZERO tool_uses, the
+            # provider returned an empty completion (some Bedrock-fronted
+            # gateways do this; the model may have gone over its server-
+            # side max_tokens budget mid-thought, or simply emitted a
+            # bare ``stop_reason`` with no content). Don't leave the
+            # user staring at a blank assistant block — surface a
+            # visible recoverable error so they know to retry.
+            if not round_text:
+                yield {
+                    "kind": "error",
+                    "message": (
+                        "The model returned no content for this turn. "
+                        "This usually means a server-side max_tokens cap "
+                        "or a quirky gateway response. Try rephrasing "
+                        "or asking a narrower question."
+                    ),
+                    "recoverable": True,
+                }
             yield {"kind": "end"}
             return
 

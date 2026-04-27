@@ -132,6 +132,7 @@ def attach_chat_routes(app: FastAPI) -> None:
 
         async def event_stream():
             assistant_text_parts: list[str] = []
+            agent_errors: list[str] = []
             agent_iter = run_agent(
                 config=cfg,
                 provider=provider,
@@ -144,10 +145,16 @@ def attach_chat_routes(app: FastAPI) -> None:
                 brain_name=_brain_name(cfg),
             )
             async for frame in encode_sse(_capture_assistant(
-                agent_iter, assistant_text_parts
+                agent_iter, assistant_text_parts, agent_errors,
             )):
                 yield frame
-            assistant_text = "".join(assistant_text_parts)
+            # Persist whatever the assistant produced — even an error
+            # — so a page reload shows the same turn the user just saw.
+            assistant_text = "".join(assistant_text_parts).strip()
+            if not assistant_text and agent_errors:
+                assistant_text = "\n\n".join(
+                    f"[error: {msg}]" for msg in agent_errors
+                )
             if assistant_text:
                 store.append_message(sid, "assistant", assistant_text)
 
@@ -177,9 +184,17 @@ def attach_chat_routes(app: FastAPI) -> None:
 async def _capture_assistant(
     agent_iter,
     sink: list[str],
+    errors: list[str] | None = None,
 ):
-    """Pass-through that records assistant text tokens for persistence."""
+    """Pass-through that records assistant text tokens AND error
+    messages for persistence so a reload shows the same turn.
+    """
     async for ev in agent_iter:
-        if ev.get("kind") == "token":
+        kind = ev.get("kind")
+        if kind == "token":
             sink.append(ev.get("text", ""))
+        elif kind == "error" and errors is not None:
+            msg = ev.get("message")
+            if isinstance(msg, str) and msg:
+                errors.append(msg)
         yield ev

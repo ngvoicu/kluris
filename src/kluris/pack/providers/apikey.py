@@ -217,6 +217,7 @@ class APIKeyProvider(LLMProvider):
             "model": self.model,
             "stream": True,
             "stream_options": {"include_usage": True},
+            "max_tokens": 4096,
             "tools": tools,
             "messages": _messages_for_openai(messages),
         }
