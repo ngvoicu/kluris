@@ -76,6 +76,41 @@ def _read_int(env: dict, name: str, default: int) -> int:
 _TRUE_LITERALS = {"1", "true", "yes", "on"}
 _FALSE_LITERALS = {"0", "false", "no", "off", ""}
 
+# Path suffixes that almost always mean the deployer pasted a full
+# endpoint URL (Anthropic / OpenAI / OpenRouter docs all show the
+# endpoint URL, not the host root). The provider classes append
+# these themselves, so leaving them on ``base_url`` produces a
+# doubled path like ``/v1/chat/completions/v1/chat/completions``
+# which 404s. Strip them with a boot warning so a copy-paste from
+# docs Just Works.
+_ENDPOINT_SUFFIXES = (
+    "/v1/chat/completions",
+    "/v1/messages",
+    "/chat/completions",  # some Azure deployments
+    "/messages",
+)
+
+
+def _normalize_base_url(raw: str, var_name: str) -> tuple[str, str | None]:
+    """Strip a known endpoint suffix from a base URL and return
+    ``(cleaned, warning_or_None)``.
+
+    The warning is plain text — main.py prints it to stderr at boot
+    so the deployer sees what was changed in ``docker compose logs``.
+    """
+    cleaned = raw.rstrip("/")
+    for suffix in _ENDPOINT_SUFFIXES:
+        if cleaned.endswith(suffix):
+            stripped = cleaned[: -len(suffix)]
+            warning = (
+                f"trimmed {suffix!r} from {var_name} "
+                f"({cleaned!r} -> {stripped!r}); the provider appends "
+                "the endpoint path itself, so set just the host root "
+                "next time."
+            )
+            return stripped.rstrip("/"), warning
+    return cleaned, None
+
 
 def _read_bool(env: dict, name: str, default: bool) -> bool:
     raw = env.get(name)
@@ -141,6 +176,12 @@ class Config(BaseModel):
     # can opt out at boot. Loud warning printed.
     skip_boot_smoke: bool = False
 
+    # Warnings collected during ``load_from_env`` (e.g. base-URL
+    # endpoint-suffix trim). main.py prints these to stderr at boot
+    # so they show up in ``docker compose logs``. Excluded from the
+    # redacted ``__repr__`` to keep config logging compact.
+    boot_warnings: list[str] = Field(default_factory=list)
+
     @property
     def auth_mode(self) -> str:
         """``"api_key"`` or ``"oauth"`` — whichever path is configured."""
@@ -187,6 +228,9 @@ class Config(BaseModel):
     def _redacted_str(self) -> str:
         fields: list[str] = []
         for name, value in self.model_dump().items():
+            if name == "boot_warnings":
+                # Noisy and orthogonal — main.py logs them separately.
+                continue
             if isinstance(value, SecretStr):
                 rendered = "***"
             elif name in {"api_key", "oauth_client_secret"} and value is not None:
@@ -206,6 +250,7 @@ class Config(BaseModel):
         Raises :class:`ConfigError` on missing/conflicting variables.
         """
         env = dict(env if env is not None else os.environ)
+        warnings: list[str] = []
 
         api_key_set = {var for var in _API_KEY_REQUIRED if env.get(var)}
         oauth_set = {var for var in _OAUTH_REQUIRED if env.get(var)}
@@ -241,7 +286,11 @@ class Config(BaseModel):
                     f"KLURIS_PROVIDER_SHAPE must be one of "
                     f"{sorted(_VALID_PROVIDER_SHAPES)}, got {shape!r}"
                 )
-            base_url = env["KLURIS_BASE_URL"].rstrip("/")
+            base_url, warning = _normalize_base_url(
+                env["KLURIS_BASE_URL"], "KLURIS_BASE_URL",
+            )
+            if warning:
+                warnings.append(warning)
             return cls._build(
                 provider_shape=shape,
                 base_url=base_url,
@@ -251,6 +300,7 @@ class Config(BaseModel):
                     "KLURIS_ANTHROPIC_VERSION", _DEFAULT_ANTHROPIC_VERSION
                 ),
                 env=env,
+                warnings=warnings,
             )
 
         # OAuth path
@@ -259,9 +309,14 @@ class Config(BaseModel):
             raise ConfigError(
                 f"missing required OAuth vars: {', '.join(missing)}"
             )
+        oauth_api_base_url, oauth_warning = _normalize_base_url(
+            env["KLURIS_OAUTH_API_BASE_URL"], "KLURIS_OAUTH_API_BASE_URL",
+        )
+        if oauth_warning:
+            warnings.append(oauth_warning)
         return cls._build(
             oauth_token_url=env["KLURIS_OAUTH_TOKEN_URL"],
-            oauth_api_base_url=env["KLURIS_OAUTH_API_BASE_URL"].rstrip("/"),
+            oauth_api_base_url=oauth_api_base_url,
             oauth_client_id=env["KLURIS_OAUTH_CLIENT_ID"],
             oauth_client_secret=SecretStr(env["KLURIS_OAUTH_CLIENT_SECRET"]),
             oauth_scope=env.get("KLURIS_OAUTH_SCOPE") or None,
@@ -270,10 +325,11 @@ class Config(BaseModel):
                 "KLURIS_ANTHROPIC_VERSION", _DEFAULT_ANTHROPIC_VERSION
             ),
             env=env,
+            warnings=warnings,
         )
 
     @classmethod
-    def _build(cls, *, env: dict, **kwargs) -> "Config":
+    def _build(cls, *, env: dict, warnings: list[str] | None = None, **kwargs) -> "Config":
         max_rounds = _read_int(env, "MAX_AGENT_ROUNDS", _DEFAULT_MAX_AGENT_ROUNDS)
         budget = _clamp(
             _read_int(env, "KLURIS_LOBE_OVERVIEW_BUDGET", _DEFAULT_LOBE_OVERVIEW_BUDGET),
@@ -313,4 +369,5 @@ class Config(BaseModel):
             tls_ca_bundle=ca_bundle,
             tls_insecure=tls_insecure,
             skip_boot_smoke=skip_boot_smoke,
+            boot_warnings=list(warnings or []),
         )

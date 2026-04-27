@@ -71,6 +71,77 @@ def test_strips_trailing_slash_from_base_url():
     assert cfg.base_url == "https://api.example.com"
 
 
+@pytest.mark.parametrize(
+    "raw, expected",
+    [
+        # Common copy-paste-from-docs mistakes:
+        (
+            "https://openrouter.ai/api/v1/chat/completions",
+            "https://openrouter.ai/api",
+        ),
+        (
+            "https://api.openai.com/v1/chat/completions",
+            "https://api.openai.com",
+        ),
+        (
+            "https://api.anthropic.com/v1/messages",
+            "https://api.anthropic.com",
+        ),
+        # Trailing slash on the endpoint also handled:
+        (
+            "https://openrouter.ai/api/v1/chat/completions/",
+            "https://openrouter.ai/api",
+        ),
+    ],
+)
+def test_normalizes_known_endpoint_suffixes_in_base_url(raw, expected):
+    """Deployers commonly paste the full endpoint URL from provider
+    docs into KLURIS_BASE_URL. The provider class appends the path
+    itself, so a doubled path ``/v1/.../v1/...`` 404s. Strip the
+    suffix automatically and surface a boot warning.
+    """
+    env = dict(_API_KEY_ENV, KLURIS_BASE_URL=raw)
+    cfg = Config.load_from_env(env)
+    assert cfg.base_url == expected
+    assert cfg.boot_warnings, "trim should surface a boot warning"
+    assert "KLURIS_BASE_URL" in cfg.boot_warnings[0]
+
+
+def test_unmodified_base_url_emits_no_warning():
+    env = dict(_API_KEY_ENV, KLURIS_BASE_URL="https://api.example.com")
+    cfg = Config.load_from_env(env)
+    assert cfg.boot_warnings == []
+
+
+def test_oauth_api_base_url_also_normalized():
+    """The same trim applies to KLURIS_OAUTH_API_BASE_URL."""
+    env = {
+        "KLURIS_OAUTH_TOKEN_URL": "https://idp.example.com/token",
+        "KLURIS_OAUTH_API_BASE_URL": "https://gw.example.com/v1/chat/completions",
+        "KLURIS_OAUTH_CLIENT_ID": "x",
+        "KLURIS_OAUTH_CLIENT_SECRET": "y",
+        "KLURIS_MODEL": "m",
+    }
+    cfg = Config.load_from_env(env)
+    assert cfg.oauth_api_base_url == "https://gw.example.com"
+    assert cfg.boot_warnings
+    assert "KLURIS_OAUTH_API_BASE_URL" in cfg.boot_warnings[0]
+
+
+def test_boot_warnings_excluded_from_repr():
+    """``boot_warnings`` is logged separately by main.py — it should
+    NOT clutter the redacted repr/str of Config.
+    """
+    env = dict(
+        _API_KEY_ENV,
+        KLURIS_BASE_URL="https://openrouter.ai/api/v1/chat/completions",
+    )
+    cfg = Config.load_from_env(env)
+    assert cfg.boot_warnings  # something was warned about
+    assert "boot_warnings" not in repr(cfg)
+    assert "boot_warnings" not in str(cfg)
+
+
 def test_missing_required_api_key_var_raises():
     env = dict(_API_KEY_ENV)
     del env["KLURIS_API_KEY"]

@@ -132,6 +132,39 @@ async def test_smoke_raises_on_401(api_env, respx_mock):
 
 
 @respx.mock(assert_all_mocked=True, assert_all_called=False)
+async def test_smoke_404_hints_at_wrong_base_url(api_env, respx_mock):
+    """A 404 from the LLM endpoint almost always means the deployer
+    pasted the full endpoint URL into KLURIS_BASE_URL (so the
+    provider's appended ``/v1/messages`` or ``/v1/chat/completions``
+    produced a doubled path). The error message must call that out
+    explicitly, not the misleading "may not support tool-calling".
+    """
+    cfg = _build_config(api_env, shape="anthropic")
+    respx_mock.post("http://api.test/v1/messages").mock(
+        return_value=httpx.Response(404, json={"error": "not found"})
+    )
+    with pytest.raises(RequestError) as exc:
+        await APIKeyProvider(cfg).smoke_test()
+    msg = str(exc.value).lower()
+    assert "404" in msg
+    assert "url is probably wrong" in msg
+    assert "kluris_base_url" in msg
+    # The misleading "tool-calling" hint must NOT appear for 404/405.
+    assert "may not support tool-calling" not in msg
+
+
+@respx.mock(assert_all_mocked=True, assert_all_called=False)
+async def test_smoke_405_also_hints_at_wrong_base_url(api_env, respx_mock):
+    cfg = _build_config(api_env, shape="openai")
+    respx_mock.post("http://api.test/v1/chat/completions").mock(
+        return_value=httpx.Response(405, json={"error": "method not allowed"})
+    )
+    with pytest.raises(RequestError) as exc:
+        await APIKeyProvider(cfg).smoke_test()
+    assert "url is probably wrong" in str(exc.value).lower()
+
+
+@respx.mock(assert_all_mocked=True, assert_all_called=False)
 async def test_smoke_raises_on_500(api_env, respx_mock):
     cfg = _build_config(api_env, shape="openai")
     respx_mock.post("http://api.test/v1/chat/completions").mock(

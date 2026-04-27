@@ -113,10 +113,24 @@ class APIKeyProvider(LLMProvider):
                 f"smoke-test auth failed ({resp.status_code}): "
                 "check KLURIS_API_KEY"
             )
+        if resp.status_code in (404, 405):
+            # The endpoint URL itself is wrong — almost always
+            # KLURIS_BASE_URL was set to the full endpoint URL
+            # (the value the docs print) instead of the host root.
+            # The provider classes append ``/v1/messages`` or
+            # ``/v1/chat/completions`` themselves.
+            raise RequestError(
+                f"smoke-test got {resp.status_code} from "
+                f"{self._endpoint()!r}: the URL is probably wrong. "
+                "KLURIS_BASE_URL should be just the host root "
+                "(e.g. https://openrouter.ai/api), not the full "
+                "endpoint URL — kluris appends the path itself."
+            )
         if resp.status_code >= 400:
             raise RequestError(
-                f"smoke-test non-2xx ({resp.status_code}); "
-                f"endpoint may not support tool-calling"
+                f"smoke-test non-2xx ({resp.status_code}) from "
+                f"{self._endpoint()!r}; provider may not support "
+                "tool-calling, or check the response body in logs."
             )
 
         try:

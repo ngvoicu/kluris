@@ -122,6 +122,11 @@ def create_app(
         sys.stderr.write(f"kluris-pack: {exc}\n")
         raise SystemExit(3) from exc
 
+    for warning in cfg.boot_warnings:
+        sys.stderr.write(f"kluris-pack: {warning}\n")
+    if cfg.boot_warnings:
+        sys.stderr.flush()
+
     if cfg.tls_insecure:
         sys.stderr.write(
             "kluris-pack: WARNING — KLURIS_TLS_INSECURE=1 is set; LLM "
