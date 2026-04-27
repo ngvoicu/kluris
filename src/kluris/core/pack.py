@@ -52,6 +52,18 @@ _BRAIN_EXCLUDES_DEFAULT = (
     ".DS_Store",
 )
 
+# Files inside an existing pack output that ``--force`` rebuilds must
+# preserve. The deployer's ``.env`` carries LLM credentials they typed
+# in by hand; wiping it on every rebuild would force them to refill
+# creds for every brain-edit cycle. ``.env.example`` is template-only
+# and IS regenerated. Glob-style: leading-dot literal, ``*`` wildcards.
+_PRESERVE_ON_FORCE = (
+    ".env",
+    ".env.local",
+    ".env.production",
+    ".env.staging",
+)
+
 
 def stage_pack(
     brain_path: Path,
@@ -59,16 +71,40 @@ def stage_pack(
     *,
     brain_name: str,
     excludes: Iterable[str] = (),
+    force: bool = False,
 ) -> dict:
     """Build the pack output directory at ``output_dir``.
 
     Returns a manifest dict ``{ok, output, brain, neuron_count,
-    files: [...]}`` so the CLI can emit JSON and the test suite can
-    assert exact file lists.
+    files: [...], preserved: [...]}`` so the CLI can emit JSON and
+    the test suite can assert exact file lists.
+
+    When ``force=True`` and ``output_dir`` already exists, the
+    directory is wiped and rebuilt — but any ``.env`` / ``.env.local``
+    / ``.env.production`` / ``.env.staging`` files inside are
+    preserved across the rebuild and overwrite the freshly-templated
+    ``.env`` if present. The deployer's typed-in credentials survive
+    a brain-edit / Dockerfile-edit / kluris-upgrade cycle.
     """
     output_dir = Path(output_dir).resolve()
+
+    preserved_files: dict[str, bytes] = {}
     if output_dir.exists():
-        raise FileExistsError(f"output directory already exists: {output_dir}")
+        if not force:
+            raise FileExistsError(
+                f"output directory already exists: {output_dir} "
+                "(rerun with `--force` to wipe + rebuild while "
+                "preserving .env)"
+            )
+        # Snapshot files we want to carry across the rebuild.
+        for name in _PRESERVE_ON_FORCE:
+            candidate = output_dir / name
+            if candidate.is_file():
+                try:
+                    preserved_files[name] = candidate.read_bytes()
+                except OSError:
+                    continue
+        shutil.rmtree(output_dir)
 
     output_dir.mkdir(parents=True)
 
@@ -103,6 +139,12 @@ def stage_pack(
         "README.template.md", output_dir / "README.md", brain_name=brain_name,
     )
 
+    # Restore preserved files AFTER staging so they overwrite the
+    # freshly-templated copies (e.g., the regenerated commented-out
+    # `.env` is replaced by the deployer's filled-in `.env`).
+    for name, contents in preserved_files.items():
+        (output_dir / name).write_bytes(contents)
+
     files = sorted(
         str(p.relative_to(output_dir)).replace("\\", "/")
         for p in output_dir.rglob("*")
@@ -114,6 +156,7 @@ def stage_pack(
         "brain": brain_name,
         "neuron_count": neuron_count,
         "files": files,
+        "preserved": sorted(preserved_files.keys()),
     }
 
 

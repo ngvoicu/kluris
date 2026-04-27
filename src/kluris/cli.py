@@ -1346,9 +1346,10 @@ def wake_up(brain_name: str | None, as_json: bool):
 @click.option("--brain", "brain_name", help="Specific brain")
 @click.option("--output", "output_dir", type=click.Path(), help="Output directory (default: ./<brain-name>-pack)")
 @click.option("--exclude", "excludes", multiple=True, help="Gitignore-style glob to exclude from the bundled brain (repeatable)")
+@click.option("--force", is_flag=True, help="If the output directory already exists, wipe and rebuild it (preserves .env / .env.local / .env.production / .env.staging)")
 @click.option("--json", "as_json", is_flag=True, help="JSON output (never prompts)")
 def pack_cmd(brain_name: str | None, output_dir: str | None,
-             excludes: tuple[str, ...], as_json: bool):
+             excludes: tuple[str, ...], force: bool, as_json: bool):
     """Produce a self-contained Docker chat-server bundle for a brain.
 
     \b
@@ -1356,6 +1357,8 @@ def pack_cmd(brain_name: str | None, output_dir: str | None,
       kluris pack --brain foo           # target a specific brain
       kluris pack --output ./build/foo  # custom output directory
       kluris pack --exclude '*.pdf'     # extra brain-side excludes
+      kluris pack --force               # wipe + rebuild existing pack dir
+                                        # (preserves .env credentials)
       kluris pack --json                # machine-readable; never prompts
     """
     from kluris.core.pack import stage_pack
@@ -1375,6 +1378,7 @@ def pack_cmd(brain_name: str | None, output_dir: str | None,
             output_path,
             brain_name=name,
             excludes=excludes,
+            force=force,
         )
     except FileExistsError as exc:
         if as_json:
@@ -1391,15 +1395,25 @@ def pack_cmd(brain_name: str | None, output_dir: str | None,
         click.echo(json_lib.dumps(manifest))
         return
 
+    verb = "Repacked" if manifest.get("preserved") else "Packed"
     console.print(
-        f"\n[bold]Packed[/bold] [green]{name}[/green] -> {manifest['output']}"
+        f"\n[bold]{verb}[/bold] [green]{name}[/green] -> {manifest['output']}"
     )
     console.print(f"  Neurons bundled: {manifest['neuron_count']}")
     console.print(f"  Files written:   {len(manifest['files'])}")
-    console.print(
-        "\nNext: edit [bold].env[/bold] in that directory, then "
-        "[bold]docker compose up[/bold]."
-    )
+    if manifest.get("preserved"):
+        console.print(
+            f"  Preserved:       {', '.join(manifest['preserved'])}"
+        )
+        console.print(
+            "\nNext: [bold]docker compose up --build[/bold] (your "
+            ".env is unchanged)."
+        )
+    else:
+        console.print(
+            "\nNext: edit [bold].env[/bold] in that directory, then "
+            "[bold]docker compose up --build[/bold]."
+        )
 
 
 @cli.command()

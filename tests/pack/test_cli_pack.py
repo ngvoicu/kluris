@@ -60,6 +60,32 @@ def test_pack_existing_output_errors(temp_brain, cli_runner_local, tmp_path):
     err = json.loads(result.stdout)
     assert err["ok"] is False
     assert "exists" in err["error"].lower()
+    # Hint at the escape hatch.
+    assert "--force" in err["error"]
+
+
+def test_pack_force_rebuilds_existing_output(
+    temp_brain, cli_runner_local, tmp_path,
+):
+    out = tmp_path / "out"
+    # Initial pack succeeds.
+    first = cli_runner_local.invoke(
+        cli, ["pack", "--output", str(out), "--json"],
+    )
+    assert first.exit_code == 0, first.stdout + first.stderr
+    # Deployer fills in .env with real creds.
+    real_env = "KLURIS_API_KEY=sk-do-not-lose\n"
+    (out / ".env").write_text(real_env, encoding="utf-8")
+
+    # --force rebuild succeeds and preserves the .env.
+    second = cli_runner_local.invoke(
+        cli, ["pack", "--output", str(out), "--force", "--json"],
+    )
+    assert second.exit_code == 0, second.stdout + second.stderr
+    data = json.loads(second.stdout)
+    assert data["ok"] is True
+    assert ".env" in data["preserved"]
+    assert (out / ".env").read_text(encoding="utf-8") == real_env
 
 
 def test_pack_help_documents_flags(cli_runner_local):

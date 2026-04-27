@@ -315,3 +315,92 @@ def test_existing_output_dir_raises(fixture_brain, tmp_path):
     out.mkdir()
     with pytest.raises(FileExistsError):
         stage_pack(fixture_brain, out, brain_name="fixture-brain")
+
+
+def test_existing_output_error_hints_at_force_flag(fixture_brain, tmp_path):
+    out = tmp_path / "exists"
+    out.mkdir()
+    with pytest.raises(FileExistsError) as exc:
+        stage_pack(fixture_brain, out, brain_name="fixture-brain")
+    assert "--force" in str(exc.value)
+
+
+def test_force_rebuild_wipes_and_recreates(fixture_brain, tmp_path):
+    """With ``force=True``, an existing dir is wiped and rebuilt — any
+    file outside the preserved ``.env`` family is gone.
+    """
+    out = tmp_path / "out"
+    stage_pack(fixture_brain, out, brain_name="fixture-brain")
+    # Drop a stray file the rebuild should NOT preserve.
+    (out / "stray.txt").write_text("stale", encoding="utf-8")
+    # Drop a file matching a non-preserved name.
+    (out / "deployer-notes.md").write_text("notes", encoding="utf-8")
+
+    manifest = stage_pack(
+        fixture_brain, out, brain_name="fixture-brain", force=True,
+    )
+    assert manifest["ok"] is True
+    # Stray files are gone.
+    assert not (out / "stray.txt").exists()
+    assert not (out / "deployer-notes.md").exists()
+    # Fresh templates are present again.
+    assert (out / "Dockerfile").is_file()
+    # The templated .env is one of the preserved candidates because
+    # the first stage_pack call wrote it; that's fine — preserving an
+    # all-commented template is a no-op for the deployer.
+    assert manifest["preserved"] == [".env"]
+
+
+def test_force_rebuild_preserves_env_credentials(fixture_brain, tmp_path):
+    """The deployer's filled-in ``.env`` survives a ``--force`` rebuild
+    so brain edits don't force re-typing credentials.
+    """
+    out = tmp_path / "out"
+    stage_pack(fixture_brain, out, brain_name="fixture-brain")
+
+    real_env = (
+        "KLURIS_PROVIDER_SHAPE=anthropic\n"
+        "KLURIS_BASE_URL=https://api.example.com\n"
+        "KLURIS_API_KEY=sk-real-deployer-key-do-not-lose\n"
+        "KLURIS_MODEL=claude-opus-4-7\n"
+    )
+    (out / ".env").write_text(real_env, encoding="utf-8")
+
+    manifest = stage_pack(
+        fixture_brain, out, brain_name="fixture-brain", force=True,
+    )
+    assert ".env" in manifest["preserved"]
+    assert (out / ".env").read_text(encoding="utf-8") == real_env, (
+        "deployer's .env credentials must survive --force rebuild"
+    )
+    # .env.example is regenerated (template), not preserved.
+    assert (out / ".env.example").is_file()
+
+
+@pytest.mark.parametrize(
+    "preserved_name",
+    [".env", ".env.local", ".env.production", ".env.staging"],
+)
+def test_force_rebuild_preserves_env_family(
+    fixture_brain, tmp_path, preserved_name,
+):
+    out = tmp_path / "out"
+    stage_pack(fixture_brain, out, brain_name="fixture-brain")
+    secret = f"KLURIS_API_KEY=sk-secret-for-{preserved_name}\n"
+    (out / preserved_name).write_text(secret, encoding="utf-8")
+
+    manifest = stage_pack(
+        fixture_brain, out, brain_name="fixture-brain", force=True,
+    )
+    assert preserved_name in manifest["preserved"]
+    assert (out / preserved_name).read_text(encoding="utf-8") == secret
+
+
+def test_force_with_no_existing_output_just_creates(fixture_brain, tmp_path):
+    out = tmp_path / "fresh"
+    manifest = stage_pack(
+        fixture_brain, out, brain_name="fixture-brain", force=True,
+    )
+    assert manifest["ok"] is True
+    assert manifest["preserved"] == []
+    assert out.is_dir()

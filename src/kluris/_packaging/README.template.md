@@ -23,6 +23,21 @@ changes (the brain is baked into the image, so a brain edit needs a
 rebuild before it shows up). On subsequent launches with no changes,
 plain `docker compose up` is fine — Compose reuses the cached image.
 
+### Re-packing after brain edits
+
+When you edit the brain repo and want to refresh this pack directory:
+
+```bash
+kluris pack --brain {brain_name} --force --output <this-dir>
+docker compose up --build
+```
+
+`--force` wipes and rebuilds the pack but **preserves `.env`,
+`.env.local`, `.env.production`, and `.env.staging`** so your typed-in
+LLM credentials survive across rebuilds. Everything else (Dockerfile,
+compose, brain content, app code) is regenerated from the current
+kluris install.
+
 The chat is reachable as soon as `/healthz` returns 200. If it
 doesn't boot, run `docker compose logs` — the smoke-test prints a
 single redacted line naming the bad/missing env var.
