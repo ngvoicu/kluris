@@ -1951,7 +1951,7 @@ function _renderTable(headerLine, bodyLines) {{
 }}
 
 function renderMarkdown(md) {{
-  const lines = (md || '').split(/\r?\n/);
+  const lines = (md || '').split(/\\r?\\n/);
   const out = [];
   let inCode = false;
   let codeBuf = [];
@@ -1968,7 +1968,7 @@ function renderMarkdown(md) {{
     const raw = lines[i];
     if (inCode) {{
       if (/^```/.test(raw)) {{
-        out.push('<pre><code>' + escapeHtml(codeBuf.join('\n')) + '</code></pre>');
+        out.push('<pre><code>' + escapeHtml(codeBuf.join('\\n')) + '</code></pre>');
         codeBuf = []; inCode = false;
       }} else {{ codeBuf.push(raw); }}
       i++; continue;
@@ -2027,9 +2027,9 @@ function renderMarkdown(md) {{
   }}
   flushList(); flushQuote();
   if (inCode) {{
-    out.push('<pre><code>' + escapeHtml(codeBuf.join('\n')) + '</code></pre>');
+    out.push('<pre><code>' + escapeHtml(codeBuf.join('\\n')) + '</code></pre>');
   }}
-  return out.join('\n');
+  return out.join('\\n');
 }}
 
 function _highlightYamlLine(escapedLine) {{
@@ -2047,20 +2047,20 @@ function _highlightYamlLine(escapedLine) {{
     '$1<span class="yaml-string">$2</span>'
   );
   html = html.replace(
-    /(:\s|-\s)(true|false|null|yes|no)\b/g,
+    /(:\s|-\s)(true|false|null|yes|no)\\b/g,
     '$1<span class="yaml-bool">$2</span>'
   );
   html = html.replace(
-    /(:\s|-\s)(-?\d+(?:\.\d+)?)\b/g,
+    /(:\s|-\s)(-?\d+(?:\.\d+)?)\\b/g,
     '$1<span class="yaml-num">$2</span>'
   );
   return html;
 }}
 function renderYaml(text) {{
-  const lines = (text || '').split(/\r?\n/);
+  const lines = (text || '').split(/\\r?\\n/);
   const highlighted = lines
     .map(l => _highlightYamlLine(escapeHtml(l)))
-    .join('\n');
+    .join('\\n');
   return '<pre class="yaml-preview"><code>' + highlighted + '</code></pre>';
 }}
 
