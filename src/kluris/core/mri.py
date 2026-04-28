@@ -1033,17 +1033,6 @@ def generate_mri_html(brain_path: Path, output_path: Path) -> dict:
     font-family: var(--mono);
     font-size: 0.82rem;
   }}
-  .inspector-header {{
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    margin-top: 22px;
-    padding-right: 32px;
-  }}
-  .inspector-nav {{
-    display: flex;
-    gap: 6px;
-  }}
   .modal-tree-folder {{
     margin: 2px 0;
   }}
@@ -1345,20 +1334,6 @@ def generate_mri_html(brain_path: Path, output_path: Path) -> dict:
       <div class="section-title">Results</div>
       <div id="result-count" class="subhead"></div>
       <div class="results" id="search-results"></div>
-
-      <div class="inspector-header">
-        <p class="eyebrow" style="margin:0">Inspector</p>
-        <div class="inspector-nav">
-          <button type="button" class="expand-btn" id="nav-back" title="Back">&larr;</button>
-          <button type="button" class="expand-btn" id="nav-forward" title="Forward">&rarr;</button>
-          <button type="button" class="expand-btn" id="nav-expand" title="Open in modal">expand</button>
-        </div>
-      </div>
-      <h2>Details</h2>
-      <div class="details-empty" id="details-empty">
-        Click a neuron in the file tree (or on the graph) to see its details and connections.
-      </div>
-      <div id="details-panel"></div>
     </div>
   </aside>
 </div>
@@ -1393,8 +1368,6 @@ const ctx = canvas.getContext('2d');
 const searchInput = document.getElementById('search-input');
 const resultsEl = document.getElementById('search-results');
 const resultCountEl = document.getElementById('result-count');
-const detailsPanel = document.getElementById('details-panel');
-const detailsEmpty = document.getElementById('details-empty');
 const stageFocus = document.getElementById('stage-focus');
 const lobesListEl = document.getElementById('lobes-list');
 const neighbors = new Map();
@@ -2083,104 +2056,17 @@ function renderYaml(text) {{
 }}
 
 function updateDetails() {{
+  // The right-sidebar inspector was removed — selection now only
+  // updates the stage focus pill (canvas HUD) and the active highlight
+  // in the left-sidebar file tree. The modal is the single place that
+  // shows neuron content, opened via the file tree.
   const node = nodes.find(item => item.id === selectedId);
-  const expandBtn = document.getElementById('nav-expand');
   if (!node) {{
-    detailsPanel.innerHTML = '';
-    detailsEmpty.style.display = 'block';
     stageFocus.textContent = '';
     syncPanelTreeActive(null);
-    if (expandBtn) expandBtn.disabled = true;
     return;
   }}
-  if (expandBtn) expandBtn.disabled = false;
-
-  detailsEmpty.style.display = 'none';
   stageFocus.textContent = `${{node.title}} • ${{node.path}}`;
-  const connected = [...(neighbors.get(node.id) || [])]
-    .map(id => nodes.find(item => item.id === id))
-    .filter(Boolean)
-    .sort((a, b) => a.title.localeCompare(b.title));
-  const tags = [...new Set(node.tags || [])].map(tag => `<span class="tag">${{escapeHtml(tag)}}</span>`).join('');
-  // Meta line dedupe: drop the sublobe/lobe chip when the connected neuron
-  // lives in the same section as the currently-selected node — otherwise
-  // every card in a same-project cluster repeats "neuron • btb" and the
-  // useful info (the title) competes with boilerplate.
-  const currentSection = node.sublobe || node.lobe || '';
-  const connectionCards = connected.map(target => {{
-    const targetSection = target.sublobe || target.lobe || '';
-    const typeLabel = target.type === 'map' ? 'lobe' : target.type;
-    const sectionChip = targetSection && targetSection !== currentSection
-      ? ` • ${{escapeHtml(targetSection)}}`
-      : '';
-    return `
-        <div class="connection-card" data-node-id="${{target.id}}">
-          <div class="connection-card-body">
-            <div class="result-title">${{escapeHtml(target.title)}}</div>
-            <div class="result-meta">${{escapeHtml(typeLabel)}}${{sectionChip}}</div>
-            <div class="result-path">${{escapeHtml(target.path)}}</div>
-          </div>
-          <button type="button" class="expand-btn connection-expand" data-node-expand="${{target.id}}" title="Open in modal">expand</button>
-        </div>
-      `;
-  }});
-  const connections = connected.length
-    ? connectionCards.join('')
-    : `<div class="details-empty">No connected nodes found for this selection.</div>`;
-
-  // Build breadcrumbs from path
-  const pathParts = node.path.split('/');
-  const crumbs = pathParts.map((part, i) => {{
-    const partPath = pathParts.slice(0, i + 1).join('/');
-    // Find a node matching this path (map.md for directories, or the file itself)
-    const isLast = i === pathParts.length - 1;
-    const targetPath = isLast ? partPath : partPath + '/map.md';
-    const target = nodes.find(n => n.path === targetPath);
-    const label = part.replace(/\.(md|yml|yaml)$/, '');
-    if (target && target.id !== node.id) {{
-      return `<button type="button" class="breadcrumb-link" data-node-id="${{target.id}}">${{escapeHtml(label)}}</button>`;
-    }}
-    return `<span class="breadcrumb-current">${{escapeHtml(label)}}</span>`;
-  }}).join('<span class="breadcrumb-sep">/</span>');
-
-  const detailsAuthoredSub = node.authored_title
-    ? `<div class="details-subtitle" title="From H1 in the file">${{escapeHtml(node.authored_title)}}</div>`
-    : '';
-  detailsPanel.innerHTML = `
-    <div class="details-card">
-      <div class="details-title">${{escapeHtml(node.title)}}</div>
-      ${{detailsAuthoredSub}}
-      <div class="breadcrumbs">${{crumbs}}</div>
-      <div class="meta-grid">
-        <div class="meta-card"><span class="label">Type</span><span class="value">${{node.type === 'map' ? 'lobe' : node.type === 'neuron' ? 'neuron' : escapeHtml(node.type)}}</span></div>
-        <div class="meta-card"><span class="label">Section</span><span class="value">${{escapeHtml(node.sublobe || node.lobe)}}</span></div>
-        <div class="meta-card"><span class="label">Updated</span><span class="value">${{escapeHtml(node.updated || '—')}}</span></div>
-        <div class="meta-card"><span class="label">Created</span><span class="value">${{escapeHtml(node.created || '—')}}</span></div>
-        <div class="meta-card"><span class="label">Connections</span><span class="value">${{connected.length}}</span></div>
-      </div>
-      ${{tags ? `<div class="tag-row">${{tags}}</div>` : ''}}
-      <div class="section-title">Excerpt</div>
-      <div class="details-copy">${{escapeHtml(node.excerpt || 'No excerpt available for this node.')}}</div>
-      <div class="section-title">Connected nodes</div>
-      <div class="results">${{connections}}</div>
-    </div>
-  `;
-  for (const button of detailsPanel.querySelectorAll('[data-node-id]')) {{
-    button.addEventListener('click', () => selectNode(Number(button.dataset.nodeId), true));
-  }}
-  for (const crumb of detailsPanel.querySelectorAll('.breadcrumb-link')) {{
-    crumb.addEventListener('click', () => selectNode(Number(crumb.dataset.nodeId), true));
-  }}
-  // Per-connection expand button — open that connected neuron in the
-  // modal without first selecting + recentering it. ``stopPropagation``
-  // so the surrounding card's "select" click doesn't also fire.
-  for (const btn of detailsPanel.querySelectorAll('[data-node-expand]')) {{
-    btn.addEventListener('click', (event) => {{
-      event.stopPropagation();
-      const target = nodes.find(n => n.id === Number(btn.dataset.nodeExpand));
-      if (target) openModal(target);
-    }});
-  }}
   syncPanelTreeActive(node.id);
 }}
 
@@ -3091,12 +2977,6 @@ document.getElementById('collapse-right').addEventListener('click', () => toggle
 document.getElementById('expand-left').addEventListener('click', () => togglePanel('left'));
 document.getElementById('expand-right').addEventListener('click', () => togglePanel('right'));
 
-document.getElementById('nav-back').addEventListener('click', navBack);
-document.getElementById('nav-forward').addEventListener('click', navForward);
-document.getElementById('nav-expand').addEventListener('click', () => {{
-  const node = nodes.find(n => n.id === selectedId);
-  if (node) openModal(node);
-}});
 document.getElementById('modal-back').addEventListener('click', () => {{
   navBack();
   const node = nodes.find(n => n.id === selectedId);

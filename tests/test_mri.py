@@ -251,19 +251,6 @@ def test_yaml_neuron_prefers_frontmatter_title(tmp_path):
     assert node["authored_title"] == ""
 
 
-def test_html_connection_cards_omit_section_chip_when_same_folder(tmp_path):
-    """Left-panel "Connected nodes" cards must drop the sublobe/lobe chip
-    when the connection is in the same section as the currently-selected
-    node — otherwise every card in a same-project cluster repeats the
-    project name and hides the actual titles."""
-    brain = _make_brain_with_yaml_neurons(tmp_path)
-    output = tmp_path / "brain-mri.html"
-    generate_mri_html(brain, output)
-    html = output.read_text(encoding="utf-8")
-    assert "const currentSection" in html
-    assert "targetSection !== currentSection" in html
-
-
 def test_html_nav_buttons_omit_parent_prefix_when_same_folder(tmp_path):
     """The modal's "Connected nodes" buttons must only prefix with the parent
     folder when it differs from the current node's parent. Otherwise every
@@ -497,27 +484,35 @@ def test_html_no_cdn(tmp_path):
     assert "cdnjs" not in html
 
 
-def test_html_has_search_and_details_ui(tmp_path):
-    """The shell must include search, details, and the file-tree panel.
+def test_html_has_search_and_file_tree_ui(tmp_path):
+    """The shell must include search and the left-sidebar file tree.
 
-    The standalone content-preview block in the inspector was removed
-    (read the body via the modal instead) — there's an Expand button
-    in the inspector header and a click-through file tree on the left.
+    The right-sidebar inspector was removed entirely — clicking a
+    neuron only updates the stage-focus pill and the active highlight
+    in the file tree. The modal (opened from the file tree) is the
+    single place that shows neuron content.
     """
     brain = _make_brain_with_neurons(tmp_path)
     output = tmp_path / "brain-mri.html"
     generate_mri_html(brain, output)
     html = output.read_text(encoding="utf-8")
+    # Kept: search, lobes, results, the left-sidebar file tree.
     assert 'id="search-input"' in html
-    assert 'id="details-panel"' in html
     assert "Search the brain" in html
-    # File explorer (left panel) and inspector Expand button replaced
-    # the removed content-preview block.
+    assert 'id="lobes-list"' in html
+    assert 'id="search-results"' in html
     assert 'id="panel-tree"' in html
-    assert 'id="nav-expand"' in html
-    # Standalone preview block must NOT be present anymore.
+    # Removed: every inspector / details / connections-card hook.
+    assert 'id="details-panel"' not in html
+    assert 'id="details-empty"' not in html
+    assert 'id="nav-back"' not in html
+    assert 'id="nav-forward"' not in html
+    assert 'id="nav-expand"' not in html
     assert "Content preview" not in html
     assert 'class="content-preview"' not in html
+    assert 'class="connection-card"' not in html
+    assert 'class="details-card"' not in html
+    assert "Connected nodes" not in html
 
 
 def test_html_has_lobes_list_in_left_panel(tmp_path):
@@ -861,27 +856,6 @@ def test_inner_sublobe_reset_clears_expanded_sublobes(tmp_path):
     html = output.read_text(encoding="utf-8")
 
     assert "expandedSublobes.clear()" in html
-
-
-def test_connections_render_all_with_per_card_expand(tmp_path):
-    """The inspector must render every connection (no truncation) and
-    each card must carry an explicit ``expand`` button so the user can
-    open that connected neuron's modal directly without having to
-    select-and-recenter first.
-    """
-    brain = _make_brain_with_inner_sublobes(tmp_path)
-    output = tmp_path / "brain-mri.html"
-    generate_mri_html(brain, output)
-    html = output.read_text(encoding="utf-8")
-
-    # No more limit constant or "Show all" button.
-    assert "CONN_LIMIT" not in html
-    assert "conn-show-all" not in html
-    assert "Show all" not in html
-    # Every connection card now has its own expand button + dispatcher.
-    assert "data-node-expand" in html
-    assert "connection-expand" in html
-    assert "querySelectorAll('[data-node-expand]')" in html
 
 
 def test_inner_sublobe_no_canvas_hull(tmp_path):

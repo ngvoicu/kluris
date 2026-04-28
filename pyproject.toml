@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "kluris"
-version = "2.15.8"
+version = "2.15.9"
 description = "Turn your AI agents into team subject matter experts with shared, human-curated knowledge"
 readme = "README.md"
 requires-python = ">=3.10"
