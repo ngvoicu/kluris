@@ -1030,6 +1030,23 @@ def generate_mri_html(brain_path: Path, output_path: Path) -> dict:
     font-family: var(--mono);
     font-size: 0.82rem;
   }}
+  .panel-tree {{
+    display: block;
+    margin: 4px 0 0;
+    font-family: var(--mono);
+    font-size: 0.82rem;
+  }}
+  .inspector-header {{
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-top: 22px;
+    padding-right: 32px;
+  }}
+  .inspector-nav {{
+    display: flex;
+    gap: 6px;
+  }}
   .modal-tree-folder {{
     margin: 2px 0;
   }}
@@ -1303,18 +1320,8 @@ def generate_mri_html(brain_path: Path, output_path: Path) -> dict:
           <div class="stat-value" id="stat-edges">{len(graph["edges"])}</div>
         </div>
       </div>
-      <div class="search-wrap">
-        <label for="search-input">Search the brain</label>
-        <div class="search-row">
-          <input id="search-input" type="search" placeholder="Name, path, lobe, tag, or yaml" autocomplete="off">
-          <button class="button" id="reset-view" type="button">Reset</button>
-        </div>
-      </div>
-      <div class="section-title">Lobes</div>
-      <div class="lobes-list" id="lobes-list"></div>
-      <div class="section-title">Results</div>
-      <div id="result-count" class="subhead"></div>
-      <div class="results" id="search-results"></div>
+      <div class="section-title">Files</div>
+      <nav class="panel-tree" id="panel-tree" aria-label="Brain files"></nav>
     </div>
   </aside>
 
@@ -1329,16 +1336,30 @@ def generate_mri_html(brain_path: Path, output_path: Path) -> dict:
   <aside class="panel panel-right">
     <button type="button" class="panel-collapse-btn" id="collapse-right" title="Collapse right panel" aria-label="Collapse right panel">&rsaquo;</button>
     <div class="panel-inner">
-      <div style="display:flex;align-items:center;justify-content:space-between;padding-right:32px">
-        <div><p class="eyebrow" style="margin:0">Inspector</p></div>
-        <div style="display:flex;gap:6px">
+      <div class="search-wrap">
+        <label for="search-input">Search the brain</label>
+        <div class="search-row">
+          <input id="search-input" type="search" placeholder="Name, path, lobe, tag, or yaml" autocomplete="off">
+          <button class="button" id="reset-view" type="button">Reset</button>
+        </div>
+      </div>
+      <div class="section-title">Lobes</div>
+      <div class="lobes-list" id="lobes-list"></div>
+      <div class="section-title">Results</div>
+      <div id="result-count" class="subhead"></div>
+      <div class="results" id="search-results"></div>
+
+      <div class="inspector-header">
+        <p class="eyebrow" style="margin:0">Inspector</p>
+        <div class="inspector-nav">
           <button type="button" class="expand-btn" id="nav-back" title="Back">&larr;</button>
           <button type="button" class="expand-btn" id="nav-forward" title="Forward">&rarr;</button>
+          <button type="button" class="expand-btn" id="nav-expand" title="Open in modal">expand</button>
         </div>
       </div>
       <h2>Details</h2>
       <div class="details-empty" id="details-empty">
-        Click a neuron to see its content and connections.
+        Click a neuron in the file tree (or on the graph) to see its details and connections.
       </div>
       <div id="details-panel"></div>
     </div>
@@ -2066,12 +2087,16 @@ function renderYaml(text) {{
 
 function updateDetails() {{
   const node = nodes.find(item => item.id === selectedId);
+  const expandBtn = document.getElementById('nav-expand');
   if (!node) {{
     detailsPanel.innerHTML = '';
     detailsEmpty.style.display = 'block';
     stageFocus.textContent = '';
+    syncPanelTreeActive(null);
+    if (expandBtn) expandBtn.disabled = true;
     return;
   }}
+  if (expandBtn) expandBtn.disabled = false;
 
   detailsEmpty.style.display = 'none';
   stageFocus.textContent = `${{node.title}} • ${{node.path}}`;
@@ -2080,10 +2105,6 @@ function updateDetails() {{
     .filter(Boolean)
     .sort((a, b) => a.title.localeCompare(b.title));
   const tags = [...new Set(node.tags || [])].map(tag => `<span class="tag">${{escapeHtml(tag)}}</span>`).join('');
-  const contentPreview = escapeHtml(node.content_preview || 'No content preview available for this node.');
-  const previewNote = node.content_preview_truncated
-    ? '<div class="content-preview-note">Preview truncated for readability. Click expand to read the full document.</div>'
-    : '';
   const CONN_LIMIT = 3;
   // Meta line dedupe: drop the sublobe/lobe chip when the connected neuron
   // lives in the same section as the currently-selected node — otherwise
@@ -2145,9 +2166,6 @@ function updateDetails() {{
       ${{tags ? `<div class="tag-row">${{tags}}</div>` : ''}}
       <div class="section-title">Excerpt</div>
       <div class="details-copy">${{escapeHtml(node.excerpt || 'No excerpt available for this node.')}}</div>
-      <div class="section-title">Content preview <button type="button" class="expand-btn" id="expand-preview">expand</button></div>
-      <pre class="content-preview">${{contentPreview}}</pre>
-      ${{previewNote}}
       <div class="section-title">Connected nodes</div>
       <div class="results">${{connections}}</div>
     </div>
@@ -2158,10 +2176,7 @@ function updateDetails() {{
   for (const crumb of detailsPanel.querySelectorAll('.breadcrumb-link')) {{
     crumb.addEventListener('click', () => selectNode(Number(crumb.dataset.nodeId), true));
   }}
-  const expandBtn = document.getElementById('expand-preview');
-  if (expandBtn) {{
-    expandBtn.addEventListener('click', () => openModal(node));
-  }}
+  syncPanelTreeActive(node.id);
   const showAllBtn = document.getElementById('conn-show-all');
   if (showAllBtn) {{
     showAllBtn.addEventListener('click', () => {{
@@ -2180,7 +2195,6 @@ function updateDetails() {{
 // call. Folders toggle via the caret. Clicking a file opens that node.
 const treeRoot = {{ folders: new Map(), files: [] }};
 let treeBuilt = false;
-let collapsedTreePaths = new Set();
 
 function buildFileTree() {{
   treeRoot.folders = new Map();
@@ -2208,13 +2222,21 @@ function buildFileTree() {{
   treeBuilt = true;
 }}
 
-function renderTreeFolder(name, folder, pathSoFar) {{
+// Per-target collapsed state — the panel tree (always visible) and the
+// modal tree have different lifecycles, so we don't want collapsing a
+// folder in one to flip the other.
+const treeCollapsed = {{
+  'modal-tree': new Set(),
+  'panel-tree': new Set(),
+}};
+
+function renderTreeFolder(name, folder, pathSoFar, targetId) {{
   const full = pathSoFar ? `${{pathSoFar}}/${{name}}` : name;
-  const collapsed = collapsedTreePaths.has(full);
+  const collapsed = (treeCollapsed[targetId] || new Set()).has(full);
   const caret = collapsed ? '▸' : '▾';
   const subFolderHtml = [...folder.folders.entries()]
     .sort((a, b) => a[0].localeCompare(b[0]))
-    .map(([n, f]) => renderTreeFolder(n, f, full))
+    .map(([n, f]) => renderTreeFolder(n, f, full, targetId))
     .join('');
   const fileHtml = folder.files
     .sort((a, b) => a.title.localeCompare(b.title))
@@ -2228,13 +2250,14 @@ function renderTreeFolder(name, folder, pathSoFar) {{
   );
 }}
 
-function renderFileTree(activeNodeId) {{
+function renderFileTree(activeNodeId, targetId = 'modal-tree') {{
   if (!treeBuilt) buildFileTree();
-  const treeEl = document.getElementById('modal-tree');
+  const treeEl = document.getElementById(targetId);
   if (!treeEl) return;
+  if (!treeCollapsed[targetId]) treeCollapsed[targetId] = new Set();
   const topFolders = [...treeRoot.folders.entries()]
     .sort((a, b) => a[0].localeCompare(b[0]))
-    .map(([n, f]) => renderTreeFolder(n, f, ''))
+    .map(([n, f]) => renderTreeFolder(n, f, '', targetId))
     .join('');
   const topFiles = treeRoot.files
     .sort((a, b) => a.title.localeCompare(b.title))
@@ -2242,35 +2265,47 @@ function renderFileTree(activeNodeId) {{
     .join('');
   treeEl.innerHTML = topFolders + topFiles;
 
-  // Highlight the active file and auto-expand its ancestor folders
   if (activeNodeId != null) {{
     for (const el of treeEl.querySelectorAll('.modal-tree-file')) {{
       if (Number(el.dataset.treeNode) === activeNodeId) el.classList.add('active');
     }}
   }}
 
-  // Wire folder caret clicks
   for (const el of treeEl.querySelectorAll('.modal-tree-folder-label')) {{
     el.addEventListener('click', () => {{
       const folder = el.closest('.modal-tree-folder');
       const path = folder?.dataset.treeFolder;
       if (!path) return;
-      if (collapsedTreePaths.has(path)) {{
-        collapsedTreePaths.delete(path);
+      const collapsedSet = treeCollapsed[targetId];
+      if (collapsedSet.has(path)) {{
+        collapsedSet.delete(path);
         folder.classList.remove('collapsed');
       }} else {{
-        collapsedTreePaths.add(path);
+        collapsedSet.add(path);
         folder.classList.add('collapsed');
       }}
     }});
   }}
 
-  // Wire file clicks to open that node in the modal
   for (const el of treeEl.querySelectorAll('.modal-tree-file')) {{
     el.addEventListener('click', () => {{
       const target = nodes.find(n => n.id === Number(el.dataset.treeNode));
       if (target) {{ selectNode(target.id, true); openModal(target); }}
     }});
+  }}
+}}
+
+// Cheap re-highlight of the active file in the panel tree without
+// rebuilding the DOM (called from selectNode / updateDetails).
+function syncPanelTreeActive(activeNodeId) {{
+  const treeEl = document.getElementById('panel-tree');
+  if (!treeEl) return;
+  for (const el of treeEl.querySelectorAll('.modal-tree-file.active')) {{
+    el.classList.remove('active');
+  }}
+  if (activeNodeId == null) return;
+  for (const el of treeEl.querySelectorAll('.modal-tree-file')) {{
+    if (Number(el.dataset.treeNode) === activeNodeId) el.classList.add('active');
   }}
 }}
 
@@ -3063,6 +3098,10 @@ document.getElementById('expand-right').addEventListener('click', () => togglePa
 
 document.getElementById('nav-back').addEventListener('click', navBack);
 document.getElementById('nav-forward').addEventListener('click', navForward);
+document.getElementById('nav-expand').addEventListener('click', () => {{
+  const node = nodes.find(n => n.id === selectedId);
+  if (node) openModal(node);
+}});
 document.getElementById('modal-back').addEventListener('click', () => {{
   navBack();
   const node = nodes.find(n => n.id === selectedId);
@@ -3099,6 +3138,7 @@ addEventListener('resize', () => {{
 }});
 nodes = initializeNodes();
 renderLobes();
+renderFileTree(null, 'panel-tree');
 refreshVisibility();
 updateDetails();
 // Frame the initial layout so the brain is centered regardless of viewport

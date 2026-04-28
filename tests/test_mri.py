@@ -498,6 +498,12 @@ def test_html_no_cdn(tmp_path):
 
 
 def test_html_has_search_and_details_ui(tmp_path):
+    """The shell must include search, details, and the file-tree panel.
+
+    The standalone content-preview block in the inspector was removed
+    (read the body via the modal instead) — there's an Expand button
+    in the inspector header and a click-through file tree on the left.
+    """
     brain = _make_brain_with_neurons(tmp_path)
     output = tmp_path / "brain-mri.html"
     generate_mri_html(brain, output)
@@ -505,7 +511,13 @@ def test_html_has_search_and_details_ui(tmp_path):
     assert 'id="search-input"' in html
     assert 'id="details-panel"' in html
     assert "Search the brain" in html
-    assert "Content preview" in html
+    # File explorer (left panel) and inspector Expand button replaced
+    # the removed content-preview block.
+    assert 'id="panel-tree"' in html
+    assert 'id="nav-expand"' in html
+    # Standalone preview block must NOT be present anymore.
+    assert "Content preview" not in html
+    assert 'class="content-preview"' not in html
 
 
 def test_html_has_lobes_list_in_left_panel(tmp_path):
