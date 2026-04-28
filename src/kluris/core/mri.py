@@ -564,23 +564,20 @@ def generate_mri_html(brain_path: Path, output_path: Path) -> dict:
     border-color: rgba(123,247,255,0.35);
     background: rgba(123,247,255,0.08);
   }}
-  .conn-show-all {{
-    appearance: none;
-    width: 100%;
-    padding: 8px 14px;
-    border-radius: 12px;
-    border: 1px dashed rgba(123,247,255,0.25);
-    background: rgba(123,247,255,0.04);
-    color: var(--accent);
-    font: inherit;
-    font-size: 0.82rem;
-    font-weight: 600;
-    cursor: pointer;
-    transition: border-color 160ms ease, background 160ms ease;
+  .connection-card {{
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
   }}
-  .conn-show-all:hover {{
-    border-color: rgba(123,247,255,0.50);
-    background: rgba(123,247,255,0.10);
+  .connection-card-body {{
+    flex: 1;
+    min-width: 0;
+  }}
+  .connection-expand {{
+    align-self: flex-start;
+    flex-shrink: 0;
+    font-size: 0.7rem;
+    padding: 2px 8px;
   }}
   .result-title {{
     font-weight: 700;
@@ -2105,7 +2102,6 @@ function updateDetails() {{
     .filter(Boolean)
     .sort((a, b) => a.title.localeCompare(b.title));
   const tags = [...new Set(node.tags || [])].map(tag => `<span class="tag">${{escapeHtml(tag)}}</span>`).join('');
-  const CONN_LIMIT = 3;
   // Meta line dedupe: drop the sublobe/lobe chip when the connected neuron
   // lives in the same section as the currently-selected node — otherwise
   // every card in a same-project cluster repeats "neuron • btb" and the
@@ -2118,20 +2114,19 @@ function updateDetails() {{
       ? ` • ${{escapeHtml(targetSection)}}`
       : '';
     return `
-        <button type="button" class="connection-card" data-node-id="${{target.id}}">
-          <div class="result-title">${{escapeHtml(target.title)}}</div>
-          <div class="result-meta">${{escapeHtml(typeLabel)}}${{sectionChip}}</div>
-          <div class="result-path">${{escapeHtml(target.path)}}</div>
-        </button>
+        <div class="connection-card" data-node-id="${{target.id}}">
+          <div class="connection-card-body">
+            <div class="result-title">${{escapeHtml(target.title)}}</div>
+            <div class="result-meta">${{escapeHtml(typeLabel)}}${{sectionChip}}</div>
+            <div class="result-path">${{escapeHtml(target.path)}}</div>
+          </div>
+          <button type="button" class="expand-btn connection-expand" data-node-expand="${{target.id}}" title="Open in modal">expand</button>
+        </div>
       `;
   }});
   const connections = connected.length
-    ? connectionCards.slice(0, CONN_LIMIT).join('')
-      + (connected.length > CONN_LIMIT
-        ? `<button type="button" class="conn-show-all" id="conn-show-all">Show all ${{connected.length}} connections</button>`
-        : '')
+    ? connectionCards.join('')
     : `<div class="details-empty">No connected nodes found for this selection.</div>`;
-  const connectionsAll = connectionCards.join('');
 
   // Build breadcrumbs from path
   const pathParts = node.path.split('/');
@@ -2176,17 +2171,17 @@ function updateDetails() {{
   for (const crumb of detailsPanel.querySelectorAll('.breadcrumb-link')) {{
     crumb.addEventListener('click', () => selectNode(Number(crumb.dataset.nodeId), true));
   }}
-  syncPanelTreeActive(node.id);
-  const showAllBtn = document.getElementById('conn-show-all');
-  if (showAllBtn) {{
-    showAllBtn.addEventListener('click', () => {{
-      const container = showAllBtn.parentElement;
-      container.innerHTML = connectionsAll;
-      for (const btn of container.querySelectorAll('[data-node-id]')) {{
-        btn.addEventListener('click', () => selectNode(Number(btn.dataset.nodeId), true));
-      }}
+  // Per-connection expand button — open that connected neuron in the
+  // modal without first selecting + recentering it. ``stopPropagation``
+  // so the surrounding card's "select" click doesn't also fire.
+  for (const btn of detailsPanel.querySelectorAll('[data-node-expand]')) {{
+    btn.addEventListener('click', (event) => {{
+      event.stopPropagation();
+      const target = nodes.find(n => n.id === Number(btn.dataset.nodeExpand));
+      if (target) openModal(target);
     }});
   }}
+  syncPanelTreeActive(node.id);
 }}
 
 // --- File browser tree (left sidebar of the expand modal) ---

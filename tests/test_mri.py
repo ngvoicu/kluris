@@ -863,20 +863,25 @@ def test_inner_sublobe_reset_clears_expanded_sublobes(tmp_path):
     assert "expandedSublobes.clear()" in html
 
 
-def test_connections_collapsed_with_show_all(tmp_path):
-    """The detail panel must show only a few connections by default and
-    offer a 'Show all N' button when there are more.
+def test_connections_render_all_with_per_card_expand(tmp_path):
+    """The inspector must render every connection (no truncation) and
+    each card must carry an explicit ``expand`` button so the user can
+    open that connected neuron's modal directly without having to
+    select-and-recenter first.
     """
     brain = _make_brain_with_inner_sublobes(tmp_path)
     output = tmp_path / "brain-mri.html"
     generate_mri_html(brain, output)
     html = output.read_text(encoding="utf-8")
 
-    # The limit constant and Show all button builder
-    assert "CONN_LIMIT" in html
-    assert "conn-show-all" in html
-    # CSS for the button
-    assert ".conn-show-all" in html
+    # No more limit constant or "Show all" button.
+    assert "CONN_LIMIT" not in html
+    assert "conn-show-all" not in html
+    assert "Show all" not in html
+    # Every connection card now has its own expand button + dispatcher.
+    assert "data-node-expand" in html
+    assert "connection-expand" in html
+    assert "querySelectorAll('[data-node-expand]')" in html
 
 
 def test_inner_sublobe_no_canvas_hull(tmp_path):
