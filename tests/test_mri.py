@@ -381,6 +381,31 @@ def test_graph_inline_edges(tmp_path):
     assert len(inline_edges) >= 1
 
 
+def test_graph_inline_glossary_anchor_edges(tmp_path):
+    """Inline links to `glossary.md#term` are still synapses in MRI.
+
+    The anchor is stripped for file resolution, but the edge target remains
+    glossary.md so the root canvas can draw a relationship to the glossary
+    when a neuron mentions a glossary term.
+    """
+    brain = _make_brain_with_neurons(tmp_path)
+    auth = brain / "arch" / "auth.md"
+    auth.write_text(
+        "---\nparent: ./map.md\nrelated: []\ntags: []\ncreated: 2026-04-01\nupdated: 2026-04-01\n---\n"
+        "# Auth\n\nUses [JWT](../glossary.md#jwt) for sessions.\n",
+        encoding="utf-8",
+    )
+    graph = build_graph(brain)
+    by_path = {n["path"]: n for n in graph["nodes"]}
+    auth_id = by_path["arch/auth.md"]["id"]
+    glossary_id = by_path["glossary.md"]["id"]
+
+    assert any(
+        e["source"] == auth_id and e["target"] == glossary_id and e["type"] == "inline"
+        for e in graph["edges"]
+    )
+
+
 def test_graph_ignores_invalid_frontmatter_links(tmp_path):
     brain = _make_brain_with_neurons(tmp_path)
     auth = brain / "arch" / "auth.md"
@@ -591,8 +616,10 @@ def test_lobes_act_as_visibility_toggles(tmp_path):
     # The dimmed style applies to hidden lobe rows.
     assert ".lobe-row" in html
     assert ".dimmed" in html
-    # Reset clears the set.
-    assert "hiddenLobes.clear()" in html
+    # The removed top-right reset button no longer owns lobe state; clicking
+    # each lobe row toggles it back on.
+    assert "hiddenLobes.delete(lobeKey)" in html
+    assert "hiddenLobes.add(lobeKey)" in html
 
 
 def test_sidebars_are_collapsible(tmp_path):
@@ -620,11 +647,12 @@ def test_sidebars_are_collapsible(tmp_path):
     assert "function togglePanel" in html
 
 
-def test_mri_starts_at_brain_root_with_lobes_and_top_files(tmp_path):
+def test_mri_starts_at_brain_root_with_lobes_and_glossary(tmp_path):
     """MRI starts at the brain root (currentPath = []) and the root view
-    shows BOTH top-level lobe folders AND top-level files (glossary.md,
-    brain.md). No more separate 'brain'/'lobe'/'sublobe' stage modes —
-    a single path-based view drills arbitrarily deep.
+    shows top-level lobe folders plus glossary.md when present. Structural
+    brain/index/map files stay indexed for links, but off the canvas. No more
+    separate 'brain'/'lobe'/'sublobe' stage modes — a single path-based view
+    drills arbitrarily deep.
     """
     brain = _make_brain_with_sublobes(tmp_path)
     output = tmp_path / "brain-mri.html"
@@ -645,10 +673,10 @@ def test_mri_starts_at_brain_root_with_lobes_and_top_files(tmp_path):
     assert 'data-stage-mode' not in html
 
 
-def test_root_includes_top_level_files_alongside_lobes(tmp_path):
-    """The root view (currentPath === []) renders top-level files (e.g.
-    glossary.md, brain.md) as siblings of the lobe folders. Folders and
-    files coexist as children at every level.
+def test_root_hides_structural_index_files_but_keeps_glossary(tmp_path):
+    """The root view (currentPath === []) renders glossary.md as a useful
+    file card, while structural brain.md / index.md / map.md nodes are only
+    indexed for links and edge counts.
     """
     brain = _make_brain_with_neurons(tmp_path)
     output = tmp_path / "brain-mri.html"
@@ -661,22 +689,26 @@ def test_root_includes_top_level_files_alongside_lobes(tmp_path):
     # Folder kicker switches between LOBE (depth 0) and SUBLOBE (deeper)
     assert "'LOBE'" in html
     assert "'SUBLOBE'" in html
-    # Glossary kicker stays distinct so root-level glossary.md renders as GLOSSARY
+    # Glossary kicker stays distinct so root-level glossary.md renders as GLOSSARY.
     assert "'GLOSSARY'" in html
+    # Structural index files are filtered inside childrenOf before cards are built.
+    assert "node.type === 'map' || node.type === 'index' || node.type === 'brain'" in html
+    # Search stays, but structural index files are not surfaced as results.
+    assert "node.type !== 'neuron' && node.type !== 'glossary') continue" in html
 
 
 def test_lobe_with_direct_neurons_shows_neurons_not_empty_index(tmp_path):
     """A lobe without sublobes must still show its direct neurons.
 
-    `map.md` is structural inside a folder, so it should not become the only
-    visible INDEX card and make the level feel empty.
+    Structural index files are hidden inside a folder, so they should not
+    become the only visible INDEX card and make the level feel empty.
     """
     brain = _make_brain_with_neurons(tmp_path)
     output = tmp_path / "brain-mri.html"
     generate_mri_html(brain, output)
     html = output.read_text(encoding="utf-8")
 
-    assert "map.md is structural inside a folder" in html
+    assert "Structural files are indexed for links/edge counts" in html
     assert "fallback.length" in html
     assert "n.type === 'neuron' && n.path.startsWith(prefix)" in html
 
@@ -712,8 +744,8 @@ def test_layout_never_single_row_for_three_or_more_items(tmp_path):
 
 def test_large_folder_layout_uses_compact_grid_and_fit(tmp_path):
     """Large brains need a flexible browser layout: compact cards, capped
-    aggregate edges, no outbound strip, and a real fit-to-current-view
-    helper instead of forcing everything into the viewport at scale=1.
+    aggregate edges, no outbound strip, and a real fit-to-current-view helper
+    instead of forcing everything into the viewport at scale=1.
     """
     brain = _make_brain_with_sublobes(tmp_path)
     output = tmp_path / "brain-mri.html"
@@ -722,7 +754,6 @@ def test_large_folder_layout_uses_compact_grid_and_fit(tmp_path):
 
     assert "function fitCurrentToView" in html
     assert "fitCurrentToView(true)" in html
-    assert "fitCurrentToView(false)" in html
     assert "function visibleAggregateEdges" in html
     assert "itemCount > 10 ? 0" in html
     assert "const maxCols = n > 12 ? 4 : 6" in html
@@ -730,8 +761,8 @@ def test_large_folder_layout_uses_compact_grid_and_fit(tmp_path):
     assert "currentOutbound" not in html
 
 
-def test_header_has_back_and_forward_path_history(tmp_path):
-    """The header has browser-like Back / Forward buttons for path history.
+def test_stage_hud_has_back_and_forward_path_history(tmp_path):
+    """The stage HUD has browser-like Back / Forward buttons for path history.
 
     Breadcrumbs still jump to a parent path; the dedicated buttons walk
     navigation history so users can return after drilling into a lobe.
@@ -743,6 +774,7 @@ def test_header_has_back_and_forward_path_history(tmp_path):
 
     assert 'id="btn-back"' in html
     assert 'id="btn-forward"' in html
+    assert 'class="hud-nav"' in html
     assert "let pathHistory = [[]]" in html
     assert "function goPathBack" in html
     assert "function goPathForward" in html
@@ -800,6 +832,22 @@ def test_search_chips_removed(tmp_path):
     assert "activeTypes" not in html
     # Search input is still present
     assert 'id="search-input"' in html
+
+
+def test_canvas_cards_show_only_type_name_and_path(tmp_path):
+    """Canvas cards stay compact: type/kicker, title, and path only.
+
+    Descriptions and tag chips still exist in the data/search layer, but they
+    are no longer drawn on cards because large/custom brains made them overlap.
+    """
+    brain = _make_brain_with_neurons(tmp_path)
+    output = tmp_path / "brain-mri.html"
+    generate_mri_html(brain, output)
+    html = output.read_text(encoding="utf-8")
+
+    assert "tagChips" not in html
+    assert "folderDescription" not in html
+    assert "Path line (mono, muted)" in html
 
 
 def test_html_under_500kb(tmp_path):
@@ -983,8 +1031,8 @@ def test_root_renders_inter_child_edges_with_counts(tmp_path):
     """At the brain root (currentPath === []) the renderer must draw
     aggregate edges between child boxes using a generic aggregator.
 
-    Children at the root are top-level lobes plus top-level files. Edges
-    between any two of those siblings render as a single labeled stub
+    Children at the root are top-level lobes plus glossary.md when present.
+    Edges between any two visible siblings render as a single labeled stub
     with the synapse count.
     """
     brain = _make_brain_with_cross_lobe_synapses(tmp_path)
@@ -998,6 +1046,8 @@ def test_root_renders_inter_child_edges_with_counts(tmp_path):
     assert "function drawCurrent" in html
     # Edge label format with synapse count (the unicode arrow + total)
     assert "↔ " in html
+    assert "hasBothDirections" in html
+    assert "→ " in html
 
 
 def test_inside_lobe_omits_outbound_stubs(tmp_path):
@@ -1058,27 +1108,29 @@ def test_breadcrumb_segments_are_clickable(tmp_path):
 
 def test_mri_header_has_full_width_bar_with_back_button(tmp_path):
     """The header bar lives full-width above the three-column body and contains
-    the brain title, stats, breadcrumb pill, Back/Forward buttons, and
-    Fit/Reset icons. The 4-button mode-switch is GONE.
+    the brain title, stats, and breadcrumb pill. Back/Forward now live in the
+    stage HUD, and the old top-right Fit/Reset icons are gone.
     """
     brain = _make_brain_with_neurons(tmp_path)
     output = tmp_path / "brain-mri.html"
     generate_mri_html(brain, output)
     html = output.read_text(encoding="utf-8")
 
-    # Header structure (back button replaces mode switch)
+    # Header structure
     assert 'class="mri-header"' in html
     assert 'class="brain-title"' in html
     assert 'class="stats"' in html
     assert 'class="breadcrumb"' in html
+    # Navigation moved into the stage HUD.
     assert 'id="btn-back"' in html
     assert 'id="btn-forward"' in html
+    assert 'class="hud-nav"' in html
     # Mode-switch DOM is gone — no buttons left with data-stage-mode.
     assert 'class="mode-switch"' not in html
     assert 'data-stage-mode' not in html
-    # Fit + Reset icon buttons stay
-    assert 'id="btn-fit"' in html
-    assert 'id="btn-reset"' in html
+    # Top-right Fit + Reset icon buttons are gone.
+    assert 'id="btn-fit"' not in html
+    assert 'id="btn-reset"' not in html
     # Stats line numbers (lobes / neurons / synapses) stay
     assert 'id="stat-lobes"' in html
     assert 'id="stat-neurons"' in html

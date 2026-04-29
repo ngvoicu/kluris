@@ -29,9 +29,9 @@ YAML_NEURON_SUFFIXES = {".yml", ".yaml"}
 def _all_neuron_files(brain_path: Path) -> list[Path]:
     """Collect markdown neurons plus opted-in yaml neurons.
 
-    MRI has its own narrower SKIP_FILES (it keeps `glossary.md`, `index.md`,
-    `brain.md`, `map.md` as visible graph nodes — unlike linker/maps which
-    hide them). The yaml opt-in gate is the same.
+    MRI has its own narrower SKIP_FILES (it indexes `glossary.md`, `index.md`,
+    `brain.md`, `map.md` so links to those files can still become graph edges —
+    unlike linker/maps which hide them). The yaml opt-in gate is the same.
     """
     files: list[Path] = []
     for item in brain_path.rglob("*.md"):
@@ -312,8 +312,8 @@ def generate_mri_html(brain_path: Path, output_path: Path) -> dict:
     """Generate a standalone HTML visualization of the brain graph.
 
     The MRI uses a path-based navigation model: the root view shows the
-    brain's direct children (top-level lobe folders + top-level files
-    like glossary.md and brain.md). Click a folder to drill in; the
+    brain's direct children (top-level lobe folders + glossary.md when
+    present). Click a folder to drill in; the
     same primitive renders any depth. A back button + breadcrumb walk
     the path back up. Pan + zoom on the canvas; click a leaf to open
     the neuron-detail modal.
@@ -372,20 +372,7 @@ def _render_mri_html(brain_name: str, graph: dict, graph_json: str) -> str:
       <span class="crumb active" data-level="brain">{brain_name}</span>
     </nav>
 
-    <div class="header-right">
-      <button class="icon-button" id="btn-back" type="button" title="Back" aria-label="Back" disabled>
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>
-      </button>
-      <button class="icon-button" id="btn-forward" type="button" title="Forward" aria-label="Forward" disabled>
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18l6-6-6-6"/></svg>
-      </button>
-      <button class="icon-button" id="btn-fit" type="button" title="Fit to view" aria-label="Fit to view">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7V3h4M21 7V3h-4M3 17v4h4M21 17v4h-4"/></svg>
-      </button>
-      <button class="icon-button" id="btn-reset" type="button" title="Reset view" aria-label="Reset view">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5"/></svg>
-      </button>
-    </div>
+    <div class="header-right" aria-hidden="true"></div>
   </header>
 
   <div class="body">
@@ -402,7 +389,15 @@ def _render_mri_html(brain_name: str, graph: dict, graph_json: str) -> str:
     <main class="stage" id="stage">
       <div class="stage-hud">
         <div class="hud-pill" id="hud-action">Click a folder to drill in · scroll to zoom · drag to pan</div>
-        <div class="hud-pill" id="hud-keys">Press <kbd>/</kbd> to search · <kbd>Esc</kbd> to close</div>
+        <div class="hud-nav" aria-label="Brain navigation">
+          <button class="icon-button hud-button" id="btn-back" type="button" title="Back" aria-label="Back" disabled>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>
+          </button>
+          <button class="icon-button hud-button" id="btn-forward" type="button" title="Forward" aria-label="Forward" disabled>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18l6-6-6-6"/></svg>
+          </button>
+          <div class="hud-pill" id="hud-keys">Press <kbd>/</kbd> to search · <kbd>Esc</kbd> to close</div>
+        </div>
       </div>
       <canvas id="mri-canvas"></canvas>
     </main>
@@ -516,7 +511,7 @@ html, body {
 /* ===== Header bar ===== */
 .mri-header {
   display: grid;
-  grid-template-columns: minmax(280px, auto) 1fr minmax(280px, auto);
+  grid-template-columns: minmax(280px, auto) 1fr minmax(0, 280px);
   gap: 24px;
   align-items: center;
   padding: 14px 22px;
@@ -776,6 +771,16 @@ canvas.dragging { cursor: grabbing; }
   align-items: flex-start;
   gap: 12px;
   pointer-events: none;
+}
+.hud-nav {
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.hud-button {
+  background: rgba(8, 15, 32, 0.78);
+  backdrop-filter: blur(8px);
 }
 .hud-pill {
   pointer-events: auto;
@@ -1287,8 +1292,8 @@ _MRI_JS = r"""
 // ============================================================
 //
 // `currentPath` is the array of folder names from the brain root.
-// `[]` means "show the brain's direct children" (top-level lobes +
-// top-level files like glossary.md / brain.md). Each element is the
+// `[]` means "show the brain's direct children" (top-level lobes plus
+// glossary.md when present). Each element is the
 // next folder name as drilling proceeds. There is no depth ceiling.
 
 let currentPath = [];
@@ -1385,10 +1390,10 @@ function childrenOf(path) {
     if (parts.length === path.length + 1) {
       // Direct file child
       const name = parts[path.length];
-      // map.md is structural inside a folder. Keep top-level brain.md /
-      // glossary.md visible at the root, but do not make a lobe with direct
-      // neurons look like it only contains an "INDEX" card.
-      if (!(path.length > 0 && name === 'map.md')) {
+      // Structural files are indexed for links/edge counts, but they stay off
+      // the canvas so folders do not look like INDEX cards.
+      const structural = node.type === 'map' || node.type === 'index' || node.type === 'brain';
+      if (!structural) {
         leaves.push({
           kind: 'leaf',
           name,
@@ -1447,14 +1452,6 @@ function folderStats(path) {
     if (parts.length > path.length + 1) directSubs.add(parts[path.length]);
   }
   return { neurons, sublobes: directSubs.size };
-}
-
-// Pull a one-line description for a folder from its map.md / index node.
-function folderDescription(path) {
-  const target = path.join('/') + '/map.md';
-  const mapNode = graph.nodes.find(n => n.path === target);
-  if (!mapNode) return '';
-  return (mapNode.excerpt || mapNode.content_preview || '').split('\n')[0].trim();
 }
 
 // Human label for a folder — prefer the H1 of its map.md when present.
@@ -1588,7 +1585,6 @@ function drawC4Box(item, opts) {
   opts = opts || {};
   const { x, y, w, h } = item;
   const density = item.density || 'normal';
-  const condensed = density === 'condensed' || density === 'compact' || density === 'tiny';
   const compact = density === 'compact' || density === 'tiny';
   const tiny = density === 'tiny';
   const left = x - w / 2;
@@ -1643,44 +1639,13 @@ function drawC4Box(item, opts) {
     ctx.lineTo(left + w - 14, top + 54);
     ctx.stroke();
   }
-  // Description (1 line, truncated)
-  if (item.desc && !compact) {
-    ctx.fillStyle = '#8ba7d1';
-    const descFont = condensed ? 10 : 11;
-    ctx.font = descFont + 'px "Avenir Next", "Segoe UI", sans-serif';
-    ctx.fillText(_truncate(item.desc, w - 24, descFont + 'px "Avenir Next", "Segoe UI", sans-serif'),
-      left + 14, top + 70);
-  }
-  // Stats line (mono, muted)
+  // Path line (mono, muted)
   if (item.statsLine) {
     ctx.fillStyle = 'rgba(139, 167, 209, 0.65)';
     const statsFont = tiny ? 8 : 10;
     ctx.font = statsFont + 'px "SFMono-Regular", monospace';
     ctx.fillText(_truncate(item.statsLine, w - 24, statsFont + 'px "SFMono-Regular", monospace'),
       left + 14, top + h - (tiny ? 10 : 14));
-  }
-  // Tag chips (leaf only)
-  if (item.tagChips && item.tagChips.length && !condensed) {
-    let tx = left + 14;
-    const ty = top + h - 30;
-    ctx.font = 'bold 9px "SFMono-Regular", monospace';
-    for (const chip of item.tagChips.slice(0, 2)) {
-      const padX = 6;
-      const m = ctx.measureText(chip);
-      const cw = m.width + padX * 2;
-      const ch = 14;
-      ctx.fillStyle = 'rgba(123, 167, 255, 0.10)';
-      ctx.beginPath();
-      ctx.roundRect(tx, ty, cw, ch, 4);
-      ctx.fill();
-      ctx.strokeStyle = 'rgba(123, 167, 255, 0.18)';
-      ctx.lineWidth = 1;
-      ctx.stroke();
-      ctx.fillStyle = '#8ba7d1';
-      ctx.fillText(chip, tx + padX, ty + 10);
-      tx += cw + 4;
-      if (tx > left + w - 14) break;
-    }
   }
   // Search dim halo (yellow)
   if (item.matchHalo) {
@@ -1737,10 +1702,8 @@ function drawAggregateEdge(cell, boxByKey, opts) {
   ctx.lineTo(tx, ty);
   ctx.stroke();
   ctx.restore();
-  const symmetric = cell.forward === cell.reverse;
-  const label = symmetric
-    ? '↔ ' + total
-    : '→ ' + cell.forward + ' / ← ' + cell.reverse;
+  const hasBothDirections = cell.forward > 0 && cell.reverse > 0;
+  const label = (hasBothDirections ? '↔ ' : '→ ') + total;
   const pillX = (sx + tx) / 2;
   const pillY = midY;
   ctx.save();
@@ -1776,15 +1739,13 @@ function buildCurrentItems() {
   const children = childrenOf(currentPath);
   const items = children.map(child => {
     if (child.kind === 'folder') {
-      const stats = folderStats(child.path);
       const top = depth === 0 && uniqueLobes.includes(child.name) ? child.name : (currentPath[0] || child.name);
       const color = uniqueLobes.includes(top) ? lobeColor(top) : lobePalette[0];
       return {
         ...child,
         kicker: depth === 0 ? 'LOBE' : 'SUBLOBE',
         title: folderTitle(child.path),
-        desc: folderDescription(child.path),
-        statsLine: stats.neurons + ' neurons' + (stats.sublobes ? ' · ' + stats.sublobes + ' sublobes' : ''),
+        statsLine: child.path.join('/'),
         color,
       };
     }
@@ -1799,10 +1760,8 @@ function buildCurrentItems() {
       ...child,
       kicker: kickerFor(child, depth),
       title: node.title,
-      desc: (node.excerpt || '').split('\n')[0].trim(),
       statsLine: node.path,
       color: leafColor,
-      tagChips: (node.tags || []).slice(0, 2),
       deprecated: node.status === 'deprecated',
       nodeId: node.id,
     };
@@ -2183,7 +2142,7 @@ function refreshSearch() {
     }
   }
   for (const node of graph.nodes) {
-    if (node.type !== 'neuron' && node.type !== 'glossary' && node.type !== 'index') continue;
+    if (node.type !== 'neuron' && node.type !== 'glossary') continue;
     const hay = [
       node.title, node.path, node.file_name, node.lobe, node.type, node.file_type || '',
       ...(node.tags || []), node.excerpt || '',
@@ -2692,18 +2651,6 @@ backBtn.addEventListener('click', () => {
 forwardBtn.addEventListener('click', () => {
   goPathForward();
 });
-document.getElementById('btn-reset').addEventListener('click', () => {
-  searchInput.value = '';
-  hiddenLobes.clear();
-  selectedId = null;
-  renderLobeFilter();
-  refreshSearch();
-  navigateTo([]);
-});
-document.getElementById('btn-fit').addEventListener('click', () => {
-  fitCurrentToView(false);
-});
-
 // Panel collapse — toggle a class on the body grid; show/hide expand button.
 function togglePanel(side) {
   const body = document.querySelector('.body');
