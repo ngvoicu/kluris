@@ -54,14 +54,7 @@ def get_config_path() -> Path:
 
 
 def read_global_config() -> GlobalConfig:
-    """Read global config from disk. Returns empty config if file doesn't exist.
-
-    Pydantic's default ``extra="ignore"`` silently drops any keys the model
-    doesn't declare — that's how we tolerate legacy fields from older
-    installations (``default_brain`` from <= 1.6.x, ``type`` / ``repo`` per
-    brain entry from <= 2.15.x). No active migration; old configs just keep
-    working.
-    """
+    """Read global config from disk. Returns empty config if file doesn't exist."""
     path = get_config_path()
     if not path.exists():
         return GlobalConfig()
@@ -84,12 +77,7 @@ def write_global_config(config: GlobalConfig) -> None:
 
 
 def read_brain_config(brain_path: Path) -> BrainConfig:
-    """Read kluris.yml from a brain directory.
-
-    Pydantic's default ``extra="ignore"`` silently drops legacy keys
-    (e.g. the ``git: { commit_prefix: ... }`` block from <= 2.15.x). No
-    active migration.
-    """
+    """Read kluris.yml from a brain directory."""
     config_file = brain_path / "kluris.yml"
     data = yaml.safe_load(config_file.read_text(encoding="utf-8")) or {}
     return BrainConfig.model_validate(data)

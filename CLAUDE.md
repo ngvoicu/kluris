@@ -51,7 +51,7 @@ src/kluris/
 - **Cross-platform** -- all file I/O uses `encoding="utf-8"`, all paths use `pathlib.Path`.
 - **wake-up bootstrap protocol** -- SKILL.md instructs the agent to run `kluris wake-up --json` (or `kluris wake-up --brain <name> --json` for per-brain skills) on the first `/<skill>` of a session (via Bash), cache the snapshot, and refresh only after brain-mutating commands. This replaces walking brain.md -> map.md -> neurons on every turn.
 - **Per-brain skill scheme** -- with 1 brain registered, install one skill named `kluris` with that brain's path baked in. With 2+ brains, install one `kluris-<name>` skill per brain so each is addressable unambiguously. Transitions in either direction sweep the entire `kluris*` artifact set before writing the new layout (`_sweep_kluris`). Per-destination atomic via stage-then-rename so a partial-write failure leaves the OLD skill in place.
-- **No default brain** -- the legacy `default_brain` field was removed in the multi-brain refactor. Resolution order is: explicit `--brain NAME` → exactly 1 brain registered → interactive picker (TTY only). Non-TTY / `--json` / `KLURIS_NO_PROMPT=1` all force the resolver to error out instead of prompting.
+- **No default brain** -- resolution order is: explicit `--brain NAME` → exactly 1 brain registered → interactive picker (TTY only). Non-TTY / `--json` / `KLURIS_NO_PROMPT=1` all force the resolver to error out instead of prompting.
 - **`--brain all`** -- accepted only on fan-out commands (dream, status, mri, companion add/remove). Other commands reject it with a clear error. `all` is also a reserved brain name to prevent collision.
 - **Sticky-selection tradeoff** -- `kluris use` was removed deliberately. Repeated commands in a terminal session each trigger the picker (or take `--brain`). The compensating affordances are `KLURIS_NO_PROMPT`, `--brain all`, the integer-pick UX, and the per-brain slash command names that make ambiguity disappear in agent workflows.
 - **Deprecation frontmatter is opt-in** -- neurons may set `status: deprecated` + `deprecated_at` + `replaced_by`. Absence of `status` means active. `linker.detect_deprecation_issues()` surfaces 4 kinds of warnings (`active_links_to_deprecated`, `deprecated_without_replacement`, `replaced_by_missing`, `replaced_by_not_active`) through `kluris dream`; they are non-blocking (do not break `healthy`). `kluris wake-up` exposes a `deprecation_count` summary.
@@ -140,20 +140,6 @@ create, register, list, status, search, wake-up, companion, dream, pack, mri, re
 - **mri output schema (unified)** -- always `{ok, brains: [{name, output_path, preflight_fixes, nodes, edges}, ...]}` regardless of brain count.
 - **`_do_install` callers** -- five command paths rewrite installed SKILL.md files: `create`, `register`, `remove`, `companion add/remove`, and `doctor`. `doctor` is the muscle-memory refresh path after `pipx upgrade kluris` -- it runs prerequisite checks, refreshes companions, AND `_do_install`. Pass `--no-refresh` to skip the refresh.
 - **`_is_interactive()`** helper wraps `sys.stdin.isatty()` so tests can monkeypatch it (CliRunner replaces sys.stdin during invoke and `monkeypatch.setattr("sys.stdin.isatty", ...)` does not survive the swap)
-
-## Migration
-
-### kluris 2.15.x → 2.16.0
-
-- Removed git-sync wrapper commands: `kluris clone`, `kluris push`, `kluris pull`, `kluris branch`. Replace with `git clone <url> <path>` + `kluris register <path>` for adoption, and plain `git push` / `git pull` / `git checkout` for sync. See [`MIGRATION.md`](./MIGRATION.md) for the full guide.
-- `kluris register` no longer accepts `.zip` files. Unzip first, then register the directory.
-- `BrainEntry.type` and `BrainEntry.repo` were dropped from `~/.kluris/config.yml`. `GitConfig` and `BrainConfig.git` (the `commit_prefix` setting) were dropped from per-brain `kluris.yml`. **Old config files are NOT migrated** — Pydantic ignores the legacy keys at runtime, so old installs keep working. Manual cleanup is documented in `MIGRATION.md`.
-- `kluris wake-up --json` no longer overlays scaffold-derived `type` / `type_structure`; agents read live structure from `lobes[]`.
-
-### kluris ≤ 1.6.x
-
-- The `kluris use <name>` command is gone. Pass `--brain NAME` per call (or pick interactively). The legacy `default_brain` field in `~/.kluris/config.yml` is silently ignored on read (Pydantic's default behavior).
-- The first post-upgrade `_do_install` (triggered by any mutation: `create`, `register`, `remove`, `companion add/remove`, or `doctor`) sweeps every `kluris/` and `kluris-*/` artifact across all 8 agent dirs + the universal slot + the Windsurf workflow dir, then writes the new layout.
 
 ## Testing
 

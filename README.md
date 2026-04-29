@@ -451,12 +451,6 @@ Sync, commit, and branch operations go through `git` directly. Brains are
 plain git repos — use `git -C <brain-path> push / pull / status / checkout`
 from the brain directory like any other repo.
 
-> **Upgrading from 2.15.x?** See [`MIGRATION.md`](./MIGRATION.md) for the
-> 2.16.0 changes — four CLI commands (`clone`, `push`, `pull`, `branch`)
-> were removed and a few persisted config fields are now ignored. Existing
-> installations keep working without migration; the guide walks through the
-> optional manual cleanup.
-
 ### Inside your AI coding agent — `> /kluris ...`
 
 Type these inside Claude Code, Cursor, Windsurf, GitHub Copilot, Codex, Gemini CLI, Kilo, or Junie. With one brain registered the slash command is `/kluris`; with multiple brains each installs as `/kluris-<name>`. Examples below use `/kluris` for clarity.

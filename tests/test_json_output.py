@@ -35,7 +35,6 @@ def test_list_json(tmp_path, monkeypatch):
     assert data["ok"] is True
     assert "brains" in data
     assert data["brains"][0]["companions"] == []
-    assert "default_brain" not in data
 
 
 def test_status_json(tmp_path, monkeypatch):

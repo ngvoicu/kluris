@@ -24,7 +24,7 @@ from kluris.core.config import (
 
 def test_kluris_importable():
     assert hasattr(kluris, "__version__")
-    assert kluris.__version__ == "2.16.1"
+    assert kluris.__version__ == "2.16.2"
 
 
 def test_global_config_defaults():
@@ -167,21 +167,6 @@ def test_config_not_found_returns_empty(tmp_path, monkeypatch):
 # --- Legacy-tolerance regressions: old YAML keys must load silently ---
 
 
-def test_legacy_default_brain_is_tolerated(tmp_path, monkeypatch):
-    """Loading a kluris<=1.6.x YAML with default_brain set must work without
-    raising. Pydantic's default extra="ignore" drops the key at validation."""
-    import yaml
-    config_path = tmp_path / "config.yml"
-    monkeypatch.setenv("KLURIS_CONFIG", str(config_path))
-    config_path.write_text(yaml.dump({
-        "default_brain": "my-brain",
-        "brains": {"my-brain": {"path": "/tmp/my-brain", "description": "x"}},
-    }), encoding="utf-8")
-    cfg = read_global_config()
-    assert "my-brain" in cfg.brains
-    assert not hasattr(cfg, "default_brain")
-
-
 def test_legacy_brain_entry_keys_are_tolerated(tmp_path, monkeypatch):
     """Loading a 2.15.x global config with `type:` and `repo:` per brain must
     succeed. The runtime model omits both fields."""
@@ -226,14 +211,13 @@ def test_legacy_kluris_yml_git_block_is_tolerated(tmp_path):
 
 def test_write_global_config_does_not_emit_legacy_keys(tmp_path, monkeypatch):
     """Round-trip: writing a fresh BrainEntry must not produce any of the
-    dropped keys (`type`, `repo`, `default_brain`) on disk."""
+    dropped keys (`type`, `repo`) on disk."""
     config_path = tmp_path / "config.yml"
     monkeypatch.setenv("KLURIS_CONFIG", str(config_path))
     register_brain("foo", BrainEntry(path="/tmp/foo", description="x"))
     raw = config_path.read_text(encoding="utf-8")
     assert "type" not in raw
     assert "repo" not in raw
-    assert "default_brain" not in raw
 
 
 def test_write_brain_config_does_not_emit_legacy_keys(tmp_path):
