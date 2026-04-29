@@ -653,7 +653,41 @@ def test_lobes_have_anti_overlap_physics_and_auto_fit(tmp_path):
     assert "lobeCentroids.get(lobeKeys[i])" in html
     # Auto-fit helpers
     assert "function fitToFilteredNodes" in html
-    assert "fitToFilteredNodes(true)" in html  # instant fit at startup
+    assert "fitToFilteredNodes(true)" in html  # instant detail refit after layout changes
+
+
+def test_mri_defaults_to_lobe_overview_with_drilldown(tmp_path):
+    """MRI starts as a lobe-first overview instead of the all-neuron force graph.
+
+    Big brains stay readable because the first canvas pass draws aggregate lobe
+    cells; clicking a lobe drills into the existing neuron graph for that lobe.
+    """
+    brain = _make_brain_with_sublobes(tmp_path)
+    output = tmp_path / "brain-mri.html"
+    generate_mri_html(brain, output)
+    html = output.read_text(encoding="utf-8")
+
+    assert "let stageMode = 'overview'" in html
+    assert 'data-stage-mode="overview"' in html
+    assert 'data-stage-mode="detail"' in html
+    assert "function drawOverview" in html
+    assert "function focusLobe" in html
+    assert "hitTestOverview" in html
+    assert "setStageMode('overview', true)" in html
+
+
+def test_mri_big_brain_force_graph_has_performance_caps(tmp_path):
+    """The detail graph must avoid O(n^2) physics once a brain is large."""
+    brain = _make_brain_with_sublobes(tmp_path)
+    output = tmp_path / "brain-mri.html"
+    generate_mri_html(brain, output)
+    html = output.read_text(encoding="utf-8")
+
+    assert "const FORCE_PAIRWISE_LIMIT = 180" in html
+    assert "filteredNodes.length <= FORCE_PAIRWISE_LIMIT" in html
+    assert "const DETAIL_EDGE_LIMIT = 700" in html
+    assert "if (stageMode === 'detail')" in html
+    assert "else if (needsDraw)" in html
 
 
 def test_sidebars_are_collapsible_and_long_names_dont_overflow(tmp_path):

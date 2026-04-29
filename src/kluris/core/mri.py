@@ -809,6 +809,13 @@ def generate_mri_html(brain_path: Path, output_path: Path) -> dict:
     gap: 12px;
     pointer-events: none;
   }}
+  .stage-tools {{
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+    min-width: 0;
+  }}
   .stage-pill {{
     pointer-events: auto;
     padding: 10px 14px;
@@ -818,6 +825,39 @@ def generate_mri_html(brain_path: Path, output_path: Path) -> dict:
     color: var(--muted);
     font-size: 0.84rem;
     backdrop-filter: blur(10px);
+  }}
+  .stage-mode-switch {{
+    pointer-events: auto;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px;
+    border-radius: 999px;
+    background: rgba(8,15,32,0.72);
+    border: 1px solid rgba(255,255,255,0.08);
+    backdrop-filter: blur(10px);
+  }}
+  .mode-button {{
+    appearance: none;
+    min-width: 78px;
+    height: 30px;
+    padding: 0 12px;
+    border: 0;
+    border-radius: 999px;
+    background: transparent;
+    color: var(--muted);
+    font: inherit;
+    font-size: 0.78rem;
+    cursor: pointer;
+    transition: background 160ms ease, color 160ms ease;
+  }}
+  .mode-button:hover {{
+    color: var(--text);
+  }}
+  .mode-button.active {{
+    color: #06111f;
+    background: var(--accent);
+    font-weight: 700;
   }}
   .details-card {{
     margin-top: 18px;
@@ -1313,7 +1353,13 @@ def generate_mri_html(brain_path: Path, output_path: Path) -> dict:
 
   <main class="stage">
     <div class="stage-hud">
-      <div class="stage-pill">Drag, pan, scroll to zoom, <strong>/</strong> to search</div>
+      <div class="stage-tools">
+        <div class="stage-pill">Drag, pan, scroll to zoom, <strong>/</strong> to search</div>
+        <div class="stage-mode-switch" aria-label="Stage mode">
+          <button class="mode-button active" type="button" data-stage-mode="overview" aria-pressed="true">Overview</button>
+          <button class="mode-button" type="button" data-stage-mode="detail" aria-pressed="false">Neurons</button>
+        </div>
+      </div>
       <div class="stage-pill" id="stage-focus"></div>
     </div>
     <canvas id="mri-canvas"></canvas>
@@ -1370,6 +1416,7 @@ const resultsEl = document.getElementById('search-results');
 const resultCountEl = document.getElementById('result-count');
 const stageFocus = document.getElementById('stage-focus');
 const lobesListEl = document.getElementById('lobes-list');
+const modeButtons = [...document.querySelectorAll('[data-stage-mode]')];
 const neighbors = new Map();
 for (const node of graph.nodes) neighbors.set(node.id, new Set());
 for (const edge of graph.edges) {{
@@ -1380,6 +1427,13 @@ for (const edge of graph.edges) {{
 let W = 0;
 let H = 0;
 const camera = {{ x: 0, y: 0, scale: 1 }};
+const FORCE_PAIRWISE_LIMIT = 180;
+const DETAIL_EDGE_LIMIT = 700;
+let stageMode = 'overview';
+let overviewItems = [];
+let hoveredOverviewLobe = null;
+let pendingOverviewLobe = null;
+let needsDraw = true;
 let pointer = {{ x: 0, y: 0 }};
 let selectedId = null;
 let hoveredId = null;
@@ -1395,6 +1449,10 @@ const hiddenLobes = new Set();
 const hiddenSublobes = new Set();
 const expandedLobes = new Set();
 const expandedSublobes = new Set();
+
+function requestDraw() {{
+  needsDraw = true;
+}}
 
 // --- Color system: two-tier palette ---
 const lobePalette = ['#7bf7ff','#ff8bd8','#f8c76d','#7df7b4','#9ea9ff','#ffa06f','#b8f0c1','#f2a8ff'];
@@ -1597,6 +1655,151 @@ function refreshVisibility() {{
     resultCountEl.textContent = `Showing all ${{filteredNodes.length}} neurons.`;
   }}
   renderResults();
+  overviewItems = buildOverviewItems();
+  requestDraw();
+}}
+
+function lobeTitle(lobeKey) {{
+  const mapNode = nodes.find(n => n.type === 'map' && n.lobe === lobeKey && n.sublobe === lobeKey);
+  return mapNode?.title || lobeKey;
+}}
+
+function buildOverviewItems() {{
+  if (!nodes.length) return [];
+  const hasActiveFilter = searchInput.value.trim() || hiddenLobes.size > 0 || hiddenSublobes.size > 0;
+  const source = hasActiveFilter ? filteredNodes : nodes.filter(n => n.type !== 'brain' && n.type !== 'map');
+  const buckets = new Map();
+  for (const node of source) {{
+    if (!node.lobe || node.lobe === 'root') continue;
+    if (!buckets.has(node.lobe)) {{
+      buckets.set(node.lobe, {{
+        key: node.lobe,
+        title: lobeTitle(node.lobe),
+        color: lobeColor(node.lobe),
+        neurons: 0,
+        docs: 0,
+        sublobes: new Map(),
+      }});
+    }}
+    const bucket = buckets.get(node.lobe);
+    if (node.type === 'neuron') bucket.neurons += 1;
+    if (node.type === 'neuron' || node.type === 'glossary' || node.type === 'index') bucket.docs += 1;
+    if (node.sublobe && node.sublobe !== node.lobe) {{
+      const parts = node.sublobe.split('/');
+      const subKey = parts.length > 2 ? parts.slice(0, 2).join('/') : node.sublobe;
+      if (!bucket.sublobes.has(subKey)) {{
+        bucket.sublobes.set(subKey, {{
+          key: subKey,
+          title: nodes.find(n => n.type === 'map' && n.sublobe === subKey)?.title || (subKey.split('/').pop() || subKey),
+          count: 0,
+        }});
+      }}
+      bucket.sublobes.get(subKey).count += 1;
+    }}
+  }}
+
+  const lobes = [...buckets.values()].sort((a, b) => a.key.localeCompare(b.key));
+  const rect = canvas.parentElement.getBoundingClientRect();
+  const width = rect.width || 900;
+  const height = rect.height || 620;
+  const centerX = width / 2;
+  const centerY = height / 2;
+  const cols = Math.max(1, Math.ceil(Math.sqrt(lobes.length)));
+  const rows = Math.max(1, Math.ceil(lobes.length / cols));
+  const cellW = Math.max(180, width / cols);
+  const cellH = Math.max(150, height / rows);
+  return lobes.map((info, index) => {{
+    const col = index % cols;
+    const row = Math.floor(index / cols);
+    const x = centerX - ((cols - 1) * cellW) / 2 + col * cellW;
+    const y = centerY - ((rows - 1) * cellH) / 2 + row * cellH;
+    const weight = Math.max(1, info.docs);
+    const radius = Math.min(Math.min(cellW, cellH) * 0.36, 58 + Math.sqrt(weight) * 14);
+    return {{
+      ...info,
+      x,
+      y,
+      radius: Math.max(62, radius),
+      sublobes: [...info.sublobes.values()].sort((a, b) => b.count - a.count || a.key.localeCompare(b.key)),
+    }};
+  }});
+}}
+
+function fitToOverviewItems(instant = false) {{
+  overviewItems = buildOverviewItems();
+  if (!overviewItems.length) {{
+    requestDraw();
+    return;
+  }}
+  const rect = canvas.parentElement.getBoundingClientRect();
+  const padding = 90;
+  const minX = Math.min(...overviewItems.map(item => item.x - item.radius)) - padding;
+  const maxX = Math.max(...overviewItems.map(item => item.x + item.radius)) + padding;
+  const minY = Math.min(...overviewItems.map(item => item.y - item.radius)) - padding;
+  const maxY = Math.max(...overviewItems.map(item => item.y + item.radius)) + padding;
+  const w = Math.max(1, maxX - minX);
+  const h = Math.max(1, maxY - minY);
+  const scale = Math.min(rect.width / w, rect.height / h) * 0.96;
+  const clampedScale = Math.min(1.9, Math.max(0.46, scale));
+  const cx = (minX + maxX) / 2;
+  const cy = (minY + maxY) / 2;
+  const tx = rect.width / 2 - cx * clampedScale;
+  const ty = rect.height / 2 - cy * clampedScale;
+  if (instant) {{
+    if (cameraAnim) {{ cancelAnimationFrame(cameraAnim); cameraAnim = null; }}
+    camera.x = tx;
+    camera.y = ty;
+    camera.scale = clampedScale;
+    requestDraw();
+  }} else {{
+    animateCamera(tx, ty, clampedScale, 280);
+  }}
+}}
+
+function hitTestOverview(worldX, worldY) {{
+  let candidate = null;
+  let minDistance = Infinity;
+  for (const item of overviewItems) {{
+    const distance = Math.hypot(item.x - worldX, item.y - worldY);
+    if (distance <= item.radius + 14 && distance < minDistance) {{
+      minDistance = distance;
+      candidate = item;
+    }}
+  }}
+  return candidate;
+}}
+
+function setStageMode(mode, instant = false) {{
+  stageMode = mode;
+  for (const btn of modeButtons) {{
+    const active = btn.dataset.stageMode === mode;
+    btn.classList.toggle('active', active);
+    btn.setAttribute('aria-pressed', active ? 'true' : 'false');
+  }}
+  hoveredOverviewLobe = null;
+  pendingOverviewLobe = null;
+  if (mode === 'overview') {{
+    selectedId = null;
+    updateDetails();
+    fitToOverviewItems(instant);
+  }} else {{
+    fitToFilteredNodes(instant);
+  }}
+  requestDraw();
+}}
+
+function focusLobe(lobeKey) {{
+  hiddenLobes.clear();
+  for (const lobe of uniqueLobes) {{
+    if (lobe !== 'root' && lobe !== lobeKey) hiddenLobes.add(lobe);
+  }}
+  hiddenSublobes.clear();
+  renderLobes();
+  refreshVisibility();
+  setStageMode('detail');
+  const mapNode = nodes.find(n => n.type === 'map' && n.lobe === lobeKey && n.sublobe === lobeKey);
+  if (mapNode) selectNode(mapNode.id, true);
+  else fitToFilteredNodes();
 }}
 
 function renderResults() {{
@@ -1720,7 +1923,8 @@ function renderLobes() {{
       else hiddenLobes.add(lobeKey);
       renderLobes();
       refreshVisibility();
-      fitToFilteredNodes();
+      if (stageMode === 'overview') fitToOverviewItems();
+      else fitToFilteredNodes();
     }});
     wrap.appendChild(card);
 
@@ -1788,7 +1992,8 @@ function renderLobes() {{
             }}
             renderLobes();
             refreshVisibility();
-            fitToFilteredNodes();
+            if (stageMode === 'overview') fitToOverviewItems();
+            else fitToFilteredNodes();
           }});
           if (hasInner) {{
             const innerWrap = document.createElement('div');
@@ -1857,7 +2062,8 @@ function renderLobes() {{
           }}
           renderLobes();
           refreshVisibility();
-          fitToFilteredNodes();
+          if (stageMode === 'overview') fitToOverviewItems();
+          else fitToFilteredNodes();
         }});
         if (hasInner) {{
           const innerWrap = document.createElement('div');
@@ -2290,6 +2496,9 @@ const navHistory = [];
 let navIndex = -1;
 
 function selectNode(id, recenter = false, fromNav = false) {{
+  if (id != null && stageMode === 'overview') {{
+    setStageMode('detail');
+  }}
   if (id !== selectedId && id != null && !fromNav) {{
     // Truncate forward history when navigating to a new node
     navHistory.splice(navIndex + 1);
@@ -2326,6 +2535,7 @@ function animateCamera(tx, ty, ts, duration) {{
     camera.x = sx + (tx - sx) * ease;
     camera.y = sy + (ty - sy) * ease;
     camera.scale = ss + (ts - ss) * ease;
+    requestDraw();
     if (t < 1) cameraAnim = requestAnimationFrame(step);
     else cameraAnim = null;
   }}
@@ -2364,6 +2574,7 @@ function fitToFilteredNodes(instant = false) {{
     camera.x = tx;
     camera.y = ty;
     camera.scale = clampedScale;
+    requestDraw();
   }} else {{
     animateCamera(tx, ty, clampedScale, 320);
   }}
@@ -2429,21 +2640,23 @@ function hitTest(worldX, worldY) {{
 function tick() {{
   const visibleIds = new Set(filteredNodes.map(n => n.id));
   // Repulsion with cross-lobe boost
-  for (let i = 0; i < filteredNodes.length; i++) {{
-    for (let j = i + 1; j < filteredNodes.length; j++) {{
-      const a = filteredNodes[i];
-      const b = filteredNodes[j];
-      const dx = b.x - a.x;
-      const dy = b.y - a.y;
-      const distance = Math.max(24, Math.hypot(dx, dy));
-      const crossLobe = a.lobe !== b.lobe ? 2.6 : 1.0;
-      const force = (1200 * crossLobe) / (distance * distance);
-      const ux = dx / distance;
-      const uy = dy / distance;
-      a.vx -= ux * force;
-      a.vy -= uy * force;
-      b.vx += ux * force;
-      b.vy += uy * force;
+  if (filteredNodes.length <= FORCE_PAIRWISE_LIMIT) {{
+    for (let i = 0; i < filteredNodes.length; i++) {{
+      for (let j = i + 1; j < filteredNodes.length; j++) {{
+        const a = filteredNodes[i];
+        const b = filteredNodes[j];
+        const dx = b.x - a.x;
+        const dy = b.y - a.y;
+        const distance = Math.max(24, Math.hypot(dx, dy));
+        const crossLobe = a.lobe !== b.lobe ? 2.6 : 1.0;
+        const force = (1200 * crossLobe) / (distance * distance);
+        const ux = dx / distance;
+        const uy = dy / distance;
+        a.vx -= ux * force;
+        a.vy -= uy * force;
+        b.vx += ux * force;
+        b.vy += uy * force;
+      }}
     }}
   }}
   // Same-lobe cohesion. Track members on the centroid record so the
@@ -2534,8 +2747,17 @@ function tick() {{
     }}
   }}
   // Edge springs
+  let springCount = 0;
   for (const edge of graph.edges) {{
     if (!visibleIds.has(edge.source) || !visibleIds.has(edge.target)) continue;
+    const touchesSelection = selectedId != null && (edge.source === selectedId || edge.target === selectedId);
+    if (
+      filteredNodes.length > FORCE_PAIRWISE_LIMIT &&
+      edge.type !== 'parent' &&
+      !touchesSelection
+    ) continue;
+    if (springCount > DETAIL_EDGE_LIMIT && !touchesSelection) continue;
+    springCount += 1;
     const source = nodes[edge.source];
     const target = nodes[edge.target];
     const dx = target.x - source.x;
@@ -2612,6 +2834,81 @@ function drawLabel(text, x, y, fontSize, bold) {{
   ctx.fillText(label, x, y);
 }}
 
+function drawOverview() {{
+  if (!overviewItems.length) overviewItems = buildOverviewItems();
+  const query = searchInput.value.trim().toLowerCase();
+  for (const item of overviewItems) {{
+    const color = item.color;
+    const isHovered = hoveredOverviewLobe === item.key;
+    const isHidden = hiddenLobes.has(item.key);
+    ctx.save();
+    ctx.globalAlpha = isHidden ? 0.36 : 1;
+    ctx.shadowColor = color;
+    ctx.shadowBlur = isHovered ? 34 : 16;
+
+    const gradient = ctx.createRadialGradient(item.x - item.radius * 0.25, item.y - item.radius * 0.30, 12, item.x, item.y, item.radius * 1.12);
+    gradient.addColorStop(0, rgbaFromHex(color, 0.30));
+    gradient.addColorStop(0.62, rgbaFromHex(color, 0.12));
+    gradient.addColorStop(1, rgbaFromHex(color, 0.035));
+    ctx.beginPath();
+    ctx.arc(item.x, item.y, item.radius, 0, Math.PI * 2);
+    ctx.fillStyle = gradient;
+    ctx.fill();
+    ctx.shadowBlur = 0;
+    ctx.strokeStyle = isHovered ? rgbaFromHex(color, 0.88) : rgbaFromHex(color, 0.35);
+    ctx.lineWidth = isHovered ? 2.4 : 1.3;
+    ctx.stroke();
+
+    const sublobes = item.sublobes.slice(0, 10);
+    if (sublobes.length) {{
+      const ringRadius = item.radius + 15;
+      sublobes.forEach((sub, index) => {{
+        const angle = -Math.PI / 2 + (index / sublobes.length) * Math.PI * 2;
+        const dotRadius = Math.max(4, Math.min(10, 3 + Math.sqrt(sub.count) * 1.7));
+        const dx = item.x + Math.cos(angle) * ringRadius;
+        const dy = item.y + Math.sin(angle) * ringRadius;
+        ctx.beginPath();
+        ctx.arc(dx, dy, dotRadius, 0, Math.PI * 2);
+        ctx.fillStyle = rgbaFromHex(color, 0.74);
+        ctx.fill();
+        ctx.strokeStyle = 'rgba(6, 17, 31, 0.86)';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+      }});
+    }}
+
+    ctx.textAlign = 'center';
+    ctx.fillStyle = 'rgba(233, 241, 255, 0.96)';
+    ctx.font = 'bold 15px "Avenir Next", "Segoe UI", sans-serif';
+    const title = String(item.title || item.key).toUpperCase();
+    const displayTitle = title.length > 22 ? title.slice(0, 22) + '...' : title;
+    ctx.fillText(displayTitle, item.x, item.y - 4);
+    ctx.font = '12px "Avenir Next", "Segoe UI", sans-serif';
+    ctx.fillStyle = 'rgba(139, 167, 209, 0.94)';
+    const docs = `${{item.docs}} file${{item.docs === 1 ? '' : 's'}}`;
+    const subs = item.sublobes.length ? ` • ${{item.sublobes.length}} sublobe${{item.sublobes.length === 1 ? '' : 's'}}` : '';
+    ctx.fillText(docs + subs, item.x, item.y + 17);
+    if (query) {{
+      ctx.font = '10px "SFMono-Regular", "SF Mono", "Monaco", monospace';
+      ctx.fillStyle = rgbaFromHex(color, 0.82);
+      ctx.fillText('SEARCH MATCHES', item.x, item.y + 36);
+    }}
+    ctx.textAlign = 'start';
+    ctx.restore();
+  }}
+
+  if (!overviewItems.length) {{
+    const rect = canvas.getBoundingClientRect();
+    const cx = (rect.width / 2 - camera.x) / camera.scale;
+    const cy = (rect.height / 2 - camera.y) / camera.scale;
+    ctx.fillStyle = 'rgba(139, 167, 209, 0.9)';
+    ctx.font = '14px "Avenir Next", "Segoe UI", sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('No visible lobes', cx, cy);
+    ctx.textAlign = 'start';
+  }}
+}}
+
 function draw() {{
   const rect = canvas.getBoundingClientRect();
   ctx.clearRect(0, 0, rect.width, rect.height);
@@ -2621,6 +2918,12 @@ function draw() {{
 
   const visibleIds = new Set(filteredNodes.map(n => n.id));
   const query = searchInput.value.trim().toLowerCase();
+
+  if (stageMode === 'overview') {{
+    drawOverview();
+    ctx.restore();
+    return;
+  }}
 
   // --- Pass 1: Lobe hull backgrounds ---
   for (const lobe of uniqueLobes) {{
@@ -2748,11 +3051,19 @@ function draw() {{
   }}
 
   // --- Pass 2: Edges ---
+  let drawnEdgeCount = 0;
   for (const edge of graph.edges) {{
     if (!visibleIds.has(edge.source) || !visibleIds.has(edge.target)) continue;
+    const selected = selectedId != null && (edge.source === selectedId || edge.target === selectedId);
+    if (
+      filteredNodes.length > FORCE_PAIRWISE_LIMIT &&
+      edge.type !== 'parent' &&
+      !selected
+    ) continue;
+    if (drawnEdgeCount > DETAIL_EDGE_LIMIT && !selected) continue;
+    drawnEdgeCount += 1;
     const source = nodes[edge.source];
     const target = nodes[edge.target];
-    const selected = selectedId != null && (edge.source === selectedId || edge.target === selectedId);
     ctx.beginPath();
     ctx.moveTo(source.x, source.y);
     const mx = (source.x + target.x) / 2;
@@ -2863,8 +3174,14 @@ function draw() {{
 }}
 
 function loop() {{
-  for (let i = 0; i < 2; i++) tick();
-  draw();
+  if (stageMode === 'detail') {{
+    const ticks = filteredNodes.length > FORCE_PAIRWISE_LIMIT ? 1 : 2;
+    for (let i = 0; i < ticks; i++) tick();
+    draw();
+  }} else if (needsDraw) {{
+    draw();
+    needsDraw = false;
+  }}
   requestAnimationFrame(loop);
 }}
 
@@ -2873,6 +3190,17 @@ canvas.addEventListener('pointerdown', event => {{
   dragMoved = false;
   lastPointer = {{ x: event.clientX, y: event.clientY }};
   const world = toWorld(event.clientX, event.clientY);
+  if (stageMode === 'overview') {{
+    const hit = hitTestOverview(world.x, world.y);
+    pendingOverviewLobe = hit ? hit.key : null;
+    hoveredOverviewLobe = pendingOverviewLobe;
+    if (!hit) {{
+      isPanning = true;
+      canvas.classList.add('dragging');
+    }}
+    requestDraw();
+    return;
+  }}
   const hit = hitTest(world.x, world.y);
   if (hit) {{
     draggingNodeId = hit.id;
@@ -2887,7 +3215,9 @@ canvas.addEventListener('pointerdown', event => {{
 canvas.addEventListener('pointermove', event => {{
   pointer = {{ x: event.clientX, y: event.clientY }};
   const world = toWorld(event.clientX, event.clientY);
-  const hit = hitTest(world.x, world.y);
+  const overviewHit = stageMode === 'overview' ? hitTestOverview(world.x, world.y) : null;
+  const hit = stageMode === 'overview' ? null : hitTest(world.x, world.y);
+  hoveredOverviewLobe = overviewHit ? overviewHit.key : null;
   hoveredId = hit ? hit.id : null;
   const dx = event.clientX - lastPointer.x;
   const dy = event.clientY - lastPointer.y;
@@ -2904,10 +3234,26 @@ canvas.addEventListener('pointermove', event => {{
   }} else if (isPanning) {{
     camera.x += dx;
     camera.y += dy;
+    requestDraw();
   }}
+  if (stageMode === 'overview') requestDraw();
 }});
 
 canvas.addEventListener('pointerup', event => {{
+  if (stageMode === 'overview') {{
+    const world = toWorld(event.clientX, event.clientY);
+    const hit = hitTestOverview(world.x, world.y);
+    if (!dragMoved && hit && pendingOverviewLobe === hit.key) {{
+      focusLobe(hit.key);
+    }} else if (!dragMoved && !hit) {{
+      selectNode(null, false);
+    }}
+    pendingOverviewLobe = null;
+    isPanning = false;
+    canvas.classList.remove('dragging');
+    requestDraw();
+    return;
+  }}
   if (!dragMoved && draggingNodeId == null && !isPanning) {{
     const world = toWorld(event.clientX, event.clientY);
     const hit = hitTest(world.x, world.y);
@@ -2921,9 +3267,12 @@ canvas.addEventListener('pointerup', event => {{
 
 canvas.addEventListener('pointerleave', () => {{
   hoveredId = null;
+  hoveredOverviewLobe = null;
+  pendingOverviewLobe = null;
   draggingNodeId = null;
   isPanning = false;
   canvas.classList.remove('dragging');
+  requestDraw();
 }});
 
 canvas.addEventListener('wheel', event => {{
@@ -2937,9 +3286,16 @@ canvas.addEventListener('wheel', event => {{
   camera.x = mouseX - worldX * nextScale;
   camera.y = mouseY - worldY * nextScale;
   camera.scale = nextScale;
+  requestDraw();
 }}, {{ passive: false }});
 
-searchInput.addEventListener('input', refreshVisibility);
+searchInput.addEventListener('input', () => {{
+  refreshVisibility();
+  if (stageMode === 'overview') fitToOverviewItems();
+}});
+for (const button of modeButtons) {{
+  button.addEventListener('click', () => setStageMode(button.dataset.stageMode || 'overview'));
+}}
 document.getElementById('reset-view').addEventListener('click', () => {{
   const rect = canvas.parentElement.getBoundingClientRect();
   searchInput.value = '';
@@ -2953,7 +3309,7 @@ document.getElementById('reset-view').addEventListener('click', () => {{
   buildAnchors(rect.width, rect.height);
   nodes = initializeNodes();
   refreshVisibility();
-  fitToFilteredNodes(true);
+  setStageMode('overview', true);
 }});
 
 // --- Collapsible side panels ---
@@ -2970,6 +3326,8 @@ function togglePanel(side) {{
     nodes = initializeNodes();
     refreshVisibility();
     updateDetails();
+    if (stageMode === 'overview') fitToOverviewItems(true);
+    else fitToFilteredNodes(true);
   }});
 }}
 document.getElementById('collapse-left').addEventListener('click', () => togglePanel('left'));
@@ -3010,15 +3368,18 @@ addEventListener('resize', () => {{
   nodes = initializeNodes();
   refreshVisibility();
   updateDetails();
+  if (stageMode === 'overview') fitToOverviewItems(true);
+  else fitToFilteredNodes(true);
 }});
 nodes = initializeNodes();
 renderLobes();
 renderFileTree(null, 'panel-tree');
 refreshVisibility();
 updateDetails();
-// Frame the initial layout so the brain is centered regardless of viewport
-// aspect ratio. Uses targetX/targetY so the fit is deterministic.
-fitToFilteredNodes(true);
+// Frame the lobe-first layout so the brain is centered regardless of viewport
+// aspect ratio. Neuron detail is available on demand without starting the
+// expensive all-node force graph by default.
+setStageMode('overview', true);
 loop();
 </script>
 </body>
