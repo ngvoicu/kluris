@@ -665,6 +665,22 @@ def test_root_includes_top_level_files_alongside_lobes(tmp_path):
     assert "'GLOSSARY'" in html
 
 
+def test_lobe_with_direct_neurons_shows_neurons_not_empty_index(tmp_path):
+    """A lobe without sublobes must still show its direct neurons.
+
+    `map.md` is structural inside a folder, so it should not become the only
+    visible INDEX card and make the level feel empty.
+    """
+    brain = _make_brain_with_neurons(tmp_path)
+    output = tmp_path / "brain-mri.html"
+    generate_mri_html(brain, output)
+    html = output.read_text(encoding="utf-8")
+
+    assert "map.md is structural inside a folder" in html
+    assert "fallback.length" in html
+    assert "n.type === 'neuron' && n.path.startsWith(prefix)" in html
+
+
 def test_layout_never_single_row_for_three_or_more_items(tmp_path):
     """layoutGrid must never lay >=3 items in a single horizontal row or
     switch back to a radial orbit.
@@ -696,7 +712,7 @@ def test_layout_never_single_row_for_three_or_more_items(tmp_path):
 
 def test_large_folder_layout_uses_compact_grid_and_fit(tmp_path):
     """Large brains need a flexible browser layout: compact cards, capped
-    aggregate edges, wrapped outbound stubs, and a real fit-to-current-view
+    aggregate edges, no outbound strip, and a real fit-to-current-view
     helper instead of forcing everything into the viewport at scale=1.
     """
     brain = _make_brain_with_sublobes(tmp_path)
@@ -708,16 +724,17 @@ def test_large_folder_layout_uses_compact_grid_and_fit(tmp_path):
     assert "fitCurrentToView(true)" in html
     assert "fitCurrentToView(false)" in html
     assert "function visibleAggregateEdges" in html
-    assert "itemCount > 36 ? 0" in html
-    assert "stubs.slice(0, 8)" in html
-    assert "+ extra + ' more'" in html
+    assert "itemCount > 10 ? 0" in html
+    assert "const maxCols = n > 12 ? 4 : 6" in html
+    assert "function drawOutboundStubs" not in html
+    assert "currentOutbound" not in html
 
 
-def test_back_button_navigates_up_one_level(tmp_path):
-    """The header back button decrements currentPath by one when clicked.
+def test_header_has_back_and_forward_path_history(tmp_path):
+    """The header has browser-like Back / Forward buttons for path history.
 
-    We assert the click handler exists and that it slices currentPath:
-    `currentPath.slice(0, -1)` is the canonical parent-path expression.
+    Breadcrumbs still jump to a parent path; the dedicated buttons walk
+    navigation history so users can return after drilling into a lobe.
     """
     brain = _make_brain_with_sublobes(tmp_path)
     output = tmp_path / "brain-mri.html"
@@ -725,10 +742,11 @@ def test_back_button_navigates_up_one_level(tmp_path):
     html = output.read_text(encoding="utf-8")
 
     assert 'id="btn-back"' in html
-    # Click handler invokes navigateTo with the parent path
-    assert "currentPath.slice(0, -1)" in html
-    # The back button is hidden / disabled at the root depth
-    assert "currentPath.length === 0" in html
+    assert 'id="btn-forward"' in html
+    assert "let pathHistory = [[]]" in html
+    assert "function goPathBack" in html
+    assert "function goPathForward" in html
+    assert "pathHistoryIndex < pathHistory.length - 1" in html
 
 
 def test_nested_sublobes_drill_arbitrarily_deep(tmp_path):
@@ -982,22 +1000,25 @@ def test_root_renders_inter_child_edges_with_counts(tmp_path):
     assert "↔ " in html
 
 
-def test_inside_lobe_renders_outbound_stubs(tmp_path):
-    """At any non-root path (e.g. inside a lobe) the renderer must render
-    outbound stubs for edges that cross the container boundary, grouped
-    by the other side's child key.
+def test_inside_lobe_omits_outbound_stubs(tmp_path):
+    """At any non-root path, the renderer must omit outbound stub pills.
+
+    Cross-boundary relationship pills became a noisy bottom strip in large
+    brains. The canvas now stays focused on the current folder's children;
+    related content remains reachable via search, recent, file tree, and
+    modal links.
     """
     brain = _make_brain_with_cross_lobe_synapses(tmp_path)
     output = tmp_path / "brain-mri.html"
     generate_mri_html(brain, output)
     html = output.read_text(encoding="utf-8")
 
-    # The unified aggregator returns both inside-edges and outbound stubs.
+    # The unified aggregator now returns only sibling edges.
     assert "function aggregateEdgesAt" in html
     assert "function drawCurrent" in html
-    # The outbound list flows through drawCurrent's stub renderer.
-    assert "function drawOutboundStubs" in html
-    assert "currentOutbound" in html
+    assert "function drawOutboundStubs" not in html
+    assert "currentOutbound" not in html
+    assert "cross-boundary and outside/outside edges are omitted" in html
 
 
 def test_aggregate_edges_drops_self_loops(tmp_path):
@@ -1037,7 +1058,7 @@ def test_breadcrumb_segments_are_clickable(tmp_path):
 
 def test_mri_header_has_full_width_bar_with_back_button(tmp_path):
     """The header bar lives full-width above the three-column body and contains
-    the brain title, stats, breadcrumb pill, a single back button, and
+    the brain title, stats, breadcrumb pill, Back/Forward buttons, and
     Fit/Reset icons. The 4-button mode-switch is GONE.
     """
     brain = _make_brain_with_neurons(tmp_path)
@@ -1051,6 +1072,7 @@ def test_mri_header_has_full_width_bar_with_back_button(tmp_path):
     assert 'class="stats"' in html
     assert 'class="breadcrumb"' in html
     assert 'id="btn-back"' in html
+    assert 'id="btn-forward"' in html
     # Mode-switch DOM is gone — no buttons left with data-stage-mode.
     assert 'class="mode-switch"' not in html
     assert 'data-stage-mode' not in html

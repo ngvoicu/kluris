@@ -376,6 +376,9 @@ def _render_mri_html(brain_name: str, graph: dict, graph_json: str) -> str:
       <button class="icon-button" id="btn-back" type="button" title="Back" aria-label="Back" disabled>
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>
       </button>
+      <button class="icon-button" id="btn-forward" type="button" title="Forward" aria-label="Forward" disabled>
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18l6-6-6-6"/></svg>
+      </button>
       <button class="icon-button" id="btn-fit" type="button" title="Fit to view" aria-label="Fit to view">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7V3h4M21 7V3h-4M3 17v4h4M21 17v4h-4"/></svg>
       </button>
@@ -1268,8 +1271,8 @@ canvas.dragging { cursor: grabbing; }
 # gone. The view is one path-based primitive: `currentPath` is an array
 # of folder names from the brain root; `childrenOf(currentPath)` collects
 # the direct children (folders + leaves); `drawCurrent()` lays them out
-# with `layoutGrid` (never a single row for n>=3) and draws aggregate
-# edges between siblings + outbound stubs for cross-boundary edges.
+# with `layoutGrid` (never a single row for n>=3) and draws only the
+# clearest aggregate edges between siblings.
 #
 # Caveat: this whole string is consumed as the body of an f-string in
 # `_render_mri_html`. Inside this constant we are NOT in an f-string, so
@@ -1323,6 +1326,7 @@ const recentListEl = document.getElementById('recent-list');
 const breadcrumbEl = document.getElementById('breadcrumb');
 const stage = document.getElementById('stage');
 const backBtn = document.getElementById('btn-back');
+const forwardBtn = document.getElementById('btn-forward');
 
 const neighbors = new Map();
 for (const node of graph.nodes) neighbors.set(node.id, new Set());
@@ -1343,10 +1347,11 @@ let isPanning = false;
 let dragMoved = false;
 let lastPointer = { x: 0, y: 0 };
 
-// Cached layout for the current path — boxes + edges + outbound stubs.
+// Cached layout for the current path — boxes + sibling edges.
 let currentBoxes = [];
 let currentEdges = [];
-let currentOutbound = [];
+let pathHistory = [[]];
+let pathHistoryIndex = 0;
 
 // Multi-select visibility toggles for lobes (right-sidebar filter).
 // Only applied at depth 0 since beyond root the user is already inside
@@ -1379,12 +1384,18 @@ function childrenOf(path) {
     if (!prefixOk) continue;
     if (parts.length === path.length + 1) {
       // Direct file child
-      leaves.push({
-        kind: 'leaf',
-        name: parts[path.length],
-        path: parts,
-        node,
-      });
+      const name = parts[path.length];
+      // map.md is structural inside a folder. Keep top-level brain.md /
+      // glossary.md visible at the root, but do not make a lobe with direct
+      // neurons look like it only contains an "INDEX" card.
+      if (!(path.length > 0 && name === 'map.md')) {
+        leaves.push({
+          kind: 'leaf',
+          name,
+          path: parts,
+          node,
+        });
+      }
     } else {
       // Folder child (one or more levels deeper)
       const name = parts[path.length];
@@ -1400,6 +1411,22 @@ function childrenOf(path) {
   }
   const folderList = [...folders.values()].sort((a, b) => a.name.localeCompare(b.name));
   leaves.sort((a, b) => a.name.localeCompare(b.name));
+  if (!folderList.length && !leaves.length && path.length > 0) {
+    // Custom brains sometimes put useful neurons deeper without a neat
+    // "sublobe" layer. If a folder has no direct visual children, flatten
+    // its descendant neurons instead of showing an empty level.
+    const prefix = path.join('/') + '/';
+    const fallback = graph.nodes
+      .filter(n => n.type === 'neuron' && n.path.startsWith(prefix))
+      .sort((a, b) => a.path.localeCompare(b.path))
+      .map(node => ({
+        kind: 'leaf',
+        name: node.path.slice(prefix.length),
+        path: node.path.split('/'),
+        node,
+      }));
+    if (fallback.length) return fallback;
+  }
   return [...folderList, ...leaves];
 }
 
@@ -1457,7 +1484,9 @@ function kickerFor(item, depth) {
 //
 // For each non-parent edge, classify both endpoints as either "child X
 // of currentPath" (folder OR leaf) or "outside" — pair-count for
-// inside/inside, return an inside-vs-inside Map plus the outbound list.
+// inside/inside. Edges that leave the current path are intentionally hidden:
+// the canvas is a navigator first, and bottom "external relationship" pills
+// quickly become noise in large customizable brains.
 function aggregateEdgesAt(path, items) {
   // Build a lookup: nodeId -> child key (folder name or leaf name) or null
   // when the node lives outside this container entirely.
@@ -1477,7 +1506,6 @@ function aggregateEdgesAt(path, items) {
     childOfNode.set(node.id, itemByName.has(name) ? name : null);
   }
   const inside = new Map();
-  const outbound = new Map();
   for (const edge of graph.edges) {
     if (edge.type === 'parent') continue;
     const sk = childOfNode.get(edge.source);
@@ -1492,45 +1520,10 @@ function aggregateEdgesAt(path, items) {
       const cell = inside.get(cellKey);
       if (sk === a) cell.forward += 1;
       else cell.reverse += 1;
-    } else if (sIn || tIn) {
-      // One side is outside the current container — outbound stub on the
-      // inside side. Group by the inside child that participates.
-      const insideKey = sIn ? sk : tk;
-      const outsideNode = sIn ? edge.target : edge.source;
-      const outsideRef = (() => {
-        const node = graph.nodes.find(n => n.id === outsideNode);
-        if (!node) return 'outside';
-        // Use the outside node's first path segment that differs from the
-        // current container — gives a readable "→ infrastructure" stub.
-        const parts = node.path.split('/');
-        if (parts.length <= path.length) return parts[parts.length - 1].replace(/\.(md|ya?ml)$/, '');
-        // Find the first part that isn't shared with currentPath (or
-        // diverges within the current container)
-        for (let i = 0; i < parts.length; i++) {
-          if (i >= path.length) return parts[i].replace(/\.(md|ya?ml)$/, '');
-          if (parts[i] !== path[i]) return parts[i].replace(/\.(md|ya?ml)$/, '');
-        }
-        return parts[parts.length - 1].replace(/\.(md|ya?ml)$/, '');
-      })();
-      const groupKey = insideKey + '||' + outsideRef;
-      if (!outbound.has(groupKey)) {
-        outbound.set(groupKey, {
-          insideKey,
-          outside: outsideRef,
-          forward: 0,
-          reverse: 0,
-        });
-      }
-      const cell = outbound.get(groupKey);
-      if (sIn) cell.forward += 1;
-      else cell.reverse += 1;
     }
-    // both outside → drop entirely
+    // cross-boundary and outside/outside edges are omitted from the canvas
   }
-  return {
-    inside: [...inside.values()],
-    outbound: [...outbound.values()],
-  };
+  return [...inside.values()];
 }
 
 // ============================================================
@@ -1565,7 +1558,8 @@ function layoutGrid(items, viewport, opts) {
   const minCellH = boxH + 34;
   const viewportCols = Math.max(2, Math.floor(W_ / minCellW));
   const aspectCols = Math.ceil(Math.sqrt(n * (W_ / Math.max(1, H_))));
-  const cols = Math.min(n, Math.max(2, Math.min(6, viewportCols, aspectCols)));
+  const maxCols = n > 12 ? 4 : 6;
+  const cols = Math.min(n, Math.max(2, Math.min(maxCols, viewportCols, aspectCols)));
   const rows = Math.ceil(n / cols);
   const cellW = Math.max(minCellW, Math.min(320, W_ / Math.min(cols, viewportCols)));
   const cellH = Math.max(minCellH, density === 'normal' ? 178 : density === 'condensed' ? 146 : 118);
@@ -1774,49 +1768,6 @@ function drawAggregateEdge(cell, boxByKey, opts) {
   cell._h = pillH;
 }
 
-function drawOutboundStubs(stubs, viewport, anchorY) {
-  if (!stubs.length) return;
-  const visible = stubs.slice(0, 8);
-  const extra = stubs.length - visible.length;
-  const rows = extra > 0 ? [...visible, { outside: '+' + extra + ' more', forward: 0, reverse: 0, summary: true }] : visible;
-  const leftBound = 40;
-  const rightBound = Math.max(leftBound + 160, viewport.width - 40);
-  let stubY = anchorY + 44;
-  let stubX = leftBound;
-  ctx.save();
-  ctx.font = 'bold 10px "SFMono-Regular", monospace';
-  for (const stub of rows) {
-    const f = stub.forward;
-    const r = stub.reverse;
-    const label = stub.summary ? stub.outside
-      : (f && r) ? '→ ' + stub.outside + ' (' + f + ') ← (' + r + ')'
-      : (f ? '→ ' + stub.outside + ' (' + f + ')' : '← ' + stub.outside + ' (' + r + ')');
-    const m = ctx.measureText(label);
-    const w = m.width + 16;
-    const h = 22;
-    if (stubX + w > rightBound && stubX > leftBound) {
-      stubX = leftBound;
-      stubY += 30;
-    }
-    ctx.fillStyle = 'rgba(8, 15, 32, 0.78)';
-    ctx.beginPath();
-    ctx.roundRect(stubX, stubY - h / 2, w, h, 6);
-    ctx.fill();
-    ctx.strokeStyle = 'rgba(123, 167, 255, 0.30)';
-    ctx.lineWidth = 1;
-    ctx.stroke();
-    ctx.fillStyle = '#e9f1ff';
-    ctx.textAlign = 'left';
-    ctx.fillText(label, stubX + 8, stubY + 3);
-    stub._x = stubX;
-    stub._y = stubY - h / 2;
-    stub._w = w;
-    stub._h = h;
-    stubX += w + 12;
-  }
-  ctx.restore();
-}
-
 // ============================================================
 // drawCurrent — single render path for any depth
 // ============================================================
@@ -1876,7 +1827,7 @@ function folderMatchText(item) {
 }
 
 function visibleAggregateEdges(edges, itemCount) {
-  const maxEdges = itemCount > 36 ? 0 : itemCount > 22 ? 8 : itemCount > 12 ? 12 : 18;
+  const maxEdges = itemCount > 10 ? 0 : itemCount > 6 ? 4 : 8;
   return edges
     .slice()
     .sort((a, b) => (b.forward + b.reverse) - (a.forward + a.reverse))
@@ -1887,9 +1838,7 @@ function drawCurrent() {
   const { items, viewport } = buildCurrentItems();
   currentBoxes = items;
   const itemByName = new Map(items.map(it => [it.name, it]));
-  const aggregated = aggregateEdgesAt(currentPath, items);
-  currentEdges = visibleAggregateEdges(aggregated.inside, items.length);
-  currentOutbound = aggregated.outbound;
+  currentEdges = visibleAggregateEdges(aggregateEdgesAt(currentPath, items), items.length);
 
   const query = searchInput.value.trim().toLowerCase();
   const matches = (item) => {
@@ -1934,11 +1883,6 @@ function drawCurrent() {
       matchHalo: query && isMatch && !isHidden,
     }, { hover: hoveredId === item.name });
   }
-  // Outbound stubs at the bottom
-  if (items.length && currentOutbound.length) {
-    const maxY = Math.max(...items.map(b => b.y + b.h / 2));
-    drawOutboundStubs(currentOutbound, { width: stage.getBoundingClientRect().width || 900 }, maxY);
-  }
 }
 
 function hitTestCurrent(worldX, worldY) {
@@ -1955,32 +1899,58 @@ function hitTestCurrent(worldX, worldY) {
       return { kind: 'edge', a: cell.a, b: cell.b };
     }
   }
-  for (const stub of currentOutbound) {
-    if (stub._x == null) continue;
-    if (worldX >= stub._x && worldX <= stub._x + stub._w &&
-        worldY >= stub._y && worldY <= stub._y + stub._h) {
-      return { kind: 'outbound', stub };
-    }
-  }
   return null;
 }
 
 // ============================================================
 // Navigation
 // ============================================================
-function navigateTo(path) {
+function _samePath(a, b) {
+  return a.length === b.length && a.every((part, i) => part === b[i]);
+}
+
+function _recordPath(path) {
+  if (_samePath(pathHistory[pathHistoryIndex] || [], path)) return;
+  pathHistory = pathHistory.slice(0, pathHistoryIndex + 1);
+  pathHistory.push(path.slice());
+  pathHistoryIndex = pathHistory.length - 1;
+}
+
+function navigateTo(path, fromHistory) {
+  if (!fromHistory) _recordPath(path);
   currentPath = path.slice();
   selectedId = null;
   renderBreadcrumb();
-  syncBackBtn();
+  syncNavButtons();
   fitCurrentToView(true);
 }
 
-function syncBackBtn() {
-  if (!backBtn) return;
-  const atRoot = currentPath.length === 0;
-  backBtn.disabled = atRoot;
-  backBtn.setAttribute('aria-disabled', atRoot ? 'true' : 'false');
+function syncNavButtons() {
+  if (backBtn) {
+    const canBack = pathHistoryIndex > 0 || currentPath.length > 0;
+    backBtn.disabled = !canBack;
+    backBtn.setAttribute('aria-disabled', canBack ? 'false' : 'true');
+  }
+  if (forwardBtn) {
+    const canForward = pathHistoryIndex < pathHistory.length - 1;
+    forwardBtn.disabled = !canForward;
+    forwardBtn.setAttribute('aria-disabled', canForward ? 'false' : 'true');
+  }
+}
+
+function goPathBack() {
+  if (pathHistoryIndex > 0) {
+    pathHistoryIndex -= 1;
+    navigateTo(pathHistory[pathHistoryIndex], true);
+  } else if (currentPath.length > 0) {
+    navigateTo(currentPath.slice(0, -1));
+  }
+}
+
+function goPathForward() {
+  if (pathHistoryIndex >= pathHistory.length - 1) return;
+  pathHistoryIndex += 1;
+  navigateTo(pathHistory[pathHistoryIndex], true);
 }
 
 function renderBreadcrumb() {
@@ -2159,9 +2129,8 @@ canvas.addEventListener('pointerup', event => {
       openModal(item.node);
     }
   }
-  // Edge / outbound clicks are no-ops in path-based navigation. The user
-  // already sees the count; drilling into an outbound target is reachable
-  // via breadcrumb / back / lobe filter / search.
+  // Edge clicks are no-ops in path-based navigation. Related files remain
+  // reachable via search, recent, the file tree, and modal links.
 });
 
 canvas.addEventListener('pointerleave', () => {
@@ -2718,8 +2687,10 @@ searchInput.addEventListener('keydown', event => {
   }
 });
 backBtn.addEventListener('click', () => {
-  if (currentPath.length === 0) return;
-  navigateTo(currentPath.slice(0, -1));
+  goPathBack();
+});
+forwardBtn.addEventListener('click', () => {
+  goPathForward();
 });
 document.getElementById('btn-reset').addEventListener('click', () => {
   searchInput.value = '';
@@ -2776,7 +2747,7 @@ document.addEventListener('keydown', event => {
     if (modal.style.display !== 'none') {
       modal.style.display = 'none';
     } else if (currentPath.length > 0) {
-      navigateTo(currentPath.slice(0, -1));
+      goPathBack();
     }
   }
   if (event.key === '/' && event.target !== searchInput) {
@@ -2798,7 +2769,7 @@ renderLobeFilter();
 renderRecent();
 renderFileTree(null, 'panel-tree');
 renderBreadcrumb();
-syncBackBtn();
+syncNavButtons();
 fitCurrentToView(true);
 loop();
 """
