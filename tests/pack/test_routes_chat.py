@@ -302,6 +302,115 @@ def test_brain_search_endpoint_finds_glossary_entries(
         assert token_glossary, "JWT definition body must surface from glossary"
 
 
+def test_list_sessions_endpoint_returns_picker_rows(api_key_config: Config):
+    """``GET /api/sessions`` must return every saved session ordered
+    by ``created_at`` desc, each row carrying the date, message count,
+    a first-user-message preview, and an ``is_current`` flag pointing
+    at the cookie's session.
+    """
+    app = _build_app(api_key_config)
+    with TestClient(app) as client:
+        # Touch the chat page to seed a current session in the DB.
+        first = client.get("/")
+        assert first.status_code == 200
+        cookie = client.cookies.get("kluris_session")
+        assert cookie
+
+        # Append one message so the preview has something to show.
+        store = app.state.session_store
+        store.append_message(cookie, "user", "Hello brain, what is JWT?")
+
+        # Make a second session via the new-conversation endpoint, then
+        # touch / again to land the current session on yet another id.
+        client.post("/chat/new")
+        client.get("/")
+        latest_cookie = client.cookies.get("kluris_session")
+        assert latest_cookie != cookie
+
+        resp = client.get("/api/sessions")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["ok"] is True
+        sessions = data["sessions"]
+        assert len(sessions) >= 2
+        # Newest first.
+        assert sessions[0]["created_at"] >= sessions[-1]["created_at"]
+        # is_current matches the live cookie, never an older session.
+        current = [s for s in sessions if s["is_current"]]
+        assert len(current) == 1
+        assert current[0]["id"] == latest_cookie
+        # The seeded preview is reachable on the older row.
+        seeded = next(s for s in sessions if s["id"] == cookie)
+        assert "JWT" in seeded["preview"]
+        assert seeded["message_count"] == 1
+
+
+def test_get_session_endpoint_returns_user_visible_messages(
+    api_key_config: Config,
+):
+    """``GET /api/sessions/<sid>`` returns only user + assistant rows
+    (tool turns are noise for the read-only viewer) and 404s on a
+    session that doesn't exist.
+    """
+    app = _build_app(api_key_config)
+    with TestClient(app) as client:
+        client.get("/")
+        sid = client.cookies.get("kluris_session")
+        store = app.state.session_store
+        store.append_message(sid, "user", "Question?")
+        store.append_message(sid, "assistant", "Answer.")
+        store.append_message(sid, "tool", "{}")
+
+        resp = client.get(f"/api/sessions/{sid}")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["ok"] is True
+        roles = [m["role"] for m in data["messages"]]
+        assert roles == ["user", "assistant"]
+        assert data["messages"][0]["content"] == "Question?"
+        assert data["messages"][1]["content"] == "Answer."
+
+        # Unknown session → 404.
+        miss = client.get("/api/sessions/does-not-exist")
+        assert miss.status_code == 404
+
+
+def test_export_session_endpoint_writes_markdown_and_json(
+    api_key_config: Config,
+):
+    """Both formats must trigger a Content-Disposition: attachment so
+    the browser saves rather than renders. The markdown body is
+    human-readable; the JSON body round-trips message rows.
+    """
+    app = _build_app(api_key_config)
+    with TestClient(app) as client:
+        client.get("/")
+        sid = client.cookies.get("kluris_session")
+        store = app.state.session_store
+        store.append_message(sid, "user", "Hi.")
+        store.append_message(sid, "assistant", "Hello!")
+
+        md = client.get(f"/api/sessions/{sid}/export", params={"format": "md"})
+        assert md.status_code == 200
+        assert md.headers["content-type"].startswith("text/markdown")
+        assert "attachment" in md.headers.get("content-disposition", "")
+        assert ".md" in md.headers.get("content-disposition", "")
+        body = md.text
+        assert "## You" in body and "Hi." in body
+        assert "## Assistant" in body and "Hello!" in body
+
+        js = client.get(f"/api/sessions/{sid}/export", params={"format": "json"})
+        assert js.status_code == 200
+        assert js.headers["content-type"].startswith("application/json")
+        assert "attachment" in js.headers.get("content-disposition", "")
+        parsed = json.loads(js.text)
+        assert parsed["session_id"] == sid
+        assert any(m["content"] == "Hi." for m in parsed["messages"])
+
+        miss = client.get("/api/sessions/nope/export")
+        assert miss.status_code == 404
+
+
 def test_brain_search_endpoint_clamps_limit(api_key_config: Config):
     """``limit`` is clamped to [1, 50] so callers can't request huge
     result lists. Out-of-range / non-int input falls back to the

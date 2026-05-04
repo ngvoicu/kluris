@@ -16,7 +16,12 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
+from fastapi.responses import (
+    HTMLResponse,
+    JSONResponse,
+    PlainTextResponse,
+    StreamingResponse,
+)
 from fastapi.staticfiles import StaticFiles
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
@@ -266,12 +271,108 @@ def attach_chat_routes(app: FastAPI) -> None:
                 status_code=404,
             )
 
+    @app.get("/api/sessions")
+    async def list_sessions(request: Request):
+        # Past-conversations picker — list every session in the DB with
+        # date + message count + first-user-message preview. Marks the
+        # caller's current session so the UI can highlight it.
+        store = _store(app)
+        current_sid = request.cookies.get(_COOKIE_NAME) or ""
+        sessions = store.list_sessions(limit=200)
+        for s in sessions:
+            s["is_current"] = (s["id"] == current_sid)
+        return JSONResponse({"ok": True, "sessions": sessions})
+
+    @app.get("/api/sessions/{sid}")
+    async def get_session(sid: str):
+        # Read-only view of a past conversation. Strips tool-use rows
+        # so the picker shows only the user-visible turns; the export
+        # endpoint preserves them for fidelity.
+        store = _store(app)
+        if not store.session_exists(sid):
+            return JSONResponse(
+                {"ok": False, "error": "not_found"}, status_code=404,
+            )
+        rows = store.replay(sid)
+        messages = [
+            {
+                "role": m["role"],
+                "content": m["content"],
+                "created_at": m["created_at"],
+            }
+            for m in rows
+            if m["role"] in ("user", "assistant")
+        ]
+        return JSONResponse({
+            "ok": True,
+            "session_id": sid,
+            "messages": messages,
+        })
+
+    @app.get("/api/sessions/{sid}/export")
+    async def export_session(sid: str, format: str = "md"):
+        # Download a session as ``.md`` (default, human-readable) or
+        # ``.json`` (round-trip-friendly, includes tool calls). Fires
+        # a Content-Disposition: attachment so the browser saves it
+        # rather than rendering inline.
+        store = _store(app)
+        if not store.session_exists(sid):
+            return JSONResponse(
+                {"ok": False, "error": "not_found"}, status_code=404,
+            )
+        rows = store.replay(sid)
+        short = sid[:8] if len(sid) >= 8 else sid
+        fmt = (format or "md").lower()
+        if fmt == "json":
+            body = json.dumps(
+                {"session_id": sid, "messages": rows},
+                indent=2,
+                ensure_ascii=False,
+            )
+            return PlainTextResponse(
+                body,
+                media_type="application/json",
+                headers={
+                    "Content-Disposition":
+                        f'attachment; filename="kluris-chat-{short}.json"',
+                },
+            )
+        # Markdown: user/assistant turns as `## You` / `## Assistant`
+        # blocks, in order. Tool rows are skipped — readers want the
+        # conversation, not the trace.
+        lines: list[str] = [
+            f"# Conversation {short}",
+            "",
+            f"_session id: `{sid}`_",
+            "",
+        ]
+        for m in rows:
+            role = m["role"]
+            if role not in ("user", "assistant"):
+                continue
+            heading = "You" if role == "user" else "Assistant"
+            lines.append(f"## {heading}")
+            lines.append("")
+            lines.append(m["content"] or "")
+            lines.append("")
+        body = "\n".join(lines)
+        return PlainTextResponse(
+            body,
+            media_type="text/markdown; charset=utf-8",
+            headers={
+                "Content-Disposition":
+                    f'attachment; filename="kluris-chat-{short}.md"',
+            },
+        )
+
     @app.post("/chat/new")
     async def chat_new(request: Request):
+        # Rotate the cookie onto a fresh session row. The previous
+        # session is intentionally LEFT IN THE DATABASE so the deployer
+        # can revisit it later via the past-conversations picker. Use
+        # the picker's per-row delete (when added) to discard a
+        # specific session, or wipe the docker volume to drop them all.
         store = _store(app)
-        old_sid = request.cookies.get(_COOKIE_NAME)
-        if old_sid and store.session_exists(old_sid):
-            store.delete_session(old_sid)
         new_sid = _new_session_id()
         store.new_session(session_id=new_sid)
         resp = JSONResponse({"ok": True, "session_id": new_sid})

@@ -402,10 +402,12 @@
   const backdrop = $("modal-backdrop");
 
   // Navigation stack inside the modal. Each entry is one of:
-  //   {kind: "neuron",        arg:  "domain/foo.md"}
-  //   {kind: "lobe",          arg:  "projects"}
-  //   {kind: "glossary-all"}                   — combined glossary view
-  //   {kind: "glossary-term", term: "OAuth"}   — single-term view
+  //   {kind: "neuron",             arg:  "domain/foo.md"}
+  //   {kind: "lobe",               arg:  "projects"}
+  //   {kind: "glossary-all"}                       — combined glossary view
+  //   {kind: "glossary-term",      term: "OAuth"}  — single-term view
+  //   {kind: "conversations-list"}                 — past sessions picker
+  //   {kind: "conversations-view", sid: "<hex>"}   — one read-only transcript
   // Entries are pushed by the show* functions and consumed by the
   // back button. Closing the modal clears the stack so re-opening
   // starts fresh.
@@ -422,10 +424,12 @@
     if (modalHistory.length < 2) return;
     modalHistory.pop();              // current view
     const prev = modalHistory.pop(); // will be re-pushed by show*
-    if (prev.kind === "neuron")              showNeuron(prev.arg);
-    else if (prev.kind === "lobe")           showLobe(prev.arg);
-    else if (prev.kind === "glossary-all")   showAllGlossary();
-    else if (prev.kind === "glossary-term")  showGlossaryTerm(prev.term);
+    if (prev.kind === "neuron")                 showNeuron(prev.arg);
+    else if (prev.kind === "lobe")              showLobe(prev.arg);
+    else if (prev.kind === "glossary-all")      showAllGlossary();
+    else if (prev.kind === "glossary-term")     showGlossaryTerm(prev.term);
+    else if (prev.kind === "conversations-list") openConversationsModal();
+    else if (prev.kind === "conversations-view") viewConversation(prev.sid);
   }
 
   function openModal({eyebrow, title, meta, tags, bodyHtml}) {
@@ -953,8 +957,167 @@
     }
   }
 
+  // ---- Past conversations browser ----------------------------------
+  //
+  // Reuses the brain modal as a chrome-only host: list view shows every
+  // session row from /api/sessions with date + preview + msg count +
+  // export buttons; clicking "View" replaces the body with a read-only
+  // transcript fetched from /api/sessions/<sid>. Export downloads
+  // happen via `<a download>` on a transient anchor — no fetch needed
+  // since the export endpoint sets Content-Disposition.
+
+  function _formatTimestamp(ts) {
+    if (!ts) return "—";
+    const d = new Date(Number(ts) * 1000);
+    if (isNaN(d.getTime())) return "—";
+    return d.toLocaleString();
+  }
+
+  async function openConversationsModal() {
+    pushHistory({kind: "conversations-list"});
+    let payload;
+    try {
+      const resp = await fetch("/api/sessions");
+      if (!resp.ok) throw new Error("HTTP " + resp.status);
+      payload = await resp.json();
+    } catch (err) {
+      openModal({
+        eyebrow: "PAST",
+        title: "Conversations",
+        meta: "",
+        bodyHtml:
+          '<p class="modal-empty">Failed to load: ' +
+          escapeHtml(String(err)) + "</p>",
+      });
+      return;
+    }
+    renderConversationsList(payload.sessions || []);
+  }
+
+  function renderConversationsList(sessions) {
+    if (!sessions.length) {
+      openModal({
+        eyebrow: "PAST",
+        title: "Conversations",
+        meta: "0 saved",
+        bodyHtml:
+          '<p class="modal-empty">No past conversations yet. ' +
+          'Start chatting in the main panel and they\'ll show up here.</p>',
+      });
+      return;
+    }
+    const rows = sessions.map((s) => {
+      const date = _formatTimestamp(s.created_at);
+      const preview = (s.preview || "").trim() || "(no user messages)";
+      const isCurrent = s.is_current
+        ? '<span class="convo-badge convo-badge-current">current</span>'
+        : "";
+      return (
+        '<li class="convo-row" data-sid="' + escapeHtml(s.id) + '">' +
+          '<div class="convo-meta-row">' +
+            '<span class="convo-date">' + escapeHtml(date) + '</span>' +
+            '<span class="convo-count">' + s.message_count +
+              ' message' + (s.message_count === 1 ? '' : 's') + '</span>' +
+            isCurrent +
+          '</div>' +
+          '<div class="convo-preview">' + escapeHtml(preview) + '</div>' +
+          '<div class="convo-actions">' +
+            '<button class="ghost-btn convo-view"' +
+                  ' data-sid="' + escapeHtml(s.id) + '"' +
+                  ' type="button">View</button>' +
+            '<a class="ghost-btn convo-export"' +
+                ' href="/api/sessions/' + encodeURIComponent(s.id) +
+                  '/export?format=md"' +
+                ' download>Export .md</a>' +
+            '<a class="ghost-btn convo-export"' +
+                ' href="/api/sessions/' + encodeURIComponent(s.id) +
+                  '/export?format=json"' +
+                ' download>Export .json</a>' +
+          '</div>' +
+        '</li>'
+      );
+    }).join("");
+    openModal({
+      eyebrow: "PAST",
+      title: "Conversations",
+      meta: sessions.length +
+        " saved · read-only · click View to inspect a transcript",
+      bodyHtml: '<ul class="convo-list">' + rows + '</ul>',
+    });
+  }
+
+  async function viewConversation(sid) {
+    let payload;
+    try {
+      const resp = await fetch("/api/sessions/" + encodeURIComponent(sid));
+      if (!resp.ok) throw new Error("HTTP " + resp.status);
+      payload = await resp.json();
+    } catch (err) {
+      openModal({
+        eyebrow: "CONVERSATION",
+        title: "Read-only view",
+        meta: "",
+        bodyHtml:
+          '<p class="modal-empty">Failed to load: ' +
+          escapeHtml(String(err)) + "</p>",
+      });
+      return;
+    }
+    pushHistory({kind: "conversations-view", sid: sid});
+    const messages = payload.messages || [];
+    if (!messages.length) {
+      openModal({
+        eyebrow: "CONVERSATION",
+        title: sid.slice(0, 8),
+        meta: "empty",
+        bodyHtml:
+          '<p class="modal-empty">This session has no messages.</p>',
+      });
+      return;
+    }
+    const html = messages.map((m) => {
+      const role = m.role === "user" ? "You" : "Assistant";
+      const time = _formatTimestamp(
+        m.created_at ? Math.floor(Number(m.created_at) / 1000) : 0,
+      );
+      const body = m.role === "assistant"
+        ? renderMarkdown(m.content || "")
+        : '<pre class="convo-msg-pre">' + escapeHtml(m.content || "") + '</pre>';
+      return (
+        '<article class="convo-msg convo-msg-' + escapeHtml(m.role) + '">' +
+          '<div class="convo-msg-role">' + escapeHtml(role) +
+            ' <span class="convo-msg-time">· ' + escapeHtml(time) + '</span>' +
+          '</div>' +
+          '<div class="convo-msg-body">' + body + '</div>' +
+        '</article>'
+      );
+    }).join("");
+    openModal({
+      eyebrow: "CONVERSATION",
+      title: sid.slice(0, 8),
+      meta: messages.length +
+        " message" + (messages.length === 1 ? "" : "s") + " · read-only",
+      bodyHtml: '<div class="convo-view">' + html + '</div>',
+    });
+  }
+
+  // Delegated click handler for conversation-list interactions. Lives
+  // on the modal-body so it survives every openModal() innerHTML reset.
+  document.addEventListener("DOMContentLoaded", () => {
+    const body = document.getElementById("modal-body");
+    if (!body) return;
+    body.addEventListener("click", (event) => {
+      const view = event.target.closest(".convo-view[data-sid]");
+      if (view && view.dataset.sid) {
+        event.preventDefault();
+        viewConversation(view.dataset.sid);
+      }
+    });
+  });
+
   window.kluris = Object.assign(window.kluris || {}, {
     bootBrainExplorer: boot,
+    openConversationsModal: openConversationsModal,
     // Exposed so the chat code can render assistant-message bodies
     // through the same Markdown subset used in the brain modal.
     // Single source of truth for "what counts as markdown" in this UI.

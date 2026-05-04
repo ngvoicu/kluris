@@ -8,6 +8,8 @@
       <span class="header-kicker">CHAT</span>
     </div>
     <div class="header-right">
+      <button id="past-conversations" type="button"
+              class="ghost-btn">Past conversations</button>
       <button id="new-conversation" type="button"
               class="ghost-btn">New conversation</button>
     </div>
@@ -247,6 +249,15 @@
       messages.innerHTML = "";
       totalIn = 0; totalOut = 0;
       usageIn.textContent = "0"; usageOut.textContent = "0";
+    });
+
+    // Past-conversations picker — opens a read-only browser of all
+    // saved sessions in the SQLite store, with .md / .json export.
+    const pastBtn = document.getElementById("past-conversations");
+    pastBtn.addEventListener("click", () => {
+      if (window.kluris && window.kluris.openConversationsModal) {
+        window.kluris.openConversationsModal();
+      }
     });
 
     // --- Panel collapse / expand (mirrors the MRI behavior) -------

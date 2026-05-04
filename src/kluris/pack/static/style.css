@@ -768,6 +768,111 @@ a { color: var(--accent); }
   border-top: 1px solid var(--border-soft);
   margin: 16px 0;
 }
+/* ---- Past-conversations picker (lives in the brain modal) -------- */
+
+.convo-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.convo-row {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px 14px;
+  background: rgba(8, 15, 32, 0.45);
+}
+.convo-row:hover { border-color: var(--line-strong); }
+.convo-meta-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 11.5px;
+  color: var(--muted);
+  margin-bottom: 6px;
+  flex-wrap: wrap;
+}
+.convo-date {
+  font-family: var(--mono);
+  color: var(--text);
+  font-weight: 600;
+}
+.convo-count { font-family: var(--mono); }
+.convo-badge {
+  font-family: var(--mono);
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.convo-badge-current {
+  background: var(--accent-soft);
+  color: var(--accent);
+  border: 1px solid var(--accent);
+}
+.convo-preview {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text);
+  margin-bottom: 10px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.convo-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.convo-actions .ghost-btn {
+  font-size: 12px;
+  padding: 4px 10px;
+  text-decoration: none;
+  display: inline-block;
+  line-height: 1.4;
+}
+
+/* ---- Read-only transcript viewer --------------------------------- */
+
+.convo-view {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.convo-msg {
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius);
+  padding: 10px 14px;
+  background: var(--panel-2);
+}
+.convo-msg-user { background: var(--user); }
+.convo-msg-assistant { background: var(--assistant); }
+.convo-msg-role {
+  font-size: 10.5px;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  letter-spacing: 0.08em;
+  margin-bottom: 6px;
+}
+.convo-msg-time { color: var(--muted-faint); }
+.convo-msg-body {
+  font-size: 13.5px;
+  line-height: 1.55;
+  color: var(--text);
+}
+.convo-msg-body p { margin: 6px 0; }
+.convo-msg-body p:first-child { margin-top: 0; }
+.convo-msg-body p:last-child { margin-bottom: 0; }
+.convo-msg-pre {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font: inherit;
+  background: transparent;
+}
+
 .modal-glossary-list {
   margin: 0;
   padding: 0;

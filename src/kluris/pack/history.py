@@ -100,6 +100,48 @@ class SessionStore:
             cur.execute("SELECT 1 FROM sessions WHERE id = ?", (sid,))
             return cur.fetchone() is not None
 
+    def list_sessions(self, *, limit: int = 100) -> list[dict[str, Any]]:
+        """Return recent sessions with message counts + first-user-message preview.
+
+        Ordered by ``created_at`` descending, capped at ``limit``. Each
+        row is shaped for the right-panel "Past conversations" picker:
+        the preview is the first user message in the session truncated
+        at 200 chars, useful as a header line in a list of past
+        sessions whose IDs are otherwise opaque hex blobs.
+        """
+        if limit <= 0:
+            return []
+        with self.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    s.id,
+                    s.created_at,
+                    (SELECT COUNT(*) FROM messages m
+                        WHERE m.session_id = s.id) AS msg_count,
+                    (SELECT content FROM messages m
+                        WHERE m.session_id = s.id AND m.role = 'user'
+                        ORDER BY m.id ASC LIMIT 1) AS first_user
+                FROM sessions s
+                ORDER BY s.created_at DESC
+                LIMIT ?
+                """,
+                (limit,),
+            )
+            rows = cur.fetchall()
+        out: list[dict[str, Any]] = []
+        for r in rows:
+            preview = (r[3] or "").strip()
+            if len(preview) > 200:
+                preview = preview[:200].rstrip() + "…"
+            out.append({
+                "id": r[0],
+                "created_at": r[1] or 0,
+                "message_count": r[2] or 0,
+                "preview": preview,
+            })
+        return out
+
     def delete_session(self, sid: str) -> None:
         """Cascade-delete a session and all its messages."""
         with self.cursor() as cur:
