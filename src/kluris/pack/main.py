@@ -224,6 +224,14 @@ def create_app(
     app.state.llm_ready = prov is not None and llm_error is None
     app.state.llm_error = llm_error
     _mount_minimal_routes(app)
+    # uvicorn binds to 0.0.0.0:8765 inside the container (required for
+    # docker port mapping), but compose maps host->127.0.0.1:8765 only.
+    # uvicorn's startup banner shows "0.0.0.0:8765" which some browsers
+    # can't resolve on Windows — print the host-reachable URL instead.
+    sys.stderr.write(
+        "kluris-pack: open http://localhost:8765 in your browser\n"
+    )
+    sys.stderr.flush()
     return app
 
 

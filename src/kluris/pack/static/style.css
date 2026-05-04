@@ -1,17 +1,23 @@
-/* Kluris pack chat — MRI-inspired dark UI with a brain-explorer
-   left sidebar, a chat main pane, and a click-to-expand neuron
+/* Kluris pack chat — same MRI three-pane shell (Files | Chat | Find)
+   with a brain-explorer left sidebar, a chat middle pane, a search /
+   recent / glossary right sidebar, and a click-to-expand neuron
    modal. No build step; everything ships as one CSS file. */
 
 :root {
   --bg: #0b0d12;
+  --bg-deeper: #060a14;
   --panel: #11141b;
   --panel-2: #161a23;
   --panel-3: #1d2230;
   --border: #232938;
   --border-soft: #1b2030;
+  --line: rgba(123, 167, 255, 0.18);
+  --line-strong: rgba(123, 167, 255, 0.32);
   --text: #e6edf3;
   --text-muted: #8a93a3;
   --text-dim: #5c6478;
+  --muted: #8ba7d1;
+  --muted-faint: rgba(139, 167, 209, 0.55);
   --accent: #7aa2ff;
   --accent-soft: rgba(122, 162, 255, 0.14);
   --user: #1c2433;
@@ -24,6 +30,7 @@
   --radius: 10px;
   --radius-sm: 6px;
   --shadow: 0 6px 20px rgba(0, 0, 0, 0.35);
+  --mono: ui-monospace, "SF Mono", "Monaco", "Cascadia Code", monospace;
 }
 
 * { box-sizing: border-box; }
@@ -47,95 +54,195 @@ button {
 }
 a { color: var(--accent); }
 
-/* ---- Layout shell ------------------------------------------------- */
+/* ---- Layout shell (mirrors MRI: app > header + body) -------------- */
 
-.app-shell {
+.app {
   display: grid;
-  grid-template-columns: 320px 1fr;
-  grid-template-rows: 100vh;
+  grid-template-rows: auto 1fr;
   height: 100vh;
   overflow: hidden;
-  background: var(--bg);
-}
-.app-shell.sidebar-collapsed {
-  grid-template-columns: 0px 1fr;
-}
-.app-shell.sidebar-collapsed .sidebar {
-  transform: translateX(-100%);
-  pointer-events: none;
+  background: var(--bg-deeper);
 }
 
-/* ---- Sidebar ------------------------------------------------------ */
+.app-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 22px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+}
+.header-left { display: flex; align-items: baseline; gap: 14px; min-width: 0; }
+.brain-title {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.header-kicker {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.18em;
+  color: var(--muted-faint);
+}
+.header-right { display: flex; align-items: center; gap: 10px; }
 
-.sidebar {
+.body {
+  display: grid;
+  grid-template-columns: 280px 1fr 320px;
+  gap: 0;
+  min-height: 0;
+  position: relative;
+}
+.body.left-collapsed { grid-template-columns: 0 1fr 320px; }
+.body.right-collapsed { grid-template-columns: 280px 1fr 0; }
+.body.left-collapsed.right-collapsed { grid-template-columns: 0 1fr 0; }
+.body.left-collapsed .panel-left,
+.body.right-collapsed .panel-right { display: none; }
+
+/* ---- Panels (left = Files, right = Find) -------------------------- */
+
+.panel {
   background: var(--panel);
   border-right: 1px solid var(--border);
   display: flex;
   flex-direction: column;
   min-width: 0;
-  transition: transform 0.2s ease;
+  overflow: hidden;
 }
-.sidebar-header {
+.panel.panel-right {
+  border-right: 0;
+  border-left: 1px solid var(--border);
+}
+.panel-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 14px 16px;
-  border-bottom: 1px solid var(--border-soft);
+  padding: 14px 18px 10px;
 }
-.sidebar-title {
-  font-size: 14px;
-  font-weight: 600;
+.panel-header h3 {
   margin: 0;
-  letter-spacing: 0.01em;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--muted);
 }
-.sidebar-collapse {
+.panel-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 18px 6px;
+}
+.panel-section-header h3 {
+  margin: 0;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.panel-collapse-btn {
+  appearance: none;
   width: 24px;
   height: 24px;
-  border-radius: var(--radius-sm);
-  color: var(--text-muted);
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 1rem;
+  line-height: 1;
+  cursor: pointer;
 }
-.sidebar-collapse:hover { background: var(--panel-2); color: var(--text); }
-.sidebar-search {
-  padding: 10px 16px;
-  border-bottom: 1px solid var(--border-soft);
-}
-.sidebar-search input {
-  width: 100%;
-  background: var(--panel-2);
+.panel-collapse-btn:hover {
   color: var(--text);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 8px 10px;
-  font-size: 13px;
+  background: rgba(123, 167, 255, 0.08);
 }
-.sidebar-search input::placeholder { color: var(--text-dim); }
-.sidebar-search input:focus {
-  outline: none;
-  border-color: var(--accent);
-  background: var(--bg);
-}
-.sidebar-nav {
+
+.panel-body {
   flex: 1;
   overflow-y: auto;
-  padding: 8px 0 16px;
+  overflow-x: hidden;
+  padding: 4px 0 18px;
 }
-.tree-section {
-  padding: 8px 0;
-}
-.tree-section + .tree-section {
+.panel-left .panel-body { padding: 4px 14px 18px; }
+.panel-footer {
   border-top: 1px solid var(--border-soft);
-  margin-top: 4px;
-  padding-top: 12px;
-}
-.tree-section-title {
+  padding: 10px 16px;
   font-size: 11px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
   color: var(--text-dim);
-  padding: 4px 16px 8px;
-  margin: 0;
 }
+.panel-stats { font-family: var(--mono); }
+
+/* Floating expand buttons (visible only when their panel is collapsed). */
+.panel-expand-btn {
+  appearance: none;
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 22px;
+  height: 56px;
+  border: 1px solid var(--border);
+  background: var(--panel-3);
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 0.9rem;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 25;
+}
+.panel-expand-btn:hover { color: var(--text); border-color: var(--line-strong); }
+.panel-expand-btn[hidden] { display: none; }
+.panel-expand-btn.panel-expand-left {
+  left: 0;
+  border-radius: 0 8px 8px 0;
+  border-left: 0;
+}
+.panel-expand-btn.panel-expand-right {
+  right: 0;
+  border-radius: 8px 0 0 8px;
+  border-right: 0;
+}
+
+/* ---- Search (right panel) ----------------------------------------- */
+
+.search {
+  margin: 0 18px 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 12px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+}
+.search svg { flex-shrink: 0; opacity: 0.55; }
+.search input[type="search"] {
+  flex: 1;
+  min-width: 0;
+  background: transparent;
+  border: 0;
+  outline: 0;
+  color: inherit;
+  font: inherit;
+  font-family: var(--mono);
+  font-size: 13px;
+}
+.search input[type="search"]::placeholder { color: var(--text-dim); }
+
+/* ---- Tree (used by left lobes, right recent, right glossary) ------ */
+
 .tree-count {
   color: var(--text-dim);
   font-weight: 400;
@@ -243,56 +350,13 @@ a { color: var(--accent); }
   text-overflow: ellipsis;
   max-width: 100%;
 }
-.sidebar-footer {
-  border-top: 1px solid var(--border-soft);
-  padding: 10px 16px;
-  font-size: 11px;
-  color: var(--text-dim);
-}
+/* ---- Main chat (stage replaces the MRI canvas) -------------------- */
 
-/* Floating expand button (visible only when sidebar collapsed). */
-.sidebar-expand {
-  position: fixed;
-  left: 0;
-  top: 50%;
-  transform: translateY(-50%);
-  width: 22px;
-  height: 48px;
-  border-radius: 0 var(--radius) var(--radius) 0;
-  background: var(--panel-3);
-  border: 1px solid var(--border);
-  border-left: 0;
-  color: var(--text-muted);
-  font-size: 16px;
-  z-index: 10;
-}
-.sidebar-expand:hover {
-  background: var(--panel-2);
-  color: var(--text);
-}
-
-/* ---- Main chat ---------------------------------------------------- */
-
-.main {
+.stage {
   display: flex;
   flex-direction: column;
   min-width: 0;
-  height: 100vh;
-}
-.main-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 12px 24px;
-  border-bottom: 1px solid var(--border);
-  background: var(--panel);
-}
-.main-title {
-  font-size: 13px;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: var(--text-muted);
-  font-weight: 600;
+  background: var(--bg);
 }
 .ghost-btn {
   background: transparent;
@@ -497,7 +561,7 @@ a { color: var(--accent); }
   outline: none;
   border-color: var(--accent);
 }
-.main-footer {
+.stage-footer {
   padding: 8px 24px;
   font-size: 11.5px;
   color: var(--text-dim);
@@ -729,19 +793,16 @@ a { color: var(--accent); }
 
 /* ---- Small screens ----------------------------------------------- */
 
-@media (max-width: 800px) {
-  .app-shell {
-    grid-template-columns: 1fr;
-  }
-  .sidebar {
-    position: fixed;
-    inset: 0 auto 0 0;
-    width: min(85vw, 360px);
-    z-index: 25;
-    transform: translateX(-100%);
-    transition: transform 0.2s ease;
-  }
-  .app-shell:not(.sidebar-collapsed) .sidebar { transform: translateX(0); }
-  .sidebar-expand { display: block; }
+/* Narrow viewport (laptop sidebar-on-the-side workflows): collapse
+   the right Find panel — the left Files tree is more useful in chat
+   than the search/recent list. Below 700px the left panel also
+   collapses and the chat takes the full width. */
+@media (max-width: 1100px) {
+  .body { grid-template-columns: 240px 1fr 0; }
+  .body .panel-right { display: none; }
+}
+@media (max-width: 700px) {
+  .body { grid-template-columns: 0 1fr 0; }
+  .body .panel-left { display: none; }
   .msg-user { max-width: 100%; }
 }

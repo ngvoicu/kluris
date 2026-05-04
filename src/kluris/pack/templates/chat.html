@@ -1,95 +1,118 @@
 {% extends "base.html" %}
 {% block body %}
-<div class="app-shell">
+<div class="app">
 
-  <aside class="sidebar" id="sidebar">
-    <header class="sidebar-header">
-      <h1 class="sidebar-title">{{ brain_name }}</h1>
-      <button class="sidebar-collapse" id="sidebar-collapse"
-              type="button" aria-label="Collapse sidebar">&lsaquo;</button>
-    </header>
-
-    <div class="sidebar-search">
-      <input id="tree-filter" type="search"
-             placeholder="Filter lobes & neurons…"
-             aria-label="Filter the brain tree">
+  <header class="app-header">
+    <div class="header-left">
+      <h1 class="brain-title">{{ brain_name }}</h1>
+      <span class="header-kicker">CHAT</span>
     </div>
+    <div class="header-right">
+      <button id="new-conversation" type="button"
+              class="ghost-btn">New conversation</button>
+    </div>
+  </header>
 
-    <nav class="sidebar-nav" id="sidebar-nav">
-      <section class="tree-section" data-section="lobes">
-        <h2 class="tree-section-title">Lobes</h2>
+  <div class="body">
+
+    <aside class="panel panel-left" id="panel-left">
+      <div class="panel-header">
+        <h3>Files</h3>
+        <button type="button" class="panel-collapse-btn" id="collapse-left"
+                title="Collapse left panel"
+                aria-label="Collapse left panel">&lsaquo;</button>
+      </div>
+      <div class="panel-body">
         <ul class="tree" id="tree-lobes">
           <li class="tree-empty">Loading…</li>
         </ul>
-      </section>
+      </div>
+      <footer class="panel-footer">
+        <span class="panel-stats" id="sidebar-stats"></span>
+      </footer>
+    </aside>
 
-      <section class="tree-section" data-section="recent">
-        <h2 class="tree-section-title">Recently updated</h2>
-        <ul class="tree" id="tree-recent"></ul>
-      </section>
+    <main class="stage" id="stage">
+      <div id="messages" class="messages">
+        {% if not llm_ready %}
+          <div class="chat-banner chat-banner-warning" role="status">
+            <strong>LLM not configured</strong>
+            <p>
+              Set <code>KLURIS_API_KEY</code> (or the OAuth vars) in
+              <code>.env</code> and restart the container to enable chat.
+              The brain explorer in the sidebars remains fully available.
+            </p>
+            {% if llm_error %}
+              <pre class="chat-banner-detail">{{ llm_error }}</pre>
+            {% endif %}
+          </div>
+        {% endif %}
+        {% for msg in history %}
+          <article class="msg msg-{{ msg.role }}"
+                   {% if msg.role == 'assistant' %}data-markdown="1"{% endif %}>
+            <div class="msg-role">{{ msg.role }}</div>
+            <div class="msg-body">{{ msg.content }}</div>
+          </article>
+        {% endfor %}
+      </div>
 
-      <section class="tree-section" data-section="glossary">
-        <h2 class="tree-section-title">
-          Glossary <span class="tree-count" id="glossary-count"></span>
-        </h2>
-        <ul class="tree" id="tree-glossary"></ul>
-      </section>
-    </nav>
+      <form id="chat-form" class="chat-form" autocomplete="off">
+        <textarea id="chat-input" rows="2" required
+                  placeholder="{% if llm_ready %}Ask the brain anything…{% else %}Configure LLM first to enable chat…{% endif %}"
+                  {% if not llm_ready %}disabled aria-disabled="true"{% endif %}></textarea>
+        <button type="submit" class="primary-btn"
+                {% if not llm_ready %}disabled aria-disabled="true"{% endif %}>Send</button>
+      </form>
 
-    <footer class="sidebar-footer">
-      <span class="sidebar-stats" id="sidebar-stats"></span>
-    </footer>
-  </aside>
+      <footer class="stage-footer">
+        <span id="usage-totals" data-input="0" data-output="0">
+          Tokens this session:
+          <strong id="usage-input">0</strong> in /
+          <strong id="usage-output">0</strong> out
+        </span>
+      </footer>
+    </main>
 
-  <button class="sidebar-expand" id="sidebar-expand" type="button"
-          aria-label="Show sidebar" hidden>&rsaquo;</button>
+    <aside class="panel panel-right" id="panel-right">
+      <div class="panel-header">
+        <h3>Find</h3>
+        <button type="button" class="panel-collapse-btn" id="collapse-right"
+                title="Collapse right panel"
+                aria-label="Collapse right panel">&rsaquo;</button>
+      </div>
+      <label class="search">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none"
+             stroke="currentColor" stroke-width="2.5" stroke-linecap="round"
+             stroke-linejoin="round">
+          <circle cx="11" cy="11" r="7"/>
+          <path d="M21 21l-4.3-4.3"/>
+        </svg>
+        <input id="tree-filter" type="search"
+               placeholder="Filter neurons, lobes, glossary…"
+               aria-label="Filter the brain tree" autocomplete="off">
+      </label>
 
-  <main class="main">
-    <header class="main-header">
-      <span class="main-title">Chat</span>
-      <button id="new-conversation" type="button"
-              class="ghost-btn">New conversation</button>
-    </header>
-
-    <div id="messages" class="messages">
-      {% if not llm_ready %}
-        <div class="chat-banner chat-banner-warning" role="status">
-          <strong>LLM not configured</strong>
-          <p>
-            Set <code>KLURIS_API_KEY</code> (or the OAuth vars) in
-            <code>.env</code> and restart the container to enable chat.
-            The brain explorer in the sidebar remains fully available.
-          </p>
-          {% if llm_error %}
-            <pre class="chat-banner-detail">{{ llm_error }}</pre>
-          {% endif %}
+      <div class="panel-body">
+        <div class="panel-section-header" style="padding-top:18px">
+          <h3>Recently updated</h3>
         </div>
-      {% endif %}
-      {% for msg in history %}
-        <article class="msg msg-{{ msg.role }}"
-                 {% if msg.role == 'assistant' %}data-markdown="1"{% endif %}>
-          <div class="msg-role">{{ msg.role }}</div>
-          <div class="msg-body">{{ msg.content }}</div>
-        </article>
-      {% endfor %}
-    </div>
+        <ul class="tree" id="tree-recent"></ul>
 
-    <form id="chat-form" class="chat-form" autocomplete="off">
-      <textarea id="chat-input" rows="2" required
-                placeholder="{% if llm_ready %}Ask the brain anything…{% else %}Configure LLM first to enable chat…{% endif %}"
-                {% if not llm_ready %}disabled aria-disabled="true"{% endif %}></textarea>
-      <button type="submit" class="primary-btn"
-              {% if not llm_ready %}disabled aria-disabled="true"{% endif %}>Send</button>
-    </form>
+        <div class="panel-section-header" style="padding-top:18px">
+          <h3>Glossary <span class="tree-count" id="glossary-count"></span></h3>
+        </div>
+        <ul class="tree" id="tree-glossary"></ul>
+      </div>
+    </aside>
 
-    <footer class="main-footer">
-      <span id="usage-totals" data-input="0" data-output="0">
-        Tokens this session:
-        <strong id="usage-input">0</strong> in /
-        <strong id="usage-output">0</strong> out
-      </span>
-    </footer>
-  </main>
+  </div>
+
+  <button type="button" class="panel-expand-btn panel-expand-left"
+          id="expand-left" title="Show left panel"
+          aria-label="Show left panel" hidden>&rsaquo;</button>
+  <button type="button" class="panel-expand-btn panel-expand-right"
+          id="expand-right" title="Show right panel"
+          aria-label="Show right panel" hidden>&lsaquo;</button>
 
   <div id="modal-backdrop" class="modal-backdrop" hidden></div>
   <dialog id="modal" class="modal" aria-labelledby="modal-title">
@@ -225,17 +248,27 @@
       usageIn.textContent = "0"; usageOut.textContent = "0";
     });
 
-    // --- Sidebar collapse / expand --------------------------------
-    const shell = document.querySelector(".app-shell");
-    const collapseBtn = document.getElementById("sidebar-collapse");
-    const expandBtn = document.getElementById("sidebar-expand");
-    collapseBtn.addEventListener("click", () => {
-      shell.classList.add("sidebar-collapsed");
-      expandBtn.hidden = false;
+    // --- Panel collapse / expand (mirrors the MRI behavior) -------
+    const body = document.querySelector(".body");
+    const collapseLeft = document.getElementById("collapse-left");
+    const collapseRight = document.getElementById("collapse-right");
+    const expandLeft = document.getElementById("expand-left");
+    const expandRight = document.getElementById("expand-right");
+    collapseLeft.addEventListener("click", () => {
+      body.classList.add("left-collapsed");
+      expandLeft.hidden = false;
     });
-    expandBtn.addEventListener("click", () => {
-      shell.classList.remove("sidebar-collapsed");
-      expandBtn.hidden = true;
+    expandLeft.addEventListener("click", () => {
+      body.classList.remove("left-collapsed");
+      expandLeft.hidden = true;
+    });
+    collapseRight.addEventListener("click", () => {
+      body.classList.add("right-collapsed");
+      expandRight.hidden = false;
+    });
+    expandRight.addEventListener("click", () => {
+      body.classList.remove("right-collapsed");
+      expandRight.hidden = true;
     });
 
     // Hand control of the brain tree + modal off to brain-explorer.js.

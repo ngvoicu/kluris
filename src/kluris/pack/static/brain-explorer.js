@@ -635,7 +635,11 @@
 
   function applyFilter(query) {
     const q = (query || "").toLowerCase().trim();
-    document.querySelectorAll("#sidebar-nav .tree-node").forEach((n) => {
+    // Filter input lives in the right panel but matches across the
+    // left-panel lobes tree AND the right-panel recent + glossary lists.
+    // Match every `.tree-node` under any `.tree` list — that's what binds
+    // the two panels together.
+    document.querySelectorAll(".tree .tree-node").forEach((n) => {
       if (!q) { n.hidden = false; return; }
       const text = n.textContent.toLowerCase();
       n.hidden = !text.includes(q);
