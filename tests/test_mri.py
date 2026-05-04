@@ -512,25 +512,26 @@ def test_html_no_cdn(tmp_path):
 def test_html_has_search_and_file_tree_ui(tmp_path):
     """The shell must include search and the left-sidebar file tree.
 
-    The new C4 design keeps the same DOM hooks (search input, file tree,
-    results panel) but the right sidebar gets restyled to the flat
-    `FIND` / `LOBES` / `RECENT` / `RESULTS` layout from the mockups.
+    The right sidebar uses the flat `FIND` / `RECENT` / `RESULTS` layout —
+    the lobe filter was removed because top-level lobes are visible in the
+    canvas itself and the filter added clutter without payoff.
     """
     brain = _make_brain_with_neurons(tmp_path)
     output = tmp_path / "brain-mri.html"
     generate_mri_html(brain, output)
     html = output.read_text(encoding="utf-8")
-    # Kept: search input, lobes filter, results panel, panel tree.
+    # Kept: search input, results panel, panel tree, recent list.
     assert 'id="search-input"' in html
-    assert 'id="lobes-list"' in html
     assert 'id="search-results"' in html
     assert 'id="panel-tree"' in html
     assert 'id="recent-list"' in html
     # Right-sidebar section labels (uppercase via CSS) — assert on
     # the literal HTML text in the section headers.
     assert ">Find<" in html
-    assert ">Lobes<" in html
     assert ">Recent<" in html
+    # Removed: lobe filter section.
+    assert 'id="lobes-list"' not in html
+    assert ">Lobes<" not in html
     # Removed: every inspector / details / connections-card hook.
     assert 'id="details-panel"' not in html
     assert 'id="details-empty"' not in html
@@ -544,27 +545,20 @@ def test_html_has_search_and_file_tree_ui(tmp_path):
     assert "Connected nodes" not in html
 
 
-def test_html_has_lobes_list_in_left_panel(tmp_path):
-    """The right panel includes a Lobes filter rendered as flat 4×22 swatch rows.
-
-    The C4 redesign drops the old gradient lobe-card; the right-sidebar
-    `LOBES` section now uses flat `.lobe-row` rows with a 4×22 color swatch,
-    a label, a count, and a visibility dot — matching the mockup-shell.html
-    contract.
+def test_right_panel_results_are_scrollable(tmp_path):
+    """The right panel wraps its body in a scroll container so long search
+    result lists don't overflow off-screen. The wrapper inherits the
+    `.panel-body` rules (`flex: 1; overflow-y: auto`), with horizontal
+    padding zeroed out so child sections keep their own padding.
     """
     brain = _make_brain_with_neurons(tmp_path)
     output = tmp_path / "brain-mri.html"
     generate_mri_html(brain, output)
     html = output.read_text(encoding="utf-8")
-    # Section + container
-    assert ">Lobes<" in html
-    assert 'id="lobes-list"' in html
-    # New flat row style replaces .lobe-card / .lobe-swatch.
-    assert ".lobe-row" in html
-    assert ".swatch" in html
-    # JS renderer wired up at startup
-    assert "function renderLobeFilter" in html
-    assert "renderLobeFilter();" in html
+    # Both panels share the same scroll-wrapper class.
+    assert html.count('<div class="panel-body">') >= 2
+    # Right panel padding override exists so child padding isn't doubled.
+    assert ".panel-right .panel-body" in html
 
 
 def _make_brain_with_sublobes(tmp_path):
@@ -599,27 +593,19 @@ def _make_brain_with_sublobes(tmp_path):
     return brain
 
 
-def test_lobes_act_as_visibility_toggles(tmp_path):
-    """Clicking a lobe in the right panel toggles visibility for that lobe.
-
-    The C4 redesign keeps the multi-select lobe filter (as 4×22 swatch rows
-    in the right sidebar) but drops the per-sublobe collapsible tree from
-    the right sidebar — sublobes are reachable by drilling into a lobe (L2)
-    rather than via a tree filter.
+def test_lobe_filter_is_not_rendered(tmp_path):
+    """The right-sidebar lobe filter was removed — none of its DOM hooks,
+    CSS classes, or JS state should leak into the rendered HTML.
     """
     brain = _make_brain_with_sublobes(tmp_path)
     output = tmp_path / "brain-mri.html"
     generate_mri_html(brain, output)
     html = output.read_text(encoding="utf-8")
-    # The hidden-lobes set still exists and powers the L1 search dim path.
-    assert "const hiddenLobes = new Set()" in html
-    # The dimmed style applies to hidden lobe rows.
-    assert ".lobe-row" in html
-    assert ".dimmed" in html
-    # The removed top-right reset button no longer owns lobe state; clicking
-    # each lobe row toggles it back on.
-    assert "hiddenLobes.delete(lobeKey)" in html
-    assert "hiddenLobes.add(lobeKey)" in html
+    assert 'id="lobes-list"' not in html
+    assert "lobe-row" not in html
+    assert "lobe-filter" not in html
+    assert "hiddenLobes" not in html
+    assert "renderLobeFilter" not in html
 
 
 def test_sidebars_are_collapsible(tmp_path):

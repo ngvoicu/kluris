@@ -413,21 +413,18 @@ def _render_mri_html(brain_name: str, graph: dict, graph_json: str) -> str:
         <kbd>/</kbd>
       </label>
 
-      <div class="panel-section-header">
-        <h3>Lobes</h3>
-      </div>
-      <div class="lobe-filter" id="lobes-list"></div>
+      <div class="panel-body">
+        <div class="panel-section-header" style="padding-top:18px">
+          <h3>Recent</h3>
+        </div>
+        <div class="recent-list" id="recent-list"></div>
 
-      <div class="panel-section-header" style="padding-top:18px">
-        <h3>Recent</h3>
+        <div class="panel-section-header" style="padding-top:18px">
+          <h3>Results</h3>
+        </div>
+        <div id="result-count" class="result-count"></div>
+        <div class="results" id="search-results"></div>
       </div>
-      <div class="recent-list" id="recent-list"></div>
-
-      <div class="panel-section-header" style="padding-top:18px">
-        <h3>Results</h3>
-      </div>
-      <div id="result-count" class="result-count"></div>
-      <div class="results" id="search-results"></div>
     </aside>
   </div>
 
@@ -840,59 +837,7 @@ canvas.dragging { cursor: grabbing; }
   font-size: 0.66rem;
 }
 
-.lobe-filter {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  padding: 0 14px 8px;
-}
-.lobe-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 8px 10px;
-  border-radius: 10px;
-  border: 1px solid transparent;
-  cursor: pointer;
-  background: transparent;
-  color: var(--text);
-  font: inherit;
-  font-size: 0.78rem;
-  text-align: left;
-  width: 100%;
-  transition: background 160ms ease, border-color 160ms ease;
-}
-.lobe-row:hover {
-  background: rgba(123, 167, 255, 0.05);
-  border-color: var(--line);
-}
-.lobe-row.dimmed { opacity: 0.45; }
-.lobe-row .swatch {
-  width: 4px;
-  height: 22px;
-  border-radius: 2px;
-  flex-shrink: 0;
-  background: var(--bar, var(--accent));
-}
-.lobe-row .label {
-  flex: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  min-width: 0;
-}
-.lobe-row .count {
-  color: var(--muted-faint);
-  font-family: var(--mono);
-  font-size: 0.7rem;
-  flex-shrink: 0;
-}
-.lobe-row .vis {
-  color: var(--muted);
-  font-size: 0.78rem;
-  width: 14px;
-  text-align: center;
-}
+.panel-right .panel-body { padding: 0 0 18px; }
 
 .recent-list {
   display: flex;
@@ -1326,7 +1271,6 @@ const ctx = canvas.getContext('2d');
 const searchInput = document.getElementById('search-input');
 const resultsEl = document.getElementById('search-results');
 const resultCountEl = document.getElementById('result-count');
-const lobesListEl = document.getElementById('lobes-list');
 const recentListEl = document.getElementById('recent-list');
 const breadcrumbEl = document.getElementById('breadcrumb');
 const stage = document.getElementById('stage');
@@ -1357,11 +1301,6 @@ let currentBoxes = [];
 let currentEdges = [];
 let pathHistory = [[]];
 let pathHistoryIndex = 0;
-
-// Multi-select visibility toggles for lobes (right-sidebar filter).
-// Only applied at depth 0 since beyond root the user is already inside
-// a single lobe and the filter would no-op or hide everything.
-const hiddenLobes = new Set();
 
 function requestDraw() { needsDraw = true; }
 
@@ -1834,12 +1773,11 @@ function drawCurrent() {
   }
   // Boxes
   for (const item of items) {
-    const isHidden = currentPath.length === 0 && item.kind === 'folder' && hiddenLobes.has(item.name);
     const isMatch = matches(item);
     drawC4Box({
       ...item,
-      dim: isHidden || (query && !isMatch),
-      matchHalo: query && isMatch && !isHidden,
+      dim: query && !isMatch,
+      matchHalo: query && isMatch,
     }, { hover: hoveredId === item.name });
   }
 }
@@ -2114,7 +2052,7 @@ canvas.addEventListener('wheel', event => {
 }, { passive: false });
 
 // ============================================================
-// Search / filter / lobe filter
+// Search / filter
 // ============================================================
 function refreshSearch() {
   const query = searchInput.value.trim().toLowerCase();
@@ -2200,30 +2138,6 @@ function searchEnterJump() {
   if (!query) return;
   const cards = resultsEl.querySelectorAll('.result-card');
   if (cards.length === 1) cards[0].click();
-}
-
-function renderLobeFilter() {
-  lobesListEl.innerHTML = '';
-  for (const lobeKey of uniqueLobes) {
-    const stats = folderStats([lobeKey]);
-    const btn = document.createElement('button');
-    btn.type = 'button';
-    btn.className = 'lobe-row' + (hiddenLobes.has(lobeKey) ? ' dimmed' : '');
-    btn.style.setProperty('--bar', lobeColor(lobeKey));
-    btn.dataset.lobe = lobeKey;
-    btn.innerHTML =
-      '<span class="swatch"></span>' +
-      '<span class="label">' + escapeHtml(folderTitle([lobeKey])) + '</span>' +
-      '<span class="count">' + stats.neurons + '</span>' +
-      '<span class="vis">' + (hiddenLobes.has(lobeKey) ? '○' : '●') + '</span>';
-    btn.addEventListener('click', () => {
-      if (hiddenLobes.has(lobeKey)) hiddenLobes.delete(lobeKey);
-      else hiddenLobes.add(lobeKey);
-      renderLobeFilter();
-      requestDraw();
-    });
-    lobesListEl.appendChild(btn);
-  }
 }
 
 function renderRecent() {
@@ -2712,7 +2626,6 @@ addEventListener('resize', () => {
   resize();
   fitCurrentToView(true);
 });
-renderLobeFilter();
 renderRecent();
 renderFileTree(null, 'panel-tree');
 renderBreadcrumb();
