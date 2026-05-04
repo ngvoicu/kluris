@@ -220,13 +220,108 @@ def test_brain_endpoints_dont_require_auth(api_key_config: Config):
     app = _build_app(api_key_config)
     with TestClient(app) as client:
         for path in ("/api/brain/tree",
+                     "/api/brain/files",
                      "/api/brain/neuron?path=knowledge/jwt.md",
-                     "/api/brain/lobe?lobe=knowledge"):
+                     "/api/brain/lobe?lobe=knowledge",
+                     "/api/brain/search?q=jwt"):
             resp = client.get(path)
             assert resp.status_code == 200, (
                 f"{path} should be reachable without auth, got {resp.status_code}"
             )
             assert "WWW-Authenticate" not in resp.headers
+
+
+def test_brain_search_endpoint_returns_ranked_results(api_key_config: Config):
+    """``GET /api/brain/search?q=…`` returns the same ranked-result
+    shape the agent's ``search`` tool emits — neurons + glossary
+    matches, scored by ``search_brain``. Empty query returns an
+    empty result list without 400'ing.
+    """
+    app = _build_app(api_key_config)
+    with TestClient(app) as client:
+        # Empty query short-circuits to an empty result list.
+        empty = client.get("/api/brain/search", params={"q": ""}).json()
+        assert empty["ok"] is True
+        assert empty["total"] == 0
+        assert empty["results"] == []
+
+        # Real query — fixture brain has a JWT neuron in `knowledge`,
+        # so a `jwt` query must surface it.
+        resp = client.get("/api/brain/search", params={"q": "jwt"})
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["ok"] is True
+        assert data["query"] == "jwt"
+        assert isinstance(data["results"], list)
+        assert data["total"] >= 1
+        files = {r["file"] for r in data["results"]}
+        assert "knowledge/jwt.md" in files
+        # Each result must carry the contract the result-card renderer reads.
+        for r in data["results"]:
+            assert {"file", "title", "matched_fields",
+                    "snippet", "score", "deprecated"} <= set(r.keys())
+
+
+def test_brain_search_endpoint_finds_glossary_entries(
+    api_key_config: Config, tmp_path,
+):
+    """Right-panel search must reach inside ``glossary.md`` — not just
+    file names. A query that matches a glossary term (or its
+    definition) shows up as a result with ``file == "glossary.md"``
+    and the term as the ``title``.
+    """
+    brain = tmp_path / "brain"
+    brain.mkdir()
+    (brain / "brain.md").write_text("# Brain\n", encoding="utf-8")
+    (brain / "glossary.md").write_text(
+        "# Glossary\n\n"
+        "**OAuth** -- Open authorization protocol used for SSO.\n"
+        "**JWT** -- JSON Web Token.\n",
+        encoding="utf-8",
+    )
+    cfg = api_key_config.model_copy(update={"brain_dir": brain})
+    app = _build_app(cfg)
+    with TestClient(app) as client:
+        # Term match → matched_fields includes "title".
+        oauth = client.get(
+            "/api/brain/search", params={"q": "oauth"},
+        ).json()
+        oauth_glossary = [
+            r for r in oauth["results"] if r["file"] == "glossary.md"
+        ]
+        assert oauth_glossary, "OAuth term must surface from glossary"
+        assert oauth_glossary[0]["title"].lower() == "oauth"
+
+        # Definition match → matched_fields includes "body".
+        token = client.get(
+            "/api/brain/search", params={"q": "token"},
+        ).json()
+        token_glossary = [
+            r for r in token["results"] if r["file"] == "glossary.md"
+        ]
+        assert token_glossary, "JWT definition body must surface from glossary"
+
+
+def test_brain_search_endpoint_clamps_limit(api_key_config: Config):
+    """``limit`` is clamped to [1, 50] so callers can't request huge
+    result lists. Out-of-range / non-int input falls back to the
+    default of 20."""
+    app = _build_app(api_key_config)
+    with TestClient(app) as client:
+        # A real query ensures we don't trip the empty-query short-circuit
+        # before the clamp logic runs.
+        resp = client.get(
+            "/api/brain/search",
+            params={"q": "knowledge", "limit": "9999"},
+        )
+        assert resp.status_code == 200
+        assert len(resp.json()["results"]) <= 50
+
+        resp = client.get(
+            "/api/brain/search",
+            params={"q": "knowledge", "limit": "not-a-number"},
+        )
+        assert resp.status_code == 200
 
 
 def test_post_chat_new_rotates_cookie(api_key_config: Config):

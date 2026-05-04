@@ -402,9 +402,10 @@
   const backdrop = $("modal-backdrop");
 
   // Navigation stack inside the modal. Each entry is one of:
-  //   {kind: "neuron", arg: "domain/foo.md"}
-  //   {kind: "lobe",   arg: "projects"}
-  //   {kind: "glossary-all"}        — combined glossary view
+  //   {kind: "neuron",        arg:  "domain/foo.md"}
+  //   {kind: "lobe",          arg:  "projects"}
+  //   {kind: "glossary-all"}                   — combined glossary view
+  //   {kind: "glossary-term", term: "OAuth"}   — single-term view
   // Entries are pushed by the show* functions and consumed by the
   // back button. Closing the modal clears the stack so re-opening
   // starts fresh.
@@ -421,9 +422,10 @@
     if (modalHistory.length < 2) return;
     modalHistory.pop();              // current view
     const prev = modalHistory.pop(); // will be re-pushed by show*
-    if (prev.kind === "neuron")             showNeuron(prev.arg);
-    else if (prev.kind === "lobe")          showLobe(prev.arg);
-    else if (prev.kind === "glossary-all")  showAllGlossary();
+    if (prev.kind === "neuron")              showNeuron(prev.arg);
+    else if (prev.kind === "lobe")           showLobe(prev.arg);
+    else if (prev.kind === "glossary-all")   showAllGlossary();
+    else if (prev.kind === "glossary-term")  showGlossaryTerm(prev.term);
   }
 
   function openModal({eyebrow, title, meta, tags, bodyHtml}) {
@@ -665,31 +667,111 @@
     }
   }
 
-  // ---- Filter -------------------------------------------------------
+  // ---- Search (right panel, MRI-style result cards) -----------------
+  //
+  // Typing in the search input fires a debounced fetch against
+  // /api/brain/search, which runs the same lexical scorer used by the
+  // CLI's `kluris search` and the LLM's `search` tool. Results land
+  // in the right panel as ranked cards — neurons + glossary entries
+  // ordered by score. Click a card to open the corresponding modal.
 
-  function applyFilter(query) {
-    const q = (query || "").toLowerCase().trim();
-    // Filter input lives in the right panel but matches across the
-    // left-panel lobes tree AND the right-panel recent + glossary lists.
-    // Match every `.tree-node` under any `.tree` list — that's what binds
-    // the two panels together.
-    document.querySelectorAll(".tree .tree-node").forEach((n) => {
-      if (!q) { n.hidden = false; return; }
-      const text = n.textContent.toLowerCase();
-      n.hidden = !text.includes(q);
-    });
-    // If filter active, expand every collapsed folder so matching files
-    // become visible.
-    if (q) {
-      document.querySelectorAll(
-        "#tree-lobes .tree-folder.collapsed"
-      ).forEach((folder) => {
-        folder.classList.remove("collapsed");
-        const btn = folder.querySelector(".tree-toggle");
-        if (btn) btn.textContent = "▾";
-      });
-    }
+  let searchTimer = null;
+
+  function debouncedSearch(query) {
+    if (searchTimer) clearTimeout(searchTimer);
+    searchTimer = setTimeout(() => runSearch(query), 180);
   }
+
+  async function runSearch(query) {
+    const resultsEl = $("search-results");
+    const countEl = $("result-count");
+    if (!resultsEl || !countEl) return;
+    const q = (query || "").trim();
+    if (!q) {
+      resultsEl.innerHTML = "";
+      countEl.textContent = "";
+      return;
+    }
+    countEl.textContent = "Searching…";
+    let payload;
+    try {
+      const resp = await fetch(
+        "/api/brain/search?q=" + encodeURIComponent(q) + "&limit=20",
+      );
+      if (!resp.ok) throw new Error("HTTP " + resp.status);
+      payload = await resp.json();
+    } catch (err) {
+      resultsEl.innerHTML =
+        '<div class="result-empty">Search failed: ' +
+        escapeHtml(String(err)) + '</div>';
+      countEl.textContent = "";
+      return;
+    }
+    // Stale-response guard: if the user kept typing while we were
+    // fetching, the live input may not match the query we ran. Drop
+    // results that no longer match the latest input.
+    const live = (searchInputEl && searchInputEl.value || "").trim();
+    if (live !== q) return;
+
+    const results = payload.results || [];
+    countEl.textContent =
+      results.length + " result" + (results.length === 1 ? "" : "s");
+    if (!results.length) {
+      resultsEl.innerHTML =
+        '<div class="result-empty">No matches.</div>';
+      return;
+    }
+    resultsEl.innerHTML = results.map((r) => {
+      const cls = "result-card" + (r.deprecated ? " is-deprecated" : "");
+      const meta = _resultMeta(r);
+      return (
+        '<button type="button" class="' + cls + '"' +
+            ' data-file="' + escapeHtml(r.file || "") + '"' +
+            ' data-title="' + escapeHtml(r.title || "") + '">' +
+          '<div class="result-title">' + escapeHtml(r.title || r.file) +
+          '</div>' +
+          '<div class="result-meta">' + escapeHtml(meta) + '</div>' +
+          (r.snippet
+            ? '<div class="result-snippet">' +
+                escapeHtml(r.snippet) + '</div>'
+            : '') +
+          '<div class="result-path">' + escapeHtml(r.file || "") + '</div>' +
+        '</button>'
+      );
+    }).join("");
+  }
+
+  function _resultMeta(r) {
+    if (r.file === "glossary.md") return "glossary";
+    if (r.file === "brain.md") return "brain";
+    const fields = (r.matched_fields || []).slice(0, 3).join(", ");
+    return fields
+      ? "matched: " + fields
+      : (r.file_type === "yaml" ? "yaml neuron" : "neuron");
+  }
+
+  function showGlossaryTerm(term) {
+    const norm = String(term || "").toLowerCase();
+    const entry = glossaryItems.find(
+      (g) => String(g.term || "").toLowerCase() === norm,
+    );
+    if (!entry) {
+      // Fall back to the combined view if the cache disagrees.
+      showAllGlossary();
+      return;
+    }
+    pushHistory({kind: "glossary-term", term: entry.term});
+    openModal({
+      eyebrow: "GLOSSARY",
+      title: entry.term,
+      meta: "from glossary.md",
+      tags: [],
+      bodyHtml: '<p>' + escapeHtml(entry.definition || "") + '</p>',
+    });
+  }
+
+  // Cached so debouncedSearch can guard against stale responses.
+  let searchInputEl = null;
 
   // ---- Boot ---------------------------------------------------------
 
@@ -843,10 +925,32 @@
       showLobe(cleanedTrailing);
     });
 
-    // Filter input.
-    $("tree-filter").addEventListener("input", (event) => {
-      applyFilter(event.target.value);
-    });
+    // Search input — debounced fetch against /api/brain/search; result
+    // cards land in #search-results in the right panel.
+    searchInputEl = $("search-input");
+    if (searchInputEl) {
+      searchInputEl.addEventListener("input", (event) => {
+        debouncedSearch(event.target.value);
+      });
+    }
+
+    // Result-card click — open the matched item's modal. Glossary
+    // hits resolve to a single-term modal via the cached glossary
+    // items array; everything else is a neuron path.
+    const searchResultsEl = $("search-results");
+    if (searchResultsEl) {
+      searchResultsEl.addEventListener("click", (event) => {
+        const card = event.target.closest(".result-card");
+        if (!card) return;
+        const file = card.dataset.file || "";
+        const title = card.dataset.title || "";
+        if (file === "glossary.md") {
+          showGlossaryTerm(title);
+        } else if (file) {
+          showNeuron(file);
+        }
+      });
+    }
   }
 
   window.kluris = Object.assign(window.kluris || {}, {

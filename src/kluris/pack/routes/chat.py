@@ -31,6 +31,7 @@ from ..tools.brain import (
     files_tool,
     lobe_overview_tool,
     read_neuron_tool,
+    search_tool,
     wake_up_tool,
 )
 
@@ -211,6 +212,27 @@ def attach_chat_routes(app: FastAPI) -> None:
         # into a nested folder tree — same shape the MRI viewer uses
         # for its left-panel file explorer.
         return JSONResponse(files_tool(cfg.brain_dir))
+
+    @app.get("/api/brain/search")
+    async def brain_search(q: str = "", limit: str = "20"):
+        cfg: Config = app.state.config
+        # Lexical search across neuron titles + bodies + paths + tags
+        # AND every glossary entry (term + definition). Used by the
+        # right-panel search input — type a query and the panel
+        # populates with ranked result cards, MRI-style.
+        #
+        # ``limit`` is typed as ``str`` (rather than ``int``) so a
+        # bad value falls back to the default instead of returning
+        # a 422 — friendlier to the live-typing input the UI uses.
+        if not q or not q.strip():
+            return JSONResponse(
+                {"ok": True, "query": "", "total": 0, "results": []},
+            )
+        try:
+            limit_i = max(1, min(int(limit), 50))
+        except (TypeError, ValueError):
+            limit_i = 20
+        return JSONResponse(search_tool(cfg.brain_dir, q, limit=limit_i))
 
     @app.get("/api/brain/neuron")
     async def brain_neuron(path: str):

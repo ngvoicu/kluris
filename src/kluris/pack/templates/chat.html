@@ -87,9 +87,9 @@
           <circle cx="11" cy="11" r="7"/>
           <path d="M21 21l-4.3-4.3"/>
         </svg>
-        <input id="tree-filter" type="search"
-               placeholder="Filter neurons, lobes, glossary…"
-               aria-label="Filter the brain tree" autocomplete="off">
+        <input id="search-input" type="search"
+               placeholder="Search neurons, paths, tags, glossary…"
+               aria-label="Search the brain" autocomplete="off">
       </label>
 
       <div class="panel-body">
@@ -97,6 +97,12 @@
           <h3>Recently updated</h3>
         </div>
         <ul class="tree" id="tree-recent"></ul>
+
+        <div class="panel-section-header" style="padding-top:18px">
+          <h3>Results</h3>
+        </div>
+        <div id="result-count" class="result-count"></div>
+        <div class="results" id="search-results"></div>
       </div>
     </aside>
 

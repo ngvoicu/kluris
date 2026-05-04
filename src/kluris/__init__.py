@@ -1,3 +1,3 @@
 """Kluris — Turn AI agents into team subject matter experts."""
 
-__version__ = "2.18.8"
+__version__ = "2.18.9"
