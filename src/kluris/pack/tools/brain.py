@@ -331,9 +331,16 @@ def files_tool(brain_path: Path) -> dict[str, Any]:
 
     Backs the chat UI's left-sidebar file tree (the same structure
     the MRI's left panel renders). Each entry has the brain-relative
-    POSIX ``path``, a humanized ``title`` (from frontmatter or the
-    file's H1 / stem), and a ``deprecated`` flag so the UI can apply
-    strikethrough styling without a second roundtrip.
+    POSIX ``path``, a stem-derived ``title``, and a ``deprecated``
+    flag so the UI can apply strikethrough styling without a second
+    roundtrip.
+
+    Title source matches the MRI: the filename stem with hyphens
+    → spaces and Title-Case (``post-imports-users.md`` → ``Post
+    Imports Users``). YAML neurons fall back to frontmatter ``title``
+    if set, because YAML stems like ``openapi`` title-case poorly.
+    The H1 is intentionally NOT used — compact labels read more
+    consistently across a sidebar than authored H1s do.
 
     The frontend builds a nested folder tree from the path strings —
     no ordering / nesting work happens here.
@@ -341,27 +348,17 @@ def files_tool(brain_path: Path) -> dict[str, Any]:
     files: list[dict[str, Any]] = []
     for neuron in sorted(neuron_files(brain_path)):
         rel = _rel(brain_path, neuron)
+        title = neuron.stem.replace("-", " ").title()
+        deprecated = False
         try:
-            meta, body = read_frontmatter(neuron)
+            meta, _body = read_frontmatter(neuron)
+            deprecated = str(meta.get("status", "active")).lower() == "deprecated"
+            if neuron.suffix.lower() in YAML_NEURON_SUFFIXES:
+                fm_title = meta.get("title")
+                if isinstance(fm_title, str) and fm_title.strip():
+                    title = fm_title.strip()
         except Exception:
-            files.append({
-                "path": rel,
-                "title": neuron.stem.replace("-", " ").title(),
-                "deprecated": False,
-            })
-            continue
-        if neuron.suffix.lower() in YAML_NEURON_SUFFIXES:
-            fm_title = meta.get("title")
-            title = (
-                fm_title.strip()
-                if isinstance(fm_title, str) and fm_title.strip()
-                else neuron.stem.replace("-", " ").title()
-            )
-        else:
-            title, _ = extract_excerpt(neuron, body)
-            if not title:
-                title = neuron.stem.replace("-", " ").title()
-        deprecated = str(meta.get("status", "active")).lower() == "deprecated"
+            pass
         files.append({"path": rel, "title": title, "deprecated": deprecated})
 
     glossary_path = brain_path / "glossary.md"

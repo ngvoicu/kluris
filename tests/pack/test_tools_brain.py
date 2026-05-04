@@ -411,6 +411,77 @@ def test_files_omits_glossary_leaf_when_missing(tmp_path):
     assert {f["path"] for f in out["files"]} == {"domain/x.md"}
 
 
+def test_files_title_is_stem_derived_not_h1(tmp_path):
+    """Display titles must be derived from the filename stem (matching
+    the MRI's left-panel tree), NOT from the H1 inside the file. This
+    keeps sidebar labels uniform regardless of what the author wrote
+    as the document heading.
+    """
+    brain = tmp_path / "brain"
+    brain.mkdir()
+    (brain / "brain.md").write_text("# Brain\n", encoding="utf-8")
+    lobe = brain / "projects" / "btb-backend-summon" / "endpoints"
+    lobe.mkdir(parents=True)
+    (brain / "projects" / "map.md").write_text(
+        "---\n---\n# Projects\n", encoding="utf-8",
+    )
+    # File stem ≠ H1 — chat tree must show the stem-derived label.
+    (lobe / "post-imports-users.md").write_text(
+        "---\nupdated: 2026-04-01\n---\n# Bulk Employee Import Endpoint\n",
+        encoding="utf-8",
+    )
+    out = files_tool(brain)
+    by_path = {f["path"]: f for f in out["files"]}
+    target = by_path["projects/btb-backend-summon/endpoints/post-imports-users.md"]
+    assert target["title"] == "Post Imports Users", (
+        "title must be derived from the filename stem, not the H1; "
+        f"got {target['title']!r}"
+    )
+
+
+def test_files_yaml_neuron_uses_frontmatter_title(tmp_path):
+    """YAML neurons keep the frontmatter ``title`` because YAML stems
+    like ``openapi`` title-case poorly (``Openapi``).
+    """
+    brain = tmp_path / "brain"
+    brain.mkdir()
+    (brain / "brain.md").write_text("# Brain\n", encoding="utf-8")
+    api = brain / "projects" / "btb-backend-core"
+    api.mkdir(parents=True)
+    (brain / "projects" / "map.md").write_text(
+        "---\n---\n# Projects\n", encoding="utf-8",
+    )
+    (api / "openapi.yml").write_text(
+        "#---\n"
+        "# title: btb-backend-core OpenAPI\n"
+        "# tags: []\n"
+        "#---\n"
+        "endpoints: []\n",
+        encoding="utf-8",
+    )
+    out = files_tool(brain)
+    by_path = {f["path"]: f for f in out["files"]}
+    target = by_path["projects/btb-backend-core/openapi.yml"]
+    assert target["title"] == "btb-backend-core OpenAPI"
+
+
+def test_files_marks_deprecated_neurons(tmp_path):
+    brain = tmp_path / "brain"
+    brain.mkdir()
+    (brain / "brain.md").write_text("# Brain\n", encoding="utf-8")
+    (brain / "domain").mkdir()
+    (brain / "domain" / "old.md").write_text(
+        "---\nstatus: deprecated\n---\n# Old\n", encoding="utf-8",
+    )
+    (brain / "domain" / "new.md").write_text(
+        "---\n---\n# New\n", encoding="utf-8",
+    )
+    out = files_tool(brain)
+    by_path = {f["path"]: f for f in out["files"]}
+    assert by_path["domain/old.md"]["deprecated"] is True
+    assert by_path["domain/new.md"]["deprecated"] is False
+
+
 def test_lobe_overview_shape(fixture_brain):
     out = lobe_overview_tool(fixture_brain, "knowledge", budget=4096)
     assert out["lobe"] == "knowledge"
