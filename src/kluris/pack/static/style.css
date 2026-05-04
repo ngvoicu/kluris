@@ -687,6 +687,33 @@ a { color: var(--accent); }
   border-top: 1px solid var(--border-soft);
   margin: 16px 0;
 }
+.modal-glossary-list {
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: minmax(120px, max-content) 1fr;
+  column-gap: 18px;
+  row-gap: 8px;
+  font-size: 13.5px;
+  line-height: 1.55;
+}
+.modal-glossary-list dt {
+  font-weight: 600;
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 12.5px;
+  white-space: nowrap;
+  padding-top: 1px;
+}
+.modal-glossary-list dd {
+  margin: 0;
+  color: var(--text-muted);
+}
+.modal-empty {
+  color: var(--text-dim);
+  font-style: italic;
+  margin: 12px 0;
+}
 .yaml-preview {
   background: var(--bg);
   border: 1px solid var(--border);

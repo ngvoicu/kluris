@@ -289,29 +289,55 @@
     }
   }
 
-  function renderGlossary(items) {
-    const ul = $("tree-glossary");
-    const count = $("glossary-count");
-    ul.innerHTML = "";
-    count.textContent = items && items.length ? "(" + items.length + ")" : "";
-    if (!items || !items.length) {
-      const empty = document.createElement("li");
-      empty.className = "tree-empty";
-      empty.textContent = "Glossary is empty";
-      ul.appendChild(empty);
+  // Mirror the MRI's left-panel file tree: glossary.md sits as a leaf at
+  // the brain root alongside the lobe folders. We render it as a single
+  // tree-leaf that opens a modal listing every term + definition. The
+  // raw items array is captured here so the click handler can read it.
+  let glossaryItems = [];
+  function renderGlossaryLeaf(items) {
+    glossaryItems = Array.isArray(items) ? items : [];
+    const lobesUl = $("tree-lobes");
+    if (!lobesUl) return;
+    // Drop any previously-rendered glossary leaf so re-renders don't dup.
+    lobesUl.querySelectorAll(".tree-glossary-leaf").forEach((n) => n.remove());
+    const li = document.createElement("li");
+    li.className = "tree-node tree-glossary-leaf";
+    li.innerHTML =
+      '<button class="tree-row tree-label" type="button">' +
+        '<span class="tree-toggle" aria-hidden="true">📄</span>' +
+        '<span class="lobe-name">glossary.md</span>' +
+        '<span class="lobe-count">' +
+          (glossaryItems.length || 0) + '</span>' +
+      '</button>';
+    li.addEventListener("click", showAllGlossary);
+    lobesUl.appendChild(li);
+  }
+
+  function showAllGlossary() {
+    if (!glossaryItems.length) {
+      openModal({
+        eyebrow: "GLOSSARY",
+        title: "glossary.md",
+        meta: "0 terms",
+        bodyHtml: "<p class='modal-empty'>Glossary is empty.</p>",
+      });
       return;
     }
-    for (const g of items) {
-      const li = document.createElement("li");
-      li.className = "tree-node tree-glossary-row";
+    pushHistory({kind: "glossary-all"});
+    const rows = glossaryItems.map((g) => {
       const term = (g.term || "").replace(/^\*\*|\*\*$/g, "");
-      li.innerHTML =
-        '<button class="tree-row tree-label tree-glossary-label" type="button">' +
-          '<span class="glossary-term">' + escapeHtml(term) + '</span>' +
-          '<span class="glossary-def">' + escapeHtml(g.definition || "") + '</span>' +
-        '</button>';
-      ul.appendChild(li);
-    }
+      return (
+        '<dt>' + escapeHtml(term) + '</dt>' +
+        '<dd>' + escapeHtml(g.definition || "") + '</dd>'
+      );
+    }).join("");
+    openModal({
+      eyebrow: "GLOSSARY",
+      title: "glossary.md",
+      meta: glossaryItems.length + " terms",
+      tags: [],
+      bodyHtml: '<dl class="modal-glossary-list">' + rows + '</dl>',
+    });
   }
 
   // ---- Path resolution --------------------------------------------
@@ -359,7 +385,7 @@
   // Navigation stack inside the modal. Each entry is one of:
   //   {kind: "neuron", arg: "domain/foo.md"}
   //   {kind: "lobe",   arg: "projects"}
-  //   {kind: "glossary", term, def}
+  //   {kind: "glossary-all"}        — combined glossary view
   // Entries are pushed by the show* functions and consumed by the
   // back button. Closing the modal clears the stack so re-opening
   // starts fresh.
@@ -376,9 +402,9 @@
     if (modalHistory.length < 2) return;
     modalHistory.pop();              // current view
     const prev = modalHistory.pop(); // will be re-pushed by show*
-    if (prev.kind === "neuron")        showNeuron(prev.arg);
-    else if (prev.kind === "lobe")     showLobe(prev.arg);
-    else if (prev.kind === "glossary") showGlossary(prev.term, prev.def);
+    if (prev.kind === "neuron")             showNeuron(prev.arg);
+    else if (prev.kind === "lobe")          showLobe(prev.arg);
+    else if (prev.kind === "glossary-all")  showAllGlossary();
   }
 
   function openModal({eyebrow, title, meta, tags, bodyHtml}) {
@@ -620,17 +646,6 @@
     }
   }
 
-  function showGlossary(term, definition) {
-    pushHistory({kind: "glossary", term: term, def: definition});
-    openModal({
-      eyebrow: "GLOSSARY",
-      title: term,
-      meta: "",
-      tags: [],
-      bodyHtml: "<p>" + escapeHtml(definition || "") + "</p>",
-    });
-  }
-
   // ---- Filter -------------------------------------------------------
 
   function applyFilter(query) {
@@ -681,7 +696,7 @@
     }
 
     renderRecent(tree.recent || []);
-    renderGlossary(tree.glossary || []);
+    renderGlossaryLeaf(tree.glossary || []);
 
     const stats = $("sidebar-stats");
     stats.textContent =
@@ -739,14 +754,9 @@
       }
     });
 
-    // Glossary row interactions.
-    $("tree-glossary").addEventListener("click", (event) => {
-      const node = event.target.closest(".tree-glossary-row");
-      if (!node) return;
-      const term = node.querySelector(".glossary-term").textContent;
-      const def = node.querySelector(".glossary-def").textContent;
-      showGlossary(term, def);
-    });
+    // The glossary leaf in the left tree owns its own click handler
+    // (attached in renderGlossaryLeaf), opening a single modal that
+    // lists every term + definition.
 
     // In-modal markdown links: navigate to a neuron path if it's
     // brain-relative; ignore http(s) and #anchors. Relative paths
