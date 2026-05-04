@@ -326,6 +326,52 @@ def glossary_tool(
     }
 
 
+def files_tool(brain_path: Path) -> dict[str, Any]:
+    """Flat listing of every neuron + glossary.md in the brain.
+
+    Backs the chat UI's left-sidebar file tree (the same structure
+    the MRI's left panel renders). Each entry has the brain-relative
+    POSIX ``path``, a humanized ``title`` (from frontmatter or the
+    file's H1 / stem), and a ``deprecated`` flag so the UI can apply
+    strikethrough styling without a second roundtrip.
+
+    The frontend builds a nested folder tree from the path strings —
+    no ordering / nesting work happens here.
+    """
+    files: list[dict[str, Any]] = []
+    for neuron in sorted(neuron_files(brain_path)):
+        rel = _rel(brain_path, neuron)
+        try:
+            meta, body = read_frontmatter(neuron)
+        except Exception:
+            files.append({
+                "path": rel,
+                "title": neuron.stem.replace("-", " ").title(),
+                "deprecated": False,
+            })
+            continue
+        if neuron.suffix.lower() in YAML_NEURON_SUFFIXES:
+            fm_title = meta.get("title")
+            title = (
+                fm_title.strip()
+                if isinstance(fm_title, str) and fm_title.strip()
+                else neuron.stem.replace("-", " ").title()
+            )
+        else:
+            title, _ = extract_excerpt(neuron, body)
+            if not title:
+                title = neuron.stem.replace("-", " ").title()
+        deprecated = str(meta.get("status", "active")).lower() == "deprecated"
+        files.append({"path": rel, "title": title, "deprecated": deprecated})
+
+    glossary_path = brain_path / "glossary.md"
+    glossary_entry = (
+        {"path": "glossary.md", "title": "Glossary"}
+        if glossary_path.exists() else None
+    )
+    return {"ok": True, "files": files, "glossary": glossary_entry}
+
+
 # --- 8. lobe_overview --------------------------------------------------------
 
 

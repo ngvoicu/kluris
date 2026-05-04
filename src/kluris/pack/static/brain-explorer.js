@@ -223,47 +223,84 @@
   }
 
   // ---- Tree rendering ----------------------------------------------
+  //
+  // The left "Files" panel mirrors the MRI's panel-tree: a fully-
+  // expanded folder/file tree built from /api/brain/files. Top-level
+  // folders correspond to lobes; nested folders are sublobes; leaves
+  // are individual neurons. glossary.md lands as a sibling of the lobe
+  // folders, sorted last because folders render before files at every
+  // level. Folders carry a chevron the user can click to collapse a
+  // subtree; clicking a top-level folder name opens the lobe-overview
+  // modal; clicking a leaf opens its neuron / glossary modal.
 
-  function renderLobeNode(lobe) {
-    const li = document.createElement("li");
-    li.className = "tree-node tree-lobe";
-    li.dataset.lobe = lobe.name;
-    li.innerHTML =
-      '<div class="tree-row tree-lobe-row">' +
-        '<button class="tree-toggle" type="button"' +
-                ' aria-label="Toggle lobe">▸</button>' +
-        '<button class="tree-label tree-lobe-label" type="button">' +
-          '<span class="lobe-name">' + escapeHtml(lobe.name) + '/</span>' +
-          '<span class="lobe-count">' + lobe.neurons + '</span>' +
-        '</button>' +
-      '</div>' +
-      '<ul class="tree tree-children" hidden></ul>';
-    return li;
+  function buildFolderTree(files) {
+    const root = {folders: new Map(), files: []};
+    for (const f of files || []) {
+      const parts = String(f.path || "").split("/").filter(Boolean);
+      if (!parts.length) continue;
+      let cursor = root;
+      for (let i = 0; i < parts.length - 1; i++) {
+        const seg = parts[i];
+        if (!cursor.folders.has(seg)) {
+          cursor.folders.set(seg, {folders: new Map(), files: []});
+        }
+        cursor = cursor.folders.get(seg);
+      }
+      cursor.files.push(f);
+    }
+    return root;
   }
 
-  function attachLobeNeurons(lobeLi, neurons) {
-    const ul = lobeLi.querySelector(".tree-children");
-    ul.innerHTML = "";
-    if (!neurons.length) {
-      const empty = document.createElement("li");
-      empty.className = "tree-empty";
-      empty.textContent = "(no neurons)";
-      ul.appendChild(empty);
-      return;
-    }
-    for (const n of neurons) {
-      const li = document.createElement("li");
-      li.className = "tree-node tree-neuron";
-      if (n.deprecated) li.classList.add("is-deprecated");
-      li.dataset.path = n.path;
-      const tail = n.path.split("/").slice(-1)[0];
-      li.innerHTML =
-        '<button class="tree-row tree-label tree-neuron-label" type="button">' +
-          '<span class="neuron-name">' + escapeHtml(n.title || tail) + '</span>' +
-          '<span class="neuron-path">' + escapeHtml(tail) + '</span>' +
-        '</button>';
-      ul.appendChild(li);
-    }
+  function renderFolderContents(folder, pathSoFar) {
+    const folderNames = [...folder.folders.keys()].sort(
+      (a, b) => a.localeCompare(b)
+    );
+    const fileItems = folder.files.slice().sort(
+      (a, b) => String(a.title || a.path).localeCompare(
+        String(b.title || b.path)
+      )
+    );
+    const folderHtml = folderNames.map((name) => {
+      const child = folder.folders.get(name);
+      const fullPath = pathSoFar ? pathSoFar + "/" + name : name;
+      return (
+        '<li class="tree-node tree-folder"' +
+            ' data-folder="' + escapeHtml(fullPath) + '">' +
+          '<div class="tree-row tree-folder-row">' +
+            '<button class="tree-toggle" type="button"' +
+                    ' aria-label="Toggle folder">▾</button>' +
+            '<button class="tree-label tree-folder-label" type="button">' +
+              '<span class="folder-name">' + escapeHtml(name) + '</span>' +
+            '</button>' +
+          '</div>' +
+          '<ul class="tree tree-children">' +
+            renderFolderContents(child, fullPath) +
+          '</ul>' +
+        '</li>'
+      );
+    }).join("");
+    const fileHtml = fileItems.map((f) => {
+      const cls = "tree-node tree-file" +
+        (f.deprecated ? " is-deprecated" : "");
+      const title = f.title || (f.path || "").split("/").pop();
+      return (
+        '<li class="' + cls + '"' +
+            ' data-path="' + escapeHtml(f.path) + '">' +
+          '<button class="tree-row tree-label tree-file-label" type="button">' +
+            '<span class="tree-icon" aria-hidden="true">📄</span>' +
+            '<span class="file-name">' + escapeHtml(title) + '</span>' +
+          '</button>' +
+        '</li>'
+      );
+    }).join("");
+    return folderHtml + fileHtml;
+  }
+
+  function renderFileTreeInto(containerEl, files) {
+    const root = buildFolderTree(files);
+    const html = renderFolderContents(root, "");
+    containerEl.innerHTML = html ||
+      '<li class="tree-empty">No neurons in this brain.</li>';
   }
 
   function renderRecent(items) {
@@ -289,29 +326,11 @@
     }
   }
 
-  // Mirror the MRI's left-panel file tree: glossary.md sits as a leaf at
-  // the brain root alongside the lobe folders. We render it as a single
-  // tree-leaf that opens a modal listing every term + definition. The
-  // raw items array is captured here so the click handler can read it.
+  // The combined glossary modal is opened when the user clicks the
+  // glossary.md leaf in the file tree. The raw term list comes from
+  // /api/brain/tree (wake_up payload) and is cached here so the click
+  // handler doesn't need a second roundtrip.
   let glossaryItems = [];
-  function renderGlossaryLeaf(items) {
-    glossaryItems = Array.isArray(items) ? items : [];
-    const lobesUl = $("tree-lobes");
-    if (!lobesUl) return;
-    // Drop any previously-rendered glossary leaf so re-renders don't dup.
-    lobesUl.querySelectorAll(".tree-glossary-leaf").forEach((n) => n.remove());
-    const li = document.createElement("li");
-    li.className = "tree-node tree-glossary-leaf";
-    li.innerHTML =
-      '<button class="tree-row tree-label" type="button">' +
-        '<span class="tree-toggle" aria-hidden="true">📄</span>' +
-        '<span class="lobe-name">glossary.md</span>' +
-        '<span class="lobe-count">' +
-          (glossaryItems.length || 0) + '</span>' +
-      '</button>';
-    li.addEventListener("click", showAllGlossary);
-    lobesUl.appendChild(li);
-  }
 
   function showAllGlossary() {
     if (!glossaryItems.length) {
@@ -659,90 +678,91 @@
       const text = n.textContent.toLowerCase();
       n.hidden = !text.includes(q);
     });
-    // If filter active, expand all lobe children so matching neurons show.
+    // If filter active, expand every collapsed folder so matching files
+    // become visible.
     if (q) {
       document.querySelectorAll(
-        "#tree-lobes .tree-children"
-      ).forEach((ul) => { ul.hidden = false; });
-      document.querySelectorAll(
-        "#tree-lobes .tree-toggle"
-      ).forEach((btn) => { btn.textContent = "▾"; });
+        "#tree-lobes .tree-folder.collapsed"
+      ).forEach((folder) => {
+        folder.classList.remove("collapsed");
+        const btn = folder.querySelector(".tree-toggle");
+        if (btn) btn.textContent = "▾";
+      });
     }
   }
 
   // ---- Boot ---------------------------------------------------------
 
   async function boot() {
-    let tree;
+    const lobesUl = $("tree-lobes");
+
+    // Two parallel fetches: /tree gives us recent + glossary metadata;
+    // /files gives us the flat neuron list the file-tree builder needs.
+    let tree, filesPayload;
     try {
-      const resp = await fetch("/api/brain/tree");
-      if (!resp.ok) throw new Error("HTTP " + resp.status);
-      tree = await resp.json();
+      const [treeResp, filesResp] = await Promise.all([
+        fetch("/api/brain/tree"),
+        fetch("/api/brain/files"),
+      ]);
+      if (!treeResp.ok)  throw new Error("tree HTTP "  + treeResp.status);
+      if (!filesResp.ok) throw new Error("files HTTP " + filesResp.status);
+      tree = await treeResp.json();
+      filesPayload = await filesResp.json();
     } catch (err) {
-      $("tree-lobes").innerHTML =
+      lobesUl.innerHTML =
         '<li class="tree-empty">Failed to load brain tree: ' +
         escapeHtml(String(err)) + '</li>';
       return;
     }
 
-    const lobesUl = $("tree-lobes");
-    lobesUl.innerHTML = "";
-    const lobes = (tree.lobes || []).slice().sort(
-      (a, b) => a.name.localeCompare(b.name)
-    );
-    for (const lobe of lobes) {
-      const li = renderLobeNode(lobe);
-      lobesUl.appendChild(li);
-    }
+    // Glossary terms feed the combined-glossary modal (opened by
+    // clicking the glossary.md leaf). The leaf itself is added to the
+    // file list below so it sorts alongside the lobe folders.
+    glossaryItems = Array.isArray(tree.glossary) ? tree.glossary : [];
+
+    const allFiles = (filesPayload.files || []).slice();
+    if (filesPayload.glossary) allFiles.push(filesPayload.glossary);
+    renderFileTreeInto(lobesUl, allFiles);
 
     renderRecent(tree.recent || []);
-    renderGlossaryLeaf(tree.glossary || []);
 
     const stats = $("sidebar-stats");
+    const lobeCount = (tree.lobes || []).length;
     stats.textContent =
-      (tree.total_neurons || 0) + " neurons · " +
-      lobes.length + " lobes";
+      (tree.total_neurons || 0) + " neurons · " + lobeCount + " lobes";
 
-    // Lobe row interactions: toggle button vs label.
-    lobesUl.addEventListener("click", async (event) => {
-      const node = event.target.closest(".tree-node.tree-lobe");
-      if (!node) return;
-
+    // Single delegated click handler for the whole left tree.
+    lobesUl.addEventListener("click", (event) => {
+      // Caret → toggle collapse on the enclosing folder.
       if (event.target.closest(".tree-toggle")) {
-        const ul = node.querySelector(".tree-children");
-        const btn = node.querySelector(".tree-toggle");
-        if (ul.hidden && !ul.dataset.loaded) {
-          ul.innerHTML = '<li class="tree-empty">Loading…</li>';
-          try {
-            const resp = await fetch("/api/brain/lobe?lobe=" +
-                                      encodeURIComponent(node.dataset.lobe));
-            if (resp.ok) {
-              const data = await resp.json();
-              attachLobeNeurons(node, data.neurons || []);
-              ul.dataset.loaded = "1";
-            } else {
-              ul.innerHTML =
-                '<li class="tree-empty">Failed to load</li>';
-            }
-          } catch (err) {
-            ul.innerHTML =
-              '<li class="tree-empty">Failed to load</li>';
-          }
+        const folder = event.target.closest(".tree-folder");
+        if (!folder) return;
+        const collapsed = folder.classList.toggle("collapsed");
+        const btn = folder.querySelector(".tree-toggle");
+        if (btn) btn.textContent = collapsed ? "▸" : "▾";
+        return;
+      }
+      // Folder name → lobe overview, but only for top-level lobes.
+      // Sublobes don't have their own map.md endpoint in the chat API.
+      const folderLabel = event.target.closest(".tree-folder-label");
+      if (folderLabel) {
+        const folder = folderLabel.closest(".tree-folder");
+        const fullPath = folder?.dataset.folder || "";
+        if (fullPath && !fullPath.includes("/")) {
+          showLobe(fullPath);
         }
-        ul.hidden = !ul.hidden;
-        btn.textContent = ul.hidden ? "▸" : "▾";
         return;
       }
-
-      const lobeLabel = event.target.closest(".tree-lobe-label");
-      if (lobeLabel) {
-        showLobe(node.dataset.lobe);
-        return;
-      }
-
-      const neuronNode = event.target.closest(".tree-neuron");
-      if (neuronNode && neuronNode.dataset.path) {
-        showNeuron(neuronNode.dataset.path);
+      // File leaf → neuron modal, with a glossary.md special-case that
+      // opens the combined-glossary modal instead of the raw file.
+      const fileNode = event.target.closest(".tree-file");
+      if (fileNode && fileNode.dataset.path) {
+        const path = fileNode.dataset.path;
+        if (path === "glossary.md") {
+          showAllGlossary();
+        } else {
+          showNeuron(path);
+        }
       }
     });
 

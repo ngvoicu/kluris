@@ -28,6 +28,7 @@ from ..streaming import encode_sse
 from ..tools.brain import (
     NotFoundError,
     SandboxError,
+    files_tool,
     lobe_overview_tool,
     read_neuron_tool,
     wake_up_tool,
@@ -201,6 +202,15 @@ def attach_chat_routes(app: FastAPI) -> None:
         # recent neurons, glossary, brain.md body, deprecation
         # diagnostics. The frontend builds the tree from this.
         return JSONResponse(wake_up_tool(cfg.brain_dir))
+
+    @app.get("/api/brain/files")
+    async def brain_files():
+        cfg: Config = app.state.config
+        # Flat list of every neuron path + title + deprecated flag,
+        # plus glossary.md as a sibling leaf. The frontend folds this
+        # into a nested folder tree — same shape the MRI viewer uses
+        # for its left-panel file explorer.
+        return JSONResponse(files_tool(cfg.brain_dir))
 
     @app.get("/api/brain/neuron")
     async def brain_neuron(path: str):

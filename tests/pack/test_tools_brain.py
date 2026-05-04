@@ -10,6 +10,7 @@ from kluris.pack.tools import brain as brain_tools
 from kluris.pack.tools.brain import (
     NotFoundError,
     SandboxError,
+    files_tool,
     glossary_tool,
     lobe_overview_tool,
     multi_read_tool,
@@ -369,6 +370,45 @@ def test_glossary_read_error_returns_empty(fixture_brain, monkeypatch):
 
 
 # --- lobe_overview -----------------------------------------------------------
+
+
+# --- files -------------------------------------------------------------------
+
+
+def test_files_returns_every_neuron_with_title_and_glossary(fixture_brain):
+    """The chat UI's left-panel file tree relies on this endpoint to
+    enumerate every neuron in the brain. It must include nested
+    sublobe paths and the glossary.md sibling leaf, with a humanized
+    title for each neuron and a deprecated flag.
+    """
+    out = files_tool(fixture_brain)
+    assert out["ok"] is True
+    paths = {f["path"] for f in out["files"]}
+    # Every neuron in the fixture brain shows up — sublobes too if any.
+    assert "knowledge/jwt.md" in paths
+    # Each entry has the contract the JS tree builder reads.
+    for entry in out["files"]:
+        assert set(entry.keys()) >= {"path", "title", "deprecated"}
+        assert isinstance(entry["title"], str) and entry["title"]
+        assert isinstance(entry["deprecated"], bool)
+    # Glossary surfaces as a sibling leaf, not a regular file entry.
+    assert out["glossary"] == {"path": "glossary.md", "title": "Glossary"}
+    assert "glossary.md" not in paths
+
+
+def test_files_omits_glossary_leaf_when_missing(tmp_path):
+    """No glossary.md in the brain → ``glossary`` is None."""
+    brain = tmp_path / "brain"
+    brain.mkdir()
+    (brain / "brain.md").write_text("# Brain\n", encoding="utf-8")
+    (brain / "domain").mkdir()
+    (brain / "domain" / "x.md").write_text(
+        "---\nupdated: 2026-04-01\n---\n# Hello\n", encoding="utf-8",
+    )
+    out = files_tool(brain)
+    assert out["ok"] is True
+    assert out["glossary"] is None
+    assert {f["path"] for f in out["files"]} == {"domain/x.md"}
 
 
 def test_lobe_overview_shape(fixture_brain):
