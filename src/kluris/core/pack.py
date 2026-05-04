@@ -11,7 +11,6 @@ Produces a self-contained directory:
 ├── docker-compose.yml
 ├── .dockerignore
 ├── .gitignore
-├── .env
 ├── .env.example
 └── README.md
 ```
@@ -53,10 +52,10 @@ _BRAIN_EXCLUDES_DEFAULT = (
 )
 
 # Files inside an existing pack output that ``--force`` rebuilds must
-# preserve. The deployer's ``.env`` carries LLM credentials they typed
-# in by hand; wiping it on every rebuild would force them to refill
-# creds for every brain-edit cycle. ``.env.example`` is template-only
-# and IS regenerated. Glob-style: leading-dot literal, ``*`` wildcards.
+# preserve. ``.env`` is created by the deployer (``cp .env.example
+# .env``) and carries LLM credentials they typed in by hand; wiping it
+# on every rebuild would force them to refill creds for every brain-
+# edit cycle. ``.env.example`` is template-only and IS regenerated.
 _PRESERVE_ON_FORCE = (
     ".env",
     ".env.local",
@@ -82,9 +81,8 @@ def stage_pack(
     When ``force=True`` and ``output_dir`` already exists, the
     directory is wiped and rebuilt — but any ``.env`` / ``.env.local``
     / ``.env.production`` / ``.env.staging`` files inside are
-    preserved across the rebuild and overwrite the freshly-templated
-    ``.env`` if present. The deployer's typed-in credentials survive
-    a brain-edit / Dockerfile-edit / kluris-upgrade cycle.
+    preserved across the rebuild. The deployer's typed-in credentials
+    survive a brain-edit / Dockerfile-edit / kluris-upgrade cycle.
     """
     output_dir = Path(output_dir).resolve()
 
@@ -131,7 +129,6 @@ def stage_pack(
     _render_template(
         "gitignore.template", output_dir / ".gitignore", brain_name=brain_name,
     )
-    _render_template("env.template", output_dir / ".env", brain_name=brain_name)
     _render_template(
         "env.example.template", output_dir / ".env.example", brain_name=brain_name,
     )
