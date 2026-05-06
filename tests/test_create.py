@@ -161,7 +161,7 @@ def test_create_prompt_specmint(tmp_path, monkeypatch):
     assert read_brain_config(brain).companions == ["specmint-core", "specmint-tdd"]
     assert (tmp_path / ".kluris" / "companions" / "specmint-core" / "SKILL.md").exists()
     assert (tmp_path / ".kluris" / "companions" / "specmint-tdd" / "SKILL.md").exists()
-    content = (tmp_path / ".claude" / "skills" / "kluris" / "SKILL.md").read_text(encoding="utf-8")
+    content = (tmp_path / ".claude" / "skills" / "kluris-my-brain" / "SKILL.md").read_text(encoding="utf-8")
     assert "## Spec-worthy work first" in content
 
 

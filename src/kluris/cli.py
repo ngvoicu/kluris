@@ -630,7 +630,7 @@ def create(name: str | None, desc: str | None, base_path: str | None,
         console.print(f"  Lobes: {lobe_count}")
         console.print()
         console.print(
-            "[bold green]Run /kluris in any AI agent to start populating your brain.[/bold green]"
+            f"[bold green]Run /kluris-{name} in any AI agent to start populating your brain.[/bold green]"
         )
 
 
@@ -1417,9 +1417,9 @@ def mri(brain_name: str | None, output_path: str | None, as_json: bool):
 def _sweep_kluris(base: Path, old_dirs_rel: list[str], home: Path) -> None:
     """Delete every ``kluris*`` artifact from a destination.
 
-    Used by :func:`_do_install` before writing new skills. Handles both
-    forward (1 brain → N) and backward (N brains → 1) transitions because
-    the glob catches both ``kluris/`` and ``kluris-*/`` in one pass.
+    Used by :func:`_do_install` before writing new skills. The glob catches
+    both legacy ``kluris/`` artifacts and current ``kluris-*/`` artifacts, so
+    ``kluris doctor`` migrates old installs to named skills.
     """
     import shutil
 
@@ -1451,18 +1451,12 @@ def _sweep_kluris(base: Path, old_dirs_rel: list[str], home: Path) -> None:
 
 
 def _compute_skills_to_render(brains: dict) -> list[tuple[str, str, object]]:
-    """Decide which skills to render based on brain count.
+    """Decide which named skills to render.
 
     Returns a list of ``(skill_name, brain_name, brain_entry)`` triples.
-    With 1 brain registered the skill is named ``kluris`` (with the brain
-    path baked in). With 2+ brains each gets its own ``kluris-<name>``
-    skill so the agent can address them unambiguously.
+    Every brain gets its own ``kluris-<name>`` skill, even when only one
+    brain is registered, so project pointers stay stable as brains are added.
     """
-    if len(brains) == 0:
-        return []
-    if len(brains) == 1:
-        only_name, only_entry = next(iter(brains.items()))
-        return [("kluris", only_name, only_entry)]
     return [(f"kluris-{n}", n, e) for n, e in brains.items()]
 
 

@@ -268,10 +268,8 @@ command; the `kluris` CLI is for mechanical operations like `dream`, `mri`,
 and `status` that you run in a terminal. Sync (commit, push, pull) goes
 through `git` directly -- kluris brains are plain git repos.
 
-If `{name}` is the only kluris brain registered on your machine, kluris also
-exposes a bare `/kluris` slash command as an alias -- both forms produce the
-same skill body and you can use either. With multiple brains registered, each
-brain installs as `/kluris-<name>` so you can address them unambiguously.
+Every registered brain installs as `/kluris-<name>` so you can address it
+unambiguously from day one, even before you add more brains.
 
 ### Bootstrap (automatic)
 
@@ -367,6 +365,50 @@ before writing.
 
 The agent walks through the neuron section by section so you can review each
 part before anything is written.
+
+## Use it from your projects
+
+The `{name}` brain stays the source of truth for shared knowledge. To make
+coding agents in your *consuming projects* aware of it, drop a small
+pointer into their `CLAUDE.md` and `AGENTS.md`. The skill (and only the
+skill) reads and writes the brain -- never edit brain files by hand.
+
+### Have an agent set it up for you
+
+Inside any AI coding agent, in the project directory:
+
+```text
+> /kluris-{name} setup this project
+```
+
+The agent surveys the project, checks whether `CLAUDE.md` and `AGENTS.md`
+exist, and either creates them, appends the pointer, or reformulates an
+old pointer it finds. Each file change goes through the standard approval
+protocol.
+
+### Or paste manually
+
+In `CLAUDE.md`:
+
+```markdown
+## Knowledge base
+
+Read and write to the **{name}** brain through kluris (never edit brain
+files by hand). Use the `/kluris-{name}` skill -- search, learn, remember,
+create.
+```
+
+In `AGENTS.md`:
+
+```markdown
+# Repository Guidelines
+
+See [`./CLAUDE.md`](./CLAUDE.md). For shared knowledge, read and write to
+the **{name}** brain through kluris via the `/kluris-{name}` skill. Never
+edit brain files by hand.
+```
+
+That's it. The skill teaches the agent the rest.
 
 ## CLI commands
 

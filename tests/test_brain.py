@@ -127,14 +127,14 @@ def test_generated_readme_does_not_freeze_scaffold_structure(tmp_path):
 
 
 def test_generated_readme_uses_brain_named_slash(tmp_path):
-    """Generated README must use /kluris-<name> consistently and explain the alias."""
+    """Generated README must use /kluris-<name> without a bare /kluris alias."""
     scaffold_brain(tmp_path / "foo", "foo", "Foo brain", "product-group")
     readme = (tmp_path / "foo" / "README.md").read_text()
     assert "/kluris-foo " in readme  # slash command form, with trailing space
     # The deleted `kluris use` command must not appear
     assert "kluris use " not in readme
-    # The alias note must appear (backticked form `/kluris`)
-    assert "`/kluris`" in readme
+    # The old bare slash command alias must not appear.
+    assert "`/kluris`" not in readme
     # No code block (lines starting with `/kluris ` not followed by a hyphen)
     # should leak the bare slash command -- examples must use /kluris-foo
     in_code_block = False

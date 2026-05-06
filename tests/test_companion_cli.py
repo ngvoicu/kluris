@@ -22,7 +22,7 @@ def test_companion_add_specmint_core(tmp_path, monkeypatch):
     brain = tmp_path / "my-brain"
     assert read_brain_config(brain).companions == ["specmint-core"]
     assert (tmp_path / ".kluris" / "companions" / "specmint-core" / "SKILL.md").exists()
-    content = (tmp_path / ".claude" / "skills" / "kluris" / "SKILL.md").read_text(encoding="utf-8")
+    content = (tmp_path / ".claude" / "skills" / "kluris-my-brain" / "SKILL.md").read_text(encoding="utf-8")
     assert "## Spec-worthy work first" in content
 
 
@@ -38,7 +38,7 @@ def test_companion_remove_specmint_core(tmp_path, monkeypatch):
     assert result.exit_code == 0, result.output
     brain = tmp_path / "my-brain"
     assert read_brain_config(brain).companions == []
-    content = (tmp_path / ".claude" / "skills" / "kluris" / "SKILL.md").read_text(encoding="utf-8")
+    content = (tmp_path / ".claude" / "skills" / "kluris-my-brain" / "SKILL.md").read_text(encoding="utf-8")
     assert "## Spec-worthy work first" not in content
 
 

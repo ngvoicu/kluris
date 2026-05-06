@@ -3,7 +3,7 @@
 from kluris.core.agents import AGENT_REGISTRY, render_commands, render_skill
 
 
-def _render(skill_name="kluris", brain_name="test-brain", brain_path="/tmp/test-brain",
+def _render(skill_name="kluris-test-brain", brain_name="test-brain", brain_path="/tmp/test-brain",
             has_git=False, brain_description="Test brain", companions=None,
             companion_home=None):
     """Convenience wrapper around render_skill with sensible defaults."""
@@ -18,7 +18,7 @@ def _render(skill_name="kluris", brain_name="test-brain", brain_path="/tmp/test-
     )
 
 
-def _install(tmp_path, agent_name="claude", skill_name="kluris", brain_name="test-brain",
+def _install(tmp_path, agent_name="claude", skill_name="kluris-test-brain", brain_name="test-brain",
              brain_path="/tmp/test-brain", has_git=False, brain_description="Test brain",
              companions=None, companion_home=None):
     """Convenience wrapper around render_commands with sensible defaults."""
@@ -128,7 +128,7 @@ def test_all_agents_use_skills():
 def test_render_skill_has_frontmatter():
     content = _render()
     assert "---" in content
-    assert "name: kluris" in content
+    assert "name: kluris-test-brain" in content
     assert "description:" in content
 
 
@@ -143,13 +143,13 @@ def test_render_creates_skill_md(tmp_path):
     files = _install(tmp_path)
     assert len(files) == 1
     assert files[0].name == "SKILL.md"
-    assert files[0].parent.name == "kluris"
+    assert files[0].parent.name == "kluris-test-brain"
 
 
 def test_render_skill_content(tmp_path):
     files = _install(tmp_path, brain_name="test-brain", brain_path="/tmp/test-brain")
     content = files[0].read_text()
-    assert "name: kluris" in content
+    assert "name: kluris-test-brain" in content
     assert "test-brain" in content
     assert "How the brain is structured" in content
     assert "Intent detection" in content
@@ -163,7 +163,7 @@ def test_render_same_format_all_agents(tmp_path):
         assert len(files) == 1
         assert files[0].name == "SKILL.md"
         content = files[0].read_text()
-        assert "name: kluris" in content
+        assert "name: kluris-test-brain" in content
 
 
 def test_skill_has_query_first_protocol():
@@ -215,11 +215,11 @@ def test_render_skill_per_brain_has_brain_flag_hint():
     assert "name: kluris-foo" in content
 
 
-def test_render_skill_single_brain_no_brain_flag_hint():
-    """The kluris (single-brain) skill must NOT mention --brain anywhere."""
-    content = _render(skill_name="kluris", brain_name="foo")
-    assert "--brain" not in content
-    # The placeholder must be substituted to empty, not left as-is
+def test_render_skill_named_skill_has_brain_flag_hint():
+    """Named skills pass --brain even when only one brain is registered."""
+    content = _render(skill_name="kluris-foo", brain_name="foo")
+    assert "--brain foo" in content
+    # The placeholder must be substituted, not left as-is.
     assert "{brain_flag_hint}" not in content
     assert "{brain_flag_hint_inline}" not in content
 
@@ -244,7 +244,7 @@ def test_render_skill_name_matches_dir(tmp_path):
 
 def test_render_skill_substitutes_all_placeholders():
     """No raw `{...}` placeholders should leak into the rendered output."""
-    content = _render(skill_name="kluris", brain_name="foo", brain_path="/tmp/foo",
+    content = _render(skill_name="kluris-foo", brain_name="foo", brain_path="/tmp/foo",
                       has_git=True, brain_description="A test brain")
     placeholders = ["{skill_name}", "{brain_name}", "{brain_path}", "{git_label}",
                     "{brain_description}", "{brain_flag_hint}", "{brain_flag_hint_inline}",

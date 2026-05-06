@@ -72,12 +72,12 @@ Kluris lives in two places. Knowing which is which makes everything else click.
 | Surface | Prompt | Where you type it | What it is | Examples |
 |---------|:------:|-------------------|-----------|----------|
 | **Terminal** | `$ kluris …` | Your shell — bash, zsh, fish, PowerShell | The `kluris` Python CLI | `kluris create`, `kluris dream`, `kluris status`, `kluris mri`, `kluris doctor` |
-| **AI agent** | `> /kluris …` | Inside your coding agent — Claude Code, Cursor, Windsurf, Codex, Copilot, Gemini CLI, Kilo, Junie | The per-brain slash-command skill Kluris keeps refreshed automatically | `/kluris learn …`, `/kluris remember …`, `/kluris search …`, `/kluris what …`, `/kluris implement …`, `/kluris fix …` |
+| **AI agent** | `> /kluris-<name> …` | Inside your coding agent — Claude Code, Cursor, Windsurf, Codex, Copilot, Gemini CLI, Kilo, Junie | The per-brain slash-command skill Kluris keeps refreshed automatically | `/kluris-acme learn …`, `/kluris-acme remember …`, `/kluris-acme search …`, `/kluris-acme what …`, `/kluris-acme implement …`, `/kluris-acme fix …` |
 
 Throughout this README:
 
 - Code blocks labelled ```` ```bash ```` or tagged **"In your terminal"** are meant for the shell. They start with `$` (or `>` on Windows PowerShell).
-- Code blocks tagged **"Inside your AI coding agent"** are meant for Claude Code / Cursor / Windsurf / Codex / Copilot / Gemini / Kilo / Junie. They start with `/kluris`.
+- Code blocks tagged **"Inside your AI coding agent"** are meant for Claude Code / Cursor / Windsurf / Codex / Copilot / Gemini / Kilo / Junie. They start with `/kluris-<name>`.
 
 Every command you'll see below belongs to exactly one of these two surfaces.
 
@@ -117,10 +117,10 @@ kluris doctor        # check prerequisites
 kluris create        # interactive wizard -- name, type, location, git
 ```
 
-Then, **inside your AI coding agent** (Claude Code, Cursor, Windsurf, …) — open any project directory and use `/kluris`:
+Then, **inside your AI coding agent** (Claude Code, Cursor, Windsurf, …) — open any project directory and use your brain's named skill:
 
 ```text
-> /kluris learn everything about this service
+> /kluris-acme learn everything about this service
 ```
 
 The agent analyzes your code and walks you through each finding one at a
@@ -129,14 +129,15 @@ or skip every piece.
 
 ### How the agent bootstraps (automatic)
 
-On the first `/kluris` call of a session, the agent runs `kluris wake-up --json`
+On the first `/kluris-<name>` call of a session, the agent runs
+`kluris wake-up --brain <name> --json`
 through its shell to load a compact snapshot of the brain: the `brain.md` body,
 lobes with neuron counts, the 5 most recently updated neurons, the full glossary,
 and any deprecation warnings. That's enough context for the agent to decode
 jargon and avoid citing superseded neurons without touching the filesystem
 again for the rest of the session. You never call it manually. The agent
-refreshes the snapshot after mutating commands (`/kluris remember`,
-`/kluris learn`, `kluris dream`) or direct brain-file edits.
+refreshes the snapshot after mutating commands (`/kluris-<name> remember`,
+`/kluris-<name> learn`, `kluris dream --brain <name>`) or direct brain-file edits.
 
 If you want to see what the agent sees, run it yourself **in your terminal**:
 
@@ -148,11 +149,10 @@ kluris wake-up --brain X  # target a specific brain when more than one is regist
 
 ### Working with multiple brains
 
-Each registered brain installs as its own slash command. With one brain
-registered, that command is `/kluris`. With two or more, each brain installs
-as `/kluris-<name>` (e.g. `/kluris-acme`, `/kluris-personal`). Every per-brain
-skill is bound to exactly one brain — the agent never has to guess which one
-you mean.
+Each registered brain installs as its own slash command from the beginning:
+`/kluris-<name>` (e.g. `/kluris-acme`, `/kluris-personal`). Every per-brain
+skill is bound to exactly one brain, so the agent never has to guess which one
+you mean and project pointers stay stable as more brains are added.
 
 CLI commands prompt interactively when 2+ brains are registered:
 
@@ -186,14 +186,14 @@ and then run `kluris register ~/brains/acme`.
 ### Learning a project
 
 **Inside your AI coding agent** (Claude Code, Cursor, Windsurf, …) — open any
-project directory and use `/kluris`. The agent analyzes your code and walks
+project directory and use `/kluris-<name>`. The agent analyzes your code and walks
 you through each finding. You review, edit, and approve before anything is
 written.
 
 ```text
-> /kluris learn the API endpoints and data model
-> /kluris learn the Docker and deployment setup
-> /kluris learn everything about this service
+> /kluris-acme learn the API endpoints and data model
+> /kluris-acme learn the Docker and deployment setup
+> /kluris-acme learn everything about this service
 ```
 
 The agent starts with a preview before writing. You can change the
@@ -204,14 +204,14 @@ target lobe, edit the content, add context the code doesn't show, or skip.
 **Inside your AI coding agent:**
 
 ```text
-> /kluris remember we chose raw SQL over JPA for query complexity
-> /kluris remember all timestamps must be TIMESTAMPTZ
-> /kluris remember from this session
-> /kluris create a decision record about the auth architecture
-> /kluris create an incident report for the January outage
+> /kluris-acme remember we chose raw SQL over JPA for query complexity
+> /kluris-acme remember all timestamps must be TIMESTAMPTZ
+> /kluris-acme remember from this session
+> /kluris-acme create a decision record about the auth architecture
+> /kluris-acme create an incident report for the January outage
 ```
 
-`/kluris remember from this session` is the sweep variant — the agent
+`/kluris-<name> remember from this session` is the sweep variant — the agent
 replays the current chat, pulls out everything that belongs in the brain,
 and walks you through each proposed neuron one at a time (approve, edit,
 or skip). Use it at the end of a pairing session instead of re-typing every
@@ -222,13 +222,13 @@ decision as its own `remember`.
 **Inside your AI coding agent:**
 
 ```text
-> /kluris search auth flow
-> /kluris search Docker setup
-> /kluris what do we know about the auth flow?
-> /kluris implement the new endpoint following our conventions
-> /kluris fix the token refresh -- use brain knowledge
-> /kluris use brain knowledge and codebase and let's write a spec for OAuth sign-in
-> /kluris use brain knowledge and codebase and let's implement auth
+> /kluris-acme search auth flow
+> /kluris-acme search Docker setup
+> /kluris-acme what do we know about the auth flow?
+> /kluris-acme implement the new endpoint following our conventions
+> /kluris-acme fix the token refresh -- use brain knowledge
+> /kluris-acme use brain knowledge and codebase and let's write a spec for OAuth sign-in
+> /kluris-acme use brain knowledge and codebase and let's implement auth
 ```
 
 The agent reads the brain first, then works on the task. If your code
@@ -243,8 +243,8 @@ a line. It's the right posture for anything non-trivial.
 **Inside your AI coding agent:**
 
 ```text
-> /kluris review this brain and create more synapses
-> /kluris review this brain for gaps and stale neurons
+> /kluris-acme review this brain and create more synapses
+> /kluris-acme review this brain for gaps and stale neurons
 ```
 
 The agent reads across every neuron, spots connections you never wrote
@@ -413,9 +413,9 @@ Empty -- build your own structure from scratch.
 ## How it works
 
 1. **Terminal** — `kluris create` creates a brain (interactive wizard)
-2. **Terminal** — Kluris refreshes the `/kluris` (or `/kluris-<name>`) skill automatically
+2. **Terminal** — Kluris refreshes the `/kluris-<name>` skill automatically
 3. **Terminal** — optional companions add embedded specmint workflows per brain
-4. **Inside your AI coding agent** — open any project and use `/kluris`; the agent becomes an SME
+4. **Inside your AI coding agent** — open any project and use `/kluris-<name>`; the agent becomes an SME
 5. Agent and human curate the brain together — you review and approve every entry
 6. **Terminal** — `kluris dream` maintains brain structure
 7. **Terminal** — `kluris mri` visualizes the brain
@@ -451,26 +451,26 @@ Sync, commit, and branch operations go through `git` directly. Brains are
 plain git repos — use `git -C <brain-path> push / pull / status / checkout`
 from the brain directory like any other repo.
 
-### Inside your AI coding agent — `> /kluris ...`
+### Inside your AI coding agent — `> /kluris-<name> ...`
 
-Type these inside Claude Code, Cursor, Windsurf, GitHub Copilot, Codex, Gemini CLI, Kilo, or Junie. With one brain registered the slash command is `/kluris`; with multiple brains each installs as `/kluris-<name>`. Examples below use `/kluris` for clarity.
+Type these inside Claude Code, Cursor, Windsurf, GitHub Copilot, Codex, Gemini CLI, Kilo, or Junie. Every registered brain installs as `/kluris-<name>`. Examples below use `/kluris-acme` for clarity.
 
 | Pattern | What the agent does |
 |---------|---------------------|
-| `/kluris learn <topic>` | Analyzes your code and proposes neurons one at a time (you approve each) |
-| `/kluris remember <fact>` | Captures a decision as a neuron in the right lobe |
-| `/kluris remember from this session` | Sweeps the current chat and proposes neurons for everything worth keeping |
-| `/kluris search <term>` | Searches the brain for a topic |
-| `/kluris what do we know about ...` | Answers a question grounded in the brain |
-| `/kluris review this brain` | Audits the brain — proposes new synapses, flags gaps and stale neurons |
-| `/kluris use brain knowledge and codebase and let's ...` | Grounds spec-writing or implementation in **both** the brain and the actual code |
-| `/kluris implement <task>` | Implements a task following your brain's conventions |
-| `/kluris fix <bug>` | Fixes a bug using brain knowledge, flags any conflicts |
-| `/kluris create a decision` | Creates a decision-record neuron |
-| `/kluris create an incident` | Creates an incident-report neuron |
-| `/kluris create a runbook` | Creates a runbook neuron |
-| `/kluris open <file>` | Opens a neuron and reads it |
-| `/kluris deprecate <file>` | Marks a neuron as deprecated |
+| `/kluris-acme learn <topic>` | Analyzes your code and proposes neurons one at a time (you approve each) |
+| `/kluris-acme remember <fact>` | Captures a decision as a neuron in the right lobe |
+| `/kluris-acme remember from this session` | Sweeps the current chat and proposes neurons for everything worth keeping |
+| `/kluris-acme search <term>` | Searches the brain for a topic |
+| `/kluris-acme what do we know about ...` | Answers a question grounded in the brain |
+| `/kluris-acme review this brain` | Audits the brain — proposes new synapses, flags gaps and stale neurons |
+| `/kluris-acme use brain knowledge and codebase and let's ...` | Grounds spec-writing or implementation in **both** the brain and the actual code |
+| `/kluris-acme implement <task>` | Implements a task following your brain's conventions |
+| `/kluris-acme fix <bug>` | Fixes a bug using brain knowledge, flags any conflicts |
+| `/kluris-acme create a decision` | Creates a decision-record neuron |
+| `/kluris-acme create an incident` | Creates an incident-report neuron |
+| `/kluris-acme create a runbook` | Creates a runbook neuron |
+| `/kluris-acme open <file>` | Opens a neuron and reads it |
+| `/kluris-acme deprecate <file>` | Marks a neuron as deprecated |
 
 Agent patterns are free-form — say it naturally. Under the hood the agent calls `kluris search` for lookups and `kluris wake-up` for the session bootstrap, but you never type those yourself when using the slash command.
 
@@ -501,6 +501,50 @@ description: my-brain knowledge base
 
 Claude Code, Cursor, Windsurf, GitHub Copilot, Codex, Gemini CLI, Kilo Code, Junie
 
+## Use it from your projects
+
+Your brain is the source of truth. To make every coding agent that lands in
+a *consuming project* aware of it, drop a small pointer into the project's
+`CLAUDE.md` and `AGENTS.md`. The skill (and only the skill) reads and
+writes the brain — never edit brain files by hand.
+
+### Have an agent set it up for you
+
+Inside any AI coding agent, in the project directory:
+
+```text
+> /kluris-<brain> setup this project
+```
+
+The agent surveys the project, checks whether `CLAUDE.md` and `AGENTS.md`
+exist, and either creates them, appends the pointer, or reformulates an
+old pointer it finds. Each file change goes through the standard approval
+protocol.
+
+### Or paste manually
+
+In `CLAUDE.md`:
+
+```markdown
+## Knowledge base
+
+Read and write to the **<brain>** brain through kluris (never edit brain
+files by hand). Use the `/kluris-<brain>` skill — search, learn, remember,
+create.
+```
+
+In `AGENTS.md`:
+
+```markdown
+# Repository Guidelines
+
+See [`./CLAUDE.md`](./CLAUDE.md). For shared knowledge, read and write to
+the **<brain>** brain through kluris via the `/kluris-<brain>` skill.
+Never edit brain files by hand.
+```
+
+That's it. The skill teaches the agent the rest.
+
 ## Pair with Specmint
 
 Kluris is the brain. [Specmint](https://specmint.io) turns a feature request
@@ -511,10 +555,10 @@ Pair them and the research phase starts half-done — grounded in your code
 **Inside your AI coding agent:**
 
 ```text
-> /kluris let's spec out adding OAuth sign-in with GitHub
+> /kluris-acme let's spec out adding OAuth sign-in with GitHub
 ```
 
-The `/kluris` skill sees this is multi-step work and follows the embedded
+The `/kluris-<name>` skill sees this is multi-step work and follows the embedded
 specmint playbook. Phase 1a reads your codebase. Phase 1b consults the brain.
 Phase 2 asks only the questions neither can answer. Phase 3 writes a spec
 where every decision references a neuron.

@@ -461,6 +461,65 @@ at a time under the approval protocol.
    well-organised, say so -- an empty report is the correct answer
    when nothing is broken.
 
+**Setup project pointers** -- "setup this project", "wire kluris into
+this project", "add the kluris pointer to claude.md", "configure my
+project for the brain", "set up claude.md and agents.md".
+
+Goal: make sure the consuming project's `CLAUDE.md` and `AGENTS.md`
+tell future agents about this brain. Operates on files in the user's
+CURRENT WORKING DIRECTORY (the project), not the brain itself.
+
+1. **Survey the project root.** Check whether `CLAUDE.md` and
+   `AGENTS.md` exist in the cwd.
+
+2. **Decide per file.** For each of the two files, classify as one of:
+   - **Missing** -- propose creating it with the canonical snippet
+     plus a one-line "what this file is for" header.
+   - **Exists, no kluris pointer** -- propose appending a short
+     `## Knowledge base` section (CLAUDE.md) or one-paragraph brain
+     mention (AGENTS.md). Show the exact insertion point.
+   - **Exists, has a stale pointer** (hardcoded brain paths, missing
+     read/write framing, old skill name, list of specific neuron
+     paths) -- propose reformulating to the canonical snippet. Show
+     before/after.
+   - **Exists, has the canonical snippet already** -- say so, do
+     nothing.
+
+3. **The canonical snippet is intentionally short.** This skill
+   already teaches search/learn/remember/create -- the project-side
+   pointer only needs the brain name and the skill name. Do not pad
+   it with topic lists, neuron paths, or repeated CLI command tables.
+
+   For `CLAUDE.md`:
+
+   ```markdown
+   ## Knowledge base
+
+   Read and write to the **{brain_name}** brain through kluris (never
+   edit brain files by hand). Use the `/kluris-{brain_name}` skill --
+   search, learn, remember, create.
+   ```
+
+   For `AGENTS.md`:
+
+   ```markdown
+   # Repository Guidelines
+
+   See [`./CLAUDE.md`](./CLAUDE.md). For shared knowledge, read and
+   write to the **{brain_name}** brain through kluris via the
+   `/kluris-{brain_name}` skill. Never edit brain files by hand.
+   ```
+
+4. **Approval protocol per file.** Show the full proposed content,
+   ask "Is this correct? Want to change anything?", write only after
+   explicit approval. Do not batch-write the two files -- one
+   approval per file.
+
+5. **This intent does not write to the brain.** Do not run
+   `kluris dream{brain_flag_hint_inline}` and do not refresh the
+   wake-up snapshot afterwards. Project-file edits do not change
+   brain state.
+
 ## Writing rules
 
 ### Approval protocol
@@ -563,7 +622,7 @@ checkout` as you would with any other repo.
 _FLAG_HINT_BLOCK = """
 
 
-When invoking the kluris CLI from this skill, you MUST pass `--brain {brain_name}` on every call (e.g. `kluris wake-up --brain {brain_name} --json`). The skill is named `{skill_name}` precisely because there are multiple brains registered on this machine."""
+When invoking the kluris CLI from this skill, you MUST pass `--brain {brain_name}` on every call (e.g. `kluris wake-up --brain {brain_name} --json`). The skill is named `{skill_name}` so it always targets this brain unambiguously."""
 
 
 _COMPANION_ORDER = ("specmint-core", "specmint-tdd")
@@ -644,13 +703,8 @@ def _build_substitutions(
     companion_home: str | None = None,
 ) -> dict[str, str]:
     """Compute the placeholder substitutions for SKILL_BODY and SKILL_DESCRIPTION."""
-    is_per_brain = skill_name != "kluris"
-    if is_per_brain:
-        flag_hint = _FLAG_HINT_BLOCK.format(brain_name=brain_name, skill_name=skill_name)
-        flag_hint_inline = f" --brain {brain_name}"
-    else:
-        flag_hint = ""
-        flag_hint_inline = ""
+    flag_hint = _FLAG_HINT_BLOCK.format(brain_name=brain_name, skill_name=skill_name)
+    flag_hint_inline = f" --brain {brain_name}"
     return {
         "{skill_name}": skill_name,
         "{brain_name}": brain_name,
@@ -683,10 +737,9 @@ def render_skill(
 ) -> str:
     """Render a SKILL.md content for a single brain.
 
-    skill_name is ``kluris`` for the single-brain world and ``kluris-<name>``
-    when multiple brains are registered. The body bakes in this single
-    brain's identity and (when per-brain) instructs the agent to pass
-    ``--brain <name>`` on every CLI invocation.
+    skill_name is always ``kluris-<name>``. The body bakes in this single
+    brain's identity and instructs the agent to pass ``--brain <name>`` on
+    every CLI invocation.
     """
     subs = _build_substitutions(
         skill_name=skill_name,

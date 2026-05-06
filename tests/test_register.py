@@ -241,10 +241,10 @@ def test_register_runs_install(tmp_path, monkeypatch):
 
     assert result.exit_code == 0, result.output
     home = tmp_path / "register-home"
-    # With one brain registered, the single-brain layout creates
-    # ~/.claude/skills/kluris/ with SKILL.md inside.
-    claude_skill = home / ".claude" / "skills" / "kluris" / "SKILL.md"
-    assert claude_skill.exists(), "register must install the kluris skill"
+    # With one brain registered, the named layout still creates
+    # ~/.claude/skills/kluris-<brain>/ with SKILL.md inside.
+    claude_skill = home / ".claude" / "skills" / "kluris-source-brain" / "SKILL.md"
+    assert claude_skill.exists(), "register must install the named kluris skill"
 
 
 # -----------------------------------------------------------------------------

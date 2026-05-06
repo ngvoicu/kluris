@@ -6,6 +6,15 @@ Kluris turns AI agents into team subject matter experts by giving them shared, h
 
 **Kluris = the tool. A brain = the git repo it creates.**
 
+## Knowledge base
+
+Architectural details for kluris itself (CLI structure, agent registry, multi-brain resolver, pack, companions, deprecation, testing) live in the **ngvoicu-sme** brain. Read and write through kluris (never edit brain files by hand — the skill enforces an approval protocol):
+
+- `/kluris-ngvoicu-sme` — Claude Code skill (search, learn, remember, create)
+- `kluris search "<query>" --brain ngvoicu-sme` — direct search
+
+Topics relevant to this repo: kluris-cli overview, architecture, multi-brain resolver, agent skills, kluris-pack, wake-up protocol, testing, CI/CD, deprecation.
+
 ## Build & Test
 
 ```bash
@@ -35,7 +44,7 @@ src/kluris/
     git.py             # git_init(), git_add(), git_commit(), git_log(),
                        # git_log_file_dates() batch helper (one subprocess replaces 2N)
     agents.py          # AGENT_REGISTRY (8 agents), per-brain SKILL.md renderer
-                       # (kluris when 1 brain, kluris-<name> when N brains);
+                       # (always kluris-<name>, even for one brain);
                        # brain_path emitted in POSIX form (C:/ on Windows) for bash
 ```
 
@@ -49,8 +58,8 @@ src/kluris/
 - **Agent skill/workflow templates are inline** in agents.py, not .j2 template files.
 - **MRI uses inline canvas JS** -- no vendored Cytoscape.js. Standalone HTML with search, inspector, and interactive graph navigation.
 - **Cross-platform** -- all file I/O uses `encoding="utf-8"`, all paths use `pathlib.Path`.
-- **wake-up bootstrap protocol** -- SKILL.md instructs the agent to run `kluris wake-up --json` (or `kluris wake-up --brain <name> --json` for per-brain skills) on the first `/<skill>` of a session (via Bash), cache the snapshot, and refresh only after brain-mutating commands. This replaces walking brain.md -> map.md -> neurons on every turn.
-- **Per-brain skill scheme** -- with 1 brain registered, install one skill named `kluris` with that brain's path baked in. With 2+ brains, install one `kluris-<name>` skill per brain so each is addressable unambiguously. Transitions in either direction sweep the entire `kluris*` artifact set before writing the new layout (`_sweep_kluris`). Per-destination atomic via stage-then-rename so a partial-write failure leaves the OLD skill in place.
+- **wake-up bootstrap protocol** -- SKILL.md instructs the agent to run `kluris wake-up --brain <name> --json` on the first `/<skill>` of a session (via Bash), cache the snapshot, and refresh only after brain-mutating commands. This replaces walking brain.md -> map.md -> neurons on every turn.
+- **Per-brain skill scheme** -- every registered brain installs as one `kluris-<name>` skill, even when it is the only brain, so project pointers stay stable as more brains are added. `kluris doctor` sweeps the entire `kluris*` artifact set before writing the named layout, so legacy bare `kluris` installs migrate automatically. Per-destination atomic via stage-then-rename so a partial-write failure leaves the OLD skill in place.
 - **No default brain** -- resolution order is: explicit `--brain NAME` → exactly 1 brain registered → interactive picker (TTY only). Non-TTY / `--json` / `KLURIS_NO_PROMPT=1` all force the resolver to error out instead of prompting.
 - **`--brain all`** -- accepted only on fan-out commands (dream, status, mri, companion add/remove). Other commands reject it with a clear error. `all` is also a reserved brain name to prevent collision.
 - **Sticky-selection tradeoff** -- `kluris use` was removed deliberately. Repeated commands in a terminal session each trigger the picker (or take `--brain`). The compensating affordances are `KLURIS_NO_PROMPT`, `--brain all`, the integer-pick UX, and the per-brain slash command names that make ambiguity disappear in agent workflows.
@@ -68,22 +77,22 @@ src/kluris/
 
 ## Agent Registry (8 agents)
 
-| Agent | Dir (1 brain) | Dir (N brains) | Format |
-|-------|---------------|----------------|--------|
-| claude | ~/.claude/skills/kluris/ | ~/.claude/skills/kluris-&lt;name&gt;/ | SKILL.md |
-| cursor | ~/.cursor/skills/kluris/ | ~/.cursor/skills/kluris-&lt;name&gt;/ | SKILL.md |
-| windsurf | ~/.codeium/windsurf/skills/kluris/ | ~/.codeium/windsurf/skills/kluris-&lt;name&gt;/ | SKILL.md + workflow |
-| copilot | ~/.copilot/skills/kluris/ | ~/.copilot/skills/kluris-&lt;name&gt;/ | SKILL.md |
-| codex | ~/.codex/skills/kluris/ | ~/.codex/skills/kluris-&lt;name&gt;/ | SKILL.md |
-| gemini | ~/.gemini/skills/kluris/ | ~/.gemini/skills/kluris-&lt;name&gt;/ | SKILL.md |
-| kilocode | ~/.kilo/skills/kluris/ | ~/.kilo/skills/kluris-&lt;name&gt;/ | SKILL.md |
-| junie | ~/.junie/skills/kluris/ | ~/.junie/skills/kluris-&lt;name&gt;/ | SKILL.md |
+| Agent | Dir | Format |
+|-------|-----|--------|
+| claude | ~/.claude/skills/kluris-&lt;name&gt;/ | SKILL.md |
+| cursor | ~/.cursor/skills/kluris-&lt;name&gt;/ | SKILL.md |
+| windsurf | ~/.codeium/windsurf/skills/kluris-&lt;name&gt;/ | SKILL.md + workflow |
+| copilot | ~/.copilot/skills/kluris-&lt;name&gt;/ | SKILL.md |
+| codex | ~/.codex/skills/kluris-&lt;name&gt;/ | SKILL.md |
+| gemini | ~/.gemini/skills/kluris-&lt;name&gt;/ | SKILL.md |
+| kilocode | ~/.kilo/skills/kluris-&lt;name&gt;/ | SKILL.md |
+| junie | ~/.junie/skills/kluris-&lt;name&gt;/ | SKILL.md |
 
 The universal `~/.agents/skills/` slot mirrors the same per-brain layout for tools that scan it.
 
 ## Agent Skill
 
-A single brain registers as `kluris`; multiple brains register as one `kluris-<name>` skill per brain. Each rendered SKILL.md is bound to exactly one brain — there is no runtime brain picker inside the skill body. Windsurf also gets one workflow file per brain (`kluris.md` or `kluris-<name>.md`).
+Every brain registers as one `kluris-<name>` skill. Each rendered SKILL.md is bound to exactly one brain — there is no runtime brain picker inside the skill body. Windsurf also gets one `kluris-<name>.md` workflow file per brain.
 
 The skill body contains six load-bearing sections (in order):
 
@@ -97,7 +106,7 @@ The skill body contains six load-bearing sections (in order):
 ## Multi-brain CLI behavior
 
 - **0 brains** → resolver errors with a hint to run `kluris create`.
-- **1 brain** → auto-resolves; no `--brain` flag needed; skill installed as `kluris`.
+- **1 brain** → auto-resolves for terminal CLI convenience, but the installed skill is still `kluris-<name>` and passes `--brain <name>`.
 - **2+ brains + TTY** → interactive picker `[1] foo [2] bar [3] all` for fan-out commands (dream/status/mri/companion add/remove); `[1] foo [2] bar` (no `all`) for single-brain commands (wake-up/search).
 - **2+ brains + non-interactive** (`--json`, no TTY, or `KLURIS_NO_PROMPT=1`) → resolver errors with the available brains listed and a hint to pass `--brain NAME` or `--brain all`.
 - **Stale brain paths** → annotated `(missing)` in the picker; resolver raises `ClickException` if the user actually tries to use one.

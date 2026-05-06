@@ -27,7 +27,7 @@ def test_remove_triggers_install(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
     runner = CliRunner()
     create_test_brain(runner, "my-brain", tmp_path)
-    assert (tmp_path / ".claude" / "skills" / "kluris" / "SKILL.md").exists()
+    assert (tmp_path / ".claude" / "skills" / "kluris-my-brain" / "SKILL.md").exists()
     runner.invoke(cli, ["remove", "my-brain"])
     # Commands should still exist (reinstalled for remaining brains)
     # or be cleaned if no brains left

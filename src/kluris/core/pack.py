@@ -162,7 +162,7 @@ def _copy_pack_source(src: Path, dest: Path) -> None:
         src,
         dest,
         ignore=shutil.ignore_patterns(
-            "__pycache__", "*.pyc", "*.pyo", "*.swp",
+            "__pycache__", "*.pyc", "*.pyo", "*.swp", ".DS_Store",
         ),
     )
 
@@ -172,7 +172,7 @@ def _copy_runtime(src: Path, dest: Path) -> None:
         src,
         dest,
         ignore=shutil.ignore_patterns(
-            "__pycache__", "*.pyc", "*.pyo", "*.swp",
+            "__pycache__", "*.pyc", "*.pyo", "*.swp", ".DS_Store",
         ),
     )
 

@@ -35,7 +35,7 @@ def test_doctor_refreshes_installed_skills(tmp_path, monkeypatch):
     runner = CliRunner()
     create_test_brain(runner, "my-brain", tmp_path)
 
-    skill_file = tmp_path / ".claude" / "skills" / "kluris" / "SKILL.md"
+    skill_file = tmp_path / ".claude" / "skills" / "kluris-my-brain" / "SKILL.md"
     assert skill_file.exists()  # written by `create`
 
     # Sabotage the installed skill (simulate it being stale post-upgrade)
@@ -45,7 +45,7 @@ def test_doctor_refreshes_installed_skills(tmp_path, monkeypatch):
     assert result.exit_code == 0
     # The skill should have been rewritten with real content
     assert "OUTDATED_PLACEHOLDER" not in skill_file.read_text()
-    assert "name: kluris" in skill_file.read_text()
+    assert "name: kluris-my-brain" in skill_file.read_text()
 
 
 def test_doctor_no_refresh_skips_skill_install(tmp_path, monkeypatch):
@@ -56,7 +56,7 @@ def test_doctor_no_refresh_skips_skill_install(tmp_path, monkeypatch):
     runner = CliRunner()
     create_test_brain(runner, "my-brain", tmp_path)
 
-    skill_file = tmp_path / ".claude" / "skills" / "kluris" / "SKILL.md"
+    skill_file = tmp_path / ".claude" / "skills" / "kluris-my-brain" / "SKILL.md"
     skill_file.write_text("OUTDATED_PLACEHOLDER", encoding="utf-8")
 
     result = runner.invoke(cli, ["doctor", "--no-refresh"])

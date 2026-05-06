@@ -12,10 +12,10 @@ def test_install_creates_claude_skill(tmp_path, monkeypatch):
     monkeypatch.setenv("USERPROFILE", str(tmp_path))
     runner = CliRunner()
     create_test_brain(runner, "my-brain", tmp_path)
-    skill_file = tmp_path / ".claude" / "skills" / "kluris" / "SKILL.md"
+    skill_file = tmp_path / ".claude" / "skills" / "kluris-my-brain" / "SKILL.md"
     assert skill_file.exists()
     content = skill_file.read_text()
-    assert "name: kluris" in content
+    assert "name: kluris-my-brain" in content
 
 
 def test_install_creates_codex_skill(tmp_path, monkeypatch):
@@ -24,7 +24,7 @@ def test_install_creates_codex_skill(tmp_path, monkeypatch):
     monkeypatch.setenv("USERPROFILE", str(tmp_path))
     runner = CliRunner()
     create_test_brain(runner, "my-brain", tmp_path)
-    assert (tmp_path / ".codex" / "skills" / "kluris" / "SKILL.md").exists()
+    assert (tmp_path / ".codex" / "skills" / "kluris-my-brain" / "SKILL.md").exists()
 
 
 def test_install_creates_gemini_skill(tmp_path, monkeypatch):
@@ -33,7 +33,7 @@ def test_install_creates_gemini_skill(tmp_path, monkeypatch):
     monkeypatch.setenv("USERPROFILE", str(tmp_path))
     runner = CliRunner()
     create_test_brain(runner, "my-brain", tmp_path)
-    assert (tmp_path / ".gemini" / "skills" / "kluris" / "SKILL.md").exists()
+    assert (tmp_path / ".gemini" / "skills" / "kluris-my-brain" / "SKILL.md").exists()
 
 
 def test_install_creates_cursor_skill(tmp_path, monkeypatch):
@@ -42,7 +42,7 @@ def test_install_creates_cursor_skill(tmp_path, monkeypatch):
     monkeypatch.setenv("USERPROFILE", str(tmp_path))
     runner = CliRunner()
     create_test_brain(runner, "my-brain", tmp_path)
-    assert (tmp_path / ".cursor" / "skills" / "kluris" / "SKILL.md").exists()
+    assert (tmp_path / ".cursor" / "skills" / "kluris-my-brain" / "SKILL.md").exists()
 
 
 def test_install_creates_windsurf_skill(tmp_path, monkeypatch):
@@ -51,7 +51,7 @@ def test_install_creates_windsurf_skill(tmp_path, monkeypatch):
     monkeypatch.setenv("USERPROFILE", str(tmp_path))
     runner = CliRunner()
     create_test_brain(runner, "my-brain", tmp_path)
-    assert (tmp_path / ".codeium" / "windsurf" / "skills" / "kluris" / "SKILL.md").exists()
+    assert (tmp_path / ".codeium" / "windsurf" / "skills" / "kluris-my-brain" / "SKILL.md").exists()
 
 
 def test_install_skill_has_brain_info(tmp_path, monkeypatch):
@@ -60,7 +60,7 @@ def test_install_skill_has_brain_info(tmp_path, monkeypatch):
     monkeypatch.setenv("USERPROFILE", str(tmp_path))
     runner = CliRunner()
     create_test_brain(runner, "my-brain", tmp_path)
-    content = (tmp_path / ".claude" / "skills" / "kluris" / "SKILL.md").read_text()
+    content = (tmp_path / ".claude" / "skills" / "kluris-my-brain" / "SKILL.md").read_text()
     assert "my-brain" in content
 
 
@@ -74,6 +74,32 @@ def test_install_idempotent(tmp_path, monkeypatch):
     result2 = runner.invoke(cli, ["doctor"])
     assert result1.exit_code == 0
     assert result2.exit_code == 0
+
+
+def test_doctor_migrates_legacy_bare_skill_to_named(tmp_path, monkeypatch):
+    """doctor removes old /kluris artifacts and rewrites /kluris-<brain>."""
+    monkeypatch.setenv("KLURIS_CONFIG", str(tmp_path / "config.yml"))
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    runner = CliRunner()
+    create_test_brain(runner, "brain-a", tmp_path)
+
+    claude_skills = tmp_path / ".claude" / "skills"
+    legacy_skill = claude_skills / "kluris"
+    legacy_skill.mkdir(parents=True, exist_ok=True)
+    (legacy_skill / "SKILL.md").write_text("legacy", encoding="utf-8")
+
+    workflows = tmp_path / ".codeium" / "windsurf" / "global_workflows"
+    workflows.mkdir(parents=True, exist_ok=True)
+    (workflows / "kluris.md").write_text("legacy", encoding="utf-8")
+
+    result = runner.invoke(cli, ["doctor"])
+
+    assert result.exit_code == 0
+    assert not legacy_skill.exists()
+    assert (claude_skills / "kluris-brain-a" / "SKILL.md").exists()
+    assert not (workflows / "kluris.md").exists()
+    assert (workflows / "kluris-brain-a.md").exists()
 
 
 def test_install_cleans_old_commands(tmp_path, monkeypatch):
@@ -130,15 +156,15 @@ def test_install_two_brains_each_skill_body_isolated(tmp_path, monkeypatch):
 
 
 def test_install_one_to_two_transition(tmp_path, monkeypatch):
-    """Going from 1 brain to 2 brains sweeps the bare kluris/ dir and writes per-brain dirs."""
+    """Going from 1 brain to 2 brains keeps the named per-brain layout."""
     monkeypatch.setenv("KLURIS_CONFIG", str(tmp_path / "config.yml"))
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("USERPROFILE", str(tmp_path))
     runner = CliRunner()
     create_test_brain(runner, "brain-a", tmp_path)
     claude_skills = tmp_path / ".claude" / "skills"
-    assert (claude_skills / "kluris" / "SKILL.md").exists()
-    assert not (claude_skills / "kluris-brain-a").exists()
+    assert (claude_skills / "kluris-brain-a" / "SKILL.md").exists()
+    assert not (claude_skills / "kluris").exists()
 
     create_test_brain(runner, "brain-b", tmp_path)
     assert not (claude_skills / "kluris").exists()
@@ -147,7 +173,7 @@ def test_install_one_to_two_transition(tmp_path, monkeypatch):
 
 
 def test_install_two_to_one_transition(tmp_path, monkeypatch):
-    """Removing a brain so only one is left sweeps the kluris-*/ dirs and recreates kluris/."""
+    """Removing a brain so only one is left keeps the named per-brain layout."""
     monkeypatch.setenv("KLURIS_CONFIG", str(tmp_path / "config.yml"))
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("USERPROFILE", str(tmp_path))
@@ -159,10 +185,10 @@ def test_install_two_to_one_transition(tmp_path, monkeypatch):
     assert (claude_skills / "kluris-brain-b").exists()
 
     runner.invoke(cli, ["remove", "brain-b"])
-    assert not (claude_skills / "kluris-brain-a").exists()
+    assert (claude_skills / "kluris-brain-a" / "SKILL.md").exists()
     assert not (claude_skills / "kluris-brain-b").exists()
-    assert (claude_skills / "kluris" / "SKILL.md").exists()
-    content = (claude_skills / "kluris" / "SKILL.md").read_text()
+    assert not (claude_skills / "kluris").exists()
+    content = (claude_skills / "kluris-brain-a" / "SKILL.md").read_text()
     assert "Brain: brain-a" in content
 
 
@@ -197,7 +223,7 @@ def test_install_windsurf_workflow_per_brain(tmp_path, monkeypatch):
 
 
 def test_install_windsurf_workflow_single_brain(tmp_path, monkeypatch):
-    """With 1 brain, the Windsurf workflow is named kluris.md."""
+    """With 1 brain, the Windsurf workflow is still named per brain."""
     monkeypatch.setenv("KLURIS_CONFIG", str(tmp_path / "config.yml"))
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("USERPROFILE", str(tmp_path))
@@ -205,8 +231,8 @@ def test_install_windsurf_workflow_single_brain(tmp_path, monkeypatch):
     create_test_brain(runner, "only-brain", tmp_path)
 
     workflows = tmp_path / ".codeium" / "windsurf" / "global_workflows"
-    assert (workflows / "kluris.md").exists()
-    assert not (workflows / "kluris-only-brain.md").exists()
+    assert not (workflows / "kluris.md").exists()
+    assert (workflows / "kluris-only-brain.md").exists()
 
 
 def test_non_tty_multi_brain_status_errors_cleanly(tmp_path, monkeypatch):
@@ -231,7 +257,7 @@ def test_install_partial_failure_keeps_old_skill(tmp_path, monkeypatch):
     monkeypatch.setenv("USERPROFILE", str(tmp_path))
     runner = CliRunner()
     create_test_brain(runner, "brain-a", tmp_path)
-    claude_skill = tmp_path / ".claude" / "skills" / "kluris" / "SKILL.md"
+    claude_skill = tmp_path / ".claude" / "skills" / "kluris-brain-a" / "SKILL.md"
     original_content = claude_skill.read_text()
     assert "brain-a" in original_content
 
