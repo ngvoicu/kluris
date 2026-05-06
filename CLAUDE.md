@@ -8,10 +8,9 @@ Kluris turns AI agents into team subject matter experts by giving them shared, h
 
 ## Knowledge base
 
-Architectural details for kluris itself (CLI structure, agent registry, multi-brain resolver, pack, companions, deprecation, testing) live in the **ngvoicu-sme** brain. Read and write through kluris (never edit brain files by hand — the skill enforces an approval protocol):
-
-- `/kluris-ngvoicu-sme` — Claude Code skill (search, learn, remember, create)
-- `kluris search "<query>" --brain ngvoicu-sme` — direct search
+Read and write to the **ngvoicu-sme** brain through kluris (never edit brain
+files by hand). Use the `/kluris-ngvoicu-sme` skill — search, learn, remember,
+create.
 
 Topics relevant to this repo: kluris-cli overview, architecture, multi-brain resolver, agent skills, kluris-pack, wake-up protocol, testing, CI/CD, deprecation.
 

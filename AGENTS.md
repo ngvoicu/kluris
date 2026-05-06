@@ -5,7 +5,7 @@
 CLI tool that turns AI agents into team subject matter experts with shared, human-curated knowledge.
 Published to PyPI as `kluris`. Source: `ngvoicu/kluris`.
 
-For cross-cutting architectural decisions (multi-brain resolver, agent registry, companion model, deprecation), read and write to the **ngvoicu-sme** brain through kluris — `/kluris-ngvoicu-sme` (Claude Code skill: search, learn, remember, create) or `kluris search "<query>" --brain ngvoicu-sme` (CLI). Never edit brain files by hand.
+Read and write to the **ngvoicu-sme** brain through kluris (never edit brain files by hand). Use the `/kluris-ngvoicu-sme` skill — search, learn, remember, create.
 
 ## Quick Reference
 
