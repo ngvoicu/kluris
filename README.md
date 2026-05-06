@@ -183,12 +183,43 @@ Registration is in-place -- Kluris does not copy or move the source. If a
 teammate handed you a zip, unzip it first (`unzip brain.zip -d ~/brains/acme`)
 and then run `kluris register ~/brains/acme`.
 
-### Learning a project
+### Onboarding a project
 
-**Inside your AI coding agent** (Claude Code, Cursor, Windsurf, …) — open any
-project directory and use `/kluris-<name>`. The agent analyzes your code and walks
-you through each finding. You review, edit, and approve before anything is
-written.
+When you start work in a new project, two things make every future
+session smoother. Both happen **inside your AI coding agent** (Claude
+Code, Cursor, Windsurf, …) with the project open.
+
+**1. Wire the brain into the project.** Drop a small pointer into
+the project's `CLAUDE.md` and `AGENTS.md` so every coding agent that
+lands in the repo sees the brain. The skill (and only the skill)
+reads and writes the brain — never edit brain files by hand.
+
+```text
+> /kluris-acme setup this project
+```
+
+The agent surveys the project, checks whether `CLAUDE.md` and
+`AGENTS.md` exist, and either creates them, appends the pointer, or
+reformulates an old pointer it finds. Each file change goes through
+the standard approval protocol.
+
+The same `## Knowledge base` section goes in **both** files — each
+must stand on its own because not every coding agent reads
+`CLAUDE.md`:
+
+```markdown
+## Knowledge base
+
+Read and write to the **<brain>** brain through kluris (never edit
+brain files by hand). Use the `/kluris-<brain>` skill — search,
+learn, remember, create.
+```
+
+That's it. The skill teaches the agent the rest.
+
+**2. Have the agent learn the project.** The agent analyzes your
+code and walks you through each finding. You review, edit, and
+approve before anything is written.
 
 ```text
 > /kluris-acme learn the API endpoints and data model
@@ -197,7 +228,8 @@ written.
 ```
 
 The agent starts with a preview before writing. You can change the
-target lobe, edit the content, add context the code doesn't show, or skip.
+target lobe, edit the content, add context the code doesn't show, or
+skip.
 
 ### Storing decisions and knowledge
 
@@ -500,50 +532,6 @@ description: my-brain knowledge base
 ## Supported agents
 
 Claude Code, Cursor, Windsurf, GitHub Copilot, Codex, Gemini CLI, Kilo Code, Junie
-
-## Use it from your projects
-
-Your brain is the source of truth. To make every coding agent that lands in
-a *consuming project* aware of it, drop a small pointer into the project's
-`CLAUDE.md` and `AGENTS.md`. The skill (and only the skill) reads and
-writes the brain — never edit brain files by hand.
-
-### Have an agent set it up for you
-
-Inside any AI coding agent, in the project directory:
-
-```text
-> /kluris-<brain> setup this project
-```
-
-The agent surveys the project, checks whether `CLAUDE.md` and `AGENTS.md`
-exist, and either creates them, appends the pointer, or reformulates an
-old pointer it finds. Each file change goes through the standard approval
-protocol.
-
-### Or paste manually
-
-In `CLAUDE.md`:
-
-```markdown
-## Knowledge base
-
-Read and write to the **<brain>** brain through kluris (never edit brain
-files by hand). Use the `/kluris-<brain>` skill — search, learn, remember,
-create.
-```
-
-In `AGENTS.md`:
-
-```markdown
-# Repository Guidelines
-
-See [`./CLAUDE.md`](./CLAUDE.md). For shared knowledge, read and write to
-the **<brain>** brain through kluris via the `/kluris-<brain>` skill.
-Never edit brain files by hand.
-```
-
-That's it. The skill teaches the agent the rest.
 
 ## Pair with Specmint
 

@@ -388,7 +388,9 @@ protocol.
 
 ### Or paste manually
 
-In `CLAUDE.md`:
+The same `## Knowledge base` section goes in both `CLAUDE.md` and
+`AGENTS.md` -- not every coding agent reads both files, so each one
+stands on its own:
 
 ```markdown
 ## Knowledge base
@@ -396,16 +398,6 @@ In `CLAUDE.md`:
 Read and write to the **{name}** brain through kluris (never edit brain
 files by hand). Use the `/kluris-{name}` skill -- search, learn, remember,
 create.
-```
-
-In `AGENTS.md`:
-
-```markdown
-# Repository Guidelines
-
-See [`./CLAUDE.md`](./CLAUDE.md). For shared knowledge, read and write to
-the **{name}** brain through kluris via the `/kluris-{name}` skill. Never
-edit brain files by hand.
 ```
 
 That's it. The skill teaches the agent the rest.

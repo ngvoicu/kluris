@@ -485,12 +485,15 @@ CURRENT WORKING DIRECTORY (the project), not the brain itself.
    - **Exists, has the canonical snippet already** -- say so, do
      nothing.
 
-3. **The canonical snippet is intentionally short.** This skill
-   already teaches search/learn/remember/create -- the project-side
-   pointer only needs the brain name and the skill name. Do not pad
-   it with topic lists, neuron paths, or repeated CLI command tables.
+3. **The canonical snippet is intentionally short and identical
+   across both files.** This skill already teaches
+   search/learn/remember/create -- the project-side pointer only
+   needs the brain name and the skill name. Do not pad it with topic
+   lists, neuron paths, or repeated CLI command tables. Do not make
+   `AGENTS.md` defer to `CLAUDE.md` -- not every agent reads
+   `CLAUDE.md`, so each file must stand on its own.
 
-   For `CLAUDE.md`:
+   The same `## Knowledge base` section goes in both files:
 
    ```markdown
    ## Knowledge base
@@ -500,15 +503,10 @@ CURRENT WORKING DIRECTORY (the project), not the brain itself.
    search, learn, remember, create.
    ```
 
-   For `AGENTS.md`:
-
-   ```markdown
-   # Repository Guidelines
-
-   See [`./CLAUDE.md`](./CLAUDE.md). For shared knowledge, read and
-   write to the **{brain_name}** brain through kluris via the
-   `/kluris-{brain_name}` skill. Never edit brain files by hand.
-   ```
+   When creating files from scratch, use these top-of-file headers:
+   - `CLAUDE.md` -> `# CLAUDE.md` then the `## Knowledge base` section.
+   - `AGENTS.md` -> `# Repository Guidelines` then the same
+     `## Knowledge base` section.
 
 4. **Approval protocol per file.** Show the full proposed content,
    ask "Is this correct? Want to change anything?", write only after
