@@ -151,7 +151,7 @@ create, register, list, status, search, wake-up, companion, dream, pack, mri, re
 
 ## Testing
 
-- conftest.py has 4 fixtures: cli_runner, temp_config, temp_home, temp_brain
+- conftest.py has 5 fixtures: `cli_runner`, `temp_config`, `temp_home`, `temp_brain`, `bare_remote` (bare git remote with `HEAD = refs/heads/main` for CI compat)
 - Tests use monkeypatch for KLURIS_CONFIG and HOME env vars
 - Git tests use real git in tmp_path (not mocked)
 - Picker tests monkeypatch `kluris.cli._is_interactive`, NOT `sys.stdin.isatty` (CliRunner stdin swap)
@@ -160,4 +160,5 @@ create, register, list, status, search, wake-up, companion, dream, pack, mri, re
 
 - `.github/workflows/ci.yml` -- tests on PR only (ubuntu, macos, windows x Python 3.10-3.13)
 - `.github/workflows/publish.yml` -- publish to PyPI on tag v*
-- Version in pyproject.toml AND src/kluris/__init__.py (must match)
+- **Version pinned in THREE files (must all match):** `pyproject.toml`, `src/kluris/__init__.py`, AND `tests/test_config.py::test_kluris_importable` (the test asserts the literal version string). The third file was added between v2.18.1 and v2.18.2; v2.18.3 shipped without bumping it and CI broke. Treat the three-file bump as one atomic step before tagging — PyPI rejects re-uploads of any existing version.
+- **End-user upgrade:** `pipx upgrade kluris && kluris doctor`. `doctor` is the muscle-memory refresh path -- it runs prerequisite checks AND `_do_install` to rewrite installed agent skills with the new SKILL.md content. Pass `--no-refresh` to keep doctor read-only.

@@ -68,7 +68,9 @@ exposes a `deprecation_count` summary for agent bootstrap.
 - Companions are embedded specmint playbooks. Per-brain opt-ins live in `kluris.yml` under `companions: []`. Runtime copies live under `~/.kluris/companions/<name>/SKILL.md`, are refreshed unconditionally by `doctor`, and are referenced by the generated layer-1 Kluris SKILL.md.
 - `register` -- registers a brain directory already on disk (in-place, no copy). Use `git clone <url> <path>` first if the brain is hosted on git, then `kluris register <path>`. Identity comes from `brain.md` H1 via `_read_brain_identity`. Calls `_do_install()` on success. Zip support was removed in 2.16.0; `.zip` paths error with a clear hint pointing at `unzip` + `git clone`.
 - Sync, commit, and branch: kluris brains are plain git repos. Use `git push` / `git pull` / `git checkout` directly. The wrapper commands (`kluris clone`, `kluris push`, `kluris pull`, `kluris branch`) were removed in 2.16.0.
-- Version must be updated in both pyproject.toml and src/kluris/__init__.py
+- **Version pinned in THREE files (must all match before tagging):** `pyproject.toml`, `src/kluris/__init__.py`, AND `tests/test_config.py::test_kluris_importable` (asserts the literal version string). PyPI rejects re-uploads, so the bump is one atomic step. v2.18.3 shipped with the third file forgotten -- treat all three as one change.
+- End-user upgrade flow: `pipx upgrade kluris && kluris doctor`. `doctor` reruns `_do_install` to refresh installed agent skills with the new SKILL.md content; pass `--no-refresh` to keep doctor read-only.
+- Test fixtures live in `conftest.py`: `cli_runner`, `temp_config`, `temp_home`, `temp_brain`, `bare_remote` (bare git remote with `HEAD = refs/heads/main` for CI compat).
 - Tests must pass before pushing: `pytest tests/ -q`
 - CI runs on PR only (ubuntu, macos, windows x Python 3.10-3.13)
 - Tags trigger PyPI publish: `git tag v0.X.Y && git push origin v0.X.Y`
