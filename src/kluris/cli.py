@@ -333,7 +333,7 @@ def _resolve_brains(
     if brain_name == "all":
         if not allow_all:
             raise click.ClickException(
-                "--brain all is only supported on dream, status, mri, and companion add/remove."
+                "--brain all is only supported on dream, status, mri, and companion commands."
             )
         if not brains:
             raise click.ClickException(
@@ -395,14 +395,24 @@ def _wizard_can_prompt(as_json: bool) -> bool:
 def _prompt_for_companions() -> list[str]:
     """Ask the interactive companion opt-in question."""
     console.print("  Install specmint companions for this brain?")
-    console.print("    [1] specmint-core (spec-driven-development companion)")
-    console.print("    [2] specmint-tdd  (spec-driven-development with test-driven-development focus companion)")
-    console.print("    [3] both")
+    console.print("    [1] specmint-core      (spec-driven-development companion)")
+    console.print(
+        "    [2] specmint-tdd       "
+        "(spec-driven-development with test-driven-development focus)"
+    )
+    console.print("    [3] core + tdd")
     console.print("    [4] skip")
+    console.print(
+        "    [5] specmint-core-html "
+        "(spec-driven-development with canonical SPEC.html)"
+    )
+    console.print("    [6] specmint-tdd-html  (TDD-focused specs with canonical SPEC.html)")
+    console.print("    [7] all")
     choice = click.prompt(
         "  Choice",
         default="4",
-        type=click.Choice(["1", "2", "3", "4"]),
+        show_choices=False,
+        type=click.Choice(["1", "2", "3", "4", "5", "6", "7"]),
     )
     if choice == "1":
         return ["specmint-core"]
@@ -410,6 +420,12 @@ def _prompt_for_companions() -> list[str]:
         return ["specmint-tdd"]
     if choice == "3":
         return ["specmint-core", "specmint-tdd"]
+    if choice == "5":
+        return ["specmint-core-html"]
+    if choice == "6":
+        return ["specmint-tdd-html"]
+    if choice == "7":
+        return list(companions.KNOWN)
     return []
 
 
@@ -534,6 +550,7 @@ def create(name: str | None, desc: str | None, base_path: str | None,
             f"Brain name '{name}' is too long ({len(name)} chars). "
             f"Maximum is {BRAIN_NAME_MAX_LENGTH}."
         )
+    assert name is not None
     if not validate_brain_name(name):
         raise click.ClickException(
             f"Brain name '{name}' is invalid. "
@@ -629,9 +646,16 @@ def create(name: str | None, desc: str | None, base_path: str | None,
         console.print(f"  Path: {brain_path}")
         console.print(f"  Lobes: {lobe_count}")
         console.print()
-        console.print(
-            f"[bold green]Run /kluris-{name} in any AI agent to start populating your brain.[/bold green]"
-        )
+        _print_skill_usage(name)
+
+
+def _print_skill_usage(name: str) -> None:
+    """Print concise agent-specific instructions for loading a generated brain skill."""
+    skill = f"kluris-{name}"
+    console.print(f"[bold green]Agent skill installed: {skill}[/bold green]")
+    console.print(f"  Claude/Codex/Gemini/etc: /{skill}")
+    console.print(f"  Hermes: /skill {skill}  (or start with `hermes -s {skill}`)")
+    console.print("  Created a new Hermes profile later? Run `kluris doctor` to refresh Kluris skills.")
 
 
 @cli.command("register")
@@ -752,6 +776,8 @@ def register_cmd(source: str | None, as_json: bool):
     else:
         console.print(f"Brain registered: [bold]{name}[/bold]")
         console.print(f"  Path: {brain_root}")
+        console.print()
+        _print_skill_usage(name)
 
 
 @cli.command("list")
@@ -828,6 +854,61 @@ def _prompt_companions_to_remove(enabled: list[str]) -> list[str]:
     if raw == len(enabled) + 1:
         return list(enabled)
     return [enabled[raw - 1]]
+
+
+@companion.command("list")
+@click.option("--brain", "brain_name", help="Brain name or 'all'")
+@click.option("--json", "as_json", is_flag=True, help="JSON output")
+def companion_list(brain_name: str | None, as_json: bool):
+    """List known companions, installed runtime copies, and brain opt-ins."""
+    config = read_global_config()
+    if brain_name:
+        brains = _resolve_brains(brain_name, allow_all=True, as_json=as_json)
+    else:
+        brains = [(n, e.model_dump()) for n, e in config.brains.items()]
+
+    home = _home_path()
+    installed = companions.installed(home)
+    brain_rows = []
+    for brain, entry in brains:
+        state = _read_companion_state(BrainEntry(**entry))
+        brain_rows.append({
+            "name": brain,
+            "path": entry.get("path", ""),
+            "companions": state,
+        })
+
+    payload = {
+        "ok": True,
+        "known": list(companions.KNOWN),
+        "installed": installed,
+        "brains": brain_rows,
+    }
+    if as_json:
+        click.echo(json_lib.dumps(payload))
+        return
+
+    known_table = Table(title="Known Companions")
+    known_table.add_column("Name")
+    known_table.add_column("Installed")
+    for name in companions.KNOWN:
+        known_table.add_row(name, "yes" if name in installed else "no")
+    console.print(known_table)
+
+    if not brain_rows:
+        console.print("No brains registered. Run 'kluris create <name>' to create one.")
+        return
+
+    brain_table = Table(title="Brain Companion Opt-ins")
+    brain_table.add_column("Brain")
+    brain_table.add_column("Companions")
+    for row in brain_rows:
+        state = row["companions"]
+        companion_text = (
+            "(unknown)" if state is None else (", ".join(state) if state else "(none)")
+        )
+        brain_table.add_row(row["name"], companion_text)
+    console.print(brain_table)
 
 
 @companion.command("add")
@@ -1038,8 +1119,8 @@ def wake_up(brain_name: str | None, as_json: bool):
 
     Emits a tight view of the brain's live state: the brain.md body, lobes
     with neuron counts, the 5 most recently updated neurons, the glossary,
-    and any deprecation warnings. Designed to be called by the /<skill>
-    slash command at session start so the agent has a fast index without
+    and any deprecation warnings. Designed to be called when the generated
+    per-brain skill is loaded or invoked so the agent has a fast index without
     walking brain.md, glossary.md, and every map.md.
 
     \b
@@ -1460,6 +1541,64 @@ def _compute_skills_to_render(brains: dict) -> list[tuple[str, str, object]]:
     return [(f"kluris-{n}", n, e) for n, e in brains.items()]
 
 
+def _hermes_skill_bases(home: Path) -> list[Path]:
+    """Return Hermes skill directories for the default home and existing profiles."""
+    bases = [home / ".hermes" / "skills"]
+    profiles = home / ".hermes" / "profiles"
+    if profiles.exists():
+        bases.extend(
+            profile / "skills"
+            for profile in sorted(profiles.iterdir(), key=lambda p: p.name)
+            if profile.is_dir()
+        )
+    return bases
+
+
+def _agent_skill_bases(agent_name: str, reg: dict, home: Path) -> list[Path]:
+    """Return destination skill directories for an agent registry entry."""
+    if agent_name == "hermes":
+        return _hermes_skill_bases(home)
+    return [home / reg["dir"] / reg["subdir"]]
+
+
+def _install_skills_to_base(
+    *,
+    agent_name: str,
+    base: Path,
+    skills_to_render: list[tuple[str, str, object]],
+    old_dirs_rel: list[str],
+    home: Path,
+    render_kwargs,
+) -> int:
+    """Stage and install all rendered skills into one destination base."""
+    import shutil
+
+    staged: list[tuple[str, Path]] = []
+    base.mkdir(parents=True, exist_ok=True)
+    for skill_name, brain_name, entry in skills_to_render:
+        staging = base / f".{skill_name}.tmp"
+        if staging.exists():
+            shutil.rmtree(staging)
+        kwargs = render_kwargs(brain_name, entry)
+        kwargs["skill_name"] = skill_name
+        files = render_commands(agent_name, base, target_dir=staging, **kwargs)
+        for f in files:
+            if not f.exists():
+                raise OSError(f"Failed to stage {f}")
+        staged.append((skill_name, staging))
+
+    _sweep_kluris(base, old_dirs_rel, home)
+
+    installed = 0
+    for skill_name, staging in staged:
+        target = base / skill_name
+        if target.exists():
+            shutil.rmtree(target)
+        staging.replace(target)
+        installed += 1
+    return installed
+
+
 def _do_install(as_json: bool = False):
     """Install agent skills/workflows for all agents across all brains."""
     import shutil
@@ -1505,51 +1644,24 @@ def _do_install(as_json: bool = False):
         if agent_name not in AGENT_REGISTRY:
             continue
         reg = AGENT_REGISTRY[agent_name]
-        base = home / reg["dir"] / reg["subdir"]
-
-        # Stage all new skills to sibling temp directories so an in-flight
-        # failure cannot leave the user with no skill at all.
-        staged: list[tuple[str, Path]] = []
-        try:
-            base.mkdir(parents=True, exist_ok=True)
-            for skill_name, brain_name, entry in skills_to_render:
-                staging = base / f".{skill_name}.tmp"
-                if staging.exists():
-                    shutil.rmtree(staging)
-                kwargs = _render_kwargs(brain_name, entry)
-                kwargs["skill_name"] = skill_name
-                files = render_commands(
-                    agent_name, base, target_dir=staging, **kwargs
+        agent_succeeded = False
+        for base in _agent_skill_bases(agent_name, reg, home):
+            try:
+                installed_files = _install_skills_to_base(
+                    agent_name=agent_name,
+                    base=base,
+                    skills_to_render=skills_to_render,
+                    old_dirs_rel=OLD_COMMAND_DIRS.get(agent_name, []),
+                    home=home,
+                    render_kwargs=_render_kwargs,
                 )
-                for f in files:
-                    if not f.exists():
-                        raise OSError(f"Failed to stage {f}")
-                staged.append((skill_name, staging))
-        except OSError as e:
-            for _, s in staged:
-                try:
-                    shutil.rmtree(s, ignore_errors=True)
-                except OSError:
-                    pass
-            failed_agents.append((agent_name, str(e)))
-            continue
-
-        # Past this point we sweep the old artifacts and rename the staged
-        # skills into place. Sweep BEFORE rename so any leftover ``kluris*``
-        # dirs (legacy or per-brain from a prior install) are removed.
-        _sweep_kluris(base, OLD_COMMAND_DIRS.get(agent_name, []), home)
-
-        try:
-            for skill_name, staging in staged:
-                target = base / skill_name
-                if target.exists():
-                    shutil.rmtree(target)
-                staging.replace(target)
-                total_files += 1
+            except OSError as e:
+                failed_agents.append((agent_name, str(e)))
+                continue
+            agent_succeeded = True
+            total_files += installed_files
+        if agent_succeeded:
             agent_count += 1
-        except OSError as e:
-            failed_agents.append((agent_name, str(e)))
-            continue
 
     # Windsurf workflow files (one per skill, not per agent loop because
     # only Windsurf opts in via ``also_workflow``). Staged writes + rename

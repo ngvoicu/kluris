@@ -42,7 +42,7 @@ src/kluris/
     mri.py             # build_graph(), generate_mri_html() -- standalone HTML viz
     git.py             # git_init(), git_add(), git_commit(), git_log(),
                        # git_log_file_dates() batch helper (one subprocess replaces 2N)
-    agents.py          # AGENT_REGISTRY (8 agents), per-brain SKILL.md renderer
+    agents.py          # AGENT_REGISTRY (9 agents), per-brain SKILL.md renderer
                        # (always kluris-<name>, even for one brain);
                        # brain_path emitted in POSIX form (C:/ on Windows) for bash
 ```
@@ -60,11 +60,11 @@ src/kluris/
 - **wake-up bootstrap protocol** -- SKILL.md instructs the agent to run `kluris wake-up --brain <name> --json` on the first `/<skill>` of a session (via Bash), cache the snapshot, and refresh only after brain-mutating commands. This replaces walking brain.md -> map.md -> neurons on every turn.
 - **Per-brain skill scheme** -- every registered brain installs as one `kluris-<name>` skill, even when it is the only brain, so project pointers stay stable as more brains are added. `kluris doctor` sweeps the entire `kluris*` artifact set before writing the named layout, so legacy bare `kluris` installs migrate automatically. Per-destination atomic via stage-then-rename so a partial-write failure leaves the OLD skill in place.
 - **No default brain** -- resolution order is: explicit `--brain NAME` → exactly 1 brain registered → interactive picker (TTY only). Non-TTY / `--json` / `KLURIS_NO_PROMPT=1` all force the resolver to error out instead of prompting.
-- **`--brain all`** -- accepted only on fan-out commands (dream, status, mri, companion add/remove). Other commands reject it with a clear error. `all` is also a reserved brain name to prevent collision.
+- **`--brain all`** -- accepted only on fan-out commands (dream, status, mri, companion commands). Other commands reject it with a clear error. `all` is also a reserved brain name to prevent collision.
 - **Sticky-selection tradeoff** -- `kluris use` was removed deliberately. Repeated commands in a terminal session each trigger the picker (or take `--brain`). The compensating affordances are `KLURIS_NO_PROMPT`, `--brain all`, the integer-pick UX, and the per-brain slash command names that make ambiguity disappear in agent workflows.
 - **Deprecation frontmatter is opt-in** -- neurons may set `status: deprecated` + `deprecated_at` + `replaced_by`. Absence of `status` means active. `linker.detect_deprecation_issues()` surfaces 4 kinds of warnings (`active_links_to_deprecated`, `deprecated_without_replacement`, `replaced_by_missing`, `replaced_by_not_active`) through `kluris dream`; they are non-blocking (do not break `healthy`). `kluris wake-up` exposes a `deprecation_count` summary.
 - **KlurisGroup detects --json via ctx args** -- scans `ctx.protected_args + ctx.args` in addition to `sys.argv` so JSON error output works under CliRunner (tests) as well as shell.
-- **Companions are embedded, not installed as separate skills** -- specmint-core/tdd ship inside the kluris package and are copied to `~/.kluris/companions/<name>/SKILL.md` on opt-in. Layer-1 SKILL.md references their paths; they are NOT auto-loaded as agent skills.
+- **Companions are embedded, not installed as separate skills** -- specmint-core, specmint-tdd, specmint-core-html, and specmint-tdd-html ship inside the kluris package and are copied to `~/.kluris/companions/<name>/SKILL.md` on opt-in. Layer-1 SKILL.md references their paths; they are NOT auto-loaded as agent skills.
 - **BrainConfig.companions** -- per-brain opt-in list; missing from older kluris.yml defaults to `[]`.
 - **Companion refresh on doctor** -- `kluris doctor` calls `companions.refresh()` for the union of referenced and installed known companions so pipx-upgraded kluris auto-updates bundled playbooks without version comparison.
 
@@ -74,7 +74,7 @@ src/kluris/
 - **Brain config:** `<brain>/kluris.yml` (gitignored, local only)
 - **Installed skills:** `~/.claude/skills/`, `~/.cursor/skills/`, `~/.copilot/skills/`, etc.
 
-## Agent Registry (8 agents)
+## Agent Registry (9 agents)
 
 | Agent | Dir | Format |
 |-------|-----|--------|
@@ -84,6 +84,7 @@ src/kluris/
 | copilot | ~/.copilot/skills/kluris-&lt;name&gt;/ | SKILL.md |
 | codex | ~/.codex/skills/kluris-&lt;name&gt;/ | SKILL.md |
 | gemini | ~/.gemini/skills/kluris-&lt;name&gt;/ | SKILL.md |
+| hermes | ~/.hermes/skills/kluris-&lt;name&gt;/ and ~/.hermes/profiles/*/skills/kluris-&lt;name&gt;/ | SKILL.md |
 | kilocode | ~/.kilo/skills/kluris-&lt;name&gt;/ | SKILL.md |
 | junie | ~/.junie/skills/kluris-&lt;name&gt;/ | SKILL.md |
 
@@ -106,7 +107,7 @@ The skill body contains six load-bearing sections (in order):
 
 - **0 brains** → resolver errors with a hint to run `kluris create`.
 - **1 brain** → auto-resolves for terminal CLI convenience, but the installed skill is still `kluris-<name>` and passes `--brain <name>`.
-- **2+ brains + TTY** → interactive picker `[1] foo [2] bar [3] all` for fan-out commands (dream/status/mri/companion add/remove); `[1] foo [2] bar` (no `all`) for single-brain commands (wake-up/search).
+- **2+ brains + TTY** → interactive picker `[1] foo [2] bar [3] all` for fan-out commands (dream/status/mri/companion commands); `[1] foo [2] bar` (no `all`) for single-brain commands (wake-up/search).
 - **2+ brains + non-interactive** (`--json`, no TTY, or `KLURIS_NO_PROMPT=1`) → resolver errors with the available brains listed and a hint to pass `--brain NAME` or `--brain all`.
 - **Stale brain paths** → annotated `(missing)` in the picker; resolver raises `ClickException` if the user actually tries to use one.
 

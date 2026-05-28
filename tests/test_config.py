@@ -24,7 +24,7 @@ from kluris.core.config import (
 
 def test_kluris_importable():
     assert hasattr(kluris, "__version__")
-    assert kluris.__version__ == "2.20.2"
+    assert kluris.__version__ == "2.21.0"
 
 
 def test_global_config_defaults():
@@ -79,7 +79,7 @@ def test_git_config_class_removed():
 
 def test_agents_config_defaults():
     cfg = AgentsConfig()
-    assert len(cfg.commands_for) == 8
+    assert len(cfg.commands_for) == 9
     assert "claude" in cfg.commands_for
     assert "cursor" in cfg.commands_for
     assert "windsurf" in cfg.commands_for
@@ -87,7 +87,26 @@ def test_agents_config_defaults():
     assert "codex" in cfg.commands_for
     assert "kilocode" in cfg.commands_for
     assert "gemini" in cfg.commands_for
+    assert "hermes" in cfg.commands_for
     assert "junie" in cfg.commands_for
+
+
+def test_agents_config_migrates_pre_hermes_default_list():
+    cfg = AgentsConfig.model_validate({
+        "commands_for": [
+            "claude", "cursor", "windsurf", "copilot",
+            "codex", "kilocode", "gemini", "junie",
+        ]
+    })
+
+    assert len(cfg.commands_for) == 9
+    assert "hermes" in cfg.commands_for
+
+
+def test_agents_config_preserves_custom_agent_list():
+    cfg = AgentsConfig.model_validate({"commands_for": ["claude"]})
+
+    assert cfg.commands_for == ["claude"]
 
 
 # --- [TEST-KLU-03] Config read/write with KLURIS_CONFIG ---

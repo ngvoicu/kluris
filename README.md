@@ -72,12 +72,12 @@ Kluris lives in two places. Knowing which is which makes everything else click.
 | Surface | Prompt | Where you type it | What it is | Examples |
 |---------|:------:|-------------------|-----------|----------|
 | **Terminal** | `$ kluris …` | Your shell — bash, zsh, fish, PowerShell | The `kluris` Python CLI | `kluris create`, `kluris dream`, `kluris status`, `kluris mri`, `kluris doctor` |
-| **AI agent** | `> /kluris-<name> …` | Inside your coding agent — Claude Code, Cursor, Windsurf, Codex, Copilot, Gemini CLI, Kilo, Junie | The per-brain slash-command skill Kluris keeps refreshed automatically | `/kluris-acme learn …`, `/kluris-acme remember …`, `/kluris-acme search …`, `/kluris-acme what …`, `/kluris-acme implement …`, `/kluris-acme fix …` |
+| **AI agent** | `> /kluris-<name> …` | Inside your coding agent — Claude Code, Cursor, Windsurf, Codex, Copilot, Gemini CLI, Hermes Agent, Kilo, Junie | The per-brain skill Kluris keeps refreshed automatically | `/kluris-acme learn …`, `/skill kluris-acme`, `hermes -s kluris-acme` |
 
 Throughout this README:
 
 - Code blocks labelled ```` ```bash ```` or tagged **"In your terminal"** are meant for the shell. They start with `$` (or `>` on Windows PowerShell).
-- Code blocks tagged **"Inside your AI coding agent"** are meant for Claude Code / Cursor / Windsurf / Codex / Copilot / Gemini / Kilo / Junie. They start with `/kluris-<name>`.
+- Code blocks tagged **"Inside your AI coding agent"** are meant for Claude Code / Cursor / Windsurf / Codex / Copilot / Gemini / Hermes / Kilo / Junie. Most start with `/kluris-<name>`; Hermes uses `/skill kluris-<name>` or `hermes -s kluris-<name>`.
 
 Every command you'll see below belongs to exactly one of these two surfaces.
 
@@ -149,14 +149,14 @@ kluris wake-up --brain X  # target a specific brain when more than one is regist
 
 ### Working with multiple brains
 
-Each registered brain installs as its own slash command from the beginning:
-`/kluris-<name>` (e.g. `/kluris-acme`, `/kluris-personal`). Every per-brain
-skill is bound to exactly one brain, so the agent never has to guess which one
-you mean and project pointers stay stable as more brains are added.
+Each registered brain installs as its own skill from the beginning:
+`kluris-<name>` (usually invoked as `/kluris-<name>`; Hermes uses `/skill kluris-<name>`).
+Every per-brain skill is bound to exactly one brain, so the agent never has to
+guess which one you mean and project pointers stay stable as more brains are added.
 
 CLI commands prompt interactively when 2+ brains are registered:
 
-- Fan-out commands (`dream`, `status`, `mri`, `companion add/remove`) show
+- Fan-out commands (`dream`, `status`, `mri`, `companion` commands) show
   `[1] acme [2] personal [3] all`. Pick a single brain or apply to every brain.
 - Single-brain commands (`wake-up`, `search`) show
   `[1] acme [2] personal` (no `all` option).
@@ -445,16 +445,16 @@ Empty -- build your own structure from scratch.
 ## How it works
 
 1. **Terminal** — `kluris create` creates a brain (interactive wizard)
-2. **Terminal** — Kluris refreshes the `/kluris-<name>` skill automatically
+2. **Terminal** — Kluris refreshes the `kluris-<name>` skill automatically
 3. **Terminal** — optional companions add embedded specmint workflows per brain
-4. **Inside your AI coding agent** — open any project and use `/kluris-<name>`; the agent becomes an SME
+4. **Inside your AI coding agent** — open any project and load/invoke `kluris-<name>`; the agent becomes an SME
 5. Agent and human curate the brain together — you review and approve every entry
 6. **Terminal** — `kluris dream` maintains brain structure
 7. **Terminal** — `kluris mri` visualizes the brain
 
 ## Commands reference
 
-Kluris has two surfaces — the terminal CLI and the slash commands you type inside your AI coding agent. Here they are side by side.
+Kluris has two surfaces — the terminal CLI and the per-brain skills you load inside your AI coding agent. Here they are side by side.
 
 ### In your terminal — `$ kluris *`
 
@@ -468,8 +468,9 @@ Run these in bash, zsh, fish, or PowerShell. They handle setup, git, maintenance
 | `kluris status` | Brain tree, neuron counts, recent changes |
 | `kluris search <query>` | Ranked search across neurons, glossary, brain.md (`--lobe`, `--tag`, `--limit`, `--json`) |
 | `kluris wake-up` | Compact brain snapshot for agent session bootstrap — includes `brain_md`, `glossary`, `deprecation` (`--json`) |
-| `kluris companion add specmint-core\|specmint-tdd` | Opt a brain into an embedded companion playbook |
-| `kluris companion remove specmint-core\|specmint-tdd` | Remove a companion opt-in from a brain |
+| `kluris companion add specmint-core\|specmint-tdd\|specmint-core-html\|specmint-tdd-html` | Opt a brain into an embedded companion playbook |
+| `kluris companion list` | List known companions, installed runtime copies, and brain opt-ins |
+| `kluris companion remove specmint-core\|specmint-tdd\|specmint-core-html\|specmint-tdd-html` | Remove a companion opt-in from a brain |
 | `kluris dream` | Regenerate maps, fix links, validate structure |
 | `kluris pack` | Pack a brain into a self-contained Docker chat server |
 | `kluris mri` | Visualize the brain (opens in browser by default) |
@@ -485,7 +486,7 @@ from the brain directory like any other repo.
 
 ### Inside your AI coding agent — `> /kluris-<name> ...`
 
-Type these inside Claude Code, Cursor, Windsurf, GitHub Copilot, Codex, Gemini CLI, Kilo, or Junie. Every registered brain installs as `/kluris-<name>`. Examples below use `/kluris-acme` for clarity.
+Type these inside Claude Code, Cursor, Windsurf, GitHub Copilot, Codex, Gemini CLI, Hermes Agent, Kilo, or Junie. Every registered brain installs as `kluris-<name>`; most agents expose it as `/kluris-<name>`, and Hermes loads it with `/skill kluris-<name>` or `hermes -s kluris-<name>`. Examples below use `/kluris-acme` for clarity.
 
 | Pattern | What the agent does |
 |---------|---------------------|
@@ -504,7 +505,7 @@ Type these inside Claude Code, Cursor, Windsurf, GitHub Copilot, Codex, Gemini C
 | `/kluris-acme open <file>` | Opens a neuron and reads it |
 | `/kluris-acme deprecate <file>` | Marks a neuron as deprecated |
 
-Agent patterns are free-form — say it naturally. Under the hood the agent calls `kluris search` for lookups and `kluris wake-up` for the session bootstrap, but you never type those yourself when using the slash command.
+Agent patterns are free-form — say it naturally. Under the hood the agent calls `kluris search` for lookups and `kluris wake-up` for the session bootstrap, but you never type those yourself when using the generated skill.
 
 ## Local config (kluris.yml)
 
@@ -531,7 +532,9 @@ description: my-brain knowledge base
 
 ## Supported agents
 
-Claude Code, Cursor, Windsurf, GitHub Copilot, Codex, Gemini CLI, Kilo Code, Junie
+Claude Code, Cursor, Windsurf, GitHub Copilot, Codex, Gemini CLI, Hermes Agent, Kilo Code, Junie
+
+Most agents load the generated skill as `/kluris-<name>`. Hermes users can load it with `/skill kluris-<name>` inside a session or start Hermes with `hermes -s kluris-<name>`. If you create a new Hermes profile after creating/registering a brain, run `kluris doctor` to refresh that profile's skills.
 
 ## Pair with Specmint
 
@@ -546,17 +549,21 @@ Pair them and the research phase starts half-done — grounded in your code
 > /kluris-acme let's spec out adding OAuth sign-in with GitHub
 ```
 
-The `/kluris-<name>` skill sees this is multi-step work and follows the embedded
+The `kluris-<name>` skill sees this is multi-step work and follows the embedded
 specmint playbook. Phase 1a reads your codebase. Phase 1b consults the brain.
 Phase 2 asks only the questions neither can answer. Phase 3 writes a spec
 where every decision references a neuron.
 
-Two flavors — both installable per brain as Kluris companions:
+Four flavors are installable per brain as Kluris companions:
 
 | Companion | What it is |
 |-----------|-----------|
 | [`specmint-core`](https://github.com/ngvoicu/specmint-core) | Spec-first workflow — Research · Interview · Spec · Implement |
 | [`specmint-tdd`](https://github.com/ngvoicu/specmint-tdd) | Same forge flow with strict TDD — a failing test before any implementation |
+| `specmint-core-html` | Spec-first workflow where `.specs/<id>/SPEC.html` is the canonical spec document |
+| `specmint-tdd-html` | TDD-focused workflow where `.specs/<id>/SPEC.html` carries tasks, RGR state, logs, and progress |
+
+Use the HTML variants when you want the spec itself to be a visual, shareable, presentation-ready HTML document. Use the non-HTML variants when you prefer plain markdown specs as the canonical source of truth.
 
 Companions ship inside the `kluris` Python package. Enabling one copies only
 its `SKILL.md` into `~/.kluris/companions/<name>/SKILL.md` and adds a short
@@ -567,6 +574,8 @@ reference snippet to that brain's generated Kluris skill.
 ```bash
 kluris companion add specmint-core --brain my-brain
 kluris companion add specmint-tdd --brain my-brain
+kluris companion add specmint-core-html --brain my-brain
+kluris companion add specmint-tdd-html --brain my-brain
 ```
 
 **Enable for every registered brain:**
@@ -574,6 +583,8 @@ kluris companion add specmint-tdd --brain my-brain
 ```bash
 kluris companion add specmint-core --brain all
 kluris companion add specmint-tdd --brain all
+kluris companion add specmint-core-html --brain all
+kluris companion add specmint-tdd-html --brain all
 ```
 
 More at [specmint.io](https://specmint.io).

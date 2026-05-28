@@ -1,5 +1,7 @@
 """Tests for agent registry and skill rendering."""
 
+from kluris.cli import _do_install, _hermes_skill_bases, cli
+from kluris.core.config import BrainEntry, GlobalConfig, write_global_config
 from kluris.core.agents import AGENT_REGISTRY, render_commands, render_skill
 
 
@@ -115,14 +117,125 @@ def test_skill_has_openapi_endpoints_convention():
     assert "Bidirectional synapses" in body
 
 
-def test_registry_8_agents():
-    assert len(AGENT_REGISTRY) == 8
+def test_registry_9_agents_includes_hermes():
+    assert len(AGENT_REGISTRY) == 9
+    assert AGENT_REGISTRY["hermes"]["dir"] == ".hermes"
+    assert AGENT_REGISTRY["hermes"]["subdir"] == "skills"
 
 
 def test_all_agents_use_skills():
     """All agents now use skills/ subdirectory with SKILL.md format."""
     for name, reg in AGENT_REGISTRY.items():
         assert reg["subdir"] == "skills", f"{name} should use skills/"
+
+
+def test_hermes_skill_bases_include_default_and_existing_profiles(tmp_path):
+    home = tmp_path / "home"
+    (home / ".hermes" / "profiles" / "reviewer").mkdir(parents=True)
+    (home / ".hermes" / "profiles" / "cody").mkdir(parents=True)
+    (home / ".hermes" / "profiles" / "not-a-dir").write_text("x", encoding="utf-8")
+
+    assert _hermes_skill_bases(home) == [
+        home / ".hermes" / "skills",
+        home / ".hermes" / "profiles" / "cody" / "skills",
+        home / ".hermes" / "profiles" / "reviewer" / "skills",
+    ]
+
+
+def test_do_install_writes_hermes_default_and_profile_skills(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    monkeypatch.setenv("KLURIS_CONFIG", str(tmp_path / "config.yml"))
+    (tmp_path / ".hermes" / "profiles" / "cody").mkdir(parents=True)
+    brain = tmp_path / "brain"
+    brain.mkdir()
+    (brain / "brain.md").write_text("# Brain\n", encoding="utf-8")
+    write_global_config(GlobalConfig(
+        brains={"brain": BrainEntry(path=str(brain), description="Brain")}
+    ))
+
+    result = _do_install()
+
+    assert result["agents"] == 9
+    default_skill = tmp_path / ".hermes" / "skills" / "kluris-brain" / "SKILL.md"
+    profile_skill = tmp_path / ".hermes" / "profiles" / "cody" / "skills" / "kluris-brain" / "SKILL.md"
+    assert "name: kluris-brain" in default_skill.read_text(encoding="utf-8")
+    assert "name: kluris-brain" in profile_skill.read_text(encoding="utf-8")
+
+
+def test_do_install_adds_hermes_for_legacy_default_agent_configs(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    monkeypatch.setenv("KLURIS_CONFIG", str(tmp_path / "config.yml"))
+    brain = tmp_path / "brain"
+    brain.mkdir()
+    (brain / "brain.md").write_text("# Brain\n", encoding="utf-8")
+    (brain / "kluris.yml").write_text(
+        """name: brain
+description: Brain
+agents:
+  commands_for:
+  - claude
+  - cursor
+  - windsurf
+  - copilot
+  - codex
+  - kilocode
+  - gemini
+  - junie
+""",
+        encoding="utf-8",
+    )
+    write_global_config(GlobalConfig(
+        brains={"brain": BrainEntry(path=str(brain), description="Brain")}
+    ))
+
+    _do_install()
+
+    assert (tmp_path / ".hermes" / "skills" / "kluris-brain" / "SKILL.md").exists()
+
+
+def test_create_output_mentions_hermes_skill_loading(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    monkeypatch.setenv("KLURIS_CONFIG", str(tmp_path / "config.yml"))
+
+    result = __import__("click.testing").testing.CliRunner().invoke(cli, [
+        "create",
+        "brain",
+        "--path",
+        str(tmp_path),
+        "--description",
+        "Brain",
+        "--type",
+        "blank",
+        "--no-git",
+    ])
+
+    assert result.exit_code == 0, result.output
+    assert "Hermes: /skill kluris-brain" in result.output
+    assert "hermes -s kluris-brain" in result.output
+    assert "kluris doctor" in result.output
+
+
+def test_register_output_mentions_hermes_skill_loading(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    monkeypatch.setenv("KLURIS_CONFIG", str(tmp_path / "config.yml"))
+    brain = tmp_path / "source-brain"
+    brain.mkdir()
+    (brain / "brain.md").write_text("# brain\n\nBrain description.\n", encoding="utf-8")
+    (brain / "kluris.yml").write_text("name: brain\ndescription: Brain\n", encoding="utf-8")
+
+    result = __import__("click.testing").testing.CliRunner().invoke(cli, [
+        "register",
+        str(brain),
+    ])
+
+    assert result.exit_code == 0, result.output
+    assert "Hermes: /skill kluris-brain" in result.output
+    assert "hermes -s kluris-brain" in result.output
+    assert "kluris doctor" in result.output
 
 
 def test_render_skill_has_frontmatter():
@@ -191,7 +304,8 @@ def test_skill_bootstrap_instruction_is_deterministic():
     """Bootstrap instruction must be deterministic, not ambiguous."""
     content = _render()
     assert "Bootstrap" in content
-    assert "first" in content.lower() and "/kluris" in content
+    assert "skill is loaded or invoked" in content.lower()
+    assert "kluris wake-up" in content
     # Cache guidance: agent should reuse wake-up output, not re-run every turn
     assert "cache" in content.lower() or "trust" in content.lower()
 
@@ -222,6 +336,15 @@ def test_render_skill_named_skill_has_brain_flag_hint():
     # The placeholder must be substituted, not left as-is.
     assert "{brain_flag_hint}" not in content
     assert "{brain_flag_hint_inline}" not in content
+
+
+def test_render_skill_has_hermes_compatible_invocation_guidance():
+    content = _render(skill_name="kluris-foo", brain_name="foo")
+
+    assert "skill is loaded or invoked" in content
+    assert "Hermes: `/skill kluris-foo`" in content
+    assert "`/kluris-foo remember`" not in content
+    assert "`/kluris-foo learn`" not in content
 
 
 def test_render_skill_isolation():
@@ -361,6 +484,18 @@ def test_specmint_block_both():
     assert "/tmp/kluris-companions/specmint-core/SKILL.md" in content
     assert "/tmp/kluris-companions/specmint-tdd/SKILL.md" in content
     assert "TDD-heavy work" in content
+
+
+def test_specmint_block_html_companions():
+    content = _render(
+        companions=["specmint-core-html", "specmint-tdd-html"],
+        companion_home="/tmp/kluris-companions",
+    )
+    assert "/tmp/kluris-companions/specmint-core-html/SKILL.md" in content
+    assert "/tmp/kluris-companions/specmint-tdd-html/SKILL.md" in content
+    assert "/tmp/kluris-companions/specmint-core/SKILL.md" not in content
+    assert "/tmp/kluris-companions/specmint-tdd/SKILL.md" not in content
+    assert "canonical SPEC.html" in content
 
 
 def test_brain_vs_current_project_heading():

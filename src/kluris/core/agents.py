@@ -13,6 +13,7 @@ AGENT_REGISTRY: dict[str, dict] = {
     "copilot": {"dir": ".copilot", "subdir": "skills"},
     "codex": {"dir": ".codex", "subdir": "skills"},
     "gemini": {"dir": ".gemini", "subdir": "skills"},
+    "hermes": {"dir": ".hermes", "subdir": "skills"},
     "kilocode": {"dir": ".kilo", "subdir": "skills"},
     "junie": {"dir": ".junie", "subdir": "skills"},
 }
@@ -25,6 +26,7 @@ OLD_COMMAND_DIRS: dict[str, list[str]] = {
     "copilot": [".copilot/agents"],
     "codex": [".agents/skills"],
     "gemini": [".gemini/commands"],
+    "hermes": [],
     "kilocode": [".config/kilo/commands", ".kilocode/commands"],
     "junie": [".junie/commands"],
 }
@@ -50,7 +52,7 @@ This skill is bound to exactly one brain. Do not look for other brains. Do not i
 {specmint_block}
 ## Bootstrap
 
-On the FIRST `/{skill_name}` call of the session, run `kluris wake-up{brain_flag_hint_inline} --json` via
+On the FIRST time this skill is loaded or invoked in the session, run `kluris wake-up{brain_flag_hint_inline} --json` via
 your Bash tool before doing anything else. Cache that wake-up output and trust
 it for the rest of the session; do not re-run wake-up on every turn.
 
@@ -62,7 +64,7 @@ The wake-up output is your compact brain index:
 - `deprecation[]`: stale/superseded knowledge warnings
 
 Re-run `kluris wake-up{brain_flag_hint_inline} --json` only after the brain changes:
-`/{skill_name} remember`, `/{skill_name} learn`, `kluris dream{brain_flag_hint_inline}`,
+this skill's remember/learn intents, `kluris dream{brain_flag_hint_inline}`,
 or direct file edits the user tells you about.
 
 If the `kluris` CLI is unavailable, the brain is still a plain filesystem tree
@@ -128,7 +130,7 @@ edit them.
 
 Understand the user's intent from their message:
 
-**Search** -- "`/{skill_name} search X`", "what do we know about X", "find info about Y".
+**Search** -- "search X" after this skill is loaded/invoked, "what do we know about X", "find info about Y".
 Run `kluris search "<query>"{brain_flag_hint_inline} --json`, read snippets first,
 then open specific neurons only when needed. Read-only: never write during
 search.
@@ -499,7 +501,8 @@ CURRENT WORKING DIRECTORY (the project), not the brain itself.
    ## Knowledge base
 
    Read and write to the **{brain_name}** brain through kluris (never
-   edit brain files by hand). Use the `/kluris-{brain_name}` skill --
+   edit brain files by hand). Use the `kluris-{brain_name}` skill
+   (usually `/kluris-{brain_name}`; Hermes: `/skill kluris-{brain_name}`) --
    search, learn, remember, create.
    ```
 
@@ -623,7 +626,13 @@ _FLAG_HINT_BLOCK = """
 When invoking the kluris CLI from this skill, you MUST pass `--brain {brain_name}` on every call (e.g. `kluris wake-up --brain {brain_name} --json`). The skill is named `{skill_name}` so it always targets this brain unambiguously."""
 
 
-_COMPANION_ORDER = ("specmint-core", "specmint-tdd")
+_COMPANION_ORDER = ("specmint-core", "specmint-tdd", "specmint-core-html", "specmint-tdd-html")
+_COMPANION_LABELS = {
+    "specmint-core": "general spec-driven work with markdown specs",
+    "specmint-tdd": "TDD-heavy work with markdown specs",
+    "specmint-core-html": "general spec-driven work with canonical SPEC.html files",
+    "specmint-tdd-html": "TDD-heavy spec-driven work with canonical SPEC.html files",
+}
 
 
 def _build_specmint_block(
@@ -638,25 +647,14 @@ def _build_specmint_block(
         raise ValueError("companion_home is required when rendering companion blocks")
 
     home = _posix_path(companion_home)
-    core_path = f"{home}/specmint-core/SKILL.md"
-    tdd_path = f"{home}/specmint-tdd/SKILL.md"
-
-    if selected == ["specmint-core", "specmint-tdd"]:
-        routing = (
-            f"- TDD-heavy work -> read `{tdd_path}`\n"
-            f"- Other multi-step work -> read `{core_path}`"
-        )
-    elif selected == ["specmint-core"]:
-        routing = (
-            f"- Multi-step work -> read `{core_path}`\n"
-            "- If the user explicitly wants strict TDD, suggest "
-            "`kluris companion add specmint-tdd` for this brain."
-        )
-    else:
-        routing = (
-            f"- TDD-heavy or spec-worthy work -> read `{tdd_path}`\n"
-            "- For non-TDD spec planning, this playbook is still usable; "
-            "keep the TDD gates only when they match the user's intent."
+    routing = "\n".join(
+        f"- {_COMPANION_LABELS[name]} -> read `{home}/{name}/SKILL.md`"
+        for name in selected
+    )
+    if "specmint-tdd" not in selected and "specmint-tdd-html" not in selected:
+        routing += (
+            "\n- If the user explicitly wants strict TDD, suggest adding "
+            "`specmint-tdd` or `specmint-tdd-html` for this brain."
         )
 
     return (
@@ -665,6 +663,8 @@ def _build_specmint_block(
         "files, migration, new subsystem), pause before coding and follow the "
         "embedded companion playbook:\n\n"
         f"{routing}\n\n"
+        "Use the HTML companions when the user wants `.specs/<id>/SPEC.html` "
+        "as the canonical spec document; otherwise prefer the markdown companions.\n\n"
         "Kluris ships these playbooks embedded. Do not direct the user to "
         "install a separate specmint skill or package.\n\n"
         "Small single-file edits do not need a spec; proceed directly.\n"

@@ -13,7 +13,7 @@ from pathlib import Path
 
 from kluris.core.config import GlobalConfig, read_brain_config
 
-KNOWN = ("specmint-core", "specmint-tdd")
+KNOWN = ("specmint-core", "specmint-tdd", "specmint-core-html", "specmint-tdd-html")
 _VENDORED = Path(__file__).parent.parent / "vendored"
 _HOME_COMPANIONS_REL = Path(".kluris") / "companions"
 

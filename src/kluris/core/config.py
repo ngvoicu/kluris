@@ -6,7 +6,7 @@ import os
 from pathlib import Path
 
 import yaml
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class BrainEntry(BaseModel):
@@ -20,12 +20,48 @@ class GlobalConfig(BaseModel):
     brains: dict[str, BrainEntry] = Field(default_factory=dict)
 
 
+DEFAULT_AGENT_COMMANDS = (
+    "claude",
+    "cursor",
+    "windsurf",
+    "copilot",
+    "codex",
+    "gemini",
+    "hermes",
+    "kilocode",
+    "junie",
+)
+
+_LEGACY_DEFAULT_AGENT_COMMANDS = frozenset((
+    "claude",
+    "cursor",
+    "windsurf",
+    "copilot",
+    "codex",
+    "gemini",
+    "kilocode",
+    "junie",
+))
+
+
 class AgentsConfig(BaseModel):
     """Agent installation settings for a brain."""
-    commands_for: list[str] = Field(default_factory=lambda: [
-        "claude", "cursor", "windsurf", "copilot",
-        "codex", "kilocode", "gemini", "junie",
-    ])
+    commands_for: list[str] = Field(
+        default_factory=lambda: list(DEFAULT_AGENT_COMMANDS)
+    )
+
+    @model_validator(mode="after")
+    def migrate_legacy_default_agents(self) -> "AgentsConfig":
+        """Treat the pre-Hermes default list as the evolving default set.
+
+        Existing brains have a local ``kluris.yml`` written with the full agent
+        default list. When Kluris adds a first-class target, those old files
+        should receive the new target on ``kluris doctor`` instead of being
+        permanently stuck on the historical list. Custom lists are preserved.
+        """
+        if frozenset(self.commands_for) == _LEGACY_DEFAULT_AGENT_COMMANDS:
+            self.commands_for = list(DEFAULT_AGENT_COMMANDS)
+        return self
 
 
 class StructureNode(BaseModel):

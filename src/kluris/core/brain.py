@@ -229,11 +229,11 @@ kluris register ~/path/to/brain            # register the on-disk brain
 
 ### Start building your team knowledge
 
-One command does everything: `/kluris-{name} <natural language>`.
+One skill does everything: `kluris-{name} <natural language>`.
 
-**Important:** `/kluris-{name}` is a slash command for coding agents -- use it
-inside Claude Code, Codex, Cursor, Windsurf, Cline, Devin, Gemini CLI, or any
-AI coding tool that supports skills. It is NOT a terminal command. For terminal
+**Important:** `kluris-{name}` is an AI-agent skill -- most agents expose it as
+`/kluris-{name}`, while Hermes can load it with `/skill kluris-{name}` or
+`hermes -s kluris-{name}`. It is NOT a terminal command. For terminal
 operations, use the `kluris` CLI directly (see [CLI commands](#cli-commands)
 below).
 
@@ -258,17 +258,19 @@ Structure conventions stay stable even as the actual lobes change:
 - Neurons are markdown files, plus opted-in YAML files when useful.
 - `kluris.yml` is local, gitignored configuration for this machine.
 
-## How to use /kluris-{name}
+## How to use kluris-{name}
 
-`/kluris-{name}` is a slash command for AI coding agents (Claude Code, Codex,
-Cursor, Windsurf, Cline, Devin, Gemini CLI, and others). Type it inside your
-coding agent -- not in a regular terminal. The agent detects your intent and
-acts accordingly. Search and guided documentation happen through the slash
-command; the `kluris` CLI is for mechanical operations like `dream`, `mri`,
-and `status` that you run in a terminal. Sync (commit, push, pull) goes
-through `git` directly -- kluris brains are plain git repos.
+`kluris-{name}` is an AI coding-agent skill for Claude Code, Codex, Cursor,
+Windsurf, Gemini CLI, Hermes Agent, Kilo Code, Junie, and other tools that
+support skills. Most agents invoke it as `/kluris-{name}`; Hermes can load it
+with `/skill kluris-{name}` inside a session or `hermes -s kluris-{name}` at
+startup. Use it inside your coding agent -- not in a regular terminal. The
+agent detects your intent and acts accordingly. Search and guided documentation
+happen through the skill; the `kluris` CLI is for mechanical operations like
+`dream`, `mri`, and `status` that you run in a terminal. Sync (commit, push,
+pull) goes through `git` directly -- kluris brains are plain git repos.
 
-Every registered brain installs as `/kluris-<name>` so you can address it
+Every registered brain installs as `kluris-<name>` so you can address it
 unambiguously from day one, even before you add more brains.
 
 ### Bootstrap (automatic)
