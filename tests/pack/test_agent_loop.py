@@ -477,11 +477,12 @@ async def test_agent_request_error_not_recoverable(fixture_brain, tmp_path):
     assert "RequestError" not in errors[0]["message"]
 
 
-async def test_agent_surfaces_reasoning_effort_incompat_hint(fixture_brain, tmp_path):
-    """When OpenAI 400s because reasoning_effort isn't allowed alongside tools,
-    the surfaced error must carry the provider's own message AND an actionable
-    hint to unset the knob — a bare "Provider error: RequestError" stranded the
-    deployer (this is exactly how the masking bug presented in the field)."""
+async def test_agent_surfaces_reasoning_effort_value_hint(fixture_brain, tmp_path):
+    """Post-LiteLLM, OpenAI reasoning runs on the Responses API, so a
+    reasoning_effort 400 means the model rejected the effort VALUE — not a
+    chat-vs-responses conflict. The surfaced error must carry the provider's own
+    message AND a hint pointing at the value, with NO stale /v1/chat/completions
+    wording."""
     cfg = _config(fixture_brain, KLURIS_DATA_DIR=str(tmp_path / "data"))
     (tmp_path / "data").mkdir()
 
@@ -493,9 +494,8 @@ async def test_agent_surfaces_reasoning_effort_incompat_hint(fixture_brain, tmp_
 
         async def complete_stream(self, messages, tools):
             raise RequestError(
-                "streaming non-2xx (400): Function tools with reasoning_effort "
-                "are not supported for gpt-5.4-mini in /v1/chat/completions. "
-                "Please use /v1/responses instead."
+                "litellm.BadRequestError: Invalid value for 'reasoning_effort': "
+                "'xhigh' is not one of the accepted values for this model."
             )
             yield  # pragma: no cover
 
@@ -505,8 +505,9 @@ async def test_agent_surfaces_reasoning_effort_incompat_hint(fixture_brain, tmp_
     errors = [e for e in events if e["kind"] == "error"]
     assert errors and errors[0]["recoverable"] is False
     msg = errors[0]["message"]
-    assert "/v1/responses" in msg  # provider detail preserved verbatim
+    assert "reasoning_effort" in msg  # provider detail preserved verbatim
     assert "KLURIS_REASONING_EFFORT" in msg  # actionable hint appended
+    assert "/v1/chat/completions" not in msg  # stale wording is gone
 
 
 async def test_agent_loads_system_prompt_per_call(fixture_brain, tmp_path):

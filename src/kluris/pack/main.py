@@ -66,19 +66,17 @@ def _minimal_config_from_env() -> Config:
 
 
 def _provider_from_config(config: Config) -> "LLMProvider":
-    """Instantiate the right provider for ``config``'s auth mode.
+    """Instantiate the single LiteLLM provider for any auth mode.
 
     Imports are local so the test suite can monkeypatch this function
-    without dragging the provider modules through every Config-only
-    test.
+    without dragging litellm through every Config-only test. The LiteLLM
+    process-wide globals (``drop_params`` + the TLS-aware async session)
+    are set here, at boot, before the provider is built.
     """
-    if config.auth_mode == "oauth":
-        from .providers.oauth import OAuthProvider
+    from .providers.litellm_provider import LiteLLMProvider, configure_litellm
 
-        return OAuthProvider(config)
-    from .providers.apikey import APIKeyProvider
-
-    return APIKeyProvider(config)
+    configure_litellm(config)
+    return LiteLLMProvider(config)
 
 
 def _loop_is_running() -> bool:

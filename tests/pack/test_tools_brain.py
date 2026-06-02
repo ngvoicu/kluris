@@ -615,6 +615,18 @@ def test_openai_schemas_have_all_8_tools():
     }
 
 
+def test_openai_schemas_emit_strict_false():
+    """Every function must carry ``strict: false`` so OpenAI's Responses API
+    does not normalize the optional-param tools (recent/glossary/search) to
+    strict mode and 400 on them."""
+    schemas = openai_schemas(max_multi_read=5)
+    assert schemas, "expected at least one function schema"
+    for s in schemas:
+        assert s["function"]["strict"] is False, (
+            f"{s['function']['name']} is missing strict:false"
+        )
+
+
 @pytest.mark.parametrize("max_paths", [3, 5, 10])
 def test_multi_read_schema_max_items_reflects_runtime(max_paths):
     schemas = anthropic_schemas(max_multi_read=max_paths)

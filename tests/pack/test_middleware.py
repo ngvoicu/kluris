@@ -262,12 +262,18 @@ def test_create_app_prints_tls_insecure_warning(
 
 
 def test_provider_factory_selects_auth_mode(api_key_config: Config, oauth_env):
-    from kluris.pack.providers.apikey import APIKeyProvider
-    from kluris.pack.providers.oauth import OAuthProvider
+    """Both auth modes now resolve to the single LiteLLMProvider; the auth mode
+    is carried inside it (static key vs OAuth token manager), not by class."""
+    from kluris.pack.providers.litellm_provider import LiteLLMProvider
 
-    assert isinstance(_provider_from_config(api_key_config), APIKeyProvider)
+    api_provider = _provider_from_config(api_key_config)
+    assert isinstance(api_provider, LiteLLMProvider)
+    assert api_provider._oauth is False
+
     oauth_cfg = Config.load_from_env(dict(oauth_env, KLURIS_BRAIN_DIR="/app/brain"))
-    assert isinstance(_provider_from_config(oauth_cfg), OAuthProvider)
+    oauth_provider = _provider_from_config(oauth_cfg)
+    assert isinstance(oauth_provider, LiteLLMProvider)
+    assert oauth_provider._oauth is True
 
 
 def test_healthz_returns_200(api_key_config: Config, stub_provider):

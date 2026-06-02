@@ -1,15 +1,16 @@
 """Provider-agnostic interface for the chat server's LLM boundary.
 
-Concrete providers (:class:`APIKeyProvider`, :class:`OAuthProvider`)
-implement two methods:
+The single concrete provider (:class:`~kluris.pack.providers.litellm_provider.LiteLLMProvider`)
+implements two methods:
 
 - :meth:`smoke_test` — sends a tiny ``ping`` tool schema at boot and
   raises if the configured endpoint cannot be reached, refuses the
   tool schema, or times out. Result drives the fail-fast at app boot.
 - :meth:`complete_stream` — streams a chat completion as
-  ``{kind: "token"|"tool_use"|"usage"|"end", ...}`` events, normalizing
-  Anthropic and OpenAI shapes into one dict shape so the agent loop and
-  SSE streaming layer stay provider-agnostic.
+  ``{kind: "token"|"tool_use"|"usage"|"end", ...}`` events. LiteLLM
+  normalizes every provider (Anthropic / OpenAI Chat Completions /
+  OpenAI Responses / OAuth gateways) to one OpenAI-shaped chunk stream,
+  so the agent loop and SSE layer stay provider-agnostic.
 """
 
 from __future__ import annotations

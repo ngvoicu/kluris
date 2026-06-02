@@ -35,7 +35,7 @@ from .tools.brain import (
     SandboxError,
     TOOLS,
 )
-from .tools.schemas import anthropic_schemas, openai_schemas
+from .tools.schemas import openai_schemas
 
 
 # Per-call test-only trace hook. Production code never reads this; the
@@ -50,9 +50,9 @@ def _system_prompt(config: Config, brain_name: str) -> str:
 
 
 def _tool_schemas(config: Config) -> list[dict[str, Any]]:
-    if config.provider_shape == "openai" or config.auth_mode == "oauth":
-        return openai_schemas(max_multi_read=config.max_multi_read_paths)
-    return anthropic_schemas(max_multi_read=config.max_multi_read_paths)
+    # LiteLLM takes OpenAI-format tool schemas for EVERY provider (translating to
+    # the Anthropic tool shape internally), so the pack emits one shape for all.
+    return openai_schemas(max_multi_read=config.max_multi_read_paths)
 
 
 def _estimate_tokens(text: str) -> int:
@@ -261,14 +261,13 @@ async def run_agent(
             detail = str(exc)
             message = f"Provider error: {detail}"
             if "reasoning_effort" in detail.lower():
-                # Current OpenAI reasoning models (e.g. gpt-5.x) reject
-                # reasoning_effort together with function tools on
-                # /v1/chat/completions and demand the Responses API. The pack is
-                # agentic — it always sends tools — so point straight at the fix.
+                # Reasoning models run through the Responses API, so a
+                # reasoning_effort 400 means the model rejected the effort VALUE
+                # (the accepted set is model-dependent), not a chat-vs-responses
+                # conflict. Point at the value, not the endpoint.
                 message += (
-                    " — unset KLURIS_REASONING_EFFORT (this model rejects "
-                    "reasoning effort together with tool calls on "
-                    "/v1/chat/completions)."
+                    " — check KLURIS_REASONING_EFFORT: this model may not accept "
+                    "that effort value. Try low / medium / high, or unset it."
                 )
             yield {
                 "kind": "error",

@@ -90,6 +90,15 @@ def test_strips_trailing_slash_from_base_url():
             "https://openrouter.ai/api/v1/chat/completions/",
             "https://openrouter.ai/api",
         ),
+        # Bare (no /v1) endpoint suffixes — some Azure / proxy deployments:
+        (
+            "https://myco.openai.azure.com/chat/completions",
+            "https://myco.openai.azure.com",
+        ),
+        (
+            "https://gw.corp/messages",
+            "https://gw.corp",
+        ),
     ],
 )
 def test_normalizes_known_endpoint_suffixes_in_base_url(raw, expected):
@@ -498,3 +507,155 @@ def test_no_ui_auth_env_vars_honored():
     # No new attributes appeared from those env vars.
     for name in ("ui_bearer_token", "auth_token", "basic_auth"):
         assert not hasattr(cfg, name)
+
+
+# --- LiteLLM model-string translation (backward-compat routing) --------------
+
+
+def test_litellm_model_anthropic_shape():
+    """Anthropic api-key → ``anthropic/<model>`` + the configured base."""
+    cfg = Config.load_from_env(_API_KEY_ENV)
+    assert cfg.is_anthropic_shape is True
+    assert cfg.litellm_model == "anthropic/claude-opus-4-7"
+    assert cfg.litellm_api_base == "https://api.example.com"
+
+
+@pytest.mark.parametrize(
+    "base_url",
+    ["https://api.openai.com", "https://api.openai.com/", "api.openai.com"],
+)
+def test_litellm_model_openai_proper_routes_to_responses(base_url):
+    """OpenAI-proper host → ``openai/responses/<model>`` (the /v1/responses win)
+    with api_base=None so LiteLLM uses its own OpenAI base. Scheme-less and
+    trailing-slash hosts resolve the same way."""
+    env = dict(
+        _API_KEY_ENV,
+        KLURIS_PROVIDER_SHAPE="openai",
+        KLURIS_BASE_URL=base_url,
+        KLURIS_MODEL="gpt-5.4-mini",
+    )
+    cfg = Config.load_from_env(env)
+    assert cfg.is_anthropic_shape is False
+    assert cfg.litellm_model == "openai/responses/gpt-5.4-mini"
+    assert cfg.litellm_api_base is None
+
+
+@pytest.mark.parametrize(
+    "base_url",
+    ["https://openrouter.ai/api", "https://myco.openai.azure.com"],
+)
+def test_litellm_model_openai_gateway_routes_to_chat(base_url):
+    """A non-OpenAI host (gateway, Azure) → ``openai/<model>`` + api_base, i.e.
+    Chat Completions, NOT the Responses API."""
+    env = dict(
+        _API_KEY_ENV,
+        KLURIS_PROVIDER_SHAPE="openai",
+        KLURIS_BASE_URL=base_url,
+        KLURIS_MODEL="gpt-4o",
+    )
+    cfg = Config.load_from_env(env)
+    assert cfg.litellm_model == "openai/gpt-4o"
+    # LiteLLM only appends the leaf path; the host root must carry /v1 (matching
+    # the retired providers' /v1/chat/completions behavior).
+    assert cfg.litellm_api_base == base_url + "/v1"
+
+
+def test_litellm_model_oauth_routes_to_chat():
+    """OAuth gateway → ``openai/<model>`` + the OAuth API base (Chat
+    Completions); the bearer is supplied at call time, not in the model
+    string."""
+    cfg = Config.load_from_env(_OAUTH_ENV)
+    assert cfg.is_anthropic_shape is False
+    assert cfg.litellm_model == "openai/internal-model-v2"
+    assert cfg.litellm_api_base == "https://api.example.com/v1"
+
+
+def test_use_responses_api_forces_responses_for_gateway():
+    """KLURIS_USE_RESPONSES_API=1 opts a non-OpenAI host into the Responses
+    prefix while keeping its api_base (for gateways that implement it)."""
+    env = dict(
+        _API_KEY_ENV,
+        KLURIS_PROVIDER_SHAPE="openai",
+        KLURIS_BASE_URL="https://gw.corp/api",
+        KLURIS_MODEL="gpt-5.4-mini",
+        KLURIS_USE_RESPONSES_API="1",
+    )
+    cfg = Config.load_from_env(env)
+    assert cfg.use_responses_api is True
+    assert cfg.litellm_model == "openai/responses/gpt-5.4-mini"
+    assert cfg.litellm_api_base == "https://gw.corp/api/v1"
+
+
+def test_use_responses_api_defaults_false():
+    cfg = Config.load_from_env(_API_KEY_ENV)
+    assert cfg.use_responses_api is False
+
+
+def test_anthropic_shape_is_not_flagged_for_openai_gateway():
+    """is_anthropic_shape gates store/reasoning_effort/stream_options; OAuth
+    (no provider_shape) must NOT be treated as Anthropic."""
+    assert Config.load_from_env(_OAUTH_ENV).is_anthropic_shape is False
+
+
+def test_litellm_api_base_v1_append_is_idempotent():
+    """A deployer who already put /v1 in the host root must not get /v1/v1."""
+    env = dict(
+        _API_KEY_ENV, KLURIS_PROVIDER_SHAPE="openai",
+        KLURIS_BASE_URL="https://openrouter.ai/api/v1", KLURIS_MODEL="gpt-4o",
+    )
+    assert Config.load_from_env(env).litellm_api_base == "https://openrouter.ai/api/v1"
+
+
+@pytest.mark.parametrize("env_extra,expected_url", [
+    (  # OpenAI-compatible gateway → chat completions, with /v1 restored
+        {"KLURIS_PROVIDER_SHAPE": "openai", "KLURIS_BASE_URL": "https://openrouter.ai/api",
+         "KLURIS_API_KEY": "k", "KLURIS_MODEL": "gpt-4o"},
+        "https://openrouter.ai/api/v1/chat/completions",
+    ),
+])
+def test_litellm_gateway_resolves_to_v1_chat_completions(env_extra, expected_url):
+    """The real URL LiteLLM builds from the computed api_base must carry /v1 —
+    this is what actually broke when the hand-rolled /v1/chat/completions append
+    was removed. Asserted via LiteLLM's own URL builder, not a mock."""
+    from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
+
+    cfg = Config.load_from_env(dict(_API_KEY_ENV, **env_extra))
+    url = OpenAIGPTConfig().get_complete_url(
+        api_base=cfg.litellm_api_base, api_key="k", model=cfg.model,
+        optional_params={}, litellm_params={},
+    )
+    assert url == expected_url
+
+
+def test_litellm_oauth_resolves_to_v1_chat_completions():
+    from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
+
+    cfg = Config.load_from_env(_OAUTH_ENV)
+    url = OpenAIGPTConfig().get_complete_url(
+        api_base=cfg.litellm_api_base, api_key="k", model=cfg.model,
+        optional_params={}, litellm_params={},
+    )
+    assert url == "https://api.example.com/v1/chat/completions"
+
+
+def test_shipped_env_example_loads_with_zero_edits():
+    """Acceptance C: the shipped .env.example must build a valid Config after
+    only filling the placeholder secret — the default (Anthropic) path."""
+    from pathlib import Path
+
+    template = (
+        Path(__file__).resolve().parents[2]
+        / "src" / "kluris" / "_packaging" / "env.example.template"
+    )
+    env: dict[str, str] = {}
+    for line in template.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        env[key.strip()] = value.strip()
+    env["KLURIS_BRAIN_DIR"] = "/app/brain"
+    cfg = Config.load_from_env(env)
+    # The active (uncommented) block is the Anthropic default.
+    assert cfg.auth_mode == "api_key"
+    assert cfg.litellm_model.startswith("anthropic/")

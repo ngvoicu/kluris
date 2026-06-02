@@ -131,6 +131,25 @@ def test_env_example_documents_reasoning_effort(staged_brain):
         l.startswith("KLURIS_REASONING_EFFORT=")
         for l in env_text.splitlines()
     )
+    # The stale "reasoning_effort BREAKS chat / is not supported with tools"
+    # warning is gone now that OpenAI-proper routes through the Responses API.
+    # (The block may still mention /v1/chat/completions to describe GATEWAY
+    # routing — only the stale warning wording must be absent.)
+    assert "BREAKS" not in env_text
+    assert "are not supported" not in env_text
+
+
+def test_env_example_documents_use_responses_api(staged_brain):
+    """The opt-in gateway-Responses knob ships documented but commented out;
+    the OpenAI-proper Responses routing is described in the OpenAI block."""
+    out, _ = staged_brain
+    env_text = (out / ".env.example").read_text(encoding="utf-8")
+    assert "# KLURIS_USE_RESPONSES_API=" in env_text
+    assert not any(
+        l.startswith("KLURIS_USE_RESPONSES_API=")
+        for l in env_text.splitlines()
+    )
+    assert "/v1/responses" in env_text  # the routing is explained
 
 
 def test_gitignore_protects_env_and_local_artifacts(staged_brain):

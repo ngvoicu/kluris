@@ -147,6 +147,48 @@ def _normalize_base_url(raw: str, var_name: str) -> tuple[str, str | None]:
     return cleaned, None
 
 
+# Host that means "real OpenAI" — the only case where the OpenAI shape is
+# routed through LiteLLM's Responses API (/v1/responses) by default. Every
+# other host (Azure, OpenRouter, vLLM, on-prem gateways) speaks Chat
+# Completions and must NOT be sent to /responses unless the deployer opts in
+# via KLURIS_USE_RESPONSES_API.
+_OPENAI_PROPER_HOST = "api.openai.com"
+
+
+def _is_openai_proper_host(base_url: str | None) -> bool:
+    """True iff ``base_url`` is unset or points at ``api.openai.com``.
+
+    Scheme-less values (``api.openai.com``) are tolerated — they parse into
+    the URL path rather than the netloc, so we retry with a ``//`` prefix.
+    """
+    if not base_url:
+        return True
+    from urllib.parse import urlparse
+
+    parsed = urlparse(base_url)
+    netloc = parsed.netloc or urlparse("//" + base_url).netloc
+    host = netloc.lower().split("@")[-1].split(":")[0]
+    return host == _OPENAI_PROPER_HOST
+
+
+def _ensure_v1_suffix(base_url: str | None) -> str | None:
+    """Append ``/v1`` to an OpenAI-compatible gateway base when it is absent.
+
+    LiteLLM (via the OpenAI SDK) appends only the leaf ``/chat/completions``
+    (or ``/responses``) to ``api_base``, so the deployer's host-root
+    ``KLURIS_BASE_URL`` (e.g. ``https://openrouter.ai/api``) must carry the
+    ``/v1`` itself or the request 404s — matching the retired providers, which
+    POSTed to ``<base>/v1/chat/completions``. Idempotent: a base already ending
+    in ``/v1`` is left alone.
+    """
+    if not base_url:
+        return None
+    trimmed = base_url.rstrip("/")
+    if trimmed.endswith("/v1"):
+        return trimmed
+    return trimmed + "/v1"
+
+
 def _read_bool(env: dict, name: str, default: bool) -> bool:
     raw = env.get(name)
     if raw is None:
@@ -193,9 +235,10 @@ class Config(BaseModel):
     lobe_overview_budget: int = _DEFAULT_LOBE_OVERVIEW_BUDGET
     max_multi_read_paths: int = _DEFAULT_MAX_MULTI_READ_PATHS
 
-    # Per-response output token budget sent to the LLM (max_completion_tokens
-    # for the OpenAI shape, max_tokens for Anthropic). ``temperature`` is None
-    # by default → omitted from the request so the model uses its own default.
+    # Per-response output token budget sent to the LLM as the unified
+    # ``max_tokens`` (LiteLLM translates it per provider — including to
+    # ``max_completion_tokens`` for OpenAI reasoning models). ``temperature``
+    # is None by default → omitted so the model uses its own default.
     max_output_tokens: int = _DEFAULT_MAX_OUTPUT_TOKENS
     temperature: float | None = None
 
@@ -205,6 +248,12 @@ class Config(BaseModel):
     # the pack doesn't do); ``load_from_env`` surfaces a boot warning if the
     # knob is set on an Anthropic endpoint.
     reasoning_effort: str | None = None
+
+    # Opt-in: force LiteLLM's OpenAI Responses API (/v1/responses) for a
+    # NON-OpenAI host that genuinely implements it. By default only
+    # api.openai.com is routed through Responses; OpenAI-compatible gateways
+    # stay on Chat Completions. Ignored on the Anthropic and OAuth paths.
+    use_responses_api: bool = False
 
     # Sliding-window budget (estimated tokens) for replayed conversation
     # history. <= 0 disables trimming. The agent loop drops the oldest turns
@@ -240,6 +289,60 @@ class Config(BaseModel):
     def auth_mode(self) -> str:
         """``"api_key"`` or ``"oauth"`` — whichever path is configured."""
         return "oauth" if self.oauth_token_url else "api_key"
+
+    @property
+    def is_anthropic_shape(self) -> bool:
+        """True only for the Anthropic api-key path.
+
+        Drives which OpenAI-only params (``store``, ``reasoning_effort``,
+        ``stream_options``) the provider may send: LiteLLM rejects them for
+        Anthropic, and ``reasoning_effort`` in particular would make LiteLLM
+        enable adaptive thinking — which the pack's tool loop cannot
+        round-trip — so the provider gates them off here.
+        """
+        return self.auth_mode == "api_key" and self.provider_shape == "anthropic"
+
+    @property
+    def litellm_model(self) -> str:
+        """The LiteLLM model string the provider passes to ``acompletion``.
+
+        Backward-compat translation of today's ``.env`` (provider shape +
+        base URL) onto LiteLLM routing:
+
+        - Anthropic api-key → ``anthropic/<model>`` (/v1/messages).
+        - OpenAI api-key, OpenAI-proper host (or ``use_responses_api``) →
+          ``openai/responses/<model>`` (/v1/responses — the reasoning+tools win).
+        - OpenAI api-key, non-OpenAI host → ``openai/<model>`` (/v1/chat/completions).
+        - OAuth gateway → ``openai/<model>`` (/v1/chat/completions, bearer auth).
+        """
+        if self.auth_mode == "oauth":
+            return f"openai/{self.model}"
+        if self.provider_shape == "anthropic":
+            return f"anthropic/{self.model}"
+        # OpenAI api-key shape.
+        if _is_openai_proper_host(self.base_url) or self.use_responses_api:
+            return f"openai/responses/{self.model}"
+        return f"openai/{self.model}"
+
+    @property
+    def litellm_api_base(self) -> str | None:
+        """The ``api_base`` the provider passes to ``acompletion`` (or ``None``).
+
+        OpenAI-proper resolves to ``None`` so LiteLLM uses its own default
+        OpenAI base (the ``openai/responses/`` prefix already selects the
+        endpoint). Anthropic passes the host unchanged (LiteLLM's handler
+        appends ``/v1/messages`` itself). Every OpenAI-compatible gateway
+        (api-key or OAuth) gets ``/v1`` appended so LiteLLM's leaf-only
+        ``/chat/completions`` (or ``/responses``) append lands correctly.
+        """
+        if self.auth_mode == "oauth":
+            return _ensure_v1_suffix(self.oauth_api_base_url)
+        if self.provider_shape == "anthropic":
+            return self.base_url or None
+        # OpenAI api-key shape.
+        if _is_openai_proper_host(self.base_url):
+            return None
+        return _ensure_v1_suffix(self.base_url)
 
     @property
     def httpx_verify(self) -> "bool | object":
@@ -421,6 +524,7 @@ class Config(BaseModel):
             )
 
         skip_boot_smoke = _read_bool(env, "KLURIS_SKIP_BOOT_SMOKE", False)
+        use_responses_api = _read_bool(env, "KLURIS_USE_RESPONSES_API", False)
 
         # ``reasoning_effort`` is an OpenAI Chat Completions field. The OAuth
         # path also targets that shape (no ``provider_shape`` kwarg), so it is
@@ -442,6 +546,7 @@ class Config(BaseModel):
             max_output_tokens=max_output,
             temperature=temperature,
             reasoning_effort=reasoning_effort,
+            use_responses_api=use_responses_api,
             max_context_tokens=max_context,
             brain_dir=brain_dir,
             data_dir=data_dir,

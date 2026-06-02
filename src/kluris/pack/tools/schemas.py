@@ -139,7 +139,15 @@ def anthropic_schemas(max_multi_read: int) -> list[dict[str, Any]]:
 
 
 def openai_schemas(max_multi_read: int) -> list[dict[str, Any]]:
-    """Tool list in OpenAI Chat Completions function-calling format."""
+    """Tool list in OpenAI function-calling format.
+
+    ``strict: false`` is emitted on every function. The Responses API (and
+    LiteLLM's bridge) passes ``strict`` through; omitting it makes OpenAI
+    normalize functions to STRICT mode (every property ``required`` +
+    ``additionalProperties:false``), which the optional-param tools (``recent``,
+    ``glossary``, ``search``) violate → 400. ``strict:false`` is the best-effort
+    calling the pack wants.
+    """
     out: list[dict[str, Any]] = []
     for name, schema in _schemas_for(max_multi_read).items():
         out.append({
@@ -148,6 +156,7 @@ def openai_schemas(max_multi_read: int) -> list[dict[str, Any]]:
                 "name": name,
                 "description": _DESCRIPTIONS[name],
                 "parameters": schema,
+                "strict": False,
             },
         })
     return out
