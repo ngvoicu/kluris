@@ -472,6 +472,41 @@ async def test_agent_request_error_not_recoverable(fixture_brain, tmp_path):
     ))
     errors = [e for e in events if e["kind"] == "error"]
     assert errors[0]["recoverable"] is False
+    # The provider's actual message must be surfaced, not just the class name.
+    assert "boom" in errors[0]["message"]
+    assert "RequestError" not in errors[0]["message"]
+
+
+async def test_agent_surfaces_reasoning_effort_incompat_hint(fixture_brain, tmp_path):
+    """When OpenAI 400s because reasoning_effort isn't allowed alongside tools,
+    the surfaced error must carry the provider's own message AND an actionable
+    hint to unset the knob — a bare "Provider error: RequestError" stranded the
+    deployer (this is exactly how the masking bug presented in the field)."""
+    cfg = _config(fixture_brain, KLURIS_DATA_DIR=str(tmp_path / "data"))
+    (tmp_path / "data").mkdir()
+
+    class _EffortReject(LLMProvider):
+        model = "gpt-5.4-mini"
+
+        async def smoke_test(self) -> None:  # pragma: no cover
+            return None
+
+        async def complete_stream(self, messages, tools):
+            raise RequestError(
+                "streaming non-2xx (400): Function tools with reasoning_effort "
+                "are not supported for gpt-5.4-mini in /v1/chat/completions. "
+                "Please use /v1/responses instead."
+            )
+            yield  # pragma: no cover
+
+    events = await _drain(run_agent(
+        config=cfg, provider=_EffortReject(), history=[], user_message="x",
+    ))
+    errors = [e for e in events if e["kind"] == "error"]
+    assert errors and errors[0]["recoverable"] is False
+    msg = errors[0]["message"]
+    assert "/v1/responses" in msg  # provider detail preserved verbatim
+    assert "KLURIS_REASONING_EFFORT" in msg  # actionable hint appended
 
 
 async def test_agent_loads_system_prompt_per_call(fixture_brain, tmp_path):

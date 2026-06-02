@@ -254,9 +254,25 @@ async def run_agent(
             yield {"kind": "end"}
             return
         except (AuthError, RequestError) as exc:
+            # Surface the provider's actual message (the RequestError carries the
+            # response body, capped to 200 chars), not just the class name — a
+            # bare "Provider error: RequestError" hides the one line the deployer
+            # needs (bad model name, unsupported param, rate-limit detail, ...).
+            detail = str(exc)
+            message = f"Provider error: {detail}"
+            if "reasoning_effort" in detail.lower():
+                # Current OpenAI reasoning models (e.g. gpt-5.x) reject
+                # reasoning_effort together with function tools on
+                # /v1/chat/completions and demand the Responses API. The pack is
+                # agentic — it always sends tools — so point straight at the fix.
+                message += (
+                    " — unset KLURIS_REASONING_EFFORT (this model rejects "
+                    "reasoning effort together with tool calls on "
+                    "/v1/chat/completions)."
+                )
             yield {
                 "kind": "error",
-                "message": f"Provider error: {type(exc).__name__}",
+                "message": message,
                 "recoverable": False,
             }
             yield {"kind": "end"}
