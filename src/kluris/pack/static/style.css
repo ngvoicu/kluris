@@ -73,7 +73,40 @@ a { color: var(--accent); }
   background: var(--panel);
   border-bottom: 1px solid var(--border);
 }
-.header-left { display: flex; align-items: baseline; gap: 14px; min-width: 0; }
+.header-left { display: flex; align-items: center; gap: 12px; min-width: 0; }
+
+/* Kluris brand lockup (logo + gradient wordmark) — mirrors kluris.io. The
+   wordmark falls back to Georgia since the pack ships no web fonts (offline,
+   self-contained); the gradient + logo carry the brand. */
+.brand { display: flex; align-items: center; gap: 9px; flex-shrink: 0; }
+.brand-logo {
+  width: 28px;
+  height: 28px;
+  object-fit: contain;
+  transition: transform 0.3s ease;
+}
+.brand:hover .brand-logo { transform: scale(1.08) rotate(2deg); }
+.brand-name {
+  font-family: "DM Serif Display", Georgia, "Times New Roman", serif;
+  font-size: 20px;
+  line-height: 1;
+  letter-spacing: 0.005em;
+}
+.gradient-text {
+  /* purple → pink, clipped to the text (same stops as the site wordmark) */
+  background: linear-gradient(135deg, #c4b5fd 0%, #a78bfa 35%, #ec4899 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
+}
+.brand-sep {
+  width: 1px;
+  height: 20px;
+  background: var(--border);
+  flex-shrink: 0;
+}
+
 .brain-title {
   margin: 0;
   font-size: 17px;
