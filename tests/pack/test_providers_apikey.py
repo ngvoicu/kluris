@@ -838,3 +838,67 @@ async def test_anthropic_stream_includes_temperature_when_set(api_env, respx_moc
         )
     ]
     assert json.loads(route.calls.last.request.content)["temperature"] == 0.9
+
+
+# --- Reasoning-effort knob (OpenAI shape only) -------------------------------
+#
+# ``reasoning_effort`` is an OpenAI Chat Completions field. It must appear in
+# the OpenAI stream body only when the deployer set it, must NEVER appear in
+# the Anthropic body (no equivalent — it would 400 or be ignored), and must
+# stay off the boot smoke probe (a reasoning model could burn the tiny token
+# budget thinking before it emits the forced ping).
+
+
+@respx.mock(assert_all_mocked=True, assert_all_called=False)
+async def test_openai_stream_includes_reasoning_effort_when_set(api_env, respx_mock):
+    cfg = _build_config(dict(api_env, KLURIS_REASONING_EFFORT="high"), shape="openai")
+    route = _openai_done(respx_mock)
+    await _drain_openai_stream(cfg)
+    assert json.loads(route.calls.last.request.content)["reasoning_effort"] == "high"
+
+
+@respx.mock(assert_all_mocked=True, assert_all_called=False)
+async def test_openai_stream_omits_reasoning_effort_by_default(api_env, respx_mock):
+    cfg = _build_config(api_env, shape="openai")
+    route = _openai_done(respx_mock)
+    await _drain_openai_stream(cfg)
+    assert "reasoning_effort" not in json.loads(route.calls.last.request.content)
+
+
+@respx.mock(assert_all_mocked=True, assert_all_called=False)
+async def test_anthropic_stream_never_sends_reasoning_effort(api_env, respx_mock):
+    """Even when the knob is set, the Anthropic Messages body must not carry
+    ``reasoning_effort`` — it's an OpenAI field with no Anthropic equivalent."""
+    cfg = _build_config(
+        dict(api_env, KLURIS_REASONING_EFFORT="high"), shape="anthropic"
+    )
+    route = respx_mock.post("http://api.test/v1/messages").mock(
+        return_value=httpx.Response(
+            200,
+            content=_sse_lines(iter([
+                "event: message_stop",
+                "data: " + json.dumps({"type": "message_stop"}),
+                "",
+            ])),
+            headers={"content-type": "text/event-stream"},
+        )
+    )
+    _events = [
+        e
+        async for e in APIKeyProvider(cfg).complete_stream(
+            messages=[{"role": "user", "content": "x"}], tools=[]
+        )
+    ]
+    assert "reasoning_effort" not in json.loads(route.calls.last.request.content)
+
+
+@respx.mock(assert_all_mocked=True, assert_all_called=False)
+async def test_openai_smoke_body_omits_reasoning_effort(api_env, respx_mock):
+    """The fixed boot ping must not inherit reasoning_effort — a reasoning model
+    could spend the 32-token cap thinking and never emit the forced tool call."""
+    cfg = _build_config(dict(api_env, KLURIS_REASONING_EFFORT="high"), shape="openai")
+    route = respx_mock.post("http://api.test/v1/chat/completions").mock(
+        return_value=httpx.Response(200, json=_openai_smoke_response())
+    )
+    await APIKeyProvider(cfg).smoke_test()
+    assert "reasoning_effort" not in json.loads(route.calls.last.request.content)

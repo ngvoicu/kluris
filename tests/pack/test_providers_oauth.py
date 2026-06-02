@@ -652,3 +652,41 @@ async def test_smoke_body_omits_temperature_and_keeps_boot_budget(respx_mock):
     body = json.loads(route.calls.last.request.content)
     assert "temperature" not in body
     assert body["max_completion_tokens"] == 32
+
+
+# --- Reasoning-effort knob ---------------------------------------------------
+#
+# OAuth targets the OpenAI Chat Completions shape, so ``reasoning_effort`` is
+# honored on the stream body when set and omitted otherwise. It stays off the
+# boot smoke probe for the same reason as the api-key path.
+
+
+@respx.mock(assert_all_mocked=True, assert_all_called=False)
+async def test_stream_includes_reasoning_effort_when_set(respx_mock):
+    cfg = Config.load_from_env(_oauth_env(KLURIS_REASONING_EFFORT="medium"))
+    body = await _drain_oauth_stream(cfg, respx_mock)
+    assert body["reasoning_effort"] == "medium"
+
+
+@respx.mock(assert_all_mocked=True, assert_all_called=False)
+async def test_stream_omits_reasoning_effort_by_default(respx_mock):
+    cfg = Config.load_from_env(_oauth_env())
+    body = await _drain_oauth_stream(cfg, respx_mock)
+    assert "reasoning_effort" not in body
+
+
+@respx.mock(assert_all_mocked=True, assert_all_called=False)
+async def test_smoke_body_omits_reasoning_effort(respx_mock):
+    """The boot ping stays clean — a reasoning model could burn the 32-token
+    cap thinking before emitting the forced tool call."""
+    cfg = Config.load_from_env(_oauth_env(KLURIS_REASONING_EFFORT="high"))
+    respx_mock.post(_TOKEN_URL).mock(
+        return_value=httpx.Response(
+            200, json={"access_token": "tok", "expires_in": 3600}
+        )
+    )
+    route = respx_mock.post(_API_URL + "/v1/chat/completions").mock(
+        return_value=httpx.Response(200, json=_smoke_response())
+    )
+    await OAuthProvider(cfg).smoke_test()
+    assert "reasoning_effort" not in json.loads(route.calls.last.request.content)

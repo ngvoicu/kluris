@@ -230,6 +230,14 @@ class APIKeyProvider(LLMProvider):
             if self._cfg.temperature is not None
             else {}
         )
+        # ``reasoning_effort`` is an OpenAI Chat Completions field (omitted
+        # unless set). It has no Anthropic equivalent here, so it is spread
+        # into the OpenAI body only.
+        reasoning = (
+            {"reasoning_effort": self._cfg.reasoning_effort}
+            if self._cfg.reasoning_effort
+            else {}
+        )
         if self.shape == "anthropic":
             system, anthropic_messages = _messages_for_anthropic(messages)
             return {
@@ -251,6 +259,7 @@ class APIKeyProvider(LLMProvider):
             "tools": tools,
             "messages": _messages_for_openai(messages),
             **temperature,
+            **reasoning,
         }
 
 

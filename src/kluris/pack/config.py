@@ -49,6 +49,14 @@ _MAX_OUTPUT_TOKENS_MAX = 200000
 # an explicit temperature. Clamped to the standard [0, 2] range when set.
 _TEMPERATURE_MIN = 0.0
 _TEMPERATURE_MAX = 2.0
+# Reasoning effort — the OpenAI Chat Completions ``reasoning_effort`` field that
+# tells a reasoning model how hard to think. ``None`` (default) omits it, so
+# non-reasoning models and the Anthropic shape are untouched. Accepted values
+# are model-dependent; this is the OpenAI union as of 2026 (gpt-5.1 takes a
+# subset). The provider is the final authority — a model that rejects a value
+# returns a 400 on the first chat. Anthropic uses a different mechanism
+# (adaptive thinking) the pack does not drive, so the knob is OpenAI-shape only.
+_VALID_REASONING_EFFORTS = {"none", "minimal", "low", "medium", "high", "xhigh"}
 # Sliding-window budget (estimated tokens) for the CONVERSATION HISTORY replayed
 # to the model each turn. Older turns are dropped once the transcript exceeds
 # this, so a long chat never hits the model's context window. ``0`` (or any
@@ -190,6 +198,13 @@ class Config(BaseModel):
     # by default → omitted from the request so the model uses its own default.
     max_output_tokens: int = _DEFAULT_MAX_OUTPUT_TOKENS
     temperature: float | None = None
+
+    # Reasoning effort for the OpenAI Chat Completions shape (api-key ``openai``
+    # + OAuth). ``None`` → omitted from the request. The Anthropic shape ignores
+    # it (driving Anthropic reasoning needs adaptive-thinking block round-trips
+    # the pack doesn't do); ``load_from_env`` surfaces a boot warning if the
+    # knob is set on an Anthropic endpoint.
+    reasoning_effort: str | None = None
 
     # Sliding-window budget (estimated tokens) for replayed conversation
     # history. <= 0 disables trimming. The agent loop drops the oldest turns
@@ -375,6 +390,17 @@ class Config(BaseModel):
         temperature = _read_float(env, "KLURIS_TEMPERATURE", None)
         if temperature is not None:
             temperature = max(_TEMPERATURE_MIN, min(_TEMPERATURE_MAX, temperature))
+        reasoning_effort = env.get("KLURIS_REASONING_EFFORT")
+        if reasoning_effort is not None:
+            reasoning_effort = reasoning_effort.strip().lower() or None
+        if (
+            reasoning_effort is not None
+            and reasoning_effort not in _VALID_REASONING_EFFORTS
+        ):
+            raise ConfigError(
+                f"KLURIS_REASONING_EFFORT must be one of "
+                f"{sorted(_VALID_REASONING_EFFORTS)}, got {reasoning_effort!r}"
+            )
         max_context = _read_int(
             env, "KLURIS_MAX_CONTEXT_TOKENS", _DEFAULT_MAX_CONTEXT_TOKENS
         )
@@ -396,6 +422,18 @@ class Config(BaseModel):
 
         skip_boot_smoke = _read_bool(env, "KLURIS_SKIP_BOOT_SMOKE", False)
 
+        # ``reasoning_effort`` is an OpenAI Chat Completions field. The OAuth
+        # path also targets that shape (no ``provider_shape`` kwarg), so it is
+        # honored there. Only the Anthropic api-key shape ignores it — warn so
+        # the deployer isn't left expecting reasoning the pack doesn't wire.
+        warn_list = list(warnings or [])
+        if reasoning_effort is not None and kwargs.get("provider_shape") == "anthropic":
+            warn_list.append(
+                "KLURIS_REASONING_EFFORT is set but only applies to the OpenAI "
+                "provider shape; the pack does not drive Anthropic adaptive "
+                "thinking, so the value is ignored for this Anthropic endpoint."
+            )
+
         return cls(
             **kwargs,
             max_agent_rounds=max_rounds,
@@ -403,11 +441,12 @@ class Config(BaseModel):
             max_multi_read_paths=max_multi,
             max_output_tokens=max_output,
             temperature=temperature,
+            reasoning_effort=reasoning_effort,
             max_context_tokens=max_context,
             brain_dir=brain_dir,
             data_dir=data_dir,
             tls_ca_bundle=ca_bundle,
             tls_insecure=tls_insecure,
             skip_boot_smoke=skip_boot_smoke,
-            boot_warnings=list(warnings or []),
+            boot_warnings=warn_list,
         )

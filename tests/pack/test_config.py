@@ -269,6 +269,68 @@ def test_temperature_invalid_raises():
         Config.load_from_env(env)
 
 
+def test_reasoning_effort_defaults_to_none():
+    """Unset → None so the OpenAI body OMITS reasoning_effort (non-reasoning
+    models and the Anthropic shape are untouched)."""
+    assert Config.load_from_env(_API_KEY_ENV).reasoning_effort is None
+
+
+def test_reasoning_effort_parsed_and_lowercased():
+    env = dict(
+        _API_KEY_ENV,
+        KLURIS_PROVIDER_SHAPE="openai",
+        KLURIS_REASONING_EFFORT="HIGH",
+    )
+    assert Config.load_from_env(env).reasoning_effort == "high"
+
+
+def test_reasoning_effort_empty_string_is_none():
+    """A commented-out .env line becomes "" after envsubst → treated as unset."""
+    env = dict(_API_KEY_ENV, KLURIS_REASONING_EFFORT="")
+    assert Config.load_from_env(env).reasoning_effort is None
+
+
+def test_reasoning_effort_invalid_raises():
+    env = dict(
+        _API_KEY_ENV,
+        KLURIS_PROVIDER_SHAPE="openai",
+        KLURIS_REASONING_EFFORT="ultra",
+    )
+    with pytest.raises(ConfigError) as exc:
+        Config.load_from_env(env)
+    assert "KLURIS_REASONING_EFFORT" in str(exc.value)
+
+
+def test_reasoning_effort_on_anthropic_shape_parses_but_warns():
+    """The knob is OpenAI-shape only. On the Anthropic shape it parses fine but
+    surfaces a boot warning so the deployer isn't left expecting reasoning the
+    pack doesn't wire for Anthropic."""
+    env = dict(_API_KEY_ENV, KLURIS_REASONING_EFFORT="high")  # shape is anthropic
+    cfg = Config.load_from_env(env)
+    assert cfg.reasoning_effort == "high"
+    assert any("KLURIS_REASONING_EFFORT" in w for w in cfg.boot_warnings)
+
+
+def test_reasoning_effort_on_openai_shape_emits_no_warning():
+    env = dict(
+        _API_KEY_ENV,
+        KLURIS_PROVIDER_SHAPE="openai",
+        KLURIS_REASONING_EFFORT="high",
+    )
+    cfg = Config.load_from_env(env)
+    assert cfg.reasoning_effort == "high"
+    assert not any("KLURIS_REASONING_EFFORT" in w for w in cfg.boot_warnings)
+
+
+def test_reasoning_effort_on_oauth_shape_emits_no_warning():
+    """OAuth targets the OpenAI Chat Completions shape, so the knob applies and
+    must NOT warn."""
+    env = dict(_OAUTH_ENV, KLURIS_REASONING_EFFORT="low")
+    cfg = Config.load_from_env(env)
+    assert cfg.reasoning_effort == "low"
+    assert not any("KLURIS_REASONING_EFFORT" in w for w in cfg.boot_warnings)
+
+
 def test_knobs_empty_string_falls_back_to_default():
     """A commented-out .env line becomes an empty value after envsubst; the
     knobs must treat "" as unset (the documented `or raw == ""` contract)."""

@@ -196,8 +196,8 @@ class OAuthProvider(LLMProvider):
         tools: list[dict[str, Any]],
     ) -> AsyncIterator[dict[str, Any]]:
         # OpenAI Chat Completions shape → ``max_completion_tokens``
-        # (newer GPT reasoning models reject ``max_tokens``). Temperature is
-        # opt-in (omitted unless the deployer set it).
+        # (newer GPT reasoning models reject ``max_tokens``). Temperature and
+        # reasoning_effort are opt-in (omitted unless the deployer set them).
         body = {
             "model": self.model,
             "stream": True,
@@ -208,6 +208,11 @@ class OAuthProvider(LLMProvider):
             **(
                 {"temperature": self._cfg.temperature}
                 if self._cfg.temperature is not None
+                else {}
+            ),
+            **(
+                {"reasoning_effort": self._cfg.reasoning_effort}
+                if self._cfg.reasoning_effort
                 else {}
             ),
         }

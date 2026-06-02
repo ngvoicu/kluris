@@ -119,6 +119,20 @@ def test_env_example_documents_openai_shape(staged_brain):
     assert active_shape_lines == ["KLURIS_PROVIDER_SHAPE=anthropic"]
 
 
+def test_env_example_documents_reasoning_effort(staged_brain):
+    """The reasoning-effort knob ships documented but commented out (default is
+    to omit it, which keeps non-reasoning models and the Anthropic shape
+    untouched)."""
+    out, _ = staged_brain
+    env_text = (out / ".env.example").read_text(encoding="utf-8")
+    assert "# KLURIS_REASONING_EFFORT=" in env_text
+    # It must stay commented — no active (uncommented) assignment.
+    assert not any(
+        l.startswith("KLURIS_REASONING_EFFORT=")
+        for l in env_text.splitlines()
+    )
+
+
 def test_gitignore_protects_env_and_local_artifacts(staged_brain):
     out, _ = staged_brain
     gi = (out / ".gitignore").read_text(encoding="utf-8")
