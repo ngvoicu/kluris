@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from kluris.pack.agent import run_agent
+from kluris.pack.agent import _trim_history, run_agent
 from kluris.pack.config import Config
 from kluris.pack.providers.base import (
     ContextLimitError,
@@ -516,3 +516,84 @@ async def test_agent_trace_hook_records_tool_calls(fixture_brain, tmp_path):
     # Trace must NOT include raw secrets/full body.
     for entry in trace:
         assert "sk-" not in str(entry)
+
+
+# --- Sliding-window history trimming -----------------------------------------
+
+
+async def test_trim_history_keeps_recent_drops_oldest():
+    hist = [
+        {"role": "user" if i % 2 == 0 else "assistant", "content": "x" * 400}
+        for i in range(10)
+    ]
+    trimmed = _trim_history(hist, 300)  # ~105 tokens/msg → keeps ~2 recent
+    assert 0 < len(trimmed) < len(hist)
+    assert trimmed == hist[-len(trimmed):]  # kept slice is the most recent tail
+
+
+async def test_trim_history_small_history_untouched():
+    hist = [
+        {"role": "user", "content": "hi"},
+        {"role": "assistant", "content": "hello"},
+    ]
+    assert _trim_history(hist, 24000) == hist
+
+
+async def test_trim_history_zero_disables_trimming():
+    hist = [{"role": "user", "content": "x" * 100000}]
+    assert _trim_history(hist, 0) == hist
+
+
+async def test_trim_history_keeps_at_least_most_recent():
+    """A single message bigger than the whole budget is still kept (we never
+    send empty history); the provider's ContextLimitError is the backstop."""
+    hist = [
+        {"role": "user", "content": "a" * 100},
+        {"role": "assistant", "content": "z" * 100000},
+    ]
+    assert _trim_history(hist, 10) == [hist[-1]]
+
+
+async def test_run_agent_trims_old_history_before_sending(fixture_brain, tmp_path):
+    """run_agent applies the sliding window: the provider receives only the
+    recent turns (plus the system prompt + the new user message)."""
+    cfg = _config(
+        fixture_brain,
+        KLURIS_DATA_DIR=str(tmp_path / "data"),
+        KLURIS_MAX_CONTEXT_TOKENS="300",
+    )
+    (tmp_path / "data").mkdir()
+
+    class _CaptureProvider(LLMProvider):
+        model = "capture"
+
+        def __init__(self) -> None:
+            self.messages = None
+
+        async def smoke_test(self) -> None:  # pragma: no cover
+            return None
+
+        async def complete_stream(self, messages, tools):
+            self.messages = messages
+            yield {"kind": "end"}
+
+    provider = _CaptureProvider()
+    long_history = [
+        {
+            "role": "user" if i % 2 == 0 else "assistant",
+            "content": f"old-turn-{i} " + "x" * 400,
+        }
+        for i in range(20)
+    ]
+    await _drain(run_agent(
+        config=cfg, provider=provider, history=long_history,
+        user_message="newest question",
+    ))
+    sent = provider.messages
+    assert sent[0]["role"] == "system"
+    assert sent[-1] == {"role": "user", "content": "newest question"}
+    history_sent = sent[1:-1]
+    assert len(history_sent) < 20  # trimmed
+    joined = " ".join(m["content"] for m in history_sent)
+    assert "old-turn-0" not in joined    # oldest dropped
+    assert "old-turn-19" in joined       # most recent kept

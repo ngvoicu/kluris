@@ -278,6 +278,17 @@ def test_knobs_empty_string_falls_back_to_default():
     assert cfg.max_output_tokens == 4096
 
 
+def test_max_context_tokens_default_and_override():
+    assert Config.load_from_env(_API_KEY_ENV).max_context_tokens == 24000
+    env = dict(_API_KEY_ENV, KLURIS_MAX_CONTEXT_TOKENS="8000")
+    assert Config.load_from_env(env).max_context_tokens == 8000
+
+
+def test_max_context_tokens_zero_disables_trimming():
+    env = dict(_API_KEY_ENV, KLURIS_MAX_CONTEXT_TOKENS="0")
+    assert Config.load_from_env(env).max_context_tokens == 0
+
+
 def test_brain_and_data_dirs_overridable():
     env = dict(
         _API_KEY_ENV,

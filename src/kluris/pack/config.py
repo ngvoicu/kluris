@@ -49,6 +49,12 @@ _MAX_OUTPUT_TOKENS_MAX = 200000
 # an explicit temperature. Clamped to the standard [0, 2] range when set.
 _TEMPERATURE_MIN = 0.0
 _TEMPERATURE_MAX = 2.0
+# Sliding-window budget (estimated tokens) for the CONVERSATION HISTORY replayed
+# to the model each turn. Older turns are dropped once the transcript exceeds
+# this, so a long chat never hits the model's context window. ``0`` (or any
+# value <= 0) disables trimming. Generous-but-bounded default; deployers on a
+# small-context model should lower it.
+_DEFAULT_MAX_CONTEXT_TOKENS = 24000
 
 # API-key shape values
 _VALID_PROVIDER_SHAPES = {"anthropic", "openai"}
@@ -184,6 +190,12 @@ class Config(BaseModel):
     # by default → omitted from the request so the model uses its own default.
     max_output_tokens: int = _DEFAULT_MAX_OUTPUT_TOKENS
     temperature: float | None = None
+
+    # Sliding-window budget (estimated tokens) for replayed conversation
+    # history. <= 0 disables trimming. The agent loop drops the oldest turns
+    # to keep the transcript under this so long chats never overflow the
+    # model's context window.
+    max_context_tokens: int = _DEFAULT_MAX_CONTEXT_TOKENS
 
     # Filesystem
     brain_dir: Path = Field(default=Path("/app/brain"))
@@ -363,6 +375,9 @@ class Config(BaseModel):
         temperature = _read_float(env, "KLURIS_TEMPERATURE", None)
         if temperature is not None:
             temperature = max(_TEMPERATURE_MIN, min(_TEMPERATURE_MAX, temperature))
+        max_context = _read_int(
+            env, "KLURIS_MAX_CONTEXT_TOKENS", _DEFAULT_MAX_CONTEXT_TOKENS
+        )
         brain_dir = Path(env.get("KLURIS_BRAIN_DIR", "/app/brain"))
         data_dir = Path(env.get("KLURIS_DATA_DIR", "/data"))
 
@@ -388,6 +403,7 @@ class Config(BaseModel):
             max_multi_read_paths=max_multi,
             max_output_tokens=max_output,
             temperature=temperature,
+            max_context_tokens=max_context,
             brain_dir=brain_dir,
             data_dir=data_dir,
             tls_ca_bundle=ca_bundle,

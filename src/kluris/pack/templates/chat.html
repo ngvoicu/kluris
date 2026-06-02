@@ -114,6 +114,10 @@
       </div>
     </aside>
 
+    <div class="col-resize-handle" id="resize-left"
+         role="separator" aria-orientation="vertical"
+         aria-label="Resize the Files panel" title="Drag to resize"></div>
+
   </div>
 
   <button type="button" class="panel-expand-btn panel-expand-left"
@@ -329,6 +333,42 @@
       body.classList.remove("right-collapsed");
       expandRight.hidden = true;
     });
+
+    // --- Drag-resize the left (Files) panel ----------------------
+    // Updates the --left-w grid variable on .body and remembers the
+    // width in localStorage so it survives reloads.
+    const resizeHandle = document.getElementById("resize-left");
+    const LEFT_MIN = 180, LEFT_MAX = 520;
+    try {
+      const saved = parseInt(localStorage.getItem("kluris_left_w") || "", 10);
+      if (saved >= LEFT_MIN && saved <= LEFT_MAX) {
+        body.style.setProperty("--left-w", saved + "px");
+      }
+    } catch (e) { /* localStorage unavailable */ }
+    if (resizeHandle) {
+      resizeHandle.addEventListener("pointerdown", (event) => {
+        event.preventDefault();
+        try { resizeHandle.setPointerCapture(event.pointerId); } catch (e) {}
+        document.body.classList.add("col-resizing");
+        let width = LEFT_MIN;
+        const onMove = (ev) => {
+          const rect = body.getBoundingClientRect();
+          width = Math.max(
+            LEFT_MIN, Math.min(LEFT_MAX, Math.round(ev.clientX - rect.left)),
+          );
+          body.style.setProperty("--left-w", width + "px");
+        };
+        const onUp = () => {
+          document.body.classList.remove("col-resizing");
+          resizeHandle.removeEventListener("pointermove", onMove);
+          resizeHandle.removeEventListener("pointerup", onUp);
+          try { resizeHandle.releasePointerCapture(event.pointerId); } catch (e) {}
+          try { localStorage.setItem("kluris_left_w", String(width)); } catch (e) {}
+        };
+        resizeHandle.addEventListener("pointermove", onMove);
+        resizeHandle.addEventListener("pointerup", onUp);
+      });
+    }
 
     // Hand control of the brain tree + modal off to brain-explorer.js.
     if (window.kluris && window.kluris.bootBrainExplorer) {

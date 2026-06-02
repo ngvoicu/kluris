@@ -128,16 +128,60 @@ a { color: var(--accent); }
 
 .body {
   display: grid;
-  grid-template-columns: 280px 1fr 320px;
+  /* Left column width is a CSS var so the drag handle can resize it.
+     Middle (1fr) is the chat; 320px is the right Find panel. */
+  grid-template-columns: var(--left-w, 280px) 1fr 320px;
+  /* Bound the single row to the body's height (NOT its content) so the
+     chat's messages list scrolls internally and the input stays pinned.
+     Explicit minmax(0, 1fr) is required: Chrome bounds the implicit auto
+     row, but Safari/Firefox size it to content — growing the stage and
+     pushing the chat input below the viewport on long conversations. */
+  grid-template-rows: minmax(0, 1fr);
   gap: 0;
   min-height: 0;
   position: relative;
 }
+/* Pin each pane to its own grid track. Without this, collapsing a panel
+   with display:none removes it from the grid and the remaining panes
+   auto-shift LEFT — collapsing the Files panel would otherwise drop the
+   chat into the now-zero-width first column (which is the bug this fixes). */
+.panel-left { grid-column: 1; }
+.stage { grid-column: 2; }
+.panel-right { grid-column: 3; }
+
 .body.left-collapsed { grid-template-columns: 0 1fr 320px; }
-.body.right-collapsed { grid-template-columns: 280px 1fr 0; }
+.body.right-collapsed { grid-template-columns: var(--left-w, 280px) 1fr 0; }
 .body.left-collapsed.right-collapsed { grid-template-columns: 0 1fr 0; }
 .body.left-collapsed .panel-left,
 .body.right-collapsed .panel-right { display: none; }
+
+/* Drag handle straddling the Files/chat divider. It lives in the chat's
+   left edge (clear of the panel scrollbar) and tracks the left width. */
+.col-resize-handle {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: var(--left-w, 280px);
+  width: 8px;
+  margin-left: -3px;
+  cursor: col-resize;
+  z-index: 15;
+  touch-action: none;
+}
+.col-resize-handle::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 3px;
+  width: 2px;
+  background: transparent;
+  transition: background 120ms ease;
+}
+.col-resize-handle:hover::before,
+body.col-resizing .col-resize-handle::before { background: var(--line-strong); }
+.body.left-collapsed .col-resize-handle { display: none; }
+body.col-resizing { cursor: col-resize; user-select: none; }
 
 /* ---- Panels (left = Files, right = Find) -------------------------- */
 

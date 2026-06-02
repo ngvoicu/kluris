@@ -55,6 +55,42 @@ def _tool_schemas(config: Config) -> list[dict[str, Any]]:
     return anthropic_schemas(max_multi_read=config.max_multi_read_paths)
 
 
+def _estimate_tokens(text: str) -> int:
+    """Rough token estimate. The pack ships no tokenizer; ~4 chars/token is a
+    standard heuristic for English prose. Rounds up so we under-fill rather
+    than overflow."""
+    return len(text) // 4 + 1
+
+
+def _trim_history(
+    history: list[dict[str, Any]], max_tokens: int
+) -> list[dict[str, Any]]:
+    """Sliding window over conversation history.
+
+    Keeps the most RECENT turns whose estimated tokens fit ``max_tokens`` and
+    drops the oldest, so a long conversation never overflows the model's
+    context window — it just forgets its oldest turns (facts are re-fetched
+    from the brain each turn anyway). ``max_tokens <= 0`` disables trimming.
+
+    Always keeps at least the single most recent message (even if it alone
+    exceeds the budget) so a turn is never sent with empty history; the
+    provider's ContextLimitError stays the backstop for that edge case. The
+    ~4-tokens-per-message overhead approximates role/formatting tokens.
+    """
+    if max_tokens <= 0:
+        return history
+    kept: list[dict[str, Any]] = []
+    total = 0
+    for msg in reversed(history):
+        cost = _estimate_tokens(str(msg.get("content", ""))) + 4
+        if kept and total + cost > max_tokens:
+            break
+        total += cost
+        kept.append(msg)
+    kept.reverse()
+    return kept
+
+
 def _dispatch_tool(
     config: Config,
     name: str,
@@ -173,7 +209,9 @@ async def run_agent(
     # native shape: OpenAI keeps role=system, Anthropic lifts it to the
     # top-level `system` request field.
     messages.append({"role": "system", "content": system})
-    messages.extend(history)
+    # Sliding-window trim so a long conversation never overflows the model's
+    # context window — the oldest turns are dropped to fit the budget.
+    messages.extend(_trim_history(history, config.max_context_tokens))
     messages.append({"role": "user", "content": user_message})
 
     rounds = 0
