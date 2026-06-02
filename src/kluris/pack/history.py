@@ -101,13 +101,16 @@ class SessionStore:
             return cur.fetchone() is not None
 
     def list_sessions(self, *, limit: int = 100) -> list[dict[str, Any]]:
-        """Return recent sessions with message counts + first-user-message preview.
+        """Return recent NON-EMPTY sessions with message counts + first-user
+        preview.
 
-        Ordered by ``created_at`` descending, capped at ``limit``. Each
-        row is shaped for the right-panel "Past conversations" picker:
-        the preview is the first user message in the session truncated
-        at 200 chars, useful as a header line in a list of past
-        sessions whose IDs are otherwise opaque hex blobs.
+        Ordered by ``created_at`` descending, capped at ``limit``. Sessions
+        with zero messages (e.g. a page load that opened a fresh conversation
+        but never sent a message) are excluded — the "Past conversations"
+        picker only lists conversations that actually have content. The
+        ``EXISTS`` filter runs before ``LIMIT``, so the cap applies to
+        non-empty sessions. The preview is the first user message truncated
+        at 200 chars, a header line for otherwise-opaque hex session IDs.
         """
         if limit <= 0:
             return []
@@ -123,6 +126,9 @@ class SessionStore:
                         WHERE m.session_id = s.id AND m.role = 'user'
                         ORDER BY m.id ASC LIMIT 1) AS first_user
                 FROM sessions s
+                WHERE EXISTS (
+                    SELECT 1 FROM messages m WHERE m.session_id = s.id
+                )
                 ORDER BY s.created_at DESC
                 LIMIT ?
                 """,

@@ -99,15 +99,15 @@ def attach_chat_routes(app: FastAPI) -> None:
     async def chat_page(request: Request):
         cfg: Config = app.state.config
         store = _store(app)
-        sid = request.cookies.get(_COOKIE_NAME)
-        if not sid or not store.session_exists(sid):
-            sid = _new_session_id()
-            store.new_session(session_id=sid)
-        history = store.replay(sid)
+        # Always open a FRESH conversation on page load — the prior session
+        # (if any) is preserved in the store and reachable via "Past
+        # conversations", but is not resumed or replayed into the page.
+        sid = _new_session_id()
+        store.new_session(session_id=sid)
         template = env.get_template("chat.html")
         html = template.render(
             brain_name=_brain_name(cfg),
-            history=history,
+            history=[],
             llm_ready=getattr(app.state, "llm_ready", False),
             llm_error=getattr(app.state, "llm_error", None),
         )

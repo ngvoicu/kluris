@@ -65,14 +65,34 @@ def test_post_chat_streams_tokens(api_key_config: Config):
         assert "[DONE]" in text
 
 
+def test_get_root_always_opens_fresh_conversation(api_key_config: Config):
+    """Each page load starts a NEW empty conversation: a prior session's
+    messages are not replayed into the page, and the cookie rotates to a
+    fresh session id. (The prior turn is still in the store, reachable via
+    "Past conversations".)"""
+    app = _build_app(api_key_config)
+    with TestClient(app) as client:
+        client.get("/")
+        sid1 = client.cookies.get("kluris_session")
+        app.state.session_store.append_message(sid1, "user", "remember me please")
+        reload = client.get("/")
+        sid2 = client.cookies.get("kluris_session")
+        assert sid2 != sid1
+        assert "remember me please" not in reload.text
+
+
 def test_post_chat_persists_history(api_key_config: Config):
     app = _build_app(api_key_config)
     with TestClient(app) as client:
         client.get("/")
+        sid = client.cookies.get("kluris_session")
         client.post("/chat", json={"message": "first"})
-        # Reload to confirm history replays
-        resp = client.get("/")
-        assert "first" in resp.text
+        # The turn is persisted to the store (reachable via the session API),
+        # even though a page reload now opens a fresh conversation.
+        resp = client.get(f"/api/sessions/{sid}")
+        assert resp.status_code == 200
+        contents = [m["content"] for m in resp.json()["messages"]]
+        assert any("first" in c for c in contents)
 
 
 def test_post_chat_persists_agent_error_when_no_text(api_key_config: Config):
@@ -102,11 +122,14 @@ def test_post_chat_persists_agent_error_when_no_text(api_key_config: Config):
     )
     with TestClient(app) as client:
         client.get("/")
+        sid = client.cookies.get("kluris_session")
         client.post("/chat", json={"message": "what is x?"})
-        resp = client.get("/")
-        # The error must be visible in the replayed history.
-        assert "[error:" in resp.text
-        assert "no content" in resp.text.lower()
+        # The error is persisted to the session (reachable via the session
+        # API) so the failed turn isn't silently lost.
+        data = client.get(f"/api/sessions/{sid}").json()
+        joined = " ".join(m["content"] for m in data["messages"])
+        assert "[error:" in joined
+        assert "no content" in joined.lower()
 
 
 def test_post_chat_empty_message_400(api_key_config: Config):
@@ -302,47 +325,50 @@ def test_brain_search_endpoint_finds_glossary_entries(
         assert token_glossary, "JWT definition body must surface from glossary"
 
 
-def test_list_sessions_endpoint_returns_picker_rows(api_key_config: Config):
-    """``GET /api/sessions`` must return every saved session ordered
-    by ``created_at`` desc, each row carrying the date, message count,
-    a first-user-message preview, and an ``is_current`` flag pointing
-    at the cookie's session.
+def test_list_sessions_endpoint_excludes_empty_and_flags_current(
+    api_key_config: Config,
+):
+    """``GET /api/sessions`` lists only conversations that HAVE messages
+    (empty sessions — e.g. a page load with no chat — are hidden), newest
+    first, each row carrying the message count + first-user preview, with
+    ``is_current`` pointing at the cookie's session once it has a message.
     """
     app = _build_app(api_key_config)
     with TestClient(app) as client:
-        # Touch the chat page to seed a current session in the DB.
-        first = client.get("/")
-        assert first.status_code == 200
-        cookie = client.cookies.get("kluris_session")
-        assert cookie
-
-        # Append one message so the preview has something to show.
-        store = app.state.session_store
-        store.append_message(cookie, "user", "Hello brain, what is JWT?")
-
-        # Make a second session via the new-conversation endpoint, then
-        # touch / again to land the current session on yet another id.
-        client.post("/chat/new")
+        # Session 1: opened, then given a real message → must appear.
         client.get("/")
-        latest_cookie = client.cookies.get("kluris_session")
-        assert latest_cookie != cookie
+        sid1 = client.cookies.get("kluris_session")
+        assert sid1
+        store = app.state.session_store
+        store.append_message(sid1, "user", "Hello brain, what is JWT?")
 
-        resp = client.get("/api/sessions")
-        assert resp.status_code == 200
-        data = resp.json()
+        # Start a fresh conversation → current session, but still empty.
+        client.post("/chat/new")
+        current = client.cookies.get("kluris_session")
+        assert current != sid1
+
+        data = client.get("/api/sessions").json()
         assert data["ok"] is True
         sessions = data["sessions"]
-        assert len(sessions) >= 2
-        # Newest first.
-        assert sessions[0]["created_at"] >= sessions[-1]["created_at"]
-        # is_current matches the live cookie, never an older session.
-        current = [s for s in sessions if s["is_current"]]
-        assert len(current) == 1
-        assert current[0]["id"] == latest_cookie
-        # The seeded preview is reachable on the older row.
-        seeded = next(s for s in sessions if s["id"] == cookie)
+        ids = {s["id"] for s in sessions}
+        # The non-empty session shows; the empty current session is hidden.
+        assert sid1 in ids
+        assert current not in ids
+        assert all(s["message_count"] > 0 for s in sessions)
+        seeded = next(s for s in sessions if s["id"] == sid1)
         assert "JWT" in seeded["preview"]
         assert seeded["message_count"] == 1
+        # No row is flagged current while the current session is empty.
+        assert all(not s["is_current"] for s in sessions)
+
+        # Once the current session gains a message, it appears AND is current.
+        store.append_message(current, "user", "another question")
+        sessions2 = client.get("/api/sessions").json()["sessions"]
+        # Newest first.
+        assert sessions2[0]["created_at"] >= sessions2[-1]["created_at"]
+        cur = [s for s in sessions2 if s["is_current"]]
+        assert len(cur) == 1
+        assert cur[0]["id"] == current
 
 
 def test_get_session_endpoint_returns_user_visible_messages(

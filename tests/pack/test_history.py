@@ -31,6 +31,18 @@ def test_create_session_and_append_messages(tmp_path):
     assert [r["content"] for r in rows] == ["hello", "hi there"]
 
 
+def test_list_sessions_excludes_empty_sessions(tmp_path):
+    """``list_sessions`` is the picker source — it must omit sessions with
+    no messages (created on every page load) and keep only real ones."""
+    s = _store(tmp_path)
+    empty = s.new_session()
+    full = s.new_session()
+    s.append_message(full, "user", "hi")
+    ids = {row["id"] for row in s.list_sessions()}
+    assert full in ids
+    assert empty not in ids
+
+
 def test_replay_in_chronological_order(tmp_path):
     s = _store(tmp_path)
     sid = s.new_session()
