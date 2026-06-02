@@ -184,18 +184,46 @@
       return div.querySelector(".msg-body");
     }
 
-    function appendToolCard(name, args) {
+    function appendToolCard(host, name, args) {
+      // Build with textContent (not innerHTML) — tool args are model-
+      // supplied and could contain HTML; this keeps them inert.
       const div = document.createElement("div");
       div.className = "msg msg-tool";
-      const summary = JSON.stringify(args || {});
-      div.innerHTML =
-        '<details><summary><span class="tool-name">' + name +
-        '</span> <span class="tool-args">— ' + summary +
-        '</span></summary>' +
-        '<div class="tool-result"></div></details>';
-      messages.appendChild(div);
+      const details = document.createElement("details");
+      const summary = document.createElement("summary");
+      const nameEl = document.createElement("span");
+      nameEl.className = "tool-name";
+      nameEl.textContent = name;
+      const argsEl = document.createElement("span");
+      argsEl.className = "tool-args";
+      argsEl.textContent = "— " + JSON.stringify(args || {});
+      summary.append(nameEl, " ", argsEl);
+      const result = document.createElement("div");
+      result.className = "tool-result";
+      details.append(summary, result);
+      div.appendChild(details);
+      host.appendChild(div);
+      div.scrollIntoView({behavior: "smooth", block: "nearest"});
       return div;
     }
+
+    // Auto-grow the textarea up to its CSS max-height (200px) as the
+    // user types, then let it scroll internally past that.
+    function autoSize() {
+      input.style.height = "auto";
+      input.style.height = Math.min(input.scrollHeight, 200) + "px";
+    }
+    input.addEventListener("input", autoSize);
+
+    // Enter submits; Shift+Enter inserts a newline. ``isComposing``
+    // guards IME composition so committing a character mid-compose
+    // doesn't fire a send.
+    input.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
+        event.preventDefault();
+        form.requestSubmit();
+      }
+    });
 
     form.addEventListener("submit", async (event) => {
       event.preventDefault();
@@ -203,14 +231,27 @@
       if (!message) return;
       appendMessage("user", message);
       input.value = "";
-      const assistantBody = appendMessage("assistant", "");
-      assistantBody.classList.add("md");
+      autoSize();
+      // Tool cards render inside this host, which sits ABOVE the
+      // assistant reply — so the tools the model called appear before
+      // the answer they produced, not after it.
+      const toolsHost = document.createElement("div");
+      toolsHost.className = "tool-stack";
+      messages.appendChild(toolsHost);
+      // The assistant bubble is created lazily on the first token so an
+      // empty bubble never sits above the tool cards during the tool-
+      // calling phase.
+      let assistantBody = null;
       // Accumulate the raw markdown stream and re-render on each
       // token. Re-rendering a few-KB string per chunk is cheap; it
       // gives the user live formatted output as the model streams.
       let assistantBuf = "";
       let lastToolCard = null;
       function paintAssistant() {
+        if (!assistantBody) {
+          assistantBody = appendMessage("assistant", "");
+          assistantBody.classList.add("md");
+        }
         assistantBody.innerHTML = renderMd(assistantBuf);
       }
       kluris.streamChat({
@@ -221,7 +262,7 @@
             assistantBuf += frame.text || "";
             paintAssistant();
           } else if (frame.type === "tool") {
-            lastToolCard = appendToolCard(frame.name, frame.args);
+            lastToolCard = appendToolCard(toolsHost, frame.name, frame.args);
           } else if (frame.type === "tool_result") {
             if (lastToolCard) {
               lastToolCard.querySelector(".tool-result").textContent =

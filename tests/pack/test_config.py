@@ -40,7 +40,6 @@ def test_loads_api_key_anthropic_shape():
     assert isinstance(cfg.api_key, SecretStr)
     assert cfg.api_key.get_secret_value() == "sk-secret-xyz"
     assert cfg.model == "claude-opus-4-7"
-    assert cfg.api_url == "https://api.example.com"
 
 
 def test_loads_api_key_openai_shape():
@@ -56,7 +55,6 @@ def test_loads_oauth_path():
     assert cfg.oauth_api_base_url == "https://api.example.com"
     assert cfg.oauth_client_id == "kluris-app"
     assert isinstance(cfg.oauth_client_secret, SecretStr)
-    assert cfg.api_url == "https://api.example.com"
 
 
 def test_oauth_scope_optional():
@@ -224,6 +222,60 @@ def test_max_agent_rounds_zero_is_unlimited_sentinel():
     """
     env = dict(_API_KEY_ENV, MAX_AGENT_ROUNDS="0")
     assert Config.load_from_env(env).max_agent_rounds == 0
+
+
+def test_max_output_tokens_default_and_override():
+    assert Config.load_from_env(_API_KEY_ENV).max_output_tokens == 4096
+    env = dict(_API_KEY_ENV, KLURIS_MAX_OUTPUT_TOKENS="32000")
+    assert Config.load_from_env(env).max_output_tokens == 32000
+
+
+def test_max_output_tokens_clamped():
+    env_low = dict(_API_KEY_ENV, KLURIS_MAX_OUTPUT_TOKENS="0")
+    assert Config.load_from_env(env_low).max_output_tokens == 16
+
+    env_high = dict(_API_KEY_ENV, KLURIS_MAX_OUTPUT_TOKENS="9999999")
+    assert Config.load_from_env(env_high).max_output_tokens == 200000
+
+
+def test_temperature_defaults_to_none():
+    """Unset → None so the providers OMIT temperature (model default;
+    required for reasoning models that reject an explicit temperature)."""
+    assert Config.load_from_env(_API_KEY_ENV).temperature is None
+
+
+def test_temperature_override_and_clamp():
+    env = dict(_API_KEY_ENV, KLURIS_TEMPERATURE="0.7")
+    assert Config.load_from_env(env).temperature == 0.7
+
+    env_low = dict(_API_KEY_ENV, KLURIS_TEMPERATURE="-1")
+    assert Config.load_from_env(env_low).temperature == 0.0
+
+    env_high = dict(_API_KEY_ENV, KLURIS_TEMPERATURE="5")
+    assert Config.load_from_env(env_high).temperature == 2.0
+
+    # Exact bounds pass through unchanged (clamp is inclusive).
+    assert Config.load_from_env(
+        dict(_API_KEY_ENV, KLURIS_TEMPERATURE="0.0")
+    ).temperature == 0.0
+    assert Config.load_from_env(
+        dict(_API_KEY_ENV, KLURIS_TEMPERATURE="2.0")
+    ).temperature == 2.0
+
+
+def test_temperature_invalid_raises():
+    env = dict(_API_KEY_ENV, KLURIS_TEMPERATURE="warm")
+    with pytest.raises(ConfigError, match="must be a number"):
+        Config.load_from_env(env)
+
+
+def test_knobs_empty_string_falls_back_to_default():
+    """A commented-out .env line becomes an empty value after envsubst; the
+    knobs must treat "" as unset (the documented `or raw == ""` contract)."""
+    env = dict(_API_KEY_ENV, KLURIS_TEMPERATURE="", KLURIS_MAX_OUTPUT_TOKENS="")
+    cfg = Config.load_from_env(env)
+    assert cfg.temperature is None
+    assert cfg.max_output_tokens == 4096
 
 
 def test_brain_and_data_dirs_overridable():

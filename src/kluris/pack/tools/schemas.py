@@ -102,7 +102,7 @@ def _lobe_overview_schema() -> dict[str, Any]:
 
 
 _DESCRIPTIONS = {
-    "wake_up": "Compact snapshot of the brain: lobes, recent neurons, glossary count, deprecation diagnostics. Call FIRST in a session.",
+    "wake_up": "Compact snapshot of the brain: lobes, recent neurons, glossary terms, deprecation diagnostics. Call FIRST in a session.",
     "search": "Lexical search across neurons + glossary + brain.md. Returns ranked results with source paths.",
     "read_neuron": "Read one neuron's frontmatter and body by brain-relative path.",
     "multi_read": "Read multiple neurons in one call (saves round trips when composing across sources).",

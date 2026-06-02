@@ -36,7 +36,6 @@ def extract(path: Path, body: str) -> tuple[str, str]:
     """
     title = ""
     excerpt = ""
-    title_seen = False
 
     for raw_line in body.splitlines():
         line = _strip_empty_html_anchors(raw_line).strip()
@@ -44,7 +43,6 @@ def extract(path: Path, body: str) -> tuple[str, str]:
             continue
         if line.startswith("# ") and not title:
             title = line[2:].strip()
-            title_seen = True
             continue
         # Skip non-content lines whether or not the H1 has appeared.
         if line.startswith(("## ", "- ", "* ", "```", "---", "up ", "sideways ")):

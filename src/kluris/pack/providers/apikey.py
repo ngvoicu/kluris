@@ -153,9 +153,14 @@ class APIKeyProvider(LLMProvider):
                 "tool_choice": {"type": "tool", "name": "ping"},
                 "messages": [{"role": "user", "content": "ping"}],
             }
+        # OpenAI Chat Completions uses ``max_completion_tokens`` (newer
+        # GPT reasoning models reject ``max_tokens`` outright). The boot
+        # budget is larger than Anthropic's because a reasoning model can
+        # spend output tokens on hidden reasoning before it emits the
+        # forced ping tool-call.
         return {
             "model": self.model,
-            "max_tokens": 4,
+            "max_completion_tokens": 32,
             "tools": [_PING_TOOL_OPENAI],
             "tool_choice": {"type": "function", "function": {"name": "ping"}},
             "messages": [{"role": "user", "content": "ping"}],
@@ -217,23 +222,35 @@ class APIKeyProvider(LLMProvider):
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]],
     ) -> dict[str, Any]:
+        # Temperature is opt-in: omitted unless the deployer set it, so models
+        # that reject an explicit temperature (some reasoning models) work by
+        # default.
+        temperature = (
+            {"temperature": self._cfg.temperature}
+            if self._cfg.temperature is not None
+            else {}
+        )
         if self.shape == "anthropic":
             system, anthropic_messages = _messages_for_anthropic(messages)
             return {
                 "model": self.model,
-                "max_tokens": 4096,
+                "max_tokens": self._cfg.max_output_tokens,
                 "stream": True,
                 "tools": tools,
                 "messages": anthropic_messages,
                 **({"system": system} if system else {}),
+                **temperature,
             }
+        # OpenAI Chat Completions uses ``max_completion_tokens``; newer
+        # GPT reasoning models reject ``max_tokens``.
         return {
             "model": self.model,
             "stream": True,
             "stream_options": {"include_usage": True},
-            "max_tokens": 4096,
+            "max_completion_tokens": self._cfg.max_output_tokens,
             "tools": tools,
             "messages": _messages_for_openai(messages),
+            **temperature,
         }
 
 

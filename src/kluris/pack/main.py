@@ -32,7 +32,6 @@ Smoke-test scheduling. ``create_app()`` may be called two ways:
 from __future__ import annotations
 
 import asyncio
-import logging
 import os
 import sys
 from contextlib import asynccontextmanager
@@ -48,8 +47,6 @@ from .readonly import assert_brain_read_only
 
 if TYPE_CHECKING:  # pragma: no cover
     from .providers.base import LLMProvider
-
-logger = logging.getLogger("kluris.pack")
 
 
 def _minimal_config_from_env() -> Config:

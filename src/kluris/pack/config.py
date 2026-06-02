@@ -38,6 +38,17 @@ _LOBE_OVERVIEW_BUDGET_MAX = 16384
 _DEFAULT_MAX_MULTI_READ_PATHS = 5
 _MAX_MULTI_READ_PATHS_MIN = 1
 _MAX_MULTI_READ_PATHS_MAX = 20
+# Per-response output token budget (the model's answer-length cap). Default
+# matches the value the providers used to hardcode. Clamped so a typo can't
+# break chat with a zero/absurd budget.
+_DEFAULT_MAX_OUTPUT_TOKENS = 4096
+_MAX_OUTPUT_TOKENS_MIN = 16
+_MAX_OUTPUT_TOKENS_MAX = 200000
+# Sampling temperature. ``None`` (the default) means "omit it from the request"
+# so the model uses its own default — required for reasoning models that reject
+# an explicit temperature. Clamped to the standard [0, 2] range when set.
+_TEMPERATURE_MIN = 0.0
+_TEMPERATURE_MAX = 2.0
 
 # API-key shape values
 _VALID_PROVIDER_SHAPES = {"anthropic", "openai"}
@@ -71,6 +82,16 @@ def _read_int(env: dict, name: str, default: int) -> int:
         return int(raw)
     except ValueError as exc:
         raise ConfigError(f"{name} must be an integer, got {raw!r}") from exc
+
+
+def _read_float(env: dict, name: str, default: float | None) -> float | None:
+    raw = env.get(name)
+    if raw is None or raw == "":
+        return default
+    try:
+        return float(raw)
+    except ValueError as exc:
+        raise ConfigError(f"{name} must be a number, got {raw!r}") from exc
 
 
 _TRUE_LITERALS = {"1", "true", "yes", "on"}
@@ -158,6 +179,12 @@ class Config(BaseModel):
     lobe_overview_budget: int = _DEFAULT_LOBE_OVERVIEW_BUDGET
     max_multi_read_paths: int = _DEFAULT_MAX_MULTI_READ_PATHS
 
+    # Per-response output token budget sent to the LLM (max_completion_tokens
+    # for the OpenAI shape, max_tokens for Anthropic). ``temperature`` is None
+    # by default → omitted from the request so the model uses its own default.
+    max_output_tokens: int = _DEFAULT_MAX_OUTPUT_TOKENS
+    temperature: float | None = None
+
     # Filesystem
     brain_dir: Path = Field(default=Path("/app/brain"))
     data_dir: Path = Field(default=Path("/data"))
@@ -205,19 +232,6 @@ class Config(BaseModel):
         if self.tls_insecure:
             return False
         return True
-
-    @property
-    def api_url(self) -> str:
-        """The base URL the provider class will POST to.
-
-        For the API-key path this is the deployer-supplied
-        ``KLURIS_BASE_URL``. For the OAuth path it is
-        ``KLURIS_OAUTH_API_BASE_URL`` (the proxied API endpoint, which
-        is not the same host as the token URL).
-        """
-        if self.auth_mode == "oauth":
-            return self.oauth_api_base_url or ""
-        return self.base_url or ""
 
     def __repr__(self) -> str:
         return self._redacted_str()
@@ -341,6 +355,14 @@ class Config(BaseModel):
             _MAX_MULTI_READ_PATHS_MIN,
             _MAX_MULTI_READ_PATHS_MAX,
         )
+        max_output = _clamp(
+            _read_int(env, "KLURIS_MAX_OUTPUT_TOKENS", _DEFAULT_MAX_OUTPUT_TOKENS),
+            _MAX_OUTPUT_TOKENS_MIN,
+            _MAX_OUTPUT_TOKENS_MAX,
+        )
+        temperature = _read_float(env, "KLURIS_TEMPERATURE", None)
+        if temperature is not None:
+            temperature = max(_TEMPERATURE_MIN, min(_TEMPERATURE_MAX, temperature))
         brain_dir = Path(env.get("KLURIS_BRAIN_DIR", "/app/brain"))
         data_dir = Path(env.get("KLURIS_DATA_DIR", "/data"))
 
@@ -364,6 +386,8 @@ class Config(BaseModel):
             max_agent_rounds=max_rounds,
             lobe_overview_budget=budget,
             max_multi_read_paths=max_multi,
+            max_output_tokens=max_output,
+            temperature=temperature,
             brain_dir=brain_dir,
             data_dir=data_dir,
             tls_ca_bundle=ca_bundle,

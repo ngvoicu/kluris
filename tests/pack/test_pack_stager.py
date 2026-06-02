@@ -100,6 +100,25 @@ def test_env_example_uses_obvious_placeholders(staged_brain):
         )
 
 
+def test_env_example_documents_openai_shape(staged_brain):
+    """`.env.example` must show the OpenAI shape as a commented
+    alternative so deployers know how to point the pack at OpenAI /
+    OpenAI-compatible gateways. The block stays fully commented so the
+    Anthropic default remains the single active auth path.
+    """
+    out, _ = staged_brain
+    env_text = (out / ".env.example").read_text(encoding="utf-8")
+    assert "# KLURIS_PROVIDER_SHAPE=openai" in env_text
+    assert "# KLURIS_BASE_URL=https://api.openai.com" in env_text
+    # The OpenAI shape must stay commented — exactly one uncommented
+    # KLURIS_PROVIDER_SHAPE line (the Anthropic default).
+    active_shape_lines = [
+        l for l in env_text.splitlines()
+        if l.startswith("KLURIS_PROVIDER_SHAPE=")
+    ]
+    assert active_shape_lines == ["KLURIS_PROVIDER_SHAPE=anthropic"]
+
+
 def test_gitignore_protects_env_and_local_artifacts(staged_brain):
     out, _ = staged_brain
     gi = (out / ".gitignore").read_text(encoding="utf-8")
@@ -252,6 +271,7 @@ def test_runtime_contains_only_allow_listed_files(staged_brain):
         "frontmatter.py",
         "neuron_index.py",
         "search.py",
+        "search_fts.py",
         "wake_up.py",
         "neuron_excerpt.py",
     }

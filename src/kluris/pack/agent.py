@@ -177,8 +177,6 @@ async def run_agent(
     messages.append({"role": "user", "content": user_message})
 
     rounds = 0
-    cumulative_input = 0
-    cumulative_output = 0
     # ``max_agent_rounds <= 0`` is the "unlimited" sentinel — keep
     # looping until the provider emits an end with no pending
     # tool_uses, regardless of round count.
@@ -194,8 +192,6 @@ async def run_agent(
                     round_text.append(str(event.get("text", "")))
                     yield event
                 elif kind == "usage":
-                    cumulative_input += int(event.get("input", 0))
-                    cumulative_output += int(event.get("output", 0))
                     yield event
                 elif kind == "tool_use":
                     pending_tools.append(event)
@@ -297,9 +293,3 @@ async def run_agent(
         "recoverable": True,
     }
     yield {"kind": "end"}
-
-
-def total_usage_event(
-    input_tokens: int, output_tokens: int
-) -> dict[str, Any]:
-    return {"kind": "usage", "input": input_tokens, "output": output_tokens}

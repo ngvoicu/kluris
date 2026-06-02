@@ -14,7 +14,6 @@ fails CI if any are introduced here.
 from __future__ import annotations
 
 import json
-import os
 from difflib import get_close_matches
 from pathlib import Path
 from typing import Any
@@ -30,6 +29,7 @@ from kluris_runtime.search import (
     parse_glossary_entries,
     search_brain,
 )
+from kluris_runtime.search_fts import search_brain_fts
 from kluris_runtime.wake_up import build_payload
 
 
@@ -86,16 +86,23 @@ def search_tool(
     lobe: str | None = None,
     tag: str | None = None,
 ) -> dict[str, Any]:
-    """Lexical search across neurons + glossary + brain.md."""
+    """BM25 search across neurons + glossary + brain.md.
+
+    Ranked by SQLite FTS5's ``bm25()`` (tokenized, prefix-matched,
+    TF-IDF-weighted). Falls back to the literal-substring engine if FTS5 is
+    unavailable or errors, so the tool can never regress to no results.
+    """
     if not isinstance(query, str) or not query.strip():
         return {"ok": False, "error": "query must be a non-empty string"}
-    results = search_brain(
-        brain_path,
-        query,
-        limit=int(limit) if limit else 10,
-        lobe_filter=lobe,
-        tag_filter=tag,
-    )
+    n = int(limit) if limit else 10
+    try:
+        results = search_brain_fts(
+            brain_path, query, limit=n, lobe_filter=lobe, tag_filter=tag,
+        )
+    except Exception:
+        results = search_brain(
+            brain_path, query, limit=n, lobe_filter=lobe, tag_filter=tag,
+        )
     return {
         "ok": True,
         "query": query,

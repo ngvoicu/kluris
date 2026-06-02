@@ -622,3 +622,219 @@ async def test_stream_raises_context_limit_on_marker_400(api_env, respx_mock):
     with pytest.raises(ContextLimitError):
         async for _ in APIKeyProvider(cfg).complete_stream(messages=[], tools=[]):
             pass
+
+
+# --- Completion-budget param: max_completion_tokens vs max_tokens ------------
+#
+# OpenAI Chat Completions rejects ``max_tokens`` for newer GPT reasoning
+# models with HTTP 400 ("Unsupported parameter ... use
+# 'max_completion_tokens' instead"). The OpenAI shape must therefore send
+# ``max_completion_tokens`` and never ``max_tokens``. Anthropic still uses
+# ``max_tokens``. Both halves of each assertion matter — a body carrying
+# BOTH keys would still 400, so the ``not in`` check is load-bearing.
+
+
+@respx.mock(assert_all_mocked=True, assert_all_called=False)
+async def test_openai_smoke_body_uses_max_completion_tokens(api_env, respx_mock):
+    cfg = _build_config(api_env, shape="openai")
+    route = respx_mock.post("http://api.test/v1/chat/completions").mock(
+        return_value=httpx.Response(200, json=_openai_smoke_response())
+    )
+    await APIKeyProvider(cfg).smoke_test()
+    body = json.loads(route.calls.last.request.content)
+    assert body["max_completion_tokens"] == 32
+    assert "max_tokens" not in body
+
+
+@respx.mock(assert_all_mocked=True, assert_all_called=False)
+async def test_openai_stream_body_uses_max_completion_tokens(api_env, respx_mock):
+    cfg = _build_config(api_env, shape="openai")
+    route = respx_mock.post("http://api.test/v1/chat/completions").mock(
+        return_value=httpx.Response(200, content=_sse_lines(iter(["data: [DONE]", ""])))
+    )
+    _events = [
+        e
+        async for e in APIKeyProvider(cfg).complete_stream(
+            messages=[{"role": "user", "content": "x"}], tools=[]
+        )
+    ]
+    body = json.loads(route.calls.last.request.content)
+    assert body["max_completion_tokens"] == 4096
+    assert "max_tokens" not in body
+
+
+@respx.mock(assert_all_mocked=True, assert_all_called=False)
+async def test_anthropic_smoke_body_uses_max_tokens(api_env, respx_mock):
+    cfg = _build_config(api_env, shape="anthropic")
+    route = respx_mock.post("http://api.test/v1/messages").mock(
+        return_value=httpx.Response(200, json=_anthropic_smoke_response())
+    )
+    await APIKeyProvider(cfg).smoke_test()
+    body = json.loads(route.calls.last.request.content)
+    assert body["max_tokens"] == 4
+    assert "max_completion_tokens" not in body
+
+
+@respx.mock(assert_all_mocked=True, assert_all_called=False)
+async def test_anthropic_stream_body_uses_max_tokens(api_env, respx_mock):
+    cfg = _build_config(api_env, shape="anthropic")
+    route = respx_mock.post("http://api.test/v1/messages").mock(
+        return_value=httpx.Response(
+            200,
+            content=_sse_lines(iter([
+                "event: message_stop",
+                "data: " + json.dumps({"type": "message_stop"}),
+                "",
+            ])),
+            headers={"content-type": "text/event-stream"},
+        )
+    )
+    _events = [
+        e
+        async for e in APIKeyProvider(cfg).complete_stream(
+            messages=[{"role": "user", "content": "x"}], tools=[]
+        )
+    ]
+    body = json.loads(route.calls.last.request.content)
+    assert body["max_tokens"] == 4096
+    assert "max_completion_tokens" not in body
+
+
+# --- Output-token budget + temperature knobs ---------------------------------
+
+
+def _openai_done(respx_mock):
+    return respx_mock.post("http://api.test/v1/chat/completions").mock(
+        return_value=httpx.Response(200, content=_sse_lines(iter(["data: [DONE]", ""])))
+    )
+
+
+async def _drain_openai_stream(cfg):
+    return [
+        e
+        async for e in APIKeyProvider(cfg).complete_stream(
+            messages=[{"role": "user", "content": "x"}], tools=[]
+        )
+    ]
+
+
+@respx.mock(assert_all_mocked=True, assert_all_called=False)
+async def test_openai_stream_honors_configured_output_tokens(api_env, respx_mock):
+    cfg = _build_config(
+        dict(api_env, KLURIS_MAX_OUTPUT_TOKENS="12345"), shape="openai"
+    )
+    route = _openai_done(respx_mock)
+    await _drain_openai_stream(cfg)
+    assert json.loads(route.calls.last.request.content)["max_completion_tokens"] == 12345
+
+
+@respx.mock(assert_all_mocked=True, assert_all_called=False)
+async def test_anthropic_stream_honors_configured_output_tokens(api_env, respx_mock):
+    cfg = _build_config(
+        dict(api_env, KLURIS_MAX_OUTPUT_TOKENS="2048"), shape="anthropic"
+    )
+    route = respx_mock.post("http://api.test/v1/messages").mock(
+        return_value=httpx.Response(
+            200,
+            content=_sse_lines(iter([
+                "event: message_stop",
+                "data: " + json.dumps({"type": "message_stop"}),
+                "",
+            ])),
+            headers={"content-type": "text/event-stream"},
+        )
+    )
+    _events = [
+        e
+        async for e in APIKeyProvider(cfg).complete_stream(
+            messages=[{"role": "user", "content": "x"}], tools=[]
+        )
+    ]
+    assert json.loads(route.calls.last.request.content)["max_tokens"] == 2048
+
+
+@respx.mock(assert_all_mocked=True, assert_all_called=False)
+async def test_stream_omits_temperature_by_default(api_env, respx_mock):
+    cfg = _build_config(api_env, shape="openai")
+    route = _openai_done(respx_mock)
+    await _drain_openai_stream(cfg)
+    assert "temperature" not in json.loads(route.calls.last.request.content)
+
+
+@respx.mock(assert_all_mocked=True, assert_all_called=False)
+async def test_openai_stream_includes_temperature_when_set(api_env, respx_mock):
+    cfg = _build_config(dict(api_env, KLURIS_TEMPERATURE="0.3"), shape="openai")
+    route = _openai_done(respx_mock)
+    await _drain_openai_stream(cfg)
+    assert json.loads(route.calls.last.request.content)["temperature"] == 0.3
+
+
+@respx.mock(assert_all_mocked=True, assert_all_called=False)
+async def test_stream_sends_temperature_zero_not_dropped_as_falsy(api_env, respx_mock):
+    """temperature=0.0 is a valid explicit setting (deterministic) and must be
+    SENT — the omit check is `is not None`, not truthiness."""
+    cfg = _build_config(dict(api_env, KLURIS_TEMPERATURE="0"), shape="openai")
+    route = _openai_done(respx_mock)
+    await _drain_openai_stream(cfg)
+    body = json.loads(route.calls.last.request.content)
+    assert body["temperature"] == 0.0
+
+
+@respx.mock(assert_all_mocked=True, assert_all_called=False)
+async def test_openai_smoke_body_omits_temperature_and_keeps_boot_budget(
+    api_env, respx_mock,
+):
+    """The boot smoke probe is a fixed tiny ping — it must NOT inherit the
+    deployer's temperature (would break reasoning models at boot) nor the
+    KLURIS_MAX_OUTPUT_TOKENS budget; it stays at max_completion_tokens=32."""
+    cfg = _build_config(
+        dict(api_env, KLURIS_TEMPERATURE="0.7", KLURIS_MAX_OUTPUT_TOKENS="9000"),
+        shape="openai",
+    )
+    route = respx_mock.post("http://api.test/v1/chat/completions").mock(
+        return_value=httpx.Response(200, json=_openai_smoke_response())
+    )
+    await APIKeyProvider(cfg).smoke_test()
+    body = json.loads(route.calls.last.request.content)
+    assert "temperature" not in body
+    assert body["max_completion_tokens"] == 32
+
+
+@respx.mock(assert_all_mocked=True, assert_all_called=False)
+async def test_anthropic_smoke_body_omits_temperature_and_keeps_boot_budget(
+    api_env, respx_mock,
+):
+    cfg = _build_config(
+        dict(api_env, KLURIS_TEMPERATURE="0.7", KLURIS_MAX_OUTPUT_TOKENS="9000"),
+        shape="anthropic",
+    )
+    route = respx_mock.post("http://api.test/v1/messages").mock(
+        return_value=httpx.Response(200, json=_anthropic_smoke_response())
+    )
+    await APIKeyProvider(cfg).smoke_test()
+    body = json.loads(route.calls.last.request.content)
+    assert "temperature" not in body
+    assert body["max_tokens"] == 4
+
+
+@respx.mock(assert_all_mocked=True, assert_all_called=False)
+async def test_anthropic_stream_includes_temperature_when_set(api_env, respx_mock):
+    cfg = _build_config(dict(api_env, KLURIS_TEMPERATURE="0.9"), shape="anthropic")
+    route = respx_mock.post("http://api.test/v1/messages").mock(
+        return_value=httpx.Response(
+            200,
+            content=_sse_lines(iter([
+                "event: message_stop",
+                "data: " + json.dumps({"type": "message_stop"}),
+                "",
+            ])),
+            headers={"content-type": "text/event-stream"},
+        )
+    )
+    _events = [
+        e
+        async for e in APIKeyProvider(cfg).complete_stream(
+            messages=[{"role": "user", "content": "x"}], tools=[]
+        )
+    ]
+    assert json.loads(route.calls.last.request.content)["temperature"] == 0.9

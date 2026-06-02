@@ -525,3 +525,130 @@ async def test_stream_http_error_raises_request_error(respx_mock):
     with pytest.raises(RequestError, match="streaming http error"):
         async for _ in OAuthProvider(cfg).complete_stream(messages=[], tools=[]):
             pass
+
+
+# --- Completion-budget param -------------------------------------------------
+#
+# The OAuth provider drives ``/v1/chat/completions`` (OpenAI shape), so it
+# must send ``max_completion_tokens`` — newer GPT reasoning models reject
+# ``max_tokens`` with HTTP 400. The ``not in`` half is load-bearing: a body
+# carrying both keys would still 400.
+
+
+@respx.mock(assert_all_mocked=True, assert_all_called=False)
+async def test_smoke_body_uses_max_completion_tokens(respx_mock):
+    cfg = _build_config()
+    respx_mock.post(_TOKEN_URL).mock(
+        return_value=httpx.Response(
+            200, json={"access_token": "tok", "expires_in": 3600}
+        )
+    )
+    route = respx_mock.post(_API_URL + "/v1/chat/completions").mock(
+        return_value=httpx.Response(200, json=_smoke_response())
+    )
+    await OAuthProvider(cfg).smoke_test()
+    body = json.loads(route.calls.last.request.content)
+    assert body["max_completion_tokens"] == 32
+    assert "max_tokens" not in body
+
+
+@respx.mock(assert_all_mocked=True, assert_all_called=False)
+async def test_stream_body_uses_max_completion_tokens(respx_mock):
+    cfg = _build_config()
+    respx_mock.post(_TOKEN_URL).mock(
+        return_value=httpx.Response(
+            200, json={"access_token": "tok", "expires_in": 3600}
+        )
+    )
+    route = respx_mock.post(_API_URL + "/v1/chat/completions").mock(
+        return_value=httpx.Response(200, content=_sse_lines(["data: [DONE]", ""]))
+    )
+    _events = [
+        e async for e in OAuthProvider(cfg).complete_stream(
+            messages=[{"role": "user", "content": "x"}], tools=[]
+        )
+    ]
+    body = json.loads(route.calls.last.request.content)
+    assert body["max_completion_tokens"] == 4096
+    assert "max_tokens" not in body
+
+
+def _oauth_env(**extra) -> dict:
+    return {
+        "KLURIS_OAUTH_TOKEN_URL": _TOKEN_URL,
+        "KLURIS_OAUTH_API_BASE_URL": _API_URL,
+        "KLURIS_OAUTH_CLIENT_ID": "client-a",
+        "KLURIS_OAUTH_CLIENT_SECRET": "secret-client-a",
+        "KLURIS_MODEL": "test-model",
+        "KLURIS_BRAIN_DIR": "/app/brain",
+        **extra,
+    }
+
+
+async def _drain_oauth_stream(cfg, respx_mock):
+    respx_mock.post(_TOKEN_URL).mock(
+        return_value=httpx.Response(
+            200, json={"access_token": "tok", "expires_in": 3600}
+        )
+    )
+    route = respx_mock.post(_API_URL + "/v1/chat/completions").mock(
+        return_value=httpx.Response(200, content=_sse_lines(["data: [DONE]", ""]))
+    )
+    _events = [
+        e async for e in OAuthProvider(cfg).complete_stream(
+            messages=[{"role": "user", "content": "x"}], tools=[]
+        )
+    ]
+    return json.loads(route.calls.last.request.content)
+
+
+@respx.mock(assert_all_mocked=True, assert_all_called=False)
+async def test_stream_honors_configured_output_tokens(respx_mock):
+    cfg = Config.load_from_env(_oauth_env(KLURIS_MAX_OUTPUT_TOKENS="7777"))
+    body = await _drain_oauth_stream(cfg, respx_mock)
+    assert body["max_completion_tokens"] == 7777
+
+
+@respx.mock(assert_all_mocked=True, assert_all_called=False)
+async def test_stream_omits_temperature_by_default(respx_mock):
+    cfg = Config.load_from_env(_oauth_env())
+    body = await _drain_oauth_stream(cfg, respx_mock)
+    assert "temperature" not in body
+
+
+@respx.mock(assert_all_mocked=True, assert_all_called=False)
+async def test_stream_includes_temperature_when_set(respx_mock):
+    cfg = Config.load_from_env(_oauth_env(KLURIS_TEMPERATURE="0.5"))
+    body = await _drain_oauth_stream(cfg, respx_mock)
+    assert body["temperature"] == 0.5
+
+
+@respx.mock(assert_all_mocked=True, assert_all_called=False)
+async def test_stream_sends_temperature_zero_not_dropped_as_falsy(respx_mock):
+    """OAuth builds its body with its OWN inline `is not None` guard (it does
+    not reuse apikey._stream_body), so temperature=0.0 must be SENT here too."""
+    cfg = Config.load_from_env(_oauth_env(KLURIS_TEMPERATURE="0"))
+    body = await _drain_oauth_stream(cfg, respx_mock)
+    assert body["temperature"] == 0.0
+
+
+@respx.mock(assert_all_mocked=True, assert_all_called=False)
+async def test_smoke_body_omits_temperature_and_keeps_boot_budget(respx_mock):
+    """The boot smoke probe is a fixed tiny ping — it must NOT inherit the
+    deployer's temperature (would break reasoning models at boot) nor the
+    KLURIS_MAX_OUTPUT_TOKENS budget; it stays at max_completion_tokens=32."""
+    cfg = Config.load_from_env(
+        _oauth_env(KLURIS_TEMPERATURE="0.7", KLURIS_MAX_OUTPUT_TOKENS="9000")
+    )
+    respx_mock.post(_TOKEN_URL).mock(
+        return_value=httpx.Response(
+            200, json={"access_token": "tok", "expires_in": 3600}
+        )
+    )
+    route = respx_mock.post(_API_URL + "/v1/chat/completions").mock(
+        return_value=httpx.Response(200, json=_smoke_response())
+    )
+    await OAuthProvider(cfg).smoke_test()
+    body = json.loads(route.calls.last.request.content)
+    assert "temperature" not in body
+    assert body["max_completion_tokens"] == 32

@@ -144,9 +144,13 @@ class OAuthProvider(LLMProvider):
         }
 
     async def smoke_test(self) -> None:  # noqa: D401
+        # Targets ``/v1/chat/completions`` (OpenAI shape), so it uses
+        # ``max_completion_tokens`` — newer GPT reasoning models reject
+        # ``max_tokens``. The budget is larger than 4 because a reasoning
+        # model may burn output tokens before emitting the forced ping.
         body = {
             "model": self.model,
-            "max_tokens": 4,
+            "max_completion_tokens": 32,
             "tools": [_PING_TOOL_OPENAI],
             "tool_choice": {"type": "function", "function": {"name": "ping"}},
             "messages": [{"role": "user", "content": "ping"}],
@@ -191,13 +195,21 @@ class OAuthProvider(LLMProvider):
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]],
     ) -> AsyncIterator[dict[str, Any]]:
+        # OpenAI Chat Completions shape → ``max_completion_tokens``
+        # (newer GPT reasoning models reject ``max_tokens``). Temperature is
+        # opt-in (omitted unless the deployer set it).
         body = {
             "model": self.model,
             "stream": True,
             "stream_options": {"include_usage": True},
-            "max_tokens": 4096,
+            "max_completion_tokens": self._cfg.max_output_tokens,
             "tools": tools,
             "messages": _messages_for_openai(messages),
+            **(
+                {"temperature": self._cfg.temperature}
+                if self._cfg.temperature is not None
+                else {}
+            ),
         }
         try:
             headers = await self._bearer_headers()
