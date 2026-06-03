@@ -4,8 +4,7 @@ The single :class:`LiteLLMProvider` replaces the retired hand-rolled
 ``APIKeyProvider`` + ``OAuthProvider``. These tests monkeypatch
 ``litellm.acompletion`` to capture the outgoing kwargs and to simulate streamed
 chunks + raised litellm exceptions — everything past that boundary (real OpenAI
-behavior) is covered only by the opt-in live contract test
-(``test_litellm_contract.py``), never by these.
+behavior) is NOT exercised here and must be checked by hand against a live key.
 """
 
 from __future__ import annotations

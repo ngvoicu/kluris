@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "kluris"
-version = "2.27.0"
+version = "2.27.1"
 description = "Turn your AI agents into team subject matter experts with shared, human-curated knowledge"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -30,13 +30,14 @@ Issues = "https://github.com/ngvoicu/kluris/issues"
 dev = [
     "pytest>=8.0",
     "pytest-cov>=5.0",
-    # Pack server deps — needed for tests in tests/pack/, NOT runtime deps.
-    # The Docker image installs its own pinned versions of these.
-    "fastapi>=0.115",
-    "uvicorn[standard]>=0.30",
+    # Pack server deps — needed for tests in tests/pack/, NOT CLI runtime deps.
+    # Floors kept in lockstep with the exact pins in packaging/Dockerfile.template
+    # so the suite validates the same versions the image ships.
+    "fastapi>=0.136.3",
+    "uvicorn[standard]>=0.48",
     "jinja2>=3.1.6",
-    "sse-starlette>=2.1",
-    "httpx>=0.28",
+    "sse-starlette>=3.4.4",
+    "httpx>=0.28.1",
     "respx>=0.21",
     "pytest-asyncio>=0.23",
     "litellm>=1.87",
@@ -49,5 +50,4 @@ include = ["packaging/*"]
 [tool.pytest.ini_options]
 markers = [
     "docker_network: opt-in Docker e2e tests; need a Docker daemon",
-    "live_openai: opt-in live OpenAI Responses contract test; needs KLURIS_LIVE_OPENAI_KEY",
 ]
