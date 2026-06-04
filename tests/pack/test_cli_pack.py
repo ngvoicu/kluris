@@ -93,3 +93,92 @@ def test_pack_help_documents_flags(cli_runner_local):
     assert result.exit_code == 0
     for flag in ("--brain", "--output", "--exclude", "--json"):
         assert flag in result.stdout
+
+
+def test_pack_from_inside_brain_uses_safe_default_json(
+    temp_brain, cli_runner_local, tmp_path, monkeypatch,
+):
+    """Run from the brain root with --json: the pack lands next to the brain,
+    never inside it (the recursion footgun)."""
+    monkeypatch.chdir(temp_brain)
+    result = cli_runner_local.invoke(cli, ["pack", "--json"])
+    assert result.exit_code == 0, result.stdout + result.stderr
+    data = json.loads(result.stdout)
+    assert data["ok"] is True
+    # Lands at <brain-parent>/<name>-pack, not inside the brain.
+    assert data["output"] == str((tmp_path / "test-brain-pack").resolve())
+    assert (tmp_path / "test-brain-pack").is_dir()
+    assert not (temp_brain / "test-brain-pack").exists()
+
+
+def test_pack_explicit_output_inside_brain_errors(
+    temp_brain, cli_runner_local,
+):
+    """An explicit --output pointing inside the brain is refused."""
+    inside = temp_brain / "build" / "pack"
+    result = cli_runner_local.invoke(
+        cli, ["pack", "--output", str(inside), "--json"],
+    )
+    assert result.exit_code != 0
+    err = json.loads(result.stdout)
+    assert err["ok"] is False
+    assert "inside a brain" in err["error"].lower()
+    assert not inside.exists()
+
+
+def test_pack_from_inside_brain_prompts_for_path(
+    temp_brain, cli_runner_local, tmp_path, monkeypatch,
+):
+    """On a TTY, running from inside the brain prompts for an output path."""
+    import kluris.cli as cli_module
+
+    monkeypatch.setattr(cli_module, "_is_interactive", lambda: True)
+    monkeypatch.chdir(temp_brain)
+    chosen = tmp_path / "chosen-pack"
+    result = cli_runner_local.invoke(
+        cli, ["pack"], input=f"{chosen}\n",
+    )
+    assert result.exit_code == 0, result.stdout + result.stderr
+    assert chosen.is_dir()
+    assert not (temp_brain / "test-brain-pack").exists()
+
+
+def test_resolve_pack_output_never_lands_in_another_brain(tmp_path, monkeypatch):
+    """Standing inside brain A while packing brain B must not drop the pack
+    inside A — the invariant holds against *every* registered brain."""
+    from kluris.cli import _resolve_pack_output, _inside_any_brain
+
+    brain_a = tmp_path / "brain-a"
+    brain_b = tmp_path / "brain-b"
+    brain_a.mkdir()
+    brain_b.mkdir()
+    roots = [brain_a, brain_b]
+
+    # cwd is inside brain A; we're packing brain B. --json → safe default.
+    monkeypatch.chdir(brain_a)
+    out = _resolve_pack_output(
+        None, brain_path=brain_b, brain_roots=roots,
+        brain_name="brain-b", as_json=True,
+    )
+    assert _inside_any_brain(out, roots) is None
+    assert out == (brain_b.parent / "brain-b-pack").resolve()
+
+
+def test_resolve_pack_output_explicit_inside_other_brain_errors(
+    tmp_path, monkeypatch,
+):
+    """An explicit --output inside a *different* registered brain is refused."""
+    import click
+    from kluris.cli import _resolve_pack_output
+
+    brain_a = tmp_path / "brain-a"
+    brain_b = tmp_path / "brain-b"
+    brain_a.mkdir()
+    brain_b.mkdir()
+
+    with pytest.raises(click.ClickException) as exc:
+        _resolve_pack_output(
+            str(brain_a / "sub"), brain_path=brain_b,
+            brain_roots=[brain_a, brain_b], brain_name="brain-b", as_json=False,
+        )
+    assert "inside a brain" in str(exc.value).lower()

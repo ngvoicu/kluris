@@ -90,10 +90,17 @@ def _read_brain_identity(brain_path: Path, fallback_name: str) -> tuple[str, str
 
 def _brain_directories(brain_path: Path) -> list[Path]:
     """Return all brain directories, deepest first so children get map.md before parents."""
-    directories = [
-        path for path in brain_path.rglob("*")
-        if path.is_dir() and ".git" not in path.parts
-    ]
+    import os
+
+    # os.walk + in-place prune of `.git` so we never descend into it. A plain
+    # rglob scandirs `.git/objects/*` and races with git's background gc
+    # deleting loose-object dirs mid-walk (raising FileNotFoundError).
+    directories: list[Path] = []
+    for dirpath, dirnames, _ in os.walk(brain_path):
+        dirnames[:] = [d for d in dirnames if d != ".git"]
+        path = Path(dirpath)
+        if path != brain_path:
+            directories.append(path)
     return sorted(
         directories,
         key=lambda path: (-len(path.relative_to(brain_path).parts), str(path)),
@@ -125,6 +132,15 @@ def _ensure_within_brain(path: Path, brain_path: Path) -> None:
         raise click.ClickException(
             "Path escapes the brain directory. Use a relative path within the brain."
         ) from exc
+
+
+def _is_inside_brain(path: Path, brain_path: Path) -> bool:
+    """True if ``path`` resolves to the brain dir itself or anything under it."""
+    try:
+        path.resolve().relative_to(brain_path.resolve())
+        return True
+    except ValueError:
+        return False
 
 
 def _sync_brain_state(brain_path: Path, brain_config) -> dict:
@@ -1185,9 +1201,89 @@ def wake_up(brain_name: str | None, as_json: bool):
             console.print(f"  {item['updated']} {item['path']}")
 
 
+def _inside_any_brain(path: Path, brain_roots: list[Path]) -> Path | None:
+    """Return the first registered brain that ``path`` lands inside, else None.
+
+    Checked against *every* registered brain, not just the one being packed:
+    a pack dropped inside any brain (e.g. ``cd brainA; kluris pack --brain
+    brainB``) pollutes that brain's neuron discovery and git tree.
+    """
+    for root in brain_roots:
+        if _is_inside_brain(path, root):
+            return root
+    return None
+
+
+def _resolve_pack_output(
+    output_dir: str | None,
+    *,
+    brain_path: Path,
+    brain_roots: list[Path],
+    brain_name: str,
+    as_json: bool,
+) -> Path:
+    """Decide where ``kluris pack`` writes — never inside a brain.
+
+    A pack is a build artifact (a Docker context holding a full copy of the
+    brain). Writing it inside a brain crashes the copy (it recurses into
+    itself) and, even fixed, would pollute neuron discovery and dirty the
+    brain's git tree. So:
+
+    - An explicit ``--output`` inside any registered brain is refused.
+    - With no ``--output``, the default is ``./<name>-pack``; but when that
+      would land inside a brain (e.g. run from the brain root), it falls
+      back to ``<brain-parent>/<name>-pack`` — prompting for the path on a
+      TTY, and using the safe default silently under ``--json`` / no-TTY /
+      ``KLURIS_NO_PROMPT``.
+    """
+    if output_dir is not None:
+        output_path = Path(output_dir).expanduser().resolve()
+        offending = _inside_any_brain(output_path, brain_roots)
+        if offending is not None:
+            raise click.ClickException(
+                f"Output directory is inside a brain ({offending}): {output_path}\n"
+                "A pack is a build artifact and must live outside the brain "
+                "(it would otherwise be copied into itself and counted as "
+                "neurons). Pass --output pointing somewhere outside the brain."
+            )
+        return output_path
+
+    safe_default = (brain_path.parent / f"{brain_name}-pack").resolve()
+    default_in_cwd = (Path.cwd() / f"{brain_name}-pack").resolve()
+
+    # Fast path: the cwd-relative default is already outside every brain.
+    if _inside_any_brain(default_in_cwd, brain_roots) is None:
+        return default_in_cwd
+
+    # cwd is inside a brain — never write the pack there.
+    import os
+
+    no_prompt = os.environ.get("KLURIS_NO_PROMPT") == "1"
+    if as_json or no_prompt or not _is_interactive():
+        return safe_default
+
+    console.print(
+        "[yellow]You're inside a brain — a pack can't be written here.[/yellow]"
+    )
+    while True:
+        raw = click.prompt(
+            "Output directory (must be outside the brain)",
+            default=str(safe_default),
+        )
+        candidate = Path(raw).expanduser().resolve()
+        offending = _inside_any_brain(candidate, brain_roots)
+        if offending is not None:
+            console.print(
+                f"  [yellow]{candidate} is inside a brain ({offending}) — "
+                "pick a path outside it.[/yellow]"
+            )
+            continue
+        return candidate
+
+
 @cli.command("pack")
 @click.option("--brain", "brain_name", help="Specific brain")
-@click.option("--output", "output_dir", type=click.Path(), help="Output directory (default: ./<brain-name>-pack)")
+@click.option("--output", "output_dir", type=click.Path(), help="Output directory (default: ./<brain-name>-pack, or next to the brain when run from inside it)")
 @click.option("--exclude", "excludes", multiple=True, help="Gitignore-style glob to exclude from the bundled brain (repeatable)")
 @click.option("--force", is_flag=True, help="If the output directory already exists, wipe and rebuild it (preserves .env / .env.local / .env.production / .env.staging)")
 @click.option("--json", "as_json", is_flag=True, help="JSON output (never prompts)")
@@ -1208,12 +1304,24 @@ def pack_cmd(brain_name: str | None, output_dir: str | None,
 
     brains = _resolve_brains(brain_name, allow_all=False, as_json=as_json)
     name, entry = brains[0]
-    brain_path = Path(entry["path"])
+    brain_path = Path(entry["path"]).resolve()
+    # All registered brains — a pack must not land inside ANY of them, not
+    # just the one being packed (you may be standing in a different brain).
+    brain_roots = [Path(e.path) for e in read_global_config().brains.values()]
 
-    if output_dir is None:
-        output_path = Path.cwd() / f"{name}-pack"
-    else:
-        output_path = Path(output_dir).expanduser().resolve()
+    try:
+        output_path = _resolve_pack_output(
+            output_dir,
+            brain_path=brain_path,
+            brain_roots=brain_roots,
+            brain_name=name,
+            as_json=as_json,
+        )
+    except click.ClickException as exc:
+        if as_json:
+            click.echo(json_lib.dumps({"ok": False, "error": exc.format_message()}))
+            sys.exit(1)
+        raise
 
     try:
         manifest = stage_pack(

@@ -466,3 +466,22 @@ def test_force_with_no_existing_output_just_creates(fixture_brain, tmp_path):
     assert manifest["ok"] is True
     assert manifest["preserved"] == []
     assert out.is_dir()
+
+
+def test_output_inside_brain_does_not_recurse(fixture_brain):
+    """Regression: a pack output *inside* the brain must not copy itself.
+
+    ``_copy_brain`` walks ``brain_path.rglob('*')`` while writing into a
+    subdir of that same tree. Without a self-exclusion guard it re-discovers
+    its own copies and recurses until the path overflows (``OSError: [Errno
+    63] File name too long``). The guard skips the output subtree.
+    """
+    out = fixture_brain / "fixture-brain-pack"
+    manifest = stage_pack(fixture_brain, out, brain_name="fixture-brain")
+    assert manifest["ok"] is True
+    # The real neurons made it into brain/ ...
+    assert (out / "brain" / "knowledge" / "jwt.md").exists()
+    # ... and the output dir was NOT copied back into itself.
+    assert not list((out / "brain").rglob("*-pack"))
+    assert not (out / "brain" / "app").exists()
+    assert not (out / "brain" / "kluris_runtime").exists()

@@ -9,6 +9,7 @@ metadata (``type`` / ``type_structure``); callers should use the live
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from kluris_runtime.deprecation import detect_deprecation_issues
@@ -27,17 +28,29 @@ _WAKE_UP_BRAIN_MD_MAX_BYTES = 4000
 
 
 def _iter_neurons(root: Path):
-    """Yield neuron files (markdown + opted-in yaml) under ``root``."""
-    for suffix in ("*.md", "*.yml", "*.yaml"):
-        for item in root.rglob(suffix):
-            if item.name in _WAKE_UP_SKIP_FILES:
+    """Yield neuron files (markdown + opted-in yaml) under ``root``.
+
+    Walks with os.walk and prunes ``SKIP_DIRS`` in place so we never descend
+    into ``.git/`` — rglob would scandir ``.git/objects/*`` and race with
+    git's background gc deleting loose-object dirs mid-walk (FileNotFoundError).
+    Order is preserved: all ``*.md``, then ``*.yml``, then ``*.yaml``.
+    """
+    buckets: dict[str, list[Path]] = {".md": [], ".yml": [], ".yaml": []}
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS]
+        base = Path(dirpath)
+        for name in filenames:
+            item = base / name
+            ext = item.suffix.lower()
+            if ext not in buckets:
                 continue
-            if any(part in SKIP_DIRS for part in item.parts):
+            if name in _WAKE_UP_SKIP_FILES:
                 continue
-            if item.suffix.lower() in YAML_NEURON_SUFFIXES:
-                if not has_yaml_opt_in_block(item):
-                    continue
-            yield item
+            if ext in YAML_NEURON_SUFFIXES and not has_yaml_opt_in_block(item):
+                continue
+            buckets[ext].append(item)
+    for ext in (".md", ".yml", ".yaml"):
+        yield from buckets[ext]
 
 
 def _lobe_description(lobe_path: Path) -> str:

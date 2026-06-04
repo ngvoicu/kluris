@@ -188,9 +188,20 @@ def _copy_brain(
     Returns the count of files actually copied.
     """
     spec = pathspec.GitIgnoreSpec.from_lines(excludes)
+    brain_path = brain_path.resolve()
+    dest = dest.resolve()
+    # The pack output directory (``dest`` is ``<output>/brain``). When the
+    # output lands inside the brain, walking the brain would otherwise copy
+    # the output back into ``brain/`` and re-discover those copies on the fly,
+    # recursing until the path overflows ("File name too long"). Skip the whole
+    # output subtree. In the normal case (output outside the brain) this never
+    # matches, so behavior is unchanged.
+    output_root = dest.parent
     dest.mkdir(parents=True)
     file_count = 0
     for src in brain_path.rglob("*"):
+        if src == output_root or output_root in src.parents:
+            continue
         rel = src.relative_to(brain_path)
         rel_posix = str(rel).replace("\\", "/")
         if src.is_dir():

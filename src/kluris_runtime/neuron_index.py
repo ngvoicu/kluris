@@ -7,6 +7,7 @@ used by every read-only retrieval tool.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 # Directories to skip when walking the brain for any reason. Centralized
@@ -57,25 +58,29 @@ def all_neuron_files(brain_path: Path) -> list[Path]:
     dirs and the ``SKIP_FILES`` set. Yaml files must declare themselves
     via a ``#---`` block.
     """
-    files: list[Path] = []
-    for item in brain_path.rglob("*.md"):
-        if any(part in SKIP_DIRS for part in item.parts):
-            continue
-        if any(part.startswith(".") for part in item.parts[:-1]):
-            continue
-        files.append(item)
-    for suffix in ("*.yml", "*.yaml"):
-        for item in brain_path.rglob(suffix):
-            if any(part in SKIP_DIRS for part in item.parts):
-                continue
-            if any(part.startswith(".") for part in item.parts[:-1]):
-                continue
-            if item.name in SKIP_FILES:
-                continue
-            if not has_yaml_opt_in_block(item):
-                continue
-            files.append(item)
-    return files
+    # Walk with os.walk and prune skip/hidden dirs IN PLACE so we never
+    # descend into them. rglob would scandir `.git/objects/*` and race with
+    # git's background gc deleting loose-object dirs mid-walk (raising
+    # FileNotFoundError); pruning avoids the descent entirely (and is faster).
+    md_files: list[Path] = []
+    yaml_files: list[Path] = []
+    for dirpath, dirnames, filenames in os.walk(brain_path):
+        dirnames[:] = [
+            d for d in dirnames
+            if d not in SKIP_DIRS and not d.startswith(".")
+        ]
+        base = Path(dirpath)
+        for name in filenames:
+            if name.endswith(".md"):
+                md_files.append(base / name)
+            elif name.endswith((".yml", ".yaml")):
+                if name in SKIP_FILES:
+                    continue
+                item = base / name
+                if not has_yaml_opt_in_block(item):
+                    continue
+                yaml_files.append(item)
+    return md_files + yaml_files
 
 
 def neuron_files(brain_path: Path) -> list[Path]:

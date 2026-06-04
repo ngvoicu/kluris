@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 from pathlib import Path
 
@@ -33,23 +34,25 @@ def _all_neuron_files(brain_path: Path) -> list[Path]:
     `brain.md`, `map.md` so links to those files can still become graph edges —
     unlike linker/maps which hide them). The yaml opt-in gate is the same.
     """
-    files: list[Path] = []
-    for item in brain_path.rglob("*.md"):
-        if any(part in SKIP_DIRS for part in item.parts):
-            continue
-        if item.name in SKIP_FILES:
-            continue
-        files.append(item)
-    for suffix in ("*.yml", "*.yaml"):
-        for item in brain_path.rglob(suffix):
-            if any(part in SKIP_DIRS for part in item.parts):
+    # os.walk with in-place dir pruning so we never descend into `.git/`:
+    # rglob would scandir `.git/objects/*` and race with git's background gc
+    # deleting loose-object dirs mid-walk (FileNotFoundError).
+    md_files: list[Path] = []
+    yaml_files: list[Path] = []
+    for dirpath, dirnames, filenames in os.walk(brain_path):
+        dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS]
+        base = Path(dirpath)
+        for name in filenames:
+            if name in SKIP_FILES:
                 continue
-            if item.name in SKIP_FILES:
-                continue
-            if not _has_yaml_opt_in_block(item):
-                continue
-            files.append(item)
-    return files
+            if name.endswith(".md"):
+                md_files.append(base / name)
+            elif name.endswith((".yml", ".yaml")):
+                item = base / name
+                if not _has_yaml_opt_in_block(item):
+                    continue
+                yaml_files.append(item)
+    return md_files + yaml_files
 
 
 # Backward-compat alias for any external caller.
