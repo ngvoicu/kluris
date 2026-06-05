@@ -22,18 +22,20 @@ from kluris.pack.providers.base import LLMProvider
 
 
 @pytest.fixture(autouse=True)
-def _reset_search_index_registry():
-    """Keep the build-once FTS index registry from leaking across tests.
+def _reset_boot_caches():
+    """Keep the build-once boot caches from leaking across tests.
 
-    ``create_app`` builds an index per boot and tests use per-test tmp brains,
-    so without this the registry would accumulate open connections for the
-    whole session. Cleared after each test so every test starts index-free
-    (a registry miss → today's per-query path).
+    ``create_app`` builds the FTS index and the wake_up snapshot per boot, and
+    tests use per-test tmp brains, so without this the caches would accumulate
+    across the session. Cleared after each test so every test starts
+    cache-free (a miss → the per-call path, identical to today's behavior).
     """
     yield
     from kluris_runtime.search_fts import _clear_index_registry
+    from kluris.pack.tools.brain import _clear_wake_up_cache
 
     _clear_index_registry()
+    _clear_wake_up_cache()
 
 
 # --- Fixture brain factory ---------------------------------------------------

@@ -9,6 +9,7 @@ metadata (``type`` / ``type_structure``); callers should use the live
 
 from __future__ import annotations
 
+import datetime
 import os
 from pathlib import Path
 
@@ -112,6 +113,21 @@ def _collect_lobes(brain_path: Path) -> list[dict]:
     return lobes
 
 
+def _recency_key(updated: str) -> tuple[int, str]:
+    """Sort key for the 'recent' list.
+
+    ISO dates/datetimes are already lexicographically chronological, so valid
+    values keep their raw string (preserving intra-day precision) and sort
+    identically to a plain string sort. Values whose date prefix is NOT ISO
+    sort BELOW all valid ones instead of interleaving unpredictably.
+    """
+    try:
+        datetime.date.fromisoformat(updated[:10])
+        return (1, updated)
+    except ValueError:
+        return (0, updated)
+
+
 def _collect_recent(brain_path: Path, limit: int = 5) -> list[dict]:
     """Return up to ``limit`` most-recently-updated neurons, newest first."""
     candidates = []
@@ -129,7 +145,7 @@ def _collect_recent(brain_path: Path, limit: int = 5) -> list[dict]:
             "updated": str(updated),
             "file_type": file_type,
         })
-    candidates.sort(key=lambda item: item["updated"], reverse=True)
+    candidates.sort(key=lambda item: _recency_key(item["updated"]), reverse=True)
     return candidates[:limit]
 
 

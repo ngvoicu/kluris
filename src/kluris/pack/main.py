@@ -239,6 +239,22 @@ def create_app(
         sys.stderr.flush()
         app.state.search_index = False
 
+    # Same idea for wake_up: precompute the brain snapshot once so the agent's
+    # first-call-of-session wake_up and every brain-tree UI load skip the
+    # re-walk. A failure degrades to a per-call snapshot.
+    try:
+        from kluris.pack.tools.brain import build_wake_up_cache
+
+        build_wake_up_cache(cfg.brain_dir)
+        app.state.wake_up_cached = True
+    except Exception as exc:  # pragma: no cover (degrades silently to per-call)
+        sys.stderr.write(
+            f"kluris-pack: wake_up cache build failed "
+            f"({type(exc).__name__}); falling back to per-call snapshot\n"
+        )
+        sys.stderr.flush()
+        app.state.wake_up_cached = False
+
     _mount_minimal_routes(app)
     # uvicorn binds to 0.0.0.0:8765 inside the container (required for
     # docker port mapping), but compose maps host->127.0.0.1:8765 only.

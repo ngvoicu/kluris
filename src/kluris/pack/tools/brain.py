@@ -30,7 +30,7 @@ from kluris_runtime.search import (
     search_brain,
 )
 from kluris_runtime.search_fts import search_brain_fts
-from kluris_runtime.wake_up import build_payload
+from kluris_runtime.wake_up import _recency_key, build_payload
 
 
 class NotFoundError(LookupError):
@@ -66,12 +66,47 @@ def _rel(brain_path: Path, target: Path) -> str:
 # --- 1. wake_up --------------------------------------------------------------
 
 
+# Opt-in cache of the wake_up payload, populated only by
+# build_wake_up_cache() at app boot, keyed by resolved brain_path. The brain
+# is immutable inside the container, so the snapshot is valid for the whole
+# process lifetime. It holds plain JSON data (no connection/handle), so reads
+# are safe from any request thread; callers treat the payload as read-only.
+_WAKE_UP_CACHE: dict[Path, dict[str, Any]] = {}
+
+
+def build_wake_up_cache(brain_path: Path) -> None:
+    """Precompute and cache the wake_up snapshot for ``brain_path`` (opt-in).
+
+    Called once at app boot so the agent's first-call-of-session wake_up and
+    every ``/api/brain/tree`` UI load skip the brain re-walk —
+    :func:`build_payload` otherwise reads every neuron's frontmatter twice per
+    call (once for recency, once for deprecation diagnostics).
+    """
+    _WAKE_UP_CACHE[brain_path.resolve()] = build_payload(brain_path)
+
+
+def drop_wake_up_cache(brain_path: Path) -> None:
+    """Forget a cached snapshot (explicit invalidation / test teardown)."""
+    _WAKE_UP_CACHE.pop(brain_path.resolve(), None)
+
+
+def _clear_wake_up_cache() -> None:
+    """Reset the wake_up cache (tests only)."""
+    _WAKE_UP_CACHE.clear()
+
+
 def wake_up_tool(brain_path: Path) -> dict[str, Any]:
     """Live snapshot of the brain.
 
-    Wraps :func:`kluris_runtime.wake_up.build_payload`. Does NOT
-    include scaffold metadata (``type`` / ``type_structure``).
+    Returns the boot-cached snapshot when one is registered for ``brain_path``
+    (see :func:`build_wake_up_cache`), else computes it fresh — so standalone
+    callers and unit tests that never boot an app are unchanged. Wraps
+    :func:`kluris_runtime.wake_up.build_payload`. Does NOT include scaffold
+    metadata (``type`` / ``type_structure``).
     """
+    cached = _WAKE_UP_CACHE.get(brain_path.resolve())
+    if cached is not None:
+        return cached
     return build_payload(brain_path)
 
 
@@ -279,8 +314,11 @@ def recent_tool(
             "deprecated": is_dep,
         })
 
+    # Use the same recency key as wake_up's recent[] so the two "most recent"
+    # surfaces agree — a non-ISO `updated:` sorts below valid dates rather than
+    # floating to the top. mtime + filename remain the deterministic tie-break.
     items.sort(
-        key=lambda d: (d["updated"] or "", d["_mtime"], d["_filename"]),
+        key=lambda d: (_recency_key(d["updated"] or ""), d["_mtime"], d["_filename"]),
         reverse=True,
     )
     trimmed = [{k: v for k, v in item.items() if not k.startswith("_")}
