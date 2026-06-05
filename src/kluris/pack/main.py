@@ -218,6 +218,27 @@ def create_app(
     app.state.provider = prov
     app.state.llm_ready = prov is not None and llm_error is None
     app.state.llm_error = llm_error
+
+    # Build the FTS5 search index once, here in the factory body (pure sync
+    # I/O — no async constraint, unlike the smoke test, so no lifespan
+    # needed). The brain is immutable inside the image, so per-request search
+    # then skips the brain file-walk. A build failure degrades to per-query
+    # search rather than killing boot. The lookup key is the resolved
+    # brain_dir inside search_fts, so the agent path (which only sees Config)
+    # reaches it too — app.state.search_index is just a boolean for health.
+    try:
+        from kluris_runtime.search_fts import build_index
+
+        build_index(cfg.brain_dir)
+        app.state.search_index = True
+    except Exception as exc:  # pragma: no cover (degrades silently to per-query)
+        sys.stderr.write(
+            f"kluris-pack: search index build failed "
+            f"({type(exc).__name__}); falling back to per-query search\n"
+        )
+        sys.stderr.flush()
+        app.state.search_index = False
+
     _mount_minimal_routes(app)
     # uvicorn binds to 0.0.0.0:8765 inside the container (required for
     # docker port mapping), but compose maps host->127.0.0.1:8765 only.

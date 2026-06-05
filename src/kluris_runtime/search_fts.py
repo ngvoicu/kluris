@@ -21,12 +21,20 @@ same code degrades to the substring engine anywhere FTS5 is missing; any query
 error falls back the same way. Callers can therefore use this in place of
 ``search_brain`` unconditionally.
 
-The index is built in a fresh in-memory database PER QUERY from the same
-``collect_searchable()`` walk the substring engine uses — identical file I/O to
-today, plus a sub-millisecond insert of a few hundred rows. The brain is
-immutable inside the container, so a build-once-at-boot cache is a safe future
-optimization; v1 keeps the per-request model to stay simple, stateless, and
-thread-safe (a fresh connection per call).
+The dominant per-query cost is the ``collect_searchable()`` brain file-walk, not
+the sub-millisecond FTS5 table build. So the pack opts the configured brain into
+a BUILD-ONCE cache of that walk at boot (see :func:`build_index`): the brain is
+immutable inside the container, so the cached walk is valid for the whole
+process lifetime and per-request search skips the file I/O. Each query still
+builds its OWN fresh in-memory FTS5 table from the cached rows on the CALLING
+thread, so there is no shared SQLite connection to cross a thread boundary — the
+engine stays stateless and thread-safe regardless of how requests are dispatched
+(important: the route handler runs on a different thread than ``create_app``).
+The opt-in is keyed by resolved ``brain_path`` so the agent and route callers
+both reuse it via ``Config.brain_dir`` with no signature changes; standalone
+callers and unit tests that never boot an app fall back to a fresh per-query
+walk — identical behavior. Filtering stays BEFORE indexing so BM25 IDF is scoped
+to the eligible rows, exactly as today.
 """
 
 from __future__ import annotations
@@ -118,73 +126,45 @@ def _snippet(body: str, tokens: list[str]) -> str:
     return ""
 
 
-def search_brain_fts(
-    brain_path: Path,
-    query: str,
-    *,
-    limit: int = 10,
-    lobe_filter: str | None = None,
-    tag_filter: str | None = None,
-) -> list[dict]:
-    """BM25/FTS5 ranked search. Same shape as ``search.search_brain``.
+def _build_fts_table(items: list[dict]) -> sqlite3.Connection:
+    """Build a fresh in-memory FTS5 table over ``items``.
 
-    Falls back to the substring engine when FTS5 is unavailable, the query has
-    no usable tokens, or anything errors — so it is always safe to call in
-    place of ``search_brain``.
+    FTS5 assigns rowid 1..N in INSERT order, so the caller maps a result
+    rowid back via ``items[rowid - 1]``. Insert order therefore also decides
+    bm25 tie-breaks — keep ``items`` in its original walk order.
     """
-    from kluris_runtime.search import search_brain  # local import: fallback only
-
-    if limit <= 0:
-        return []
-
-    expr, tokens = _match_expr(query)
-    if expr is None or not fts5_available():
-        return search_brain(
-            brain_path, query, limit=limit,
-            lobe_filter=lobe_filter, tag_filter=tag_filter,
-        )
-
-    try:
-        items = [
-            it for it in collect_searchable(brain_path)
-            if _passes(it, lobe_filter, tag_filter)
-        ]
-        if not items:
-            return []
-
-        weights = ", ".join(str(w) for w in _BM25_WEIGHTS)
-        con = sqlite3.connect(":memory:")
-        try:
-            con.execute(
-                "CREATE VIRTUAL TABLE docs USING fts5("
-                "title, tags, path, body, tokenize='unicode61')"
+    con = sqlite3.connect(":memory:")
+    con.execute(
+        "CREATE VIRTUAL TABLE docs USING fts5("
+        "title, tags, path, body, tokenize='unicode61')"
+    )
+    con.executemany(
+        "INSERT INTO docs(title, tags, path, body) VALUES (?, ?, ?, ?)",
+        [
+            (
+                it["title"],
+                " ".join(str(t) for t in it.get("tags", [])),
+                it["file"],
+                it["body"],
             )
-            con.executemany(
-                "INSERT INTO docs(title, tags, path, body) VALUES (?, ?, ?, ?)",
-                [
-                    (
-                        it["title"],
-                        " ".join(str(t) for t in it.get("tags", [])),
-                        it["file"],
-                        it["body"],
-                    )
-                    for it in items
-                ],
-            )
-            rows = con.execute(
-                f"SELECT rowid, bm25(docs, {weights}) AS score "
-                "FROM docs WHERE docs MATCH ? ORDER BY score LIMIT ?",
-                (expr, limit),
-            ).fetchall()
-        finally:
-            con.close()
-    except sqlite3.Error:
-        return search_brain(
-            brain_path, query, limit=limit,
-            lobe_filter=lobe_filter, tag_filter=tag_filter,
-        )
+            for it in items
+        ],
+    )
+    return con
 
-    # FTS5 auto-assigns rowid 1..N in insert order → items[rowid - 1].
+
+def _query_table(con: sqlite3.Connection, expr: str, limit: int) -> list:
+    """Run the BM25 MATCH query, returning ``(rowid, raw_score)`` rows."""
+    weights = ", ".join(str(w) for w in _BM25_WEIGHTS)
+    return con.execute(
+        f"SELECT rowid, bm25(docs, {weights}) AS score "
+        "FROM docs WHERE docs MATCH ? ORDER BY score LIMIT ?",
+        (expr, limit),
+    ).fetchall()
+
+
+def _rows_to_results(items: list[dict], rows: list, tokens: list[str]) -> list[dict]:
+    """Map ``(rowid, raw_score)`` rows back to result dicts."""
     results: list[dict] = []
     for rowid, raw_score in rows:
         item = items[rowid - 1]
@@ -202,3 +182,86 @@ def search_brain_fts(
             "deprecated": item["is_deprecated"],
         })
     return results
+
+
+# Opt-in cache of the collect_searchable() walk, populated only by
+# build_index() at app boot, keyed by resolved brain_path. Mirrors the
+# module-global _fts5_supported guard: written once before requests are served
+# and read-only thereafter. Stores only plain data (no SQLite connection), so
+# there is nothing thread-bound to leak; each query builds its own table.
+_INDEX_REGISTRY: dict[Path, list[dict]] = {}
+
+
+def build_index(brain_path: Path) -> None:
+    """Cache the ``collect_searchable()`` walk for ``brain_path`` (opt-in).
+
+    Called once at app boot. The brain is immutable inside the container, so
+    the cached walk is valid for the process lifetime and lets every later
+    query skip the brain file I/O (the dominant cost). Deliberately does NOT
+    cache a built FTS5 table/connection: each query builds its own table on
+    its own thread, keeping the engine stateless and thread-safe.
+    """
+    _INDEX_REGISTRY[brain_path.resolve()] = collect_searchable(brain_path)
+
+
+def drop_index(brain_path: Path) -> None:
+    """Forget a cached walk (explicit invalidation / test teardown)."""
+    _INDEX_REGISTRY.pop(brain_path.resolve(), None)
+
+
+def _clear_index_registry() -> None:
+    """Reset the walk cache (tests only)."""
+    _INDEX_REGISTRY.clear()
+
+
+def search_brain_fts(
+    brain_path: Path,
+    query: str,
+    *,
+    limit: int = 10,
+    lobe_filter: str | None = None,
+    tag_filter: str | None = None,
+) -> list[dict]:
+    """BM25/FTS5 ranked search. Same shape as ``search.search_brain``.
+
+    Reuses a boot-cached brain walk (see :func:`build_index`) when one is
+    registered for ``brain_path``, skipping the file I/O; otherwise walks the
+    brain fresh. Either way it builds its own per-query in-memory FTS5 table on
+    the calling thread. Falls back to the substring engine when FTS5 is
+    unavailable, the query has no usable tokens, or anything errors — so it is
+    always safe to call in place of ``search_brain``.
+    """
+    from kluris_runtime.search import search_brain  # local import: fallback only
+
+    if limit <= 0:
+        return []
+
+    expr, tokens = _match_expr(query)
+    if expr is None or not fts5_available():
+        return search_brain(
+            brain_path, query, limit=limit,
+            lobe_filter=lobe_filter, tag_filter=tag_filter,
+        )
+
+    # Reuse the cached walk when available, else walk fresh (today's path).
+    cached = _INDEX_REGISTRY.get(brain_path.resolve())
+    source = cached if cached is not None else collect_searchable(brain_path)
+
+    try:
+        # Filter BEFORE indexing so BM25 IDF is scoped to the eligible rows,
+        # exactly as today. The fresh per-query connection lives only on this
+        # thread, so the engine is thread-safe however requests are dispatched.
+        items = [it for it in source if _passes(it, lobe_filter, tag_filter)]
+        if not items:
+            return []
+        con = _build_fts_table(items)
+        try:
+            rows = _query_table(con, expr, limit)
+        finally:
+            con.close()
+        return _rows_to_results(items, rows, tokens)
+    except sqlite3.Error:
+        return search_brain(
+            brain_path, query, limit=limit,
+            lobe_filter=lobe_filter, tag_filter=tag_filter,
+        )
