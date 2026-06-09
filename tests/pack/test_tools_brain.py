@@ -140,6 +140,44 @@ def test_read_neuron_absolute_path_treated_as_relative(fixture_brain):
     assert out["ok"] is True
 
 
+def test_read_neuron_clamps_body_when_max_bytes_set(fixture_brain):
+    """The agent path passes max_bytes; an oversized body is truncated and
+    flagged so the model knows to search for the specific section."""
+    full = read_neuron_tool(fixture_brain, "knowledge/jwt.md")["body"]
+    assert len(full.encode("utf-8")) > 20  # precondition: body exceeds the cap
+    out = read_neuron_tool(fixture_brain, "knowledge/jwt.md", max_bytes=20)
+    assert out["truncated"] is True
+    assert "truncated to fit" in out["body"]
+    # The RETAINED content (before the marker) is clipped to the byte cap.
+    head = out["body"].split("\n\n[... neuron truncated")[0]
+    assert len(head.encode("utf-8")) <= 20
+
+
+def test_read_neuron_no_clamp_by_default(fixture_brain):
+    """The UI path (max_bytes=None) and a generous cap return the full body with
+    no truncated flag — human readers are never clamped."""
+    out_default = read_neuron_tool(fixture_brain, "knowledge/jwt.md")
+    out_big = read_neuron_tool(
+        fixture_brain, "knowledge/jwt.md", max_bytes=1_000_000
+    )
+    assert "truncated" not in out_default
+    assert "truncated" not in out_big
+    assert out_default["body"] == out_big["body"]
+
+
+def test_multi_read_clamps_each_body(fixture_brain):
+    out = multi_read_tool(
+        fixture_brain, ["knowledge/jwt.md"], max_paths=5, max_bytes=20,
+    )
+    assert out["ok"] is True
+    assert out["results"][0]["truncated"] is True
+
+
+def test_multi_read_no_clamp_without_max_bytes(fixture_brain):
+    out = multi_read_tool(fixture_brain, ["knowledge/jwt.md"], max_paths=5)
+    assert "truncated" not in out["results"][0]
+
+
 def test_resolve_in_brain_rejects_symlink_escape(fixture_brain, tmp_path):
     outside = tmp_path / "outside.md"
     outside.write_text("# outside\n", encoding="utf-8")

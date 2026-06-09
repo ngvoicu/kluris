@@ -20,6 +20,7 @@ each tool call. The chat route in
 from __future__ import annotations
 
 import json
+import sys
 from typing import Any, AsyncIterator, Callable
 
 from .config import Config
@@ -91,6 +92,185 @@ def _trim_history(
     return kept
 
 
+def _estimate_messages_tokens(messages: list[dict[str, Any]]) -> int:
+    """Rough token estimate of a full request payload — content plus any
+    ``tool_calls`` block, plus ~4 tokens/message of role/formatting overhead.
+    Used to bound the in-turn transcript, not to bill anyone.
+    """
+    total = 0
+    for msg in messages:
+        total += _estimate_tokens(str(msg.get("content", "")))
+        if msg.get("tool_calls"):
+            total += _estimate_tokens(str(msg["tool_calls"]))
+        total += 4
+    return total
+
+
+# Stub that replaces an elided tool-result body. The tool_call_id and message
+# position are preserved (we only swap ``content``), so the assistant↔tool
+# pairing OpenAI requires stays intact — only the payload shrinks.
+_COMPACTED_TOOL_RESULT = (
+    '{"compacted": true, "note": "earlier tool result elided to fit the turn '
+    'budget; call the tool again if you still need it"}'
+)
+
+
+def _compact_tool_results(
+    messages: list[dict[str, Any]], max_tokens: int
+) -> list[dict[str, Any]]:
+    """Bound a single turn's request size by eliding the OLDEST tool-result
+    payloads until the estimate fits ``max_tokens``.
+
+    Only the ``content`` of ``role: tool`` messages is replaced — never the
+    system prompt, the user turn, or an assistant ``tool_calls`` block — so the
+    message structure (and tool_call_id pairing) is preserved. The most recent
+    tool result is always kept verbatim so the model still has fresh evidence to
+    answer from. ``max_tokens <= 0`` disables compaction (the unbounded legacy
+    behaviour). Mutates ``messages`` in place and returns it.
+    """
+    if max_tokens <= 0 or _estimate_messages_tokens(messages) <= max_tokens:
+        return messages
+    tool_idxs = [i for i, m in enumerate(messages) if m.get("role") == "tool"]
+    # Keep the last tool result intact; compact older ones oldest-first.
+    for i in tool_idxs[:-1]:
+        if _estimate_messages_tokens(messages) <= max_tokens:
+            break
+        if messages[i].get("content") != _COMPACTED_TOOL_RESULT:
+            messages[i] = {**messages[i], "content": _COMPACTED_TOOL_RESULT}
+    return messages
+
+
+# Injected as a user turn for the tools-disabled synthesis pass (see
+# ``_stream_final_synthesis``) — used instead of throwing the turn away when the
+# round budget is hit or a round comes back empty after evidence was gathered.
+_SYNTHESIS_NUDGE = (
+    "You have gathered enough information from the tools above. Answer the "
+    "user's question now using ONLY that evidence. If the brain does not "
+    "contain what they asked for, say so plainly and list what is missing. "
+    "Do not call any tools."
+)
+
+
+def _provider_error_event(exc: Exception) -> dict[str, Any]:
+    """Normalize a provider exception to an error event, classified exactly as
+    the main loop does — so the synthesis fallback can't silently downgrade a
+    fatal ``AuthError`` / ``RequestError`` to "recoverable" or mislabel a context
+    overflow. ``ContextLimitError`` is a ``RequestError`` subclass, so it must be
+    checked first.
+    """
+    if isinstance(exc, ContextLimitError):
+        return {
+            "kind": "error",
+            "message": (
+                "Conversation has grown beyond the model's context window. "
+                "Click 'New conversation' to start fresh."
+            ),
+            "recoverable": True,
+        }
+    detail = str(exc)
+    message = f"Provider error: {detail}"
+    if "reasoning_effort" in detail.lower():
+        message += (
+            " — check KLURIS_REASONING_EFFORT: this model may not accept "
+            "that effort value. Try low / medium / high, or unset it."
+        )
+    return {"kind": "error", "message": message, "recoverable": False}
+
+
+async def _stream_final_synthesis(
+    provider: LLMProvider, messages: list[dict[str, Any]]
+) -> AsyncIterator[dict[str, Any]]:
+    """One tools-disabled completion that forces a final answer from the
+    evidence already gathered this turn.
+
+    Yields the normalized ``token`` / ``usage`` events, then a terminal
+    ``{"kind": "_synth", "produced", "completed", "error"}`` sentinel the caller
+    consumes (never forwards):
+
+    - ``produced``  — at least one non-empty token streamed.
+    - ``completed`` — the stream finished without raising.
+    - ``error``     — a classified error event if a provider error was raised
+      BEFORE any token (else ``None``). A drop AFTER tokens leaves
+      ``produced=True, completed=False`` so the caller can flag the partial as
+      incomplete rather than render it as a finished answer.
+    """
+    produced = False
+    completed = False
+    error_event: dict[str, Any] | None = None
+    try:
+        async for ev in provider.complete_stream(messages, []):
+            kind = ev.get("kind")
+            if kind == "token":
+                if ev.get("text"):
+                    produced = True
+                yield ev
+            elif kind == "usage":
+                yield ev
+            # tool_use / end from the synthesis call are intentionally ignored
+        completed = True
+    except (ContextLimitError, AuthError, RequestError) as exc:
+        # Surface a real provider failure only when nothing streamed yet; a drop
+        # mid-answer is reported via produced=True, completed=False instead.
+        if not produced:
+            error_event = _provider_error_event(exc)
+    except Exception:
+        # Unknown failure → benign non-completion; the caller uses its generic
+        # recoverable fallback (or the incomplete-partial note).
+        pass
+    yield {
+        "kind": "_synth",
+        "produced": produced,
+        "completed": completed,
+        "error": error_event,
+    }
+
+
+async def _run_synthesis_fallback(
+    provider: LLMProvider,
+    messages: list[dict[str, Any]],
+    config: Config,
+    empty_error: dict[str, Any],
+) -> AsyncIterator[dict[str, Any]]:
+    """Run one tools-disabled synthesis and yield the correct terminal events.
+
+    Outcomes, in precedence order:
+
+    - a clean answer streamed           → just ``end``;
+    - a drop mid-answer (partial text)  → an "incomplete" note, then ``end``;
+    - a fatal provider error, no tokens → the classified error, then ``end``;
+    - a clean empty completion          → ``empty_error`` (the caller's generic
+      recoverable message), then ``end``.
+
+    Always terminates the turn with ``{"kind": "end"}``.
+    """
+    messages = _compact_tool_results(messages, config.max_turn_tokens)
+    messages.append({"role": "user", "content": _SYNTHESIS_NUDGE})
+    produced = False
+    completed = False
+    error_event: dict[str, Any] | None = None
+    async for ev in _stream_final_synthesis(provider, messages):
+        if ev.get("kind") == "_synth":
+            produced = bool(ev.get("produced"))
+            completed = bool(ev.get("completed"))
+            error_event = ev.get("error")
+        else:
+            yield ev
+    if produced and not completed:
+        yield {
+            "kind": "error",
+            "message": (
+                "The answer above may be incomplete — the model's connection "
+                "dropped mid-response. Try asking again."
+            ),
+            "recoverable": True,
+        }
+    elif not produced and error_event is not None:
+        yield error_event
+    elif not produced:
+        yield empty_error
+    yield {"kind": "end"}
+
+
 def _dispatch_tool(
     config: Config,
     name: str,
@@ -113,12 +293,17 @@ def _dispatch_tool(
                 tag=args.get("tag"),
             )
         if name == "read_neuron":
-            return fn(config.brain_dir, args.get("path", ""))
+            return fn(
+                config.brain_dir,
+                args.get("path", ""),
+                max_bytes=config.max_neuron_bytes,
+            )
         if name == "multi_read":
             return fn(
                 config.brain_dir,
                 args.get("paths", []) or [],
                 max_paths=config.max_multi_read_paths,
+                max_bytes=config.max_neuron_bytes,
             )
         if name == "related":
             return fn(config.brain_dir, args.get("path", ""))
@@ -215,12 +400,40 @@ async def run_agent(
     messages.append({"role": "user", "content": user_message})
 
     rounds = 0
+    # Tracked across the WHOLE turn (not per round): whether any tool ran (gates
+    # the synthesis fallback) and which (tool, args) pairs we've already served
+    # (so a flailing model can't re-issue the same call and re-bloat the
+    # transcript).
+    any_tools_used = False
+    seen_calls: set[tuple[str, str]] = set()
+    # tool_call_id -> its (tool, args) key, so when compaction elides a result we
+    # can forget that key and let an identical re-issue actually re-fetch.
+    dup_key_by_call_id: dict[str, tuple[str, str]] = {}
     # ``max_agent_rounds <= 0`` is the "unlimited" sentinel — keep
     # looping until the provider emits an end with no pending
     # tool_uses, regardless of round count.
     unlimited = config.max_agent_rounds <= 0
     while unlimited or rounds < config.max_agent_rounds:
         rounds += 1
+        # Bound this single request: elide the oldest tool-result payloads when
+        # the accumulated transcript would exceed the per-turn budget. Without it
+        # a broad query re-sends every prior full result each round (quadratic).
+        messages = _compact_tool_results(messages, config.max_turn_tokens)
+        if config.max_turn_tokens > 0:
+            # A result we just elided can no longer be "reused": drop its
+            # dedup key so an identical re-issue re-dispatches instead of being
+            # suppressed with a pointer to a stub we already discarded. ``pop``
+            # (not ``get``) so each elided stub prunes its key exactly once — a
+            # later re-fetch re-registers its own (new) call_id and stays
+            # dedup-able.
+            for _m in messages:
+                if (
+                    _m.get("role") == "tool"
+                    and _m.get("content") == _COMPACTED_TOOL_RESULT
+                ):
+                    _k = dup_key_by_call_id.pop(_m.get("tool_call_id"), None)
+                    if _k is not None:
+                        seen_calls.discard(_k)
         pending_tools: list[dict[str, Any]] = []
         round_text: list[str] = []
         try:
@@ -242,76 +455,93 @@ async def run_agent(
                     pass  # we'll decide below whether to continue
                 else:
                     yield event
-        except ContextLimitError:
-            yield {
-                "kind": "error",
-                "message": (
-                    "Conversation has grown beyond the model's context window. "
-                    "Click 'New conversation' to start fresh."
-                ),
-                "recoverable": True,
-            }
-            yield {"kind": "end"}
-            return
-        except (AuthError, RequestError) as exc:
+        except (ContextLimitError, AuthError, RequestError) as exc:
             # Surface the provider's actual message (the RequestError carries the
-            # response body, capped to 200 chars), not just the class name — a
-            # bare "Provider error: RequestError" hides the one line the deployer
-            # needs (bad model name, unsupported param, rate-limit detail, ...).
-            detail = str(exc)
-            message = f"Provider error: {detail}"
-            if "reasoning_effort" in detail.lower():
-                # Reasoning models run through the Responses API, so a
-                # reasoning_effort 400 means the model rejected the effort VALUE
-                # (the accepted set is model-dependent), not a chat-vs-responses
-                # conflict. Point at the value, not the endpoint.
-                message += (
-                    " — check KLURIS_REASONING_EFFORT: this model may not accept "
-                    "that effort value. Try low / medium / high, or unset it."
-                )
-            yield {
-                "kind": "error",
-                "message": message,
-                "recoverable": False,
-            }
+            # response body, capped to 200 chars), not just the class name, and
+            # classify recoverability — context overflow is recoverable ("New
+            # conversation"), auth / bad-request is not. Shared with the
+            # synthesis fallback via ``_provider_error_event`` so both paths
+            # classify identically.
+            yield _provider_error_event(exc)
             yield {"kind": "end"}
             return
 
+        if config.debug_stream:
+            # Per-round diagnostic (pairs with the stream-level line in the
+            # provider): the input size actually SENT this round plus what came
+            # back. The failing round in an empty-turn report is the last one
+            # whose ``text=False`` and (here) no tools. Redaction-safe.
+            sys.stderr.write(
+                f"kluris-pack: round={rounds} "
+                f"est_input_tokens={_estimate_messages_tokens(messages)} "
+                f"tools={[c.get('name') for c in pending_tools]} "
+                f"text={bool(round_text)}\n"
+            )
+            sys.stderr.flush()
+
         if not pending_tools:
-            # No more tools requested. If the round produced ANY text,
-            # we have a real answer — emit end and return cleanly.
-            #
-            # If the round produced ZERO tokens AND ZERO tool_uses, the
-            # provider returned an empty completion (some Bedrock-fronted
-            # gateways do this; the model may have gone over its server-
-            # side max_tokens budget mid-thought, or simply emitted a
-            # bare ``stop_reason`` with no content). Don't leave the
-            # user staring at a blank assistant block — surface a
-            # visible recoverable error so they know to retry.
-            if not round_text:
-                yield {
-                    "kind": "error",
-                    "message": (
-                        "The model returned no content for this turn. "
-                        "This usually means a server-side max_tokens cap "
-                        "or a quirky gateway response. Try rephrasing "
-                        "or asking a narrower question."
-                    ),
-                    "recoverable": True,
-                }
+            # The model is done calling tools. If it produced text, that's the
+            # answer — end cleanly.
+            if round_text:
+                yield {"kind": "end"}
+                return
+            # ZERO text AND ZERO tool calls — an empty completion. If we already
+            # gathered evidence this turn, the model likely went quiet mid-
+            # research rather than having nothing to say: force one tools-disabled
+            # synthesis pass before giving up. (With no tools run yet there's
+            # nothing to synthesize from, so fall straight through to the error —
+            # which also still covers a gateway that truncated mid-thought.)
+            no_content_error = {
+                "kind": "error",
+                "message": (
+                    "The model returned no content for this turn. "
+                    "This usually means a server-side max_tokens cap "
+                    "or a quirky gateway response. Try rephrasing "
+                    "or asking a narrower question."
+                ),
+                "recoverable": True,
+            }
+            if any_tools_used:
+                async for ev in _run_synthesis_fallback(
+                    provider, messages, config, no_content_error
+                ):
+                    yield ev
+                return
+            # No tools ran yet — nothing to synthesize from, so surface the
+            # empty-completion error directly (also covers a gateway that
+            # truncated mid-thought on the very first round).
+            yield no_content_error
             yield {"kind": "end"}
             return
 
         # Append the assistant tool-call request + tool results to the
         # conversation, then re-enter the loop for the next turn.
+        any_tools_used = True
         assistant_tool_calls: list[dict[str, Any]] = []
         tool_result_messages: list[dict[str, Any]] = []
         for call in pending_tools:
             name = call.get("name") or ""
             args = call.get("args") or {}
             call_id = call.get("id") or f"tu_{rounds}_{name}"
-            result = _dispatch_tool(config, name, args)
-            summary = _summarize_tool_result(name, result)
+            # Exact-duplicate suppression: a (tool, args) pair already served
+            # this turn returns a tiny stub instead of re-running the tool and
+            # re-sending its full payload (the model only needs it once).
+            dup_key = (name, json.dumps(args, sort_keys=True, ensure_ascii=False))
+            if dup_key in seen_calls:
+                result = {
+                    "ok": True,
+                    "duplicate": True,
+                    "note": (
+                        f"Already called {name} with these arguments this turn; "
+                        "reuse the earlier result instead of repeating it."
+                    ),
+                }
+                summary = "duplicate call (reused earlier result)"
+            else:
+                seen_calls.add(dup_key)
+                dup_key_by_call_id[call_id] = dup_key
+                result = _dispatch_tool(config, name, args)
+                summary = _summarize_tool_result(name, result)
             if trace_hook is not None:
                 trace_hook({
                     "round": rounds,
@@ -337,7 +567,10 @@ async def run_agent(
         })
         messages.extend(tool_result_messages)
 
-    yield {
+    # Round budget exhausted. Rather than throw the turn away after N rounds of
+    # gathering, make one tools-disabled synthesis pass so the user still gets an
+    # answer (or an explicit "not in the brain") from everything found so far.
+    round_budget_error = {
         "kind": "error",
         "message": (
             f"Hit the max {config.max_agent_rounds}-round tool budget. "
@@ -345,4 +578,7 @@ async def run_agent(
         ),
         "recoverable": True,
     }
-    yield {"kind": "end"}
+    async for ev in _run_synthesis_fallback(
+        provider, messages, config, round_budget_error
+    ):
+        yield ev

@@ -149,18 +149,48 @@ def search_tool(
 # --- 3. read_neuron ----------------------------------------------------------
 
 
-def read_neuron_tool(brain_path: Path, path: str) -> dict[str, Any]:
-    """Read one neuron's frontmatter + body."""
+def _clamp_body(body: str, max_bytes: int | None) -> tuple[str, bool]:
+    """Truncate ``body`` to at most ``max_bytes`` UTF-8 bytes for the agent
+    path so one fat neuron can't dominate a turn's token budget.
+
+    Returns ``(body, truncated)``. ``max_bytes`` falsy / ``<= 0`` → no clamp:
+    the brain-explorer UI passes ``None`` so human readers always get the whole
+    neuron; only the agent dispatch passes a cap.
+    """
+    if not max_bytes or max_bytes <= 0:
+        return body, False
+    encoded = body.encode("utf-8")
+    if len(encoded) <= max_bytes:
+        return body, False
+    clipped = encoded[:max_bytes].decode("utf-8", errors="ignore")
+    return (
+        clipped
+        + "\n\n[... neuron truncated to fit the agent's per-neuron budget; "
+        "use search to pull the specific section you need ...]"
+    ), True
+
+
+def read_neuron_tool(
+    brain_path: Path, path: str, *, max_bytes: int | None = None
+) -> dict[str, Any]:
+    """Read one neuron's frontmatter + body.
+
+    ``max_bytes`` (agent path only) caps the body; the UI passes ``None``.
+    """
     target = resolve_in_brain(brain_path, path)
     meta, body = read_frontmatter(target)
     deprecated = str(meta.get("status", "active")).lower() == "deprecated"
-    return {
+    body, truncated = _clamp_body(body, max_bytes)
+    result: dict[str, Any] = {
         "ok": True,
         "path": _rel(brain_path, target),
         "frontmatter": meta,
         "body": body,
         "deprecated": deprecated,
     }
+    if truncated:
+        result["truncated"] = True
+    return result
 
 
 # --- 4. multi_read -----------------------------------------------------------
@@ -171,11 +201,15 @@ def multi_read_tool(
     paths: list[str],
     *,
     max_paths: int,
+    max_bytes: int | None = None,
 ) -> dict[str, Any]:
     """Read up to ``max_paths`` neurons in one call.
 
     Each path is sandboxed independently — a bad path produces an
     ``{path, error}`` entry without aborting the rest of the batch.
+    ``max_bytes`` (agent path only) caps each neuron body; the UI passes
+    ``None``. A batch read of many full files is the usual turn-budget bomb,
+    so the agent always passes a per-neuron cap.
     """
     if not isinstance(paths, list):
         return {"ok": False, "error": "paths must be a list of strings"}
@@ -193,12 +227,16 @@ def multi_read_tool(
             target = resolve_in_brain(brain_path, raw)
             meta, body = read_frontmatter(target)
             deprecated = str(meta.get("status", "active")).lower() == "deprecated"
-            results.append({
+            body, truncated = _clamp_body(body, max_bytes)
+            entry: dict[str, Any] = {
                 "path": _rel(brain_path, target),
                 "frontmatter": meta,
                 "body": body,
                 "deprecated": deprecated,
-            })
+            }
+            if truncated:
+                entry["truncated"] = True
+            results.append(entry)
         except SandboxError as exc:
             results.append({"path": str(raw), "error": f"sandbox: {exc}"})
         except NotFoundError as exc:

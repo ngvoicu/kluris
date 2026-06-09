@@ -360,6 +360,28 @@ def test_max_context_tokens_zero_disables_trimming():
     assert Config.load_from_env(env).max_context_tokens == 0
 
 
+def test_max_turn_tokens_default_and_override():
+    assert Config.load_from_env(_API_KEY_ENV).max_turn_tokens == 96000
+    env = dict(_API_KEY_ENV, KLURIS_MAX_TURN_TOKENS="120000")
+    assert Config.load_from_env(env).max_turn_tokens == 120000
+
+
+def test_max_turn_tokens_zero_disables():
+    env = dict(_API_KEY_ENV, KLURIS_MAX_TURN_TOKENS="0")
+    assert Config.load_from_env(env).max_turn_tokens == 0
+
+
+def test_max_neuron_bytes_default_and_override():
+    assert Config.load_from_env(_API_KEY_ENV).max_neuron_bytes == 16384
+    env = dict(_API_KEY_ENV, KLURIS_MAX_NEURON_BYTES="32768")
+    assert Config.load_from_env(env).max_neuron_bytes == 32768
+
+
+def test_max_neuron_bytes_zero_disables():
+    env = dict(_API_KEY_ENV, KLURIS_MAX_NEURON_BYTES="0")
+    assert Config.load_from_env(env).max_neuron_bytes == 0
+
+
 def test_brain_and_data_dirs_overridable():
     env = dict(
         _API_KEY_ENV,

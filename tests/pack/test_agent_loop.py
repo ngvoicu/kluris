@@ -4,7 +4,12 @@ from __future__ import annotations
 
 import pytest
 
-from kluris.pack.agent import _trim_history, run_agent
+from kluris.pack.agent import (
+    _compact_tool_results,
+    _estimate_messages_tokens,
+    _trim_history,
+    run_agent,
+)
 from kluris.pack.config import Config
 from kluris.pack.providers.base import (
     ContextLimitError,
@@ -350,6 +355,9 @@ async def test_agent_does_not_error_when_round_has_text(
 
 
 async def test_agent_max_rounds_cap_respected(fixture_brain, tmp_path):
+    """The cap stops the tool loop at exactly MAX_AGENT_ROUNDS rounds. When the
+    post-cap synthesis pass also yields nothing (scripts exhausted), the
+    round-budget error is the fallback."""
     cfg = _config(
         fixture_brain,
         KLURIS_DATA_DIR=str(tmp_path / "data"),
@@ -360,14 +368,216 @@ async def test_agent_max_rounds_cap_respected(fixture_brain, tmp_path):
         {"kind": "tool_use", "name": "search", "id": "tu", "args": {"query": "x"}},
         {"kind": "end"},
     ]
-    provider = _ScriptedProvider([looper, looper, looper])
+    # Two loop rounds, no synthesis script → synthesis yields nothing → error.
+    provider = _ScriptedProvider([looper, looper])
     events = await _drain(run_agent(
         config=cfg, provider=provider, history=[], user_message="x",
     ))
     errors = [e for e in events if e["kind"] == "error"]
-    # Hit the cap at exactly 2 rounds.
+    # The loop made exactly 2 provider calls; the synthesis call found no script
+    # and returned nothing (no extra increment), so the cap error still fires.
     assert provider.calls == 2
     assert errors and "round" in errors[-1]["message"].lower()
+
+
+async def test_agent_max_rounds_synthesizes_final_answer(fixture_brain, tmp_path):
+    """Instead of throwing the turn away at the round cap, the loop makes one
+    tools-disabled synthesis pass. If it answers, the user gets that answer and
+    NO round-budget error."""
+    cfg = _config(
+        fixture_brain,
+        KLURIS_DATA_DIR=str(tmp_path / "data"),
+        MAX_AGENT_ROUNDS="2",
+    )
+    (tmp_path / "data").mkdir()
+    looper = [
+        {"kind": "tool_use", "name": "search", "id": "tu", "args": {"query": "x"}},
+        {"kind": "end"},
+    ]
+    synthesis = [{"kind": "token", "text": "Synthesized from evidence."},
+                 {"kind": "end"}]
+    provider = _ScriptedProvider([looper, looper, synthesis])
+    events = await _drain(run_agent(
+        config=cfg, provider=provider, history=[], user_message="x",
+    ))
+    errors = [e for e in events if e["kind"] == "error"]
+    tokens = [e for e in events if e["kind"] == "token"]
+    assert provider.calls == 3  # 2 loop rounds + 1 synthesis pass
+    assert errors == []
+    assert any("Synthesized from evidence" in t["text"] for t in tokens)
+
+
+async def test_agent_empty_round_after_tools_synthesizes(fixture_brain, tmp_path):
+    """An empty round AFTER evidence was gathered triggers a synthesis pass
+    rather than the bare 'no content' error."""
+    cfg = _config(fixture_brain, KLURIS_DATA_DIR=str(tmp_path / "data"))
+    (tmp_path / "data").mkdir()
+    provider = _ScriptedProvider([
+        [{"kind": "tool_use", "name": "search", "id": "tu",
+          "args": {"query": "auth"}}, {"kind": "end"}],
+        [{"kind": "end"}],  # empty round after a tool ran
+        [{"kind": "token", "text": "Answer from what I found."}, {"kind": "end"}],
+    ])
+    events = await _drain(run_agent(
+        config=cfg, provider=provider, history=[], user_message="x",
+    ))
+    errors = [e for e in events if e["kind"] == "error"]
+    tokens = [e for e in events if e["kind"] == "token"]
+    assert errors == []
+    assert any("Answer from what I found" in t["text"] for t in tokens)
+
+
+async def test_agent_duplicate_tool_call_suppressed(fixture_brain, tmp_path):
+    """An exact-duplicate (tool, args) call within a turn is served from a stub
+    instead of re-dispatching — the second search is NOT re-run."""
+    cfg = _config(fixture_brain, KLURIS_DATA_DIR=str(tmp_path / "data"))
+    (tmp_path / "data").mkdir()
+    same = {"kind": "tool_use", "name": "search", "id": "tu",
+            "args": {"query": "auth"}}
+    provider = _ScriptedProvider([
+        [same, {"kind": "end"}],
+        [same, {"kind": "end"}],  # identical call again
+        [{"kind": "token", "text": "done"}, {"kind": "end"}],
+    ])
+    results = []
+    await _drain(run_agent(
+        config=cfg, provider=provider, history=[], user_message="x",
+        trace_hook=results.append,
+    ))
+    summaries = [r["result_summary"] for r in results]
+    assert len(summaries) == 2
+    assert "duplicate" in summaries[1].lower()
+    assert "duplicate" not in summaries[0].lower()
+
+
+class _SynthErrorProvider(LLMProvider):
+    """Round 1 gathers a tool; the synthesis call (call 2) raises ``exc``."""
+
+    model = "synth-err"
+
+    def __init__(self, exc: Exception) -> None:
+        self.calls = 0
+        self._exc = exc
+
+    async def smoke_test(self) -> None:  # pragma: no cover
+        return None
+
+    async def complete_stream(self, messages, tools):
+        self.calls += 1
+        if self.calls == 1:
+            yield {"kind": "tool_use", "name": "search", "id": "t",
+                   "args": {"query": "x"}}
+            yield {"kind": "end"}
+        else:
+            raise self._exc
+            yield  # pragma: no cover (make this an async generator)
+
+
+async def test_synthesis_context_limit_surfaces_recoverable_hint(
+    fixture_brain, tmp_path
+):
+    """A ContextLimitError on the synthesis pass must surface the recoverable
+    'New conversation' guidance — NOT a generic 'try rephrasing' that retries
+    straight back into the overflow."""
+    cfg = _config(fixture_brain, KLURIS_DATA_DIR=str(tmp_path / "data"),
+                  MAX_AGENT_ROUNDS="1")
+    (tmp_path / "data").mkdir()
+    provider = _SynthErrorProvider(ContextLimitError("too big"))
+    events = await _drain(run_agent(
+        config=cfg, provider=provider, history=[], user_message="x",
+    ))
+    errors = [e for e in events if e["kind"] == "error"]
+    assert errors and errors[0]["recoverable"] is True
+    assert "New conversation" in errors[0]["message"]
+    assert events[-1]["kind"] == "end"
+
+
+async def test_synthesis_request_error_surfaces_non_recoverable(
+    fixture_brain, tmp_path
+):
+    """A RequestError on the synthesis pass must stay NON-recoverable (matching
+    the main loop) instead of being downgraded to a recoverable retry."""
+    cfg = _config(fixture_brain, KLURIS_DATA_DIR=str(tmp_path / "data"),
+                  MAX_AGENT_ROUNDS="1")
+    (tmp_path / "data").mkdir()
+    provider = _SynthErrorProvider(RequestError("boom"))
+    events = await _drain(run_agent(
+        config=cfg, provider=provider, history=[], user_message="x",
+    ))
+    errors = [e for e in events if e["kind"] == "error"]
+    assert errors and errors[0]["recoverable"] is False
+    assert "boom" in errors[0]["message"]
+
+
+async def test_synthesis_midstream_drop_flags_partial_incomplete(
+    fixture_brain, tmp_path
+):
+    """If synthesis streams text then drops mid-answer, the partial is kept but
+    an 'incomplete' note is emitted — it must NOT render as a finished turn."""
+    cfg = _config(fixture_brain, KLURIS_DATA_DIR=str(tmp_path / "data"),
+                  MAX_AGENT_ROUNDS="1")
+    (tmp_path / "data").mkdir()
+
+    class _PartialThenRaise(LLMProvider):
+        model = "partial"
+
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def smoke_test(self) -> None:  # pragma: no cover
+            return None
+
+        async def complete_stream(self, messages, tools):
+            self.calls += 1
+            if self.calls == 1:
+                yield {"kind": "tool_use", "name": "search", "id": "t",
+                       "args": {"query": "x"}}
+                yield {"kind": "end"}
+            else:
+                yield {"kind": "token", "text": "partial answer"}
+                raise RequestError("dropped")
+
+    provider = _PartialThenRaise()
+    events = await _drain(run_agent(
+        config=cfg, provider=provider, history=[], user_message="x",
+    ))
+    tokens = [e for e in events if e["kind"] == "token"]
+    errors = [e for e in events if e["kind"] == "error"]
+    assert any("partial answer" in t["text"] for t in tokens)  # partial kept
+    assert errors and "incomplete" in errors[0]["message"].lower()
+    assert errors[0]["recoverable"] is True
+
+
+async def test_compacted_result_allows_refetch_not_dup_suppressed(
+    fixture_brain, tmp_path
+):
+    """When compaction elides a tool result, an identical re-issue must
+    re-dispatch (the stub invites it) rather than be duplicate-suppressed into a
+    pointer to the discarded payload."""
+    cfg = _config(fixture_brain, KLURIS_DATA_DIR=str(tmp_path / "data"),
+                  KLURIS_MAX_TURN_TOKENS="50")
+    (tmp_path / "data").mkdir()
+    alpha = {"kind": "tool_use", "name": "search", "id": "a1",
+             "args": {"query": "alpha"}}
+    beta = {"kind": "tool_use", "name": "search", "id": "b1",
+            "args": {"query": "beta"}}
+    alpha_again = {"kind": "tool_use", "name": "search", "id": "a2",
+                   "args": {"query": "alpha"}}  # identical args to alpha
+    provider = _ScriptedProvider([
+        [alpha, {"kind": "end"}],
+        [beta, {"kind": "end"}],         # 2nd result → alpha becomes "oldest"
+        [alpha_again, {"kind": "end"}],  # alpha's result was compacted by now
+        [{"kind": "token", "text": "done"}, {"kind": "end"}],
+    ])
+    results = []
+    await _drain(run_agent(
+        config=cfg, provider=provider, history=[], user_message="x",
+        trace_hook=results.append,
+    ))
+    summaries = [r["result_summary"] for r in results]
+    assert len(summaries) == 3  # alpha, beta, alpha-again all dispatched
+    # The alpha re-issue must NOT be suppressed — its earlier result was elided.
+    assert "duplicate" not in summaries[2].lower()
 
 
 async def test_agent_max_rounds_zero_means_unlimited(fixture_brain, tmp_path):
@@ -588,6 +798,109 @@ async def test_trim_history_keeps_at_least_most_recent():
         {"role": "assistant", "content": "z" * 100000},
     ]
     assert _trim_history(hist, 10) == [hist[-1]]
+
+
+# --- In-turn compaction (per-turn request-size budget) -----------------------
+
+
+def _msgs_with_tool_results(n: int, body_chars: int) -> list[dict]:
+    """system + user + n × (assistant tool_call, tool result) pairs."""
+    msgs: list[dict] = [
+        {"role": "system", "content": "S"},
+        {"role": "user", "content": "Q"},
+    ]
+    for i in range(n):
+        msgs.append({
+            "role": "assistant", "content": "",
+            "tool_calls": [{"id": f"t{i}", "name": "search", "args": {}}],
+        })
+        msgs.append({
+            "role": "tool", "tool_call_id": f"t{i}", "content": "X" * body_chars,
+        })
+    return msgs
+
+
+async def test_compact_disabled_when_budget_zero():
+    msgs = _msgs_with_tool_results(3, 4000)
+    out = _compact_tool_results(msgs, 0)
+    tool_msgs = [m for m in out if m.get("role") == "tool"]
+    assert all("X" * 4000 in m["content"] for m in tool_msgs)
+
+
+async def test_compact_under_budget_is_noop():
+    msgs = _msgs_with_tool_results(2, 4)
+    before = [m["content"] for m in msgs]
+    out = _compact_tool_results(msgs, 100000)
+    assert [m["content"] for m in out] == before
+
+
+async def test_compact_elides_oldest_keeps_latest_and_structure():
+    msgs = _msgs_with_tool_results(3, 8000)  # ~2k est tokens per result
+    n_before = len(msgs)
+    roles_before = [m.get("role") for m in msgs]
+    ids_before = [m.get("tool_call_id") for m in msgs]
+    assert _estimate_messages_tokens(msgs) > 1500  # precondition: over budget
+    out = _compact_tool_results(msgs, 1500)
+    tool_msgs = [m for m in out if m.get("role") == "tool"]
+    # Oldest elided, newest kept verbatim.
+    assert '"compacted": true' in tool_msgs[0]["content"]
+    assert "X" * 8000 in tool_msgs[-1]["content"]
+    # Structure preserved: same count, same roles, same tool_call_id pairing.
+    assert len(out) == n_before
+    assert [m.get("role") for m in out] == roles_before
+    assert [m.get("tool_call_id") for m in out] == ids_before
+
+
+class _RecordingProvider(LLMProvider):
+    """Scripted provider that snapshots the messages of every call."""
+
+    model = "rec"
+
+    def __init__(self, scripts: list[list[dict]]) -> None:
+        self._scripts = list(scripts)
+        self.seen_messages: list[list[dict]] = []
+
+    async def smoke_test(self) -> None:  # pragma: no cover
+        return None
+
+    async def complete_stream(self, messages, tools):
+        self.seen_messages.append([dict(m) for m in messages])
+        if self._scripts:
+            for ev in self._scripts.pop(0):
+                yield ev
+
+
+async def test_run_agent_compacts_old_tool_results_within_turn(
+    fixture_brain, tmp_path
+):
+    """With a tiny per-turn budget, the oldest tool result is elided before the
+    next round's request while the newest stays intact."""
+    cfg = _config(
+        fixture_brain,
+        KLURIS_DATA_DIR=str(tmp_path / "data"),
+        KLURIS_MAX_TURN_TOKENS="50",
+    )
+    (tmp_path / "data").mkdir()
+
+    def _search(q):
+        return [
+            {"kind": "tool_use", "name": "search", "id": f"t-{q}",
+             "args": {"query": q}},
+            {"kind": "end"},
+        ]
+
+    provider = _RecordingProvider([
+        _search("alpha"), _search("beta"),
+        [{"kind": "token", "text": "ok"}, {"kind": "end"}],
+    ])
+    await _drain(run_agent(
+        config=cfg, provider=provider, history=[], user_message="x",
+    ))
+    round3 = provider.seen_messages[2]  # the 3rd provider call
+    tool_msgs = [m for m in round3 if m.get("role") == "tool"]
+    assert len(tool_msgs) == 2
+    assert '"compacted": true' in tool_msgs[0]["content"]   # oldest elided
+    assert '"compacted": true' not in tool_msgs[-1]["content"]  # newest kept
 
 
 async def test_run_agent_trims_old_history_before_sending(fixture_brain, tmp_path):
