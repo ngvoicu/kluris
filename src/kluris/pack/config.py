@@ -279,6 +279,16 @@ class Config(BaseModel):
     # can opt out at boot. Loud warning printed.
     skip_boot_smoke: bool = False
 
+    # Diagnostic: when set, the provider writes ONE summary line per LLM
+    # stream to stderr — round chunk count, whether any text/tool-call
+    # surfaced, and the final ``finish_reason``. This is the supported way
+    # to diagnose an empty "model returned no content" turn (see
+    # ``agent.py``): the failing round is the last summary line before the
+    # error. No request/response payloads are logged, so it is safe to
+    # leave on; ``LITELLM_LOG=DEBUG`` is suppressed by ``configure_litellm``
+    # and far noisier, so this is the preferred knob.
+    debug_stream: bool = False
+
     # Warnings collected during ``load_from_env`` (e.g. base-URL
     # endpoint-suffix trim). main.py prints these to stderr at boot
     # so they show up in ``docker compose logs``. Excluded from the
@@ -525,6 +535,7 @@ class Config(BaseModel):
 
         skip_boot_smoke = _read_bool(env, "KLURIS_SKIP_BOOT_SMOKE", False)
         use_responses_api = _read_bool(env, "KLURIS_USE_RESPONSES_API", False)
+        debug_stream = _read_bool(env, "KLURIS_DEBUG_STREAM", False)
 
         # ``reasoning_effort`` is an OpenAI Chat Completions field. The OAuth
         # path also targets that shape (no ``provider_shape`` kwarg), so it is
@@ -553,5 +564,6 @@ class Config(BaseModel):
             tls_ca_bundle=ca_bundle,
             tls_insecure=tls_insecure,
             skip_boot_smoke=skip_boot_smoke,
+            debug_stream=debug_stream,
             boot_warnings=warn_list,
         )

@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sys
 import time
 from typing import Any, AsyncIterator
 
@@ -261,7 +262,9 @@ class LiteLLMProvider(LLMProvider):
                 stream=True,
                 **kwargs,
             )
-            async for event in _parse_litellm_stream(response):
+            async for event in _parse_litellm_stream(
+                response, debug=self._cfg.debug_stream
+            ):
                 yield event
         except (AuthError, RequestError):
             raise
@@ -370,6 +373,8 @@ def _get(obj: Any, key: str, default: Any = None) -> Any:
 
 async def _parse_litellm_stream(
     response: AsyncIterator[Any],
+    *,
+    debug: bool = False,
 ) -> AsyncIterator[dict[str, Any]]:
     """Translate LiteLLM's OpenAI-shaped streamed chunks into common events.
 
@@ -378,10 +383,21 @@ async def _parse_litellm_stream(
     same round both surface (the v1.87.0-fixed bug). Emits a zero-usage event
     at end-of-stream when the endpoint ignored ``stream_options.include_usage``
     so the UI footer still ticks.
+
+    ``debug=True`` (from ``KLURIS_DEBUG_STREAM``) writes a single redaction-safe
+    summary line per stream to stderr — chunk count, whether any text/tool-call
+    surfaced, and the final ``finish_reason`` — so an empty "no content" turn can
+    be diagnosed from the logs (the failing round is the last summary line before
+    the error). No payloads are logged.
     """
     tool_buffers: dict[int, dict[str, Any]] = {}
     saw_usage = False
+    chunks = 0
+    saw_text = False
+    saw_tool = False
+    last_finish: str | None = None
     async for chunk in response:
+        chunks += 1
         usage = _get(chunk, "usage")
         if usage:
             saw_usage = True
@@ -399,6 +415,7 @@ async def _parse_litellm_stream(
 
         text = _get(delta, "content")
         if text:
+            saw_text = True
             yield {"kind": "token", "text": text}
 
         for tc in _get(delta, "tool_calls") or []:
@@ -419,8 +436,10 @@ async def _parse_litellm_stream(
 
         finish = _get(choice0, "finish_reason")
         if finish:
+            last_finish = finish
             for buf in tool_buffers.values():
                 if buf["name"]:
+                    saw_tool = True
                     try:
                         args = json.loads(buf["json"]) if buf["json"] else {}
                     except ValueError:
@@ -432,6 +451,14 @@ async def _parse_litellm_stream(
                         "args": args,
                     }
             tool_buffers.clear()
+
+    if debug:
+        # Redaction-safe: only counts, booleans, and the finish_reason string.
+        sys.stderr.write(
+            f"kluris-pack: stream chunks={chunks} text={saw_text} "
+            f"tool={saw_tool} finish={last_finish!r}\n"
+        )
+        sys.stderr.flush()
 
     if not saw_usage:
         # Graceful degradation: some endpoints ignore include_usage silently.

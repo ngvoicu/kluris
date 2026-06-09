@@ -243,7 +243,11 @@ def create_app(
     # first-call-of-session wake_up and every brain-tree UI load skip the
     # re-walk. A failure degrades to a per-call snapshot.
     try:
-        from kluris.pack.tools.brain import build_wake_up_cache
+        # Relative import: in the deployed image the pack is the top-level
+        # ``app`` package (uvicorn app.main:create_app), NOT ``kluris.pack`` —
+        # an absolute ``kluris.pack`` import here raises ModuleNotFoundError in
+        # the container, silently disabling the cache.
+        from .tools.brain import build_wake_up_cache
 
         build_wake_up_cache(cfg.brain_dir)
         app.state.wake_up_cached = True

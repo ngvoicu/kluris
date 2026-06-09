@@ -493,6 +493,23 @@ def test_skip_boot_smoke_invalid_literal_errors():
     assert "KLURIS_SKIP_BOOT_SMOKE" in str(exc.value)
 
 
+def test_debug_stream_default_false():
+    cfg = Config.load_from_env(_API_KEY_ENV)
+    assert cfg.debug_stream is False
+
+
+def test_debug_stream_truthy():
+    env = dict(_API_KEY_ENV, KLURIS_DEBUG_STREAM="1")
+    assert Config.load_from_env(env).debug_stream is True
+
+
+def test_debug_stream_invalid_literal_errors():
+    env = dict(_API_KEY_ENV, KLURIS_DEBUG_STREAM="maybe")
+    with pytest.raises(ConfigError) as exc:
+        Config.load_from_env(env)
+    assert "KLURIS_DEBUG_STREAM" in str(exc.value)
+
+
 def test_no_ui_auth_env_vars_honored():
     """The Kluris app has no built-in UI auth. Setting common UI-auth
     env vars must not change Config behavior — they're simply ignored.

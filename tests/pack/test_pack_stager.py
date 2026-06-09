@@ -485,3 +485,87 @@ def test_output_inside_brain_does_not_recurse(fixture_brain):
     assert not list((out / "brain").rglob("*-pack"))
     assert not (out / "brain" / "app").exists()
     assert not (out / "brain" / "kluris_runtime").exists()
+
+
+def test_pack_source_has_no_absolute_self_imports():
+    """Pack modules must import siblings RELATIVELY (``.tools.brain``), never as
+    ``kluris.pack.*``. In the deployed image the pack is the top-level ``app``
+    package (``uvicorn app.main:create_app``), so an absolute ``kluris.pack``
+    import raises ModuleNotFoundError at runtime — yet it works in source/tests,
+    which is exactly how such a bug ships unnoticed (v2.27.4 boot-cache).
+    """
+    pack_src = (
+        Path(__file__).resolve().parent.parent.parent
+        / "src" / "kluris" / "pack"
+    )
+    offenders = []
+    for py in pack_src.rglob("*.py"):
+        for lineno, line in enumerate(
+            py.read_text(encoding="utf-8").splitlines(), 1
+        ):
+            stripped = line.strip()
+            if stripped.startswith("from kluris.pack") or \
+                    stripped.startswith("import kluris.pack"):
+                offenders.append(f"{py.relative_to(pack_src)}:{lineno}: {stripped}")
+    assert not offenders, (
+        "absolute kluris.pack imports break in the app-packaged image; "
+        "use relative imports:\n" + "\n".join(offenders)
+    )
+
+
+def test_subprocess_create_app_builds_caches_in_app_layout(staged_brain):
+    """Boot ``create_app`` in the STAGED ``app`` layout (the deployed-image
+    package shape, not the ``kluris.pack`` source tree) and assert BOTH boot
+    caches build. The wake_up cache build used an absolute ``kluris.pack``
+    import that raised ModuleNotFoundError only in this layout — every
+    source-tree test missed it because it imports ``kluris.pack`` directly.
+    """
+    out, _ = staged_brain
+    code = textwrap.dedent("""
+        import sys
+        # Simulate the deployed container: only `app` + `kluris_runtime` are
+        # shipped, the `kluris` package is NOT installed. Blocking kluris.pack
+        # makes an absolute `kluris.pack.*` import fail here exactly as it does
+        # in the image (the dev venv has kluris editable-installed, which is why
+        # a naive subprocess test passes even on the buggy code).
+        sys.modules['kluris.pack'] = None
+
+        import os
+        from pathlib import Path
+        import app.main
+        from app.config import Config
+
+        out = os.environ['EXPECTED_OUT']
+
+        class _StubProvider:
+            model = 'stub'
+            async def smoke_test(self):
+                pass
+
+        data_dir = Path(out) / '_caches_probe_data'
+        data_dir.mkdir(exist_ok=True)
+        application = app.main.create_app(
+            config=Config(brain_dir=Path(out) / 'brain', data_dir=data_dir),
+            provider=_StubProvider(),
+            allow_writable_brain=True,
+            skip_smoke_test=True,
+        )
+        assert application.state.wake_up_cached is True, \
+            'wake_up cache did NOT build in the app layout'
+        assert application.state.search_index is True, \
+            'search index did NOT build in the app layout'
+        print('ok')
+    """).strip()
+    env = dict(os.environ)
+    env["PYTHONPATH"] = str(out)
+    env["PYTHONDONTWRITEBYTECODE"] = "1"
+    env["EXPECTED_OUT"] = str(out)
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        capture_output=True, text=True, env=env,
+        cwd=str(out.parent), check=False,
+    )
+    assert result.returncode == 0, (
+        f"stdout={result.stdout!r}\nstderr={result.stderr!r}"
+    )
+    assert "ok" in result.stdout

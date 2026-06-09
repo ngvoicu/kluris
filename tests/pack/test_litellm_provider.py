@@ -329,6 +329,33 @@ async def test_parse_stream_tolerates_plain_dicts():
     ]
 
 
+async def test_debug_stream_emits_redacted_summary_line(fake_litellm, capsys):
+    """KLURIS_DEBUG_STREAM=1 writes one stderr summary per stream — the supported
+    way to diagnose an empty 'model returned no content' turn. The failing shape
+    (no text, no tool, finish='stop') is exactly what the line surfaces. Only
+    counts/booleans/finish_reason are logged — no payloads."""
+    cfg = _api_cfg(KLURIS_DEBUG_STREAM="1")
+    fake_litellm.stream_chunks = [_c_text("", finish="stop"), _c_usage(120, 40)]
+    await _drain(LiteLLMProvider(cfg).complete_stream(
+        [{"role": "user", "content": "q"}], [],
+    ))
+    err = capsys.readouterr().err
+    assert "kluris-pack: stream" in err
+    assert "text=False" in err
+    assert "tool=False" in err
+    assert "finish='stop'" in err
+
+
+async def test_debug_stream_off_by_default_writes_nothing(fake_litellm, capsys):
+    """Without the knob the diagnostic line must not appear — it is opt-in."""
+    cfg = _api_cfg()  # KLURIS_DEBUG_STREAM unset → False
+    fake_litellm.stream_chunks = [_c_text("hi", finish="stop")]
+    await _drain(LiteLLMProvider(cfg).complete_stream(
+        [{"role": "user", "content": "q"}], [],
+    ))
+    assert "kluris-pack: stream" not in capsys.readouterr().err
+
+
 # ============================================================================
 # Exception mapping (Acceptance D)
 # ============================================================================
