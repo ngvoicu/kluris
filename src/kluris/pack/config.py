@@ -32,6 +32,9 @@ class ConfigError(ValueError):
 # Optional vars with sane defaults — deployer can override.
 _DEFAULT_ANTHROPIC_VERSION = "2023-06-01"
 _DEFAULT_MAX_AGENT_ROUNDS = 20
+# 0 = unlimited (off). A backstop on TOTAL per-turn tool calls, independent of
+# the round cap (one round can fan out into many parallel calls).
+_DEFAULT_MAX_TOOL_CALLS = 0
 _DEFAULT_LOBE_OVERVIEW_BUDGET = 4096
 _LOBE_OVERVIEW_BUDGET_MIN = 1024
 _LOBE_OVERVIEW_BUDGET_MAX = 16384
@@ -249,6 +252,13 @@ class Config(BaseModel):
     # tool_uses. Useful for deep-research questions on a brain you
     # trust to converge; risky against a sparse brain (cost runaway).
     max_agent_rounds: int = _DEFAULT_MAX_AGENT_ROUNDS
+    # Hard ceiling on the TOTAL tool calls a single turn may make. Distinct from
+    # max_agent_rounds: one round can emit many parallel tool calls, so the
+    # round cap does not bound the call count. ``0`` = unlimited (off); when a
+    # turn reaches the cap the loop stops and the synthesis fallback answers
+    # from what was gathered. A backstop against a model that fans out into
+    # per-item searches on a broad question.
+    max_tool_calls: int = _DEFAULT_MAX_TOOL_CALLS
     lobe_overview_budget: int = _DEFAULT_LOBE_OVERVIEW_BUDGET
     max_multi_read_paths: int = _DEFAULT_MAX_MULTI_READ_PATHS
 
@@ -541,6 +551,9 @@ class Config(BaseModel):
     @classmethod
     def _build(cls, *, env: dict, warnings: list[str] | None = None, **kwargs) -> "Config":
         max_rounds = _read_int(env, "MAX_AGENT_ROUNDS", _DEFAULT_MAX_AGENT_ROUNDS)
+        max_tool_calls = max(
+            0, _read_int(env, "KLURIS_MAX_TOOL_CALLS", _DEFAULT_MAX_TOOL_CALLS)
+        )
         budget = _clamp(
             _read_int(env, "KLURIS_LOBE_OVERVIEW_BUDGET", _DEFAULT_LOBE_OVERVIEW_BUDGET),
             _LOBE_OVERVIEW_BUDGET_MIN,
@@ -622,6 +635,7 @@ class Config(BaseModel):
         return cls(
             **kwargs,
             max_agent_rounds=max_rounds,
+            max_tool_calls=max_tool_calls,
             lobe_overview_budget=budget,
             max_multi_read_paths=max_multi,
             max_output_tokens=max_output,

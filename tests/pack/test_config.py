@@ -233,6 +233,18 @@ def test_max_agent_rounds_zero_is_unlimited_sentinel():
     assert Config.load_from_env(env).max_agent_rounds == 0
 
 
+def test_max_tool_calls_default_off_and_override():
+    """``KLURIS_MAX_TOOL_CALLS`` defaults to 0 (off / unlimited) and clamps
+    negatives to 0; a positive value is the per-turn total-call ceiling."""
+    assert Config.load_from_env(_API_KEY_ENV).max_tool_calls == 0
+    assert Config.load_from_env(
+        dict(_API_KEY_ENV, KLURIS_MAX_TOOL_CALLS="50")
+    ).max_tool_calls == 50
+    assert Config.load_from_env(
+        dict(_API_KEY_ENV, KLURIS_MAX_TOOL_CALLS="-5")
+    ).max_tool_calls == 0
+
+
 def test_max_output_tokens_default_and_override():
     assert Config.load_from_env(_API_KEY_ENV).max_output_tokens == 4096
     env = dict(_API_KEY_ENV, KLURIS_MAX_OUTPUT_TOKENS="32000")

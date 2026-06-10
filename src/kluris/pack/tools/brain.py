@@ -225,6 +225,11 @@ def _run_search(
         )
 
 
+# Cap on the explicitly-listed empty lobes so a query that misses on a brain
+# with hundreds of lobes can't bloat the result; the count is always exact.
+_MAX_NO_MATCH_LOBES_LISTED = 50
+
+
 def _grouped_search(
     brain_path: Path,
     query: str,
@@ -234,15 +239,24 @@ def _grouped_search(
 ) -> dict[str, Any]:
     """Exact top hits per top-level lobe (partitioned ranking, not a flat
     window — a flat top-N bunches into the single most relevant lobe on a
-    large corpus, missing every other lobe)."""
+    large corpus, missing every other lobe).
+
+    Also reports the lobes that were swept and matched NOTHING
+    (``no_match_lobes``). Without it the model can't tell "this lobe has no
+    entry" from "this lobe wasn't covered", so on an "X across all lobes"
+    question it re-searches each missing lobe one by one — the dominant
+    tool-call fan-out. Naming the empty lobes makes absence definitive in a
+    single call."""
     per_lobe = max(1, min(per_lobe, 10))
+    search_ok = True
     try:
         grouped = search_brain_fts_grouped(
             brain_path, query, per_lobe=per_lobe, snippet_chars=snippet_chars,
         )
     except Exception:
         grouped = {"lobes": {}, "total": 0}
-    return {
+        search_ok = False
+    result = {
         "ok": True,
         "query": query,
         "grouped_by_lobe": True,
@@ -250,6 +264,26 @@ def _grouped_search(
         "per_lobe_limit": per_lobe,
         "lobes": grouped["lobes"],
     }
+    # The full lobe set comes from the boot snapshot (its ``lobe_tags`` is keyed
+    # by every top-level lobe that holds neurons; ``_lobe_of`` buckets root
+    # files as "(root)", which is not a lobe, so it never appears here). No
+    # snapshot ⇒ omit the hint rather than pay for a brain walk. The hint is
+    # ONLY emitted when the grouped search actually ran: on a search error the
+    # empty bucket set would otherwise be reported as "every lobe definitively
+    # has no match", which the note tells the model to trust — a dangerous lie.
+    snap = get_snapshot(brain_path) if search_ok else None
+    if snap is not None:
+        all_lobes = set(snap.get("lobe_tags", {}).keys())
+        no_match = sorted(all_lobes - set(grouped["lobes"].keys()))
+        result["lobes_searched"] = len(all_lobes)
+        result["lobes_with_matches"] = len(all_lobes) - len(no_match)
+        result["no_match_lobes"] = no_match[:_MAX_NO_MATCH_LOBES_LISTED]
+        result["no_match_lobe_count"] = len(no_match)
+        result["no_match_note"] = (
+            "These lobes were searched and contain NO match for this query — "
+            "treat them as definitive; do not re-search them individually."
+        )
+    return result
 
 
 # --- 3. read_neuron ----------------------------------------------------------

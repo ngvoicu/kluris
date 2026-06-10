@@ -21,6 +21,7 @@ import asyncio
 import json
 import sys
 import time
+import warnings
 from typing import Any, AsyncIterator
 
 import httpx
@@ -84,6 +85,23 @@ def configure_litellm(config: Config) -> None:
     # errors) — it bypasses the logging-redaction filter and could echo request
     # detail to container logs.
     litellm.suppress_debug_info = True
+    # On the OpenAI Responses path LiteLLM dumps a response whose ``usage`` is a
+    # chat-completions-shaped dict (``completion_tokens`` / ``video_tokens``)
+    # into its ``ResponseAPIUsage`` pydantic model; pydantic then emits a
+    # benign "Pydantic serializer warnings: PydanticSerializationUnexpectedValue
+    # (Expected ResponseAPIUsage ...)" UserWarning on EVERY completion. It does
+    # not affect the chat or token accounting (we read usage straight off the
+    # stream chunks as a dict, never via that model — see _parse_litellm_stream),
+    # so silence just that advisory serializer warning to keep container logs
+    # clean. The ``(?s)`` flag lets the message regex reach ``ResponseAPIUsage``
+    # past the newline pydantic puts after "Pydantic serializer warnings:", so
+    # the filter is scoped to THIS warning — unrelated serializer warnings (and
+    # every other category) still surface.
+    warnings.filterwarnings(
+        "ignore",
+        message=r"(?s)Pydantic serializer warnings.*ResponseAPIUsage",
+        category=UserWarning,
+    )
     litellm.ssl_verify = config.httpx_verify
     litellm.aclient_session = httpx.AsyncClient(verify=config.httpx_verify)
 

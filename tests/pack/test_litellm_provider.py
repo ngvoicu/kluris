@@ -185,6 +185,37 @@ async def test_openai_proper_routes_responses_with_full_kwargs(fake_litellm):
     assert "api_base" not in last
 
 
+async def test_configure_litellm_silences_pydantic_usage_serializer_warning():
+    """On the Responses path LiteLLM dumps a chat-completions-shaped usage dict
+    into its ResponseAPIUsage model, so pydantic emits a benign 'Pydantic
+    serializer warnings' UserWarning on every completion. configure_litellm must
+    silence THAT specific one (scoped to the ResponseAPIUsage text) while leaving
+    unrelated warnings — including OTHER pydantic serializer warnings — visible."""
+    import warnings
+
+    cfg = _api_cfg()
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")  # baseline: record everything
+        configure_litellm(cfg)           # prepends the scoped "ignore" filter
+        warnings.warn(
+            "Pydantic serializer warnings:\n  "
+            "PydanticSerializationUnexpectedValue(Expected `ResponseAPIUsage`)",
+            UserWarning,
+        )
+        # A pydantic serializer warning about something ELSE must NOT be muted.
+        warnings.warn(
+            "Pydantic serializer warnings:\n  "
+            "PydanticSerializationUnexpectedValue(Expected `SomeOtherModel`)",
+            UserWarning,
+        )
+        warnings.warn("an unrelated UserWarning", UserWarning)
+
+    messages = [str(w.message) for w in caught]
+    assert not any("ResponseAPIUsage" in m for m in messages)
+    assert any("SomeOtherModel" in m for m in messages)
+    assert any("an unrelated UserWarning" in m for m in messages)
+
+
 async def test_anthropic_gates_off_openai_only_params(fake_litellm):
     cfg = _api_cfg(shape="anthropic", base="https://api.anthropic.com",
                    model="claude-opus-4-7", KLURIS_REASONING_EFFORT="high")

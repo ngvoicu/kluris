@@ -452,6 +452,35 @@ async def test_agent_duplicate_tool_call_suppressed(fixture_brain, tmp_path):
     assert "duplicate" not in summaries[0].lower()
 
 
+async def test_agent_total_tool_call_cap_routes_to_synthesis(fixture_brain, tmp_path):
+    """KLURIS_MAX_TOOL_CALLS caps TOTAL calls across rounds (the round cap can't,
+    since one round may fan out into many parallel calls). At the cap the loop
+    stops and the synthesis fallback labels the budget as tool-calls."""
+    cfg = _config(
+        fixture_brain,
+        KLURIS_DATA_DIR=str(tmp_path / "data"),
+        KLURIS_MAX_TOOL_CALLS="2",
+        MAX_AGENT_ROUNDS="20",  # rounds are NOT the limiter here
+    )
+    (tmp_path / "data").mkdir()
+    def _round(tag):
+        return [{"kind": "tool_use", "name": "search", "id": tag,
+                 "args": {"query": tag}}, {"kind": "end"}]
+    # FOUR rounds available — the cap must stop the loop well before they run
+    # out, so script exhaustion can't be confused for the cap firing.
+    provider = _ScriptedProvider([_round(t) for t in ("a", "b", "c", "d")])
+    results = []
+    events = await _drain(run_agent(
+        config=cfg, provider=provider, history=[], user_message="x",
+        trace_hook=results.append,
+    ))
+    errors = [e for e in events if e["kind"] == "error"]
+    # trace_hook fires only for LOOP dispatches (synthesis is tools-disabled), so
+    # exactly 2 tool calls ran before the cap stopped the loop — not 4.
+    assert len(results) == 2
+    assert errors and "tool-call" in errors[-1]["message"].lower()
+
+
 class _SynthErrorProvider(LLMProvider):
     """Round 1 gathers a tool; the synthesis call (call 2) raises ``exc``."""
 

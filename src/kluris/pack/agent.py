@@ -636,6 +636,9 @@ async def run_agent(
     # result. Keeping it resident is what stops the model from re-issuing
     # wake_up every few rounds to re-orient.
     sticky_call_ids: set[str] = set()
+    # Total tool calls the model has issued this turn (across all rounds, incl.
+    # parallel batches and re-served duplicates) — bounded by max_tool_calls.
+    total_tool_calls = 0
 
     def _stored_results() -> dict[str, str]:
         return {
@@ -648,6 +651,7 @@ async def run_agent(
     # looping until the provider emits an end with no pending
     # tool_uses, regardless of round count.
     unlimited = config.max_agent_rounds <= 0
+    hit_call_cap = False
     while unlimited or rounds < config.max_agent_rounds:
         rounds += 1
         if should_cancel is not None and await should_cancel():
@@ -754,6 +758,7 @@ async def run_agent(
         for call_index, call in enumerate(pending_tools):
             name = call.get("name") or ""
             args = call.get("args") or {}
+            total_tool_calls += 1
             # Include the per-round call index in the fallback id: a provider
             # that streams parallel SAME-tool calls without ids (litellm yields
             # id=None) would otherwise collapse them to one id, producing
@@ -836,18 +841,38 @@ async def run_agent(
         })
         messages.extend(tool_result_messages)
 
-    # Round budget exhausted. Rather than throw the turn away after N rounds of
-    # gathering, make one tools-disabled synthesis pass so the user still gets an
-    # answer (or an explicit "not in the brain") from everything found so far.
-    round_budget_error = {
-        "kind": "error",
-        "message": (
-            f"Hit the max {config.max_agent_rounds}-round tool budget. "
-            "Try a narrower question or click 'New conversation'."
-        ),
-        "recoverable": True,
-    }
+        # Total tool-call ceiling (checked at the round boundary so every
+        # emitted call still gets a result — a clean transcript). A single round
+        # can fan out into many parallel calls, so this can overshoot the cap by
+        # at most one round's width; that's intentional, the alternative is a
+        # malformed transcript with tool_calls missing their results.
+        if config.max_tool_calls and total_tool_calls >= config.max_tool_calls:
+            hit_call_cap = True
+            break
+
+    # Budget exhausted (round cap OR total tool-call cap). Rather than throw the
+    # turn away after gathering, make one tools-disabled synthesis pass so the
+    # user still gets an answer (or an explicit "not in the brain") from
+    # everything found so far.
+    if hit_call_cap:
+        budget_error = {
+            "kind": "error",
+            "message": (
+                f"Hit the max {config.max_tool_calls}-tool-call budget. "
+                "Try a narrower question or click 'New conversation'."
+            ),
+            "recoverable": True,
+        }
+    else:
+        budget_error = {
+            "kind": "error",
+            "message": (
+                f"Hit the max {config.max_agent_rounds}-round tool budget. "
+                "Try a narrower question or click 'New conversation'."
+            ),
+            "recoverable": True,
+        }
     async for ev in _run_synthesis_fallback(
-        provider, messages, config, round_budget_error, _stored_results()
+        provider, messages, config, budget_error, _stored_results()
     ):
         yield ev

@@ -719,6 +719,48 @@ def test_search_group_by_lobe_buckets_per_lobe(fixture_brain):
         assert 1 <= len(bucket) <= 2
 
 
+def test_group_by_lobe_reports_no_match_lobes_with_snapshot(snapshot_brain):
+    """With the boot snapshot registered, group_by_lobe names the lobes that
+    were searched and matched NOTHING — so the model can treat absence as
+    definitive instead of re-searching each missing lobe one by one."""
+    # "raw sql" lives only in the knowledge lobe (raw-sql-modern / raw-sql-old).
+    out = search_tool(snapshot_brain, "raw sql", group_by_lobe=True)
+    assert out["grouped_by_lobe"] is True
+    assert "knowledge" in out["lobes"]
+    assert out["lobes_searched"] == 3  # knowledge, projects, infrastructure
+    assert out["lobes_with_matches"] == 1
+    assert out["no_match_lobe_count"] == 2
+    assert set(out["no_match_lobes"]) == {"infrastructure", "projects"}
+    assert "definitive" in out["no_match_note"].lower()
+
+
+def test_group_by_lobe_omits_no_match_lobes_without_snapshot(fixture_brain):
+    """No snapshot ⇒ the hint is omitted rather than paying for a brain walk to
+    enumerate the full lobe set."""
+    out = search_tool(fixture_brain, "raw sql", group_by_lobe=True)
+    assert out["grouped_by_lobe"] is True
+    assert "no_match_lobes" not in out
+    assert "lobes_searched" not in out
+
+
+def test_group_by_lobe_no_match_omitted_on_search_error(snapshot_brain, monkeypatch):
+    """A grouped-search ERROR must NOT be reported as 'every lobe definitively
+    has no match' — that empty bucket set, paired with the no-match note, would
+    tell the model to stop searching lobes it never actually searched."""
+    import kluris.pack.tools.brain as brain_mod
+
+    def _boom(*a, **k):
+        raise RuntimeError("fts blew up")
+
+    monkeypatch.setattr(brain_mod, "search_brain_fts_grouped", _boom)
+    out = search_tool(snapshot_brain, "raw sql", group_by_lobe=True)
+    assert out["grouped_by_lobe"] is True
+    assert out["lobes"] == {}
+    # No definitive-absence hint on an errored search, even with a snapshot.
+    assert "no_match_lobes" not in out
+    assert "lobes_searched" not in out
+
+
 # --- snapshot-served tools (2.28.0) ---------------------------------------------
 
 
