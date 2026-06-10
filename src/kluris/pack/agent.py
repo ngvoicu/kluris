@@ -114,20 +114,26 @@ def _estimate_messages_tokens(messages: list[dict[str, Any]]) -> int:
 
 # Stub that replaces an elided tool-result body. The tool_call_id and message
 # position are preserved (we only swap ``content``), so the assistant↔tool
-# pairing OpenAI requires stays intact — only the payload shrinks.
+# pairing OpenAI requires stays intact — only the payload shrinks. The note
+# DISCOURAGES re-calling: an early invitation to "call it again" caused the
+# model to re-issue orienting calls (wake_up especially) in a churn loop.
 _COMPACTED_TOOL_RESULT = (
-    '{"compacted": true, "note": "earlier tool result elided to fit the turn '
-    'budget; call the tool again if you still need it"}'
+    '{"compacted": true, "note": "an earlier tool result is omitted here to fit '
+    'the turn budget. You have already seen it this turn — rely on it; do NOT '
+    'repeat the call. If you need a specific detail you did not capture, search '
+    'for that detail directly."}'
 )
 
 # Stub for EAGER eliding: results the model has already read (older than
 # ``keep_result_rounds``) are swapped out of the request well before the
 # max_turn_tokens ceiling. The full payload stays in the turn's in-memory
-# store, so a repeated call is re-served instantly without re-running the
-# tool, and the synthesis fallback restores it as evidence.
+# store and the synthesis fallback restores it as evidence, so nothing is
+# lost — but the note must NOT invite a re-call (that was the wake_up churn).
 _SEEN_TOOL_RESULT = (
-    '{"elided": true, "note": "result from an earlier round elided to keep '
-    'the request small; repeat the exact call to get it again instantly"}'
+    '{"elided": true, "note": "an earlier tool result is omitted here to keep '
+    'the request small. You have already seen it this turn — rely on it; do NOT '
+    'repeat the call. If you are missing a specific detail, search for that '
+    'detail directly instead of repeating a broad call."}'
 )
 
 _STUB_CONTENTS = (_COMPACTED_TOOL_RESULT, _SEEN_TOOL_RESULT)
@@ -144,6 +150,7 @@ def _stub_seen_rounds(
     round_of_call_id: dict[str, int],
     current_round: int,
     keep_last: int,
+    protected_call_ids: set[str] | None = None,
 ) -> None:
     """Eagerly elide tool results older than the last ``keep_last`` rounds.
 
@@ -153,9 +160,13 @@ def _stub_seen_rounds(
     ``messages`` in place; the structural contract matches
     :func:`_compact_tool_results` (only ``content`` of ``role: tool``
     messages is swapped).
+
+    ``protected_call_ids`` are never elided — used to keep the small,
+    orienting ``wake_up`` result resident so the model never re-fetches it.
     """
     if keep_last <= 0:
         return
+    protected = protected_call_ids or set()
     # When issuing round N's request the completed rounds are 1..N-1; keep
     # the most recent ``keep_last`` of those and stub everything older.
     cutoff = current_round - 1 - keep_last
@@ -165,6 +176,8 @@ def _stub_seen_rounds(
         if msg.get("role") != "tool":
             continue
         if msg.get("content") in _STUB_CONTENTS:
+            continue
+        if msg.get("tool_call_id") in protected:
             continue
         produced_in = round_of_call_id.get(msg.get("tool_call_id"))
         if produced_in is not None and produced_in <= cutoff:
@@ -189,12 +202,20 @@ def _dup_key(name: str, args: dict[str, Any]) -> tuple[str, str]:
         normalized = dict(args)
         tokens = sorted(set(re.findall(r"\w+", str(args.get("query", "")).lower())))
         normalized["query"] = " ".join(tokens)
+        # ``snippet_chars`` is pure presentation — re-running the SAME search
+        # only to widen the snippet is wasted work (same neurons, same FTS
+        # scan). Drop it from the key so that variation is suppressed; keep
+        # ``limit`` / ``offset`` / ``full_bodies`` / ``group_by_lobe`` / filters
+        # in the key so paging and content-escalation stay distinct calls.
+        normalized.pop("snippet_chars", None)
         return (name, json.dumps(normalized, sort_keys=True, ensure_ascii=False))
     return (name, json.dumps(args, sort_keys=True, ensure_ascii=False))
 
 
 def _compact_tool_results(
-    messages: list[dict[str, Any]], max_tokens: int
+    messages: list[dict[str, Any]],
+    max_tokens: int,
+    protected_call_ids: set[str] | None = None,
 ) -> list[dict[str, Any]]:
     """Bound a single turn's request size by eliding the OLDEST tool-result
     payloads until the estimate fits ``max_tokens``.
@@ -203,17 +224,21 @@ def _compact_tool_results(
     system prompt, the user turn, or an assistant ``tool_calls`` block — so the
     message structure (and tool_call_id pairing) is preserved. The most recent
     tool result is always kept verbatim so the model still has fresh evidence to
-    answer from. ``max_tokens <= 0`` disables compaction (the unbounded legacy
+    answer from. ``protected_call_ids`` (e.g. the small ``wake_up`` result) are
+    never elided. ``max_tokens <= 0`` disables compaction (the unbounded legacy
     behaviour). Mutates ``messages`` in place and returns it.
     """
     if max_tokens <= 0 or _estimate_messages_tokens(messages) <= max_tokens:
         return messages
+    protected = protected_call_ids or set()
     tool_idxs = [i for i, m in enumerate(messages) if m.get("role") == "tool"]
     # Keep the last tool result intact; compact older ones oldest-first.
     for i in tool_idxs[:-1]:
         if _estimate_messages_tokens(messages) <= max_tokens:
             break
-        if messages[i].get("content") != _COMPACTED_TOOL_RESULT:
+        if messages[i].get("tool_call_id") in protected:
+            continue
+        if messages[i].get("content") not in _STUB_CONTENTS:
             messages[i] = {**messages[i], "content": _COMPACTED_TOOL_RESULT}
     return messages
 
@@ -607,6 +632,10 @@ async def run_agent(
     # dispatch or a re-serve) — pointer stubs share the dup_key but must not
     # count as "the payload is still in the transcript".
     payload_call_ids: set[str] = set()
+    # call_ids never elided from the request: the small, orienting wake_up
+    # result. Keeping it resident is what stops the model from re-issuing
+    # wake_up every few rounds to re-orient.
+    sticky_call_ids: set[str] = set()
 
     def _stored_results() -> dict[str, str]:
         return {
@@ -630,9 +659,12 @@ async def run_agent(
         # whatever remains. Without these a broad query re-sends every prior
         # full result each round (quadratic).
         _stub_seen_rounds(
-            messages, round_of_call_id, rounds, config.keep_result_rounds
+            messages, round_of_call_id, rounds, config.keep_result_rounds,
+            sticky_call_ids,
         )
-        messages = _compact_tool_results(messages, config.max_turn_tokens)
+        messages = _compact_tool_results(
+            messages, config.max_turn_tokens, sticky_call_ids
+        )
         pending_tools: list[dict[str, Any]] = []
         round_text: list[str] = []
         try:
@@ -729,6 +761,10 @@ async def run_agent(
             # this turn's per-call bookkeeping so one call's evidence is lost
             # from the synthesis restore.
             call_id = call.get("id") or f"tu_{rounds}_{call_index}_{name}"
+            if name == "wake_up":
+                # Keep the orienting snapshot resident for the whole turn so
+                # the model never re-issues wake_up to re-orient.
+                sticky_call_ids.add(call_id)
             # Duplicate suppression (near-duplicate-aware for search): a call
             # already served this turn never re-runs the tool. If its payload
             # is still in the transcript, a tiny pointer stub suffices; if it

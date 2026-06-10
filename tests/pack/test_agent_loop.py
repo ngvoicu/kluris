@@ -1279,3 +1279,72 @@ async def test_parallel_same_tool_calls_get_distinct_ids(fixture_brain, tmp_path
     tool_ids = [m["tool_call_id"] for m in final if m.get("role") == "tool"]
     assert len(tool_ids) == 2
     assert len(set(tool_ids)) == 2  # distinct — no collision
+
+
+# --- v2.28.1: stop the wake_up / re-search churn loop -------------------------
+
+
+async def test_wake_up_is_never_elided_across_rounds(fixture_brain, tmp_path):
+    """wake_up's result stays full in the request for the whole turn (sticky),
+    so the model has no reason to re-issue it — even with aggressive eliding."""
+    from kluris.pack.agent import _STUB_CONTENTS
+
+    cfg = _config(
+        fixture_brain,
+        KLURIS_DATA_DIR=str(tmp_path / "data"),
+        KLURIS_KEEP_RESULT_ROUNDS="1",
+    )
+    (tmp_path / "data").mkdir()
+    provider = _RecordingProvider([
+        [{"kind": "tool_use", "name": "wake_up", "id": "w1", "args": {}},
+         {"kind": "end"}],
+        [{"kind": "tool_use", "name": "search", "id": "s1",
+          "args": {"query": "jwt"}}, {"kind": "end"}],
+        [{"kind": "tool_use", "name": "search", "id": "s2",
+          "args": {"query": "oauth"}}, {"kind": "end"}],
+        [{"kind": "token", "text": "done"}, {"kind": "end"}],
+    ])
+    await _drain(run_agent(
+        config=cfg, provider=provider, history=[], user_message="x",
+    ))
+    # By the final round, s1 is elided (old) but wake_up (w1) is still FULL.
+    final = provider.seen_messages[-1]
+    w1 = next(m for m in final if m.get("tool_call_id") == "w1")
+    assert w1["content"] not in _STUB_CONTENTS
+    assert '"ok": true' in w1["content"]
+
+
+async def test_elision_stub_discourages_recalling(fixture_brain, tmp_path):
+    """The elided-result stub must tell the model NOT to repeat the call —
+    the wording that previously invited re-calls drove the churn loop."""
+    from kluris.pack.agent import _SEEN_TOOL_RESULT, _COMPACTED_TOOL_RESULT
+
+    for stub in (_SEEN_TOOL_RESULT, _COMPACTED_TOOL_RESULT):
+        low = stub.lower()
+        assert "do not repeat the call" in low
+        assert "instantly" not in low  # the old "get it again instantly" invite
+
+
+async def test_snippet_only_variation_is_deduped(fixture_brain, tmp_path):
+    """The same search re-issued only to widen the snippet is a duplicate —
+    snippet_chars is presentation, not a new query. Changing full_bodies or
+    offset is NOT a duplicate (legitimate escalation / paging)."""
+    cfg = _config(fixture_brain, KLURIS_DATA_DIR=str(tmp_path / "data"))
+    (tmp_path / "data").mkdir()
+    provider = _ScriptedProvider([
+        [{"kind": "tool_use", "name": "search", "id": "a",
+          "args": {"query": "auth", "snippet_chars": 180}}, {"kind": "end"}],
+        [{"kind": "tool_use", "name": "search", "id": "b",
+          "args": {"query": "auth", "snippet_chars": 400}}, {"kind": "end"}],
+        [{"kind": "tool_use", "name": "search", "id": "c",
+          "args": {"query": "auth", "full_bodies": 3}}, {"kind": "end"}],
+        [{"kind": "token", "text": "done"}, {"kind": "end"}],
+    ])
+    results = []
+    await _drain(run_agent(
+        config=cfg, provider=provider, history=[], user_message="x",
+        trace_hook=results.append,
+    ))
+    summaries = [r["result_summary"] for r in results]
+    assert "duplicate" in summaries[1].lower()      # snippet-only widen → dup
+    assert "duplicate" not in summaries[2].lower()  # full_bodies → real call
