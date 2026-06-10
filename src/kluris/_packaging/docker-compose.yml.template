@@ -13,6 +13,24 @@ services:
     env_file:
       - .env
     restart: unless-stopped
+    # --- container hardening (safe defaults; loosen only deliberately) ----
+    # The app needs no Linux capabilities (non-root user, port >1024), no
+    # privilege escalation, and no writable rootfs (/data volume + /tmp
+    # tmpfs are the only writable paths; the brain is read-only by image
+    # construction).
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp
+    pids_limit: 256
+    # Resource caps — uncomment and size to your brain/host. A 10k-neuron
+    # brain is comfortable in 1g; very large brains hold their search index
+    # and snapshot in RAM, so size up before capping.
+    # mem_limit: 2g
+    # cpus: 2.0
 
 volumes:
   kluris-data:

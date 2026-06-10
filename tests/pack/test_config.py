@@ -698,3 +698,53 @@ def test_shipped_env_example_loads_with_zero_edits():
     # The active (uncommented) block is the Anthropic default.
     assert cfg.auth_mode == "api_key"
     assert cfg.litellm_model.startswith("anthropic/")
+
+
+# --- 2.28.0 knobs ----------------------------------------------------------------
+
+
+def _min_env(**extra):
+    return dict(
+        {
+            "KLURIS_PROVIDER_SHAPE": "anthropic",
+            "KLURIS_BASE_URL": "http://api.test",
+            "KLURIS_API_KEY": "sk-test",
+            "KLURIS_MODEL": "fake",
+        },
+        **extra,
+    )
+
+
+def test_new_knobs_defaults():
+    cfg = Config.load_from_env(_min_env())
+    assert cfg.keep_result_rounds == 3
+    assert cfg.access_token is None
+    assert cfg.rate_limit_per_min == 0
+    assert cfg.session_retention_days == 0
+    assert cfg.lock_system_prompt is False
+
+
+def test_new_knobs_parse_from_env():
+    cfg = Config.load_from_env(_min_env(
+        KLURIS_KEEP_RESULT_ROUNDS="5",
+        KLURIS_ACCESS_TOKEN="tok-abcdef",
+        KLURIS_RATE_LIMIT_PER_MIN="12",
+        KLURIS_SESSION_RETENTION_DAYS="30",
+        KLURIS_LOCK_SYSTEM_PROMPT="1",
+    ))
+    assert cfg.keep_result_rounds == 5
+    assert cfg.access_token.get_secret_value() == "tok-abcdef"
+    assert cfg.rate_limit_per_min == 12
+    assert cfg.session_retention_days == 30
+    assert cfg.lock_system_prompt is True
+
+
+def test_access_token_redacted_in_repr():
+    cfg = Config.load_from_env(_min_env(KLURIS_ACCESS_TOKEN="tok-abcdef"))
+    assert "tok-abcdef" not in repr(cfg)
+    assert "tok-abcdef" not in str(cfg)
+
+
+def test_blank_access_token_means_unset():
+    cfg = Config.load_from_env(_min_env(KLURIS_ACCESS_TOKEN="   "))
+    assert cfg.access_token is None

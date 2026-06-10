@@ -133,6 +133,40 @@ def _rel(brain_path: Path, target: Path) -> str:
     return str(target.relative_to(brain_path)).replace("\\", "/")
 
 
+def neuron_searchable_item(
+    brain_path: Path, neuron: Path, meta: dict, body: str
+) -> dict:
+    """Shape one already-parsed neuron into a searchable item dict.
+
+    Extracted from :func:`collect_searchable` so the boot snapshot
+    (:mod:`kluris_runtime.snapshot`) can build the identical rows from its
+    single walk — one definition of the row shape, no drift.
+    """
+    is_yaml = neuron.suffix.lower() in YAML_NEURON_SUFFIXES
+    file_type = "yaml" if is_yaml else "markdown"
+    if is_yaml:
+        fm_title = meta.get("title")
+        if isinstance(fm_title, str) and fm_title.strip():
+            title = fm_title.strip()
+        else:
+            title = neuron.stem.replace("-", " ").title()
+    else:
+        title = extract_neuron_title(neuron, body)
+    tags = meta.get("tags", [])
+    if not isinstance(tags, list):
+        tags = []
+    is_deprecated = str(meta.get("status", "active")).lower() == "deprecated"
+    return {
+        "kind": "neuron",
+        "file": _rel(brain_path, neuron),
+        "file_type": file_type,
+        "title": title,
+        "tags": tags,
+        "body": body,
+        "is_deprecated": is_deprecated,
+    }
+
+
 def collect_searchable(brain_path: Path) -> list[dict]:
     """Walk the brain and return one dict per searchable item.
 
@@ -152,29 +186,17 @@ def collect_searchable(brain_path: Path) -> list[dict]:
             meta, body = read_frontmatter(neuron)
         except Exception:
             continue
-        is_yaml = neuron.suffix.lower() in YAML_NEURON_SUFFIXES
-        file_type = "yaml" if is_yaml else "markdown"
-        if is_yaml:
-            fm_title = meta.get("title")
-            if isinstance(fm_title, str) and fm_title.strip():
-                title = fm_title.strip()
-            else:
-                title = neuron.stem.replace("-", " ").title()
-        else:
-            title = extract_neuron_title(neuron, body)
-        tags = meta.get("tags", [])
-        if not isinstance(tags, list):
-            tags = []
-        is_deprecated = str(meta.get("status", "active")).lower() == "deprecated"
-        items.append({
-            "kind": "neuron",
-            "file": _rel(brain_path, neuron),
-            "file_type": file_type,
-            "title": title,
-            "tags": tags,
-            "body": body,
-            "is_deprecated": is_deprecated,
-        })
+        items.append(neuron_searchable_item(brain_path, neuron, meta, body))
+
+    items.extend(non_neuron_searchable_items(brain_path))
+    return items
+
+
+def non_neuron_searchable_items(brain_path: Path) -> list[dict]:
+    """The glossary + brain.md searchable items (everything that is not a
+    walked neuron). Shared by :func:`collect_searchable` and the boot
+    snapshot."""
+    items: list[dict] = []
 
     glossary_path = brain_path / "glossary.md"
     if glossary_path.exists():
@@ -232,6 +254,68 @@ def _passes_filters(
     return True
 
 
+def search_brain_paged(
+    brain_path: Path,
+    query: str,
+    *,
+    limit: int = 10,
+    offset: int = 0,
+    lobe_filter: str | None = None,
+    tag_filter: str | None = None,
+    snippet_chars: int = 200,
+    include_bodies: int = 0,
+) -> dict:
+    """Search a brain for ``query`` with deterministic pagination.
+
+    Returns ``{"results": [...], "total": int}`` where ``total`` is the full
+    match count (before the limit/offset window) so a caller can page a broad
+    result set instead of re-querying with permuted terms. Ordering matches
+    :func:`search_brain`: descending score, ties broken by file path.
+
+    ``snippet_chars`` widens the body snippet; ``include_bodies`` attaches the
+    raw ``body`` to the first N results of the window (the caller clamps it
+    before it reaches a model transcript).
+    """
+    if limit <= 0:
+        return {"results": [], "total": 0}
+    offset = max(0, int(offset))
+
+    query_lower = query.lower()
+    items = collect_searchable(brain_path)
+
+    scored: list[tuple[int, str, dict]] = []
+    for item in items:
+        if not _passes_filters(item, lobe_filter=lobe_filter, tag_filter=tag_filter):
+            continue
+        score = score_hit(item, query_lower)
+        if score == 0:
+            continue
+        fields = matched_fields(item, query_lower)
+        snippet = (
+            extract_snippet(item["body"], query_lower, width=snippet_chars)
+            if "body" in fields
+            else ""
+        )
+        scored.append((score, item["file"], {
+            "file": item["file"],
+            "file_type": item.get("file_type", "markdown"),
+            "title": item["title"],
+            "matched_fields": fields,
+            "snippet": snippet,
+            "score": score,
+            "deprecated": item["is_deprecated"],
+        }, item["body"]))
+
+    scored.sort(key=lambda quad: (-quad[0], quad[1]))
+    window = scored[offset:offset + limit]
+    results = []
+    for i, (_score, _file, result, body) in enumerate(window):
+        if i < include_bodies:
+            result = {**result, "body": body}
+        results.append(result)
+    return {"results": results, "total": len(scored)}
+
+
 def search_brain(
     brain_path: Path,
     query: str,
@@ -246,34 +330,7 @@ def search_brain(
     broken by file path. Items with score 0 are filtered out. Capped
     at ``limit`` results.
     """
-    if limit <= 0:
-        return []
-
-    query_lower = query.lower()
-    items = collect_searchable(brain_path)
-
-    scored: list[tuple[int, str, dict]] = []
-    for item in items:
-        if not _passes_filters(item, lobe_filter=lobe_filter, tag_filter=tag_filter):
-            continue
-        score = score_hit(item, query_lower)
-        if score == 0:
-            continue
-        fields = matched_fields(item, query_lower)
-        snippet = (
-            extract_snippet(item["body"], query_lower)
-            if "body" in fields
-            else ""
-        )
-        scored.append((score, item["file"], {
-            "file": item["file"],
-            "file_type": item.get("file_type", "markdown"),
-            "title": item["title"],
-            "matched_fields": fields,
-            "snippet": snippet,
-            "score": score,
-            "deprecated": item["is_deprecated"],
-        }))
-
-    scored.sort(key=lambda triple: (-triple[0], triple[1]))
-    return [result for _score, _file, result in scored[:limit]]
+    return search_brain_paged(
+        brain_path, query,
+        limit=limit, lobe_filter=lobe_filter, tag_filter=tag_filter,
+    )["results"]

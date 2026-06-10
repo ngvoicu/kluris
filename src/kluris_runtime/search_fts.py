@@ -21,20 +21,24 @@ same code degrades to the substring engine anywhere FTS5 is missing; any query
 error falls back the same way. Callers can therefore use this in place of
 ``search_brain`` unconditionally.
 
-The dominant per-query cost is the ``collect_searchable()`` brain file-walk, not
-the sub-millisecond FTS5 table build. So the pack opts the configured brain into
-a BUILD-ONCE cache of that walk at boot (see :func:`build_index`): the brain is
-immutable inside the container, so the cached walk is valid for the whole
-process lifetime and per-request search skips the file I/O. Each query still
-builds its OWN fresh in-memory FTS5 table from the cached rows on the CALLING
-thread, so there is no shared SQLite connection to cross a thread boundary — the
-engine stays stateless and thread-safe regardless of how requests are dispatched
-(important: the route handler runs on a different thread than ``create_app``).
-The opt-in is keyed by resolved ``brain_path`` so the agent and route callers
-both reuse it via ``Config.brain_dir`` with no signature changes; standalone
+Two boot-time opt-ins make search scale to very large brains (both built by
+:func:`build_index`; the brain is immutable inside the container, so both are
+valid for the whole process lifetime):
+
+- a cache of the ``collect_searchable()`` walk, so per-request search never
+  re-reads the brain from disk;
+- a PERSISTENT on-disk FTS5 index, so unfiltered queries skip the per-query
+  table rebuild entirely (linear in corpus size — the dominant search cost at
+  10k+ neurons) and instead open a fresh per-query READ-ONLY connection on
+  the calling thread. No shared connection ever crosses a thread boundary, so
+  the engine stays stateless and thread-safe regardless of how requests are
+  dispatched.
+
+Lobe/tag-FILTERED queries still build a fresh in-memory table from the
+eligible subset of the cached rows: filtering BEFORE indexing keeps BM25 IDF
+scoped to the eligible rows, so filtered ranking is unchanged. Standalone
 callers and unit tests that never boot an app fall back to a fresh per-query
-walk — identical behavior. Filtering stays BEFORE indexing so BM25 IDF is scoped
-to the eligible rows, exactly as today.
+walk + build — identical behavior.
 """
 
 from __future__ import annotations
@@ -117,12 +121,12 @@ def _matched_fields(item: dict, tokens: list[str]) -> list[str]:
     return [f for f in _FIELDS if any(tok in texts[f] for tok in tokens)]
 
 
-def _snippet(body: str, tokens: list[str]) -> str:
+def _snippet(body: str, tokens: list[str], width: int = 200) -> str:
     """Body snippet centered on the first query token found in the body."""
     lowered = body.lower()
     for tok in tokens:
         if tok in lowered:
-            return extract_snippet(body, tok)
+            return extract_snippet(body, tok, width=width)
     return ""
 
 
@@ -153,34 +157,58 @@ def _build_fts_table(items: list[dict]) -> sqlite3.Connection:
     return con
 
 
-def _query_table(con: sqlite3.Connection, expr: str, limit: int) -> list:
+def _query_table(
+    con: sqlite3.Connection, expr: str, limit: int, offset: int = 0
+) -> list:
     """Run the BM25 MATCH query, returning ``(rowid, raw_score)`` rows."""
     weights = ", ".join(str(w) for w in _BM25_WEIGHTS)
     return con.execute(
         f"SELECT rowid, bm25(docs, {weights}) AS score "
-        "FROM docs WHERE docs MATCH ? ORDER BY score LIMIT ?",
-        (expr, limit),
+        "FROM docs WHERE docs MATCH ? ORDER BY score LIMIT ? OFFSET ?",
+        (expr, limit, offset),
     ).fetchall()
 
 
-def _rows_to_results(items: list[dict], rows: list, tokens: list[str]) -> list[dict]:
+def _match_total(con: sqlite3.Connection, expr: str) -> int:
+    """Full match count for ``expr`` (the page window's denominator)."""
+    return int(
+        con.execute(
+            "SELECT count(*) FROM docs WHERE docs MATCH ?", (expr,)
+        ).fetchone()[0]
+    )
+
+
+def _rows_to_results(
+    items: list[dict],
+    rows: list,
+    tokens: list[str],
+    *,
+    snippet_chars: int = 200,
+    include_bodies: int = 0,
+) -> list[dict]:
     """Map ``(rowid, raw_score)`` rows back to result dicts."""
     results: list[dict] = []
     for rowid, raw_score in rows:
         item = items[rowid - 1]
         fields = _matched_fields(item, tokens)
-        results.append({
+        result = {
             "file": item["file"],
             "file_type": item.get("file_type", "markdown"),
             "title": item["title"],
             "matched_fields": fields,
-            "snippet": _snippet(item["body"], tokens) if "body" in fields else "",
+            "snippet": (
+                _snippet(item["body"], tokens, snippet_chars)
+                if "body" in fields else ""
+            ),
             # bm25() returns more-negative = more-relevant; expose a positive
             # score so "higher is better" matches the substring engine's
             # convention for any consumer that compares scores.
             "score": round(-raw_score, 4),
             "deprecated": item["is_deprecated"],
-        })
+        }
+        if len(results) < include_bodies:
+            result["body"] = item["body"]
+        results.append(result)
     return results
 
 
@@ -191,27 +219,209 @@ def _rows_to_results(items: list[dict], rows: list, tokens: list[str]) -> list[d
 # there is nothing thread-bound to leak; each query builds its own table.
 _INDEX_REGISTRY: dict[Path, list[dict]] = {}
 
+# Opt-in persistent FTS5 index, built once at boot when build_index() is
+# given a db_path. Unfiltered queries open a fresh per-query READ-ONLY
+# connection to it on the calling thread — no shared connection ever crosses
+# a thread boundary, and the per-query table REBUILD (linear in corpus size,
+# the dominant search cost at 10k+ neurons) disappears. Filtered queries
+# still rebuild from the eligible subset so BM25 IDF stays scoped to it.
+_DB_REGISTRY: dict[Path, Path] = {}
 
-def build_index(brain_path: Path) -> None:
-    """Cache the ``collect_searchable()`` walk for ``brain_path`` (opt-in).
+# On-disk schema: same four indexed columns (and bm25 weights) as the
+# in-memory table, plus two UNINDEXED payload columns the result mapper reads
+# back. Weights for unindexed columns are required positionally and ignored.
+_DB_WEIGHTS = (*_BM25_WEIGHTS, 0.0, 0.0)
+
+
+def build_index(
+    brain_path: Path,
+    *,
+    rows: list[dict] | None = None,
+) -> None:
+    """Cache the searchable walk for ``brain_path`` (opt-in).
 
     Called once at app boot. The brain is immutable inside the container, so
-    the cached walk is valid for the process lifetime and lets every later
-    query skip the brain file I/O (the dominant cost). Deliberately does NOT
-    cache a built FTS5 table/connection: each query builds its own table on
-    its own thread, keeping the engine stateless and thread-safe.
+    the cache is valid for the process lifetime. ``rows`` lets the boot
+    snapshot's single walk feed this too (must be ``collect_searchable``
+    shaped).
+
+    This module is part of the WRITE-FREE runtime, so the persistent on-disk
+    index is built by the pack layer (``kluris.pack.search_index``) and
+    announced here via :func:`register_db`.
     """
-    _INDEX_REGISTRY[brain_path.resolve()] = collect_searchable(brain_path)
+    resolved = brain_path.resolve()
+    source = rows if rows is not None else collect_searchable(brain_path)
+    _INDEX_REGISTRY[resolved] = source
+
+
+def register_db(brain_path: Path, db_path: Path) -> None:
+    """Register a persistent FTS5 index file for ``brain_path``.
+
+    The file is built by the pack layer (this runtime is write-free); from
+    here on, unfiltered queries are served from it over per-query read-only
+    connections.
+    """
+    _DB_REGISTRY[brain_path.resolve()] = Path(db_path)
 
 
 def drop_index(brain_path: Path) -> None:
-    """Forget a cached walk (explicit invalidation / test teardown)."""
-    _INDEX_REGISTRY.pop(brain_path.resolve(), None)
+    """Forget a cached walk + persistent index (invalidation / teardown)."""
+    resolved = brain_path.resolve()
+    _INDEX_REGISTRY.pop(resolved, None)
+    _DB_REGISTRY.pop(resolved, None)
 
 
 def _clear_index_registry() -> None:
-    """Reset the walk cache (tests only)."""
+    """Reset the caches (tests only)."""
     _INDEX_REGISTRY.clear()
+    _DB_REGISTRY.clear()
+
+
+def _query_db(db_path: Path, expr: str, limit: int, offset: int) -> tuple[list, int]:
+    """Query the persistent index over a fresh read-only connection.
+
+    Returns ``(rows, total)`` where each row carries the score plus every
+    field the result mapper needs — no in-RAM items list required.
+    """
+    con = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    try:
+        weights = ", ".join(str(w) for w in _DB_WEIGHTS)
+        rows = con.execute(
+            f"SELECT bm25(docs, {weights}) AS score, "
+            "title, tags, path, body, file_type, deprecated "
+            "FROM docs WHERE docs MATCH ? ORDER BY score LIMIT ? OFFSET ?",
+            (expr, limit, offset),
+        ).fetchall()
+        return rows, _match_total(con, expr)
+    finally:
+        con.close()
+
+
+def _db_rows_to_results(
+    rows: list,
+    tokens: list[str],
+    *,
+    snippet_chars: int = 200,
+    include_bodies: int = 0,
+) -> list[dict]:
+    """Map persistent-index rows to result dicts (same shape as in-memory)."""
+    results: list[dict] = []
+    for raw_score, title, tags_str, file, body, file_type, deprecated in rows:
+        # _matched_fields space-joins the tags list before matching, so a
+        # single-element list holding the stored joined string matches
+        # identically to the original list.
+        item = {
+            "title": title,
+            "tags": [tags_str] if tags_str else [],
+            "file": file,
+            "body": body,
+        }
+        fields = _matched_fields(item, tokens)
+        result = {
+            "file": file,
+            "file_type": file_type,
+            "title": title,
+            "matched_fields": fields,
+            "snippet": (
+                _snippet(body, tokens, snippet_chars)
+                if "body" in fields else ""
+            ),
+            "score": round(-raw_score, 4),
+            "deprecated": bool(deprecated),
+        }
+        if len(results) < include_bodies:
+            result["body"] = body
+        results.append(result)
+    return results
+
+
+def search_brain_fts_paged(
+    brain_path: Path,
+    query: str,
+    *,
+    limit: int = 10,
+    offset: int = 0,
+    lobe_filter: str | None = None,
+    tag_filter: str | None = None,
+    snippet_chars: int = 200,
+    include_bodies: int = 0,
+) -> dict:
+    """BM25/FTS5 ranked search with deterministic pagination.
+
+    Returns ``{"results": [...], "total": int}`` — ``total`` is the full match
+    count so callers can page a broad result set instead of re-querying with
+    permuted phrasings.
+
+    Unfiltered queries are served from the boot-built persistent index when
+    one is registered (see :func:`build_index`) over a fresh per-query
+    read-only connection — no rebuild, no shared connection. Lobe/tag-filtered
+    queries (and brains without a persistent index) keep the per-query table
+    build over the eligible rows so BM25 IDF stays scoped to the subset.
+    Falls back to the substring engine when FTS5 is unavailable, the query has
+    no usable tokens, or anything errors — always safe to call.
+    """
+    from kluris_runtime.search import search_brain_paged  # fallback only
+
+    if limit <= 0:
+        return {"results": [], "total": 0}
+    offset = max(0, int(offset))
+
+    expr, tokens = _match_expr(query)
+    if expr is None or not fts5_available():
+        return search_brain_paged(
+            brain_path, query, limit=limit, offset=offset,
+            lobe_filter=lobe_filter, tag_filter=tag_filter,
+            snippet_chars=snippet_chars, include_bodies=include_bodies,
+        )
+
+    resolved = brain_path.resolve()
+
+    if lobe_filter is None and tag_filter is None:
+        db_path = _DB_REGISTRY.get(resolved)
+        if db_path is not None:
+            try:
+                rows, total = _query_db(db_path, expr, limit, offset)
+                return {
+                    "results": _db_rows_to_results(
+                        rows, tokens,
+                        snippet_chars=snippet_chars,
+                        include_bodies=include_bodies,
+                    ),
+                    "total": total,
+                }
+            except sqlite3.Error:
+                pass  # degrade to the in-memory build below
+
+    # Reuse the cached walk when available, else walk fresh (today's path).
+    cached = _INDEX_REGISTRY.get(resolved)
+    source = cached if cached is not None else collect_searchable(brain_path)
+
+    try:
+        # Filter BEFORE indexing so BM25 IDF is scoped to the eligible rows,
+        # exactly as today. The fresh per-query connection lives only on this
+        # thread, so the engine is thread-safe however requests are dispatched.
+        items = [it for it in source if _passes(it, lobe_filter, tag_filter)]
+        if not items:
+            return {"results": [], "total": 0}
+        con = _build_fts_table(items)
+        try:
+            rows = _query_table(con, expr, limit, offset)
+            total = _match_total(con, expr)
+        finally:
+            con.close()
+        return {
+            "results": _rows_to_results(
+                items, rows, tokens,
+                snippet_chars=snippet_chars, include_bodies=include_bodies,
+            ),
+            "total": total,
+        }
+    except sqlite3.Error:
+        return search_brain_paged(
+            brain_path, query, limit=limit, offset=offset,
+            lobe_filter=lobe_filter, tag_filter=tag_filter,
+            snippet_chars=snippet_chars, include_bodies=include_bodies,
+        )
 
 
 def search_brain_fts(
@@ -222,46 +432,156 @@ def search_brain_fts(
     lobe_filter: str | None = None,
     tag_filter: str | None = None,
 ) -> list[dict]:
-    """BM25/FTS5 ranked search. Same shape as ``search.search_brain``.
+    """BM25/FTS5 ranked search. Same shape as ``search.search_brain``."""
+    return search_brain_fts_paged(
+        brain_path, query, limit=limit,
+        lobe_filter=lobe_filter, tag_filter=tag_filter,
+    )["results"]
 
-    Reuses a boot-cached brain walk (see :func:`build_index`) when one is
-    registered for ``brain_path``, skipping the file I/O; otherwise walks the
-    brain fresh. Either way it builds its own per-query in-memory FTS5 table on
-    the calling thread. Falls back to the substring engine when FTS5 is
-    unavailable, the query has no usable tokens, or anything errors — so it is
-    always safe to call in place of ``search_brain``.
+
+def _lobe_of(file: str) -> str:
+    return file.split("/", 1)[0] if "/" in file else "(root)"
+
+
+def _query_db_grouped(
+    db_path: Path, expr: str, per_lobe: int
+) -> tuple[list, int]:
+    """Exact per-lobe top-K over the persistent index, in ONE query.
+
+    A flat top-N window cannot give per-lobe coverage — on a homogeneous
+    corpus the highest-ranked N bunch into one lobe. The window function
+    partitions by the path's first segment, so every lobe with a match
+    surfaces its own best hits regardless of how other lobes rank.
     """
-    from kluris_runtime.search import search_brain  # local import: fallback only
+    con = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    try:
+        weights = ", ".join(str(w) for w in _DB_WEIGHTS)
+        rows = con.execute(
+            "SELECT score, title, tags, path, body, file_type, deprecated "
+            "FROM ("
+            "  SELECT t.*, ROW_NUMBER() OVER ("
+            "    PARTITION BY lobe ORDER BY score) AS rn"
+            "  FROM ("
+            f"    SELECT bm25(docs, {weights}) AS score, title, tags, path, "
+            "          body, file_type, deprecated, "
+            "          CASE WHEN instr(path, '/') > 0 "
+            "               THEN substr(path, 1, instr(path, '/') - 1) "
+            "               ELSE '(root)' END AS lobe "
+            "    FROM docs WHERE docs MATCH ?"
+            "  ) t"
+            ") WHERE rn <= ? ORDER BY lobe, rn",
+            (expr, per_lobe),
+        ).fetchall()
+        return rows, _match_total(con, expr)
+    finally:
+        con.close()
 
-    if limit <= 0:
-        return []
+
+def _query_table_grouped(
+    con: sqlite3.Connection, expr: str, per_lobe: int
+) -> list:
+    """Per-lobe top-K over an in-memory ``docs`` table, returning
+    ``(rowid, raw_score)`` rows ordered by (lobe, in-lobe rank).
+
+    Same global-IDF + ``ROW_NUMBER() OVER (PARTITION BY lobe)`` shape as the
+    on-disk grouped query, so the two paths rank identically. The in-memory
+    table carries a ``path`` column, so the lobe is derived the same way.
+    """
+    weights = ", ".join(str(w) for w in _BM25_WEIGHTS)
+    return con.execute(
+        "SELECT rid, score FROM ("
+        "  SELECT t.*, ROW_NUMBER() OVER ("
+        "    PARTITION BY lobe ORDER BY score) AS rn"
+        "  FROM ("
+        f"    SELECT rowid AS rid, bm25(docs, {weights}) AS score, "
+        "          CASE WHEN instr(path, '/') > 0 "
+        "               THEN substr(path, 1, instr(path, '/') - 1) "
+        "               ELSE '(root)' END AS lobe "
+        "    FROM docs WHERE docs MATCH ?"
+        "  ) t"
+        ") WHERE rn <= ? ORDER BY lobe, rn",
+        (expr, per_lobe),
+    ).fetchall()
+
+
+def search_brain_fts_grouped(
+    brain_path: Path,
+    query: str,
+    *,
+    per_lobe: int = 3,
+    snippet_chars: int = 200,
+) -> dict:
+    """Top hits PER top-level lobe — the one-call answer to "X across every
+    lobe". Returns ``{"lobes": {lobe: [results]}, "total": int}``.
+
+    On the persistent index this is a single partitioned window query; the
+    in-memory path builds one small table per lobe over the (cached) rows.
+    Falls back to bucketing the substring engine's ranked list when FTS5 is
+    unavailable — degraded but never erroring.
+    """
+    from kluris_runtime.search import search_brain_paged  # fallback only
+
+    if per_lobe <= 0:
+        return {"lobes": {}, "total": 0}
 
     expr, tokens = _match_expr(query)
     if expr is None or not fts5_available():
-        return search_brain(
-            brain_path, query, limit=limit,
-            lobe_filter=lobe_filter, tag_filter=tag_filter,
+        paged = search_brain_paged(
+            brain_path, query, limit=per_lobe * 64,
+            snippet_chars=snippet_chars,
         )
+        lobes: dict[str, list[dict]] = {}
+        for hit in paged["results"]:
+            bucket = lobes.setdefault(_lobe_of(hit["file"]), [])
+            if len(bucket) < per_lobe:
+                bucket.append(hit)
+        return {"lobes": lobes, "total": paged["total"]}
 
-    # Reuse the cached walk when available, else walk fresh (today's path).
-    cached = _INDEX_REGISTRY.get(brain_path.resolve())
-    source = cached if cached is not None else collect_searchable(brain_path)
+    resolved = brain_path.resolve()
 
-    try:
-        # Filter BEFORE indexing so BM25 IDF is scoped to the eligible rows,
-        # exactly as today. The fresh per-query connection lives only on this
-        # thread, so the engine is thread-safe however requests are dispatched.
-        items = [it for it in source if _passes(it, lobe_filter, tag_filter)]
-        if not items:
-            return []
-        con = _build_fts_table(items)
+    db_path = _DB_REGISTRY.get(resolved)
+    if db_path is not None:
         try:
-            rows = _query_table(con, expr, limit)
+            rows, total = _query_db_grouped(db_path, expr, per_lobe)
+            lobes = {}
+            for result in _db_rows_to_results(
+                rows, tokens, snippet_chars=snippet_chars
+            ):
+                lobes.setdefault(_lobe_of(result["file"]), []).append(result)
+            return {"lobes": lobes, "total": total}
+        except sqlite3.Error:
+            pass  # degrade to the in-memory path below
+
+    # In-memory path: build ONE table over ALL rows and partition with the
+    # same window query as the on-disk path, so BM25 IDF is GLOBAL on both —
+    # within-lobe ranking is identical whether or not a persistent index is
+    # registered (a per-lobe subset build would scope IDF differently and
+    # diverge). Exact per-lobe top-K, no coverage window.
+    cached = _INDEX_REGISTRY.get(resolved)
+    source = cached if cached is not None else collect_searchable(brain_path)
+    try:
+        con = _build_fts_table(source)
+        try:
+            rows = _query_table_grouped(con, expr, per_lobe)
+            total = _match_total(con, expr)
         finally:
             con.close()
-        return _rows_to_results(items, rows, tokens)
+        lobes = {}
+        for result in _rows_to_results(
+            source, rows, tokens, snippet_chars=snippet_chars
+        ):
+            lobes.setdefault(_lobe_of(result["file"]), []).append(result)
+        return {"lobes": lobes, "total": total}
     except sqlite3.Error:
-        return search_brain(
-            brain_path, query, limit=limit,
-            lobe_filter=lobe_filter, tag_filter=tag_filter,
+        # FTS5 genuinely unavailable mid-flight: bucket the substring engine's
+        # FULL ranked list (no window cap, so every matched lobe is covered).
+        paged = search_brain_paged(
+            brain_path, query, limit=len(source) + 1,
+            snippet_chars=snippet_chars,
         )
+        lobes = {}
+        for hit in paged["results"]:
+            bucket = lobes.setdefault(_lobe_of(hit["file"]), [])
+            if len(bucket) < per_lobe:
+                bucket.append(hit)
+        return {"lobes": lobes, "total": paged["total"]}

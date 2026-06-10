@@ -48,6 +48,8 @@ CREATE TABLE IF NOT EXISTS messages (
 );
 CREATE INDEX IF NOT EXISTS idx_messages_session_created
     ON messages(session_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_sessions_created
+    ON sessions(created_at);
 """
 
 
@@ -155,6 +157,29 @@ class SessionStore:
             # works if a future schema migration relaxes the cascade.
             cur.execute("DELETE FROM messages WHERE session_id = ?", (sid,))
             cur.execute("DELETE FROM sessions WHERE id = ?", (sid,))
+
+    def prune_old_sessions(self, retention_days: int) -> int:
+        """Delete sessions (and their messages) older than ``retention_days``.
+
+        Returns the number of sessions removed. ``retention_days <= 0`` is a
+        no-op — retention is strictly opt-in, deleting a deployer's history
+        must never be a surprise default. Called at boot; a long-running
+        container otherwise accumulates a session row per page load and a
+        full transcript per turn, forever.
+        """
+        if retention_days <= 0:
+            return 0
+        cutoff = int(time.time()) - retention_days * 86400
+        with self.cursor() as cur:
+            cur.execute(
+                "DELETE FROM messages WHERE session_id IN "
+                "(SELECT id FROM sessions WHERE created_at < ?)",
+                (cutoff,),
+            )
+            cur.execute(
+                "DELETE FROM sessions WHERE created_at < ?", (cutoff,),
+            )
+            return cur.rowcount or 0
 
     # --- Messages ----------------------------------------------------
 

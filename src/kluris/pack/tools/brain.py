@@ -27,9 +27,13 @@ from kluris_runtime.neuron_index import (
 )
 from kluris_runtime.search import (
     parse_glossary_entries,
-    search_brain,
+    search_brain_paged,
 )
-from kluris_runtime.search_fts import search_brain_fts
+from kluris_runtime.search_fts import (
+    search_brain_fts_grouped,
+    search_brain_fts_paged,
+)
+from kluris_runtime.snapshot import get_snapshot
 from kluris_runtime.wake_up import _recency_key, build_payload
 
 
@@ -60,7 +64,15 @@ def resolve_in_brain(brain_root: Path, raw: str) -> Path:
 
 
 def _rel(brain_path: Path, target: Path) -> str:
-    return str(target.relative_to(brain_path)).replace("\\", "/")
+    # ``target`` is usually resolve_in_brain()-resolved while ``brain_path``
+    # arrives as the caller passed it; when the brain path contains a symlink
+    # segment (macOS /tmp, a symlinked deploy dir) the unresolved base is not
+    # a prefix of the resolved target — fall back to the resolved base.
+    try:
+        rel = target.relative_to(brain_path)
+    except ValueError:
+        rel = target.relative_to(brain_path.resolve())
+    return str(rel).replace("\\", "/")
 
 
 # --- 1. wake_up --------------------------------------------------------------
@@ -74,15 +86,19 @@ def _rel(brain_path: Path, target: Path) -> str:
 _WAKE_UP_CACHE: dict[Path, dict[str, Any]] = {}
 
 
-def build_wake_up_cache(brain_path: Path) -> None:
+def build_wake_up_cache(brain_path: Path, snapshot: dict | None = None) -> None:
     """Precompute and cache the wake_up snapshot for ``brain_path`` (opt-in).
 
     Called once at app boot so the agent's first-call-of-session wake_up and
     every ``/api/brain/tree`` UI load skip the brain re-walk —
     :func:`build_payload` otherwise reads every neuron's frontmatter twice per
-    call (once for recency, once for deprecation diagnostics).
+    call (once for recency, once for deprecation diagnostics). With the boot
+    ``snapshot`` it reuses that single walk instead and the payload gains the
+    per-lobe ``top_tags`` routing hints.
     """
-    _WAKE_UP_CACHE[brain_path.resolve()] = build_payload(brain_path)
+    _WAKE_UP_CACHE[brain_path.resolve()] = build_payload(
+        brain_path, snapshot=snapshot
+    )
 
 
 def drop_wake_up_cache(brain_path: Path) -> None:
@@ -113,6 +129,14 @@ def wake_up_tool(brain_path: Path) -> dict[str, Any]:
 # --- 2. search ---------------------------------------------------------------
 
 
+# Per-hit cap for ``full_bodies`` content. Deliberately much smaller than the
+# read_neuron clamp: at the schema's max of 5 bodies per call this bounds the
+# tool result to ~20KB regardless of neuron sizes.
+_SEARCH_BODY_MAX_BYTES = 4096
+_MAX_SNIPPET_CHARS = 2000
+_MAX_FULL_BODIES = 5
+
+
 def search_tool(
     brain_path: Path,
     query: str,
@@ -120,29 +144,111 @@ def search_tool(
     limit: int = 10,
     lobe: str | None = None,
     tag: str | None = None,
+    offset: int = 0,
+    snippet_chars: int | None = None,
+    full_bodies: int = 0,
+    group_by_lobe: bool = False,
 ) -> dict[str, Any]:
     """BM25 search across neurons + glossary + brain.md.
 
     Ranked by SQLite FTS5's ``bm25()`` (tokenized, prefix-matched,
     TF-IDF-weighted). Falls back to the literal-substring engine if FTS5 is
     unavailable or errors, so the tool can never regress to no results.
+
+    Broad-question affordances (all opt-in, defaults preserve the classic
+    shape): ``total`` always reports the FULL match count and ``offset`` pages
+    deterministically through it; ``snippet_chars`` widens snippets;
+    ``full_bodies`` attaches the clamped body of the top N hits so a question
+    can be answered from one search; ``group_by_lobe`` returns the top hits
+    PER lobe — the single-call answer to "X across every lobe/country".
     """
     if not isinstance(query, str) or not query.strip():
         return {"ok": False, "error": "query must be a non-empty string"}
     n = int(limit) if limit else 10
-    try:
-        results = search_brain_fts(
-            brain_path, query, limit=n, lobe_filter=lobe, tag_filter=tag,
+    off = max(0, int(offset) if offset else 0)
+    chars = int(snippet_chars) if snippet_chars else 200
+    chars = max(50, min(chars, _MAX_SNIPPET_CHARS))
+    bodies = max(0, min(int(full_bodies) if full_bodies else 0, _MAX_FULL_BODIES))
+
+    if group_by_lobe:
+        # Grouping partitions by top-level lobe across the WHOLE brain;
+        # lobe/tag filters don't compose with it and are ignored here.
+        return _grouped_search(
+            brain_path, query, per_lobe=n, snippet_chars=chars,
         )
-    except Exception:
-        results = search_brain(
-            brain_path, query, limit=n, lobe_filter=lobe, tag_filter=tag,
-        )
+
+    paged = _run_search(
+        brain_path, query, limit=n, offset=off, lobe=lobe, tag=tag,
+        snippet_chars=chars, include_bodies=bodies,
+    )
+    results = paged["results"]
+    for r in results:
+        if "body" in r:
+            body, truncated = _clamp_body(r["body"], _SEARCH_BODY_MAX_BYTES)
+            r["body"] = body
+            if truncated:
+                r["body_truncated"] = True
     return {
         "ok": True,
         "query": query,
-        "total": len(results),
+        "total": paged["total"],
+        "offset": off,
+        "count": len(results),
         "results": results,
+    }
+
+
+def _run_search(
+    brain_path: Path,
+    query: str,
+    *,
+    limit: int,
+    offset: int,
+    lobe: str | None,
+    tag: str | None,
+    snippet_chars: int,
+    include_bodies: int,
+) -> dict[str, Any]:
+    """FTS engine with substring-engine last resort (never regresses to zero
+    results on an engine error)."""
+    try:
+        return search_brain_fts_paged(
+            brain_path, query, limit=limit, offset=offset,
+            lobe_filter=lobe, tag_filter=tag,
+            snippet_chars=snippet_chars, include_bodies=include_bodies,
+        )
+    except Exception:
+        return search_brain_paged(
+            brain_path, query, limit=limit, offset=offset,
+            lobe_filter=lobe, tag_filter=tag,
+            snippet_chars=snippet_chars, include_bodies=include_bodies,
+        )
+
+
+def _grouped_search(
+    brain_path: Path,
+    query: str,
+    *,
+    per_lobe: int,
+    snippet_chars: int,
+) -> dict[str, Any]:
+    """Exact top hits per top-level lobe (partitioned ranking, not a flat
+    window — a flat top-N bunches into the single most relevant lobe on a
+    large corpus, missing every other lobe)."""
+    per_lobe = max(1, min(per_lobe, 10))
+    try:
+        grouped = search_brain_fts_grouped(
+            brain_path, query, per_lobe=per_lobe, snippet_chars=snippet_chars,
+        )
+    except Exception:
+        grouped = {"lobes": {}, "total": 0}
+    return {
+        "ok": True,
+        "query": query,
+        "grouped_by_lobe": True,
+        "total": grouped["total"],
+        "per_lobe_limit": per_lobe,
+        "lobes": grouped["lobes"],
     }
 
 
@@ -249,20 +355,9 @@ def multi_read_tool(
 # --- 5. related --------------------------------------------------------------
 
 
-def related_tool(brain_path: Path, path: str) -> dict[str, Any]:
-    """Outbound + inbound related neurons.
-
-    Outbound: ``related:`` frontmatter on the source neuron.
-    Inbound: any neuron in the brain whose ``related:`` includes the
-    source path (reverse scan).
-
-    Cycles are naturally bounded — we walk a finite set of neuron
-    files exactly once per call.
-    """
-    target = resolve_in_brain(brain_path, path)
-    target_resolved = target.resolve()
+def _outbound_links(brain_path: Path, target: Path) -> list[str]:
+    """Resolved in-brain ``related:`` targets of one neuron (single read)."""
     target_meta, _ = read_frontmatter(target)
-
     outbound: list[str] = []
     seen: set[Path] = set()
     raw_related = target_meta.get("related", [])
@@ -280,6 +375,38 @@ def related_tool(brain_path: Path, path: str) -> dict[str, Any]:
                 continue
             seen.add(resolved)
             outbound.append(_rel(brain_path, resolved))
+    return outbound
+
+
+def related_tool(brain_path: Path, path: str) -> dict[str, Any]:
+    """Outbound + inbound related neurons.
+
+    Outbound: ``related:`` frontmatter on the source neuron.
+    Inbound: any neuron in the brain whose ``related:`` includes the
+    source path.
+
+    With a boot snapshot both directions are dict lookups against its
+    precomputed link maps — no brain re-walk. Without one (standalone
+    callers, unit tests) the inbound side is the classic reverse scan.
+    """
+    target = resolve_in_brain(brain_path, path)
+    target_resolved = target.resolve()
+
+    snap = get_snapshot(brain_path)
+    if snap is not None:
+        entry = snap["by_resolved"].get(str(target_resolved))
+        outbound = (
+            list(entry["related"]) if entry is not None
+            else _outbound_links(brain_path, target)
+        )
+        return {
+            "ok": True,
+            "path": _rel(brain_path, target),
+            "outbound": outbound,
+            "inbound": list(snap["inbound"].get(str(target_resolved), [])),
+        }
+
+    outbound = _outbound_links(brain_path, target)
 
     inbound: list[str] = []
     for neuron in neuron_files(brain_path):
@@ -326,31 +453,50 @@ def recent_tool(
     Sorts by frontmatter ``updated:`` descending; falls back to file
     mtime when ``updated`` is absent. Filename is the final tie-break
     so the output is deterministic across platforms.
+
+    Served from the boot snapshot when one is registered — no brain
+    re-walk, no per-call frontmatter reads.
     """
     items: list[dict[str, Any]] = []
-    for neuron in neuron_files(brain_path):
-        rel = _rel(brain_path, neuron)
-        if lobe and not rel.startswith(lobe.rstrip("/") + "/"):
-            continue
-        try:
-            meta, _ = read_frontmatter(neuron)
-        except Exception:
-            continue
-        is_dep = str(meta.get("status", "active")).lower() == "deprecated"
-        if is_dep and not include_deprecated:
-            continue
-        updated = meta.get("updated")
-        try:
-            mtime = neuron.stat().st_mtime
-        except OSError:
-            mtime = 0.0
-        items.append({
-            "path": rel,
-            "updated": str(updated) if updated else "",
-            "_mtime": mtime,
-            "_filename": neuron.name,
-            "deprecated": is_dep,
-        })
+    snap = get_snapshot(brain_path)
+    if snap is not None:
+        for entry in snap["entries"]:
+            rel = entry["path"]
+            if lobe and not rel.startswith(lobe.rstrip("/") + "/"):
+                continue
+            if entry["deprecated"] and not include_deprecated:
+                continue
+            items.append({
+                "path": rel,
+                "updated": entry["updated"] or "",
+                "_mtime": entry["mtime"],
+                "_filename": entry["filename"],
+                "deprecated": entry["deprecated"],
+            })
+    else:
+        for neuron in neuron_files(brain_path):
+            rel = _rel(brain_path, neuron)
+            if lobe and not rel.startswith(lobe.rstrip("/") + "/"):
+                continue
+            try:
+                meta, _ = read_frontmatter(neuron)
+            except Exception:
+                continue
+            is_dep = str(meta.get("status", "active")).lower() == "deprecated"
+            if is_dep and not include_deprecated:
+                continue
+            updated = meta.get("updated")
+            try:
+                mtime = neuron.stat().st_mtime
+            except OSError:
+                mtime = 0.0
+            items.append({
+                "path": rel,
+                "updated": str(updated) if updated else "",
+                "_mtime": mtime,
+                "_filename": neuron.name,
+                "deprecated": is_dep,
+            })
 
     # Use the same recency key as wake_up's recent[] so the two "most recent"
     # surfaces agree — a non-ISO `updated:` sorts below valid dates rather than
@@ -427,22 +573,36 @@ def files_tool(brain_path: Path) -> dict[str, Any]:
 
     The frontend builds a nested folder tree from the path strings —
     no ordering / nesting work happens here.
+
+    Served from the boot snapshot when one is registered (its ``label``
+    field carries exactly these title semantics) — no brain re-walk.
     """
     files: list[dict[str, Any]] = []
-    for neuron in sorted(neuron_files(brain_path)):
-        rel = _rel(brain_path, neuron)
-        title = neuron.stem.replace("-", " ").title()
-        deprecated = False
-        try:
-            meta, _body = read_frontmatter(neuron)
-            deprecated = str(meta.get("status", "active")).lower() == "deprecated"
-            if neuron.suffix.lower() in YAML_NEURON_SUFFIXES:
-                fm_title = meta.get("title")
-                if isinstance(fm_title, str) and fm_title.strip():
-                    title = fm_title.strip()
-        except Exception:
-            pass
-        files.append({"path": rel, "title": title, "deprecated": deprecated})
+    snap = get_snapshot(brain_path)
+    if snap is not None:
+        files = [
+            {
+                "path": e["path"],
+                "title": e["label"],
+                "deprecated": e["deprecated"],
+            }
+            for e in snap["entries"]
+        ]
+    else:
+        for neuron in sorted(neuron_files(brain_path)):
+            rel = _rel(brain_path, neuron)
+            title = neuron.stem.replace("-", " ").title()
+            deprecated = False
+            try:
+                meta, _body = read_frontmatter(neuron)
+                deprecated = str(meta.get("status", "active")).lower() == "deprecated"
+                if neuron.suffix.lower() in YAML_NEURON_SUFFIXES:
+                    fm_title = meta.get("title")
+                    if isinstance(fm_title, str) and fm_title.strip():
+                        title = fm_title.strip()
+            except Exception:
+                pass
+            files.append({"path": rel, "title": title, "deprecated": deprecated})
 
     glossary_path = brain_path / "glossary.md"
     glossary_entry = (
@@ -460,18 +620,23 @@ def lobe_overview_tool(
     lobe: str,
     *,
     budget: int,
+    offset: int = 0,
 ) -> dict[str, Any]:
     """Lobe map.md body + per-neuron title/excerpt/tags + tag union.
 
     Truncates the response so ``len(json.dumps(response).encode("utf-8"))``
-    is at most ``budget`` UTF-8 bytes. Drops trailing neurons one at a
-    time and re-encodes after each drop. ``map_body`` is never
-    truncated mid-string — if it alone exceeds the budget, neurons are
-    dropped to ``[]`` and a ``note`` directs the agent to other tools.
-    """
-    if not isinstance(lobe, str) or not lobe:
-        raise NotFoundError("lobe must be a non-empty string")
+    is at most ``budget`` UTF-8 bytes. ``map_body`` is never truncated
+    mid-string — if it alone exceeds the budget, neurons are dropped to
+    ``[]`` and a ``note`` directs the agent to other tools.
 
+    Large lobes are PAGEABLE instead of silently lossy: ``total_count``
+    reports the lobe's full size, ``offset`` skips into the (path-ordered)
+    neuron list, and ``next_offset`` is present whenever more neurons exist
+    beyond what this response carries.
+
+    Served from the boot snapshot when one is registered; the no-snapshot
+    fallback walks ONLY the lobe subtree (never the whole brain).
+    """
     lobe_dir = resolve_in_brain(brain_path, lobe)
     if not lobe_dir.is_dir():
         raise NotFoundError(f"lobe {lobe!r} not found")
@@ -487,80 +652,129 @@ def lobe_overview_tool(
     lobe_rel = _rel(brain_path, lobe_dir).rstrip("/")
     prefix = lobe_rel + "/"
     neurons: list[dict[str, Any]] = []
-    tags_seen: list[str] = []
-    tag_set: set[str] = set()
-    for neuron in sorted(neuron_files(brain_path)):
-        rel = _rel(brain_path, neuron)
-        if not rel.startswith(prefix):
-            continue
-        try:
-            meta, body = read_frontmatter(neuron)
-        except Exception:
-            continue
-        is_yaml = neuron.suffix.lower() in YAML_NEURON_SUFFIXES
-        if is_yaml:
-            fm_title = meta.get("title")
-            title = (
-                fm_title.strip() if isinstance(fm_title, str) and fm_title.strip()
-                else neuron.stem.replace("-", " ").title()
-            )
-            excerpt = ""
-        else:
-            title, excerpt = extract_excerpt(neuron, body)
-        tags = meta.get("tags", []) or []
-        if not isinstance(tags, list):
-            tags = []
-        for t in tags:
-            t_str = str(t)
-            if t_str not in tag_set:
-                tag_set.add(t_str)
-                tags_seen.append(t_str)
-        neurons.append({
-            "path": rel,
-            "title": title,
-            "excerpt": excerpt,
-            "tags": list(tags),
-            "deprecated": str(meta.get("status", "active")).lower() == "deprecated",
-        })
+
+    snap = get_snapshot(brain_path)
+    if snap is not None:
+        neurons = [
+            {
+                "path": e["path"],
+                "title": e["title"],
+                "excerpt": e["excerpt"],
+                "tags": list(e["tags"]),
+                "deprecated": e["deprecated"],
+            }
+            for e in snap["entries"]
+            if e["path"].startswith(prefix)
+        ]
+    else:
+        for neuron in sorted(neuron_files(lobe_dir)):
+            rel = _rel(brain_path, neuron)
+            try:
+                meta, body = read_frontmatter(neuron)
+            except Exception:
+                continue
+            is_yaml = neuron.suffix.lower() in YAML_NEURON_SUFFIXES
+            if is_yaml:
+                fm_title = meta.get("title")
+                title = (
+                    fm_title.strip()
+                    if isinstance(fm_title, str) and fm_title.strip()
+                    else neuron.stem.replace("-", " ").title()
+                )
+                excerpt = ""
+            else:
+                title, excerpt = extract_excerpt(neuron, body)
+            tags = meta.get("tags", []) or []
+            if not isinstance(tags, list):
+                tags = []
+            neurons.append({
+                "path": rel,
+                "title": title,
+                "excerpt": excerpt,
+                "tags": [str(t) for t in tags],
+                "deprecated": str(meta.get("status", "active")).lower() == "deprecated",
+            })
+
+    total_count = len(neurons)
+    offset = max(0, int(offset) if offset else 0)
 
     response: dict[str, Any] = {
         "ok": True,
         "lobe": lobe_rel,
         "map_body": map_body,
-        "neurons": neurons,
-        "tag_union": tags_seen,
+        "neurons": neurons[offset:],
+        "tag_union": [],
+        "total_count": total_count,
+        "offset": offset,
     }
-    return _trim_to_budget(response, budget)
+    out = _trim_to_budget(response, budget)
+    if offset + len(out["neurons"]) < total_count:
+        out["next_offset"] = offset + len(out["neurons"])
+    return out
 
 
 def _encoded_size(payload: dict[str, Any]) -> int:
     return len(json.dumps(payload, ensure_ascii=False).encode("utf-8"))
 
 
-def _trim_to_budget(response: dict[str, Any], budget: int) -> dict[str, Any]:
-    """Drop trailing neurons until ``response`` JSON fits the budget.
+def _entry_cost(neuron: dict[str, Any]) -> int:
+    """Conservative encoded cost of one neuron entry: its own JSON plus its
+    tags' worst-case contribution to ``tag_union`` (every tag new), plus list
+    separators. Over-estimating under-fills — never overflows."""
+    cost = len(json.dumps(neuron, ensure_ascii=False).encode("utf-8")) + 2
+    for t in neuron.get("tags", []):
+        cost += len(json.dumps(str(t), ensure_ascii=False).encode("utf-8")) + 2
+    return cost
 
-    Re-encodes after each drop so the assertion is exact, not an
-    estimate. If even an empty ``neurons`` list overruns, falls back
-    to the ``map_body``-only response with a ``note`` telling the
-    agent to use ``search`` / ``recent``.
+
+def _tag_union(neurons: list[dict[str, Any]]) -> list[str]:
+    seen: list[str] = []
+    seen_set: set[str] = set()
+    for n in neurons:
+        for t in n.get("tags", []):
+            ts = str(t)
+            if ts not in seen_set:
+                seen_set.add(ts)
+                seen.append(ts)
+    return seen
+
+
+def _trim_to_budget(response: dict[str, Any], budget: int) -> dict[str, Any]:
+    """Keep the longest neuron prefix whose response JSON fits the budget.
+
+    Single accumulation pass over per-entry cost estimates (the estimates are
+    conservative, so the exact re-encode backstop below almost never has to
+    drop more) — NOT the old pop-one-and-re-encode-everything loop, which was
+    quadratic in lobe size. If even an empty ``neurons`` list overruns
+    (``map_body`` alone too big), falls back to the map-body-only response
+    with a ``note`` telling the agent to use ``search`` / ``recent``.
     """
-    omitted = 0
+    all_neurons = response["neurons"]
+    base = {**response, "neurons": [], "tag_union": []}
+    # Slack for the truncated/omitted_count/next_offset keys added later.
+    remaining = budget - _encoded_size(base) - 64
+
+    kept: list[dict[str, Any]] = []
+    for neuron in all_neurons:
+        cost = _entry_cost(neuron)
+        if remaining - cost < 0:
+            break
+        remaining -= cost
+        kept.append(neuron)
+
+    omitted = len(all_neurons) - len(kept)
+    response["neurons"] = kept
+    response["tag_union"] = _tag_union(kept)
+    if omitted:
+        response["truncated"] = True
+        response["omitted_count"] = omitted
+
+    # Exact backstop: the estimate is conservative, so this loop is expected
+    # to run zero times; it guarantees the byte contract regardless.
     while _encoded_size(response) > budget and response["neurons"]:
         response["neurons"].pop()
         omitted += 1
-        # Recompute tag_union from the remaining neurons so we don't
-        # advertise tags that came only from dropped entries.
-        seen: list[str] = []
-        seen_set: set[str] = set()
-        for n in response["neurons"]:
-            for t in n.get("tags", []):
-                ts = str(t)
-                if ts not in seen_set:
-                    seen_set.add(ts)
-                    seen.append(ts)
-        response["tag_union"] = seen
-    if omitted:
+        response["tag_union"] = _tag_union(response["neurons"])
         response["truncated"] = True
         response["omitted_count"] = omitted
 

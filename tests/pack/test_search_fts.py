@@ -269,3 +269,203 @@ def test_boot_index_failure_degrades_silently(tmp_path, stub_provider, monkeypat
         r["file"] == "knowledge/sso.md"
         for r in search_brain_fts(brain, "authentication")
     )
+
+
+# --- persistent on-disk index (pack-built, runtime-served) --------------------
+
+
+def _build_db(brain, db_path):
+    """Pack-side index build (the runtime is write-free), from the cached
+    rows when registered, else a fresh walk."""
+    from kluris.pack.search_index import build_search_db
+    from kluris_runtime.search import collect_searchable
+
+    rows = sf._INDEX_REGISTRY.get(brain.resolve())
+    if rows is None:
+        rows = collect_searchable(brain)
+    return build_search_db(brain, rows, db_path)
+
+
+@requires_fts
+def test_on_disk_index_matches_in_memory_unfiltered(tmp_path):
+    """The persistent index serves unfiltered queries byte-identical to the
+    per-query in-memory build — scores included."""
+    brain = _brain(tmp_path)
+    baseline = search_brain_fts(brain, "authentication", limit=10)
+    multiword = search_brain_fts(brain, "auth flow", limit=10)
+    sf.build_index(brain)
+    assert _build_db(brain, tmp_path / "cache" / "fts.sqlite")
+    assert brain.resolve() in sf._DB_REGISTRY
+    assert search_brain_fts(brain, "authentication", limit=10) == baseline
+    assert search_brain_fts(brain, "auth flow", limit=10) == multiword
+
+
+@requires_fts
+def test_on_disk_index_filtered_queries_keep_subset_idf(tmp_path):
+    """Lobe/tag-filtered queries must bypass the persistent index and keep
+    the subset rebuild, so BM25 IDF stays scoped to the eligible rows."""
+    brain = _brain(tmp_path)
+    base_lobe = search_brain_fts(brain, "authentication", lobe_filter="knowledge")
+    base_tag = search_brain_fts(brain, "guidance", tag_filter="decision")
+    sf.build_index(brain)
+    assert _build_db(brain, tmp_path / "fts.sqlite")
+    assert search_brain_fts(brain, "authentication", lobe_filter="knowledge") == base_lobe
+    assert search_brain_fts(brain, "guidance", tag_filter="decision") == base_tag
+
+
+@requires_fts
+def test_on_disk_index_skips_per_query_rebuild(tmp_path, monkeypatch):
+    """With the persistent index registered, an unfiltered query must NOT
+    build an in-memory table — the large-brain hot-path win."""
+    brain = _brain(tmp_path)
+    sf.build_index(brain)
+    assert _build_db(brain, tmp_path / "fts.sqlite")
+
+    def _no_rebuild(items):
+        raise AssertionError("per-query FTS table was rebuilt")
+
+    monkeypatch.setattr(sf, "_build_fts_table", _no_rebuild)
+    hits = search_brain_fts(brain, "authentication", limit=10)
+    assert any(r["file"] == "knowledge/sso.md" for r in hits)
+
+
+@requires_fts
+def test_paged_search_window_and_total(tmp_path):
+    """offset pages deterministically through the same ranked order, and
+    total reports the full match count regardless of the window — identically
+    on the persistent and in-memory paths."""
+    brain = _brain(tmp_path)
+    sf.build_index(brain)
+    assert _build_db(brain, tmp_path / "fts.sqlite")
+    full = sf.search_brain_fts_paged(brain, "auth old", limit=10)
+    assert full["total"] == len(full["results"]) >= 3
+    page = sf.search_brain_fts_paged(brain, "auth old", limit=1, offset=1)
+    assert page["results"] == full["results"][1:2]
+    assert page["total"] == full["total"]
+
+    # In-memory path (no persistent index) pages identically.
+    sf.drop_index(brain)
+    assert sf.search_brain_fts_paged(brain, "auth old", limit=1, offset=1) == page
+
+
+@requires_fts
+def test_corrupt_on_disk_index_degrades_to_in_memory(tmp_path):
+    """A corrupted index file must degrade to the in-memory build, never
+    error out — search can only get slower, not broken."""
+    brain = _brain(tmp_path)
+    db = tmp_path / "fts.sqlite"
+    sf.build_index(brain)
+    assert _build_db(brain, db)
+    db.write_bytes(b"this is not a sqlite database")
+    hits = search_brain_fts(brain, "authentication", limit=10)
+    assert any(r["file"] == "knowledge/sso.md" for r in hits)
+
+
+@requires_fts
+def test_build_index_accepts_snapshot_rows(tmp_path):
+    """The boot snapshot's rows feed build_index directly (single boot walk):
+    results match a walk-fed build exactly."""
+    from kluris_runtime.snapshot import build_snapshot
+
+    brain = _brain(tmp_path)
+    baseline = search_brain_fts(brain, "authentication", limit=10)
+    snap = build_snapshot(brain)
+    sf.build_index(brain, rows=snap["rows"])
+    assert _build_db(brain, tmp_path / "fts.sqlite")
+    assert search_brain_fts(brain, "authentication", limit=10) == baseline
+
+
+@requires_fts
+def test_build_index_overwrites_stale_db_file(tmp_path):
+    """Rebuilding over an existing db file serves the NEW corpus — the data
+    volume outlives the image, so stale indexes must never survive a boot."""
+    brain = _brain(tmp_path)
+    db = tmp_path / "fts.sqlite"
+    sf.build_index(brain)
+    assert _build_db(brain, db)
+    (brain / "knowledge" / "fresh.md").write_text(
+        "# Fresh\n\nbrand new keycloak material.\n", encoding="utf-8"
+    )
+    sf.drop_index(brain)
+    sf.build_index(brain)
+    assert _build_db(brain, db)
+    assert "knowledge/fresh.md" in {
+        r["file"] for r in search_brain_fts(brain, "keycloak")
+    }
+
+
+# --- grouped per-lobe search (partitioned, not windowed) -----------------------
+
+
+def _homogeneous_brain(tmp_path, lobes=6, per_lobe=40):
+    """Every neuron matches the query — the shape where a flat top-N window
+    bunches into one lobe and grouping must still cover all of them."""
+    b = tmp_path / "homo-brain"
+    for li in range(lobes):
+        d = b / f"lobe-{li:02d}"
+        d.mkdir(parents=True)
+        for ni in range(per_lobe):
+            (d / f"doc-{li}-{ni}.md").write_text(
+                f"# Doc {li}-{ni}\n\nfee rate details entry {ni}.\n",
+                encoding="utf-8",
+            )
+    return b
+
+
+@requires_fts
+def test_grouped_search_covers_every_lobe_on_homogeneous_corpus(tmp_path):
+    brain = _homogeneous_brain(tmp_path)
+    out = sf.search_brain_fts_grouped(brain, "fee rate", per_lobe=2)
+    assert len(out["lobes"]) == 6
+    assert all(len(hits) == 2 for hits in out["lobes"].values())
+    assert out["total"] == 240
+
+
+@requires_fts
+def test_grouped_search_identical_coverage_on_persistent_index(tmp_path):
+    brain = _homogeneous_brain(tmp_path)
+    sf.build_index(brain)
+    assert _build_db(brain, tmp_path / "fts.sqlite")
+    out = sf.search_brain_fts_grouped(brain, "fee rate", per_lobe=2)
+    assert len(out["lobes"]) == 6
+    assert all(len(hits) == 2 for hits in out["lobes"].values())
+    # Every hit belongs to the lobe it is bucketed under.
+    for lobe, hits in out["lobes"].items():
+        assert all(h["file"].startswith(lobe + "/") for h in hits)
+
+
+@requires_fts
+def test_grouped_search_through_search_tool(tmp_path):
+    brain = _homogeneous_brain(tmp_path)
+    out = search_tool(brain, "fee rate", limit=2, group_by_lobe=True)
+    assert out["grouped_by_lobe"] is True
+    assert len(out["lobes"]) == 6
+    assert out["per_lobe_limit"] == 2
+
+
+@requires_fts
+def test_grouped_within_lobe_ranking_identical_on_both_paths(tmp_path):
+    """Heterogeneous corpus: in-memory (no db) and on-disk grouped search must
+    produce IDENTICAL within-lobe ranking, not just identical coverage — both
+    use GLOBAL bm25 IDF."""
+    brain = tmp_path / "het-brain"
+    (brain / "lobe-a").mkdir(parents=True)
+    (brain / "lobe-a" / "A.md").write_text("# A\n\nalpha distinctive\n", encoding="utf-8")
+    (brain / "lobe-a" / "f0.md").write_text("# f0\n\nbeta beta common\n", encoding="utf-8")
+    (brain / "lobe-a" / "f1.md").write_text("# f1\n\nbeta common\n", encoding="utf-8")
+    (brain / "lobe-b").mkdir(parents=True)
+    for i in range(40):
+        (brain / "lobe-b" / f"x{i}.md").write_text(
+            f"# x{i}\n\nalpha alpha entry\n", encoding="utf-8")
+
+    sf.build_index(brain)
+    mem = sf.search_brain_fts_grouped(brain, "alpha beta", per_lobe=2)
+
+    assert _build_db(brain, tmp_path / "fts.sqlite")
+    disk = sf.search_brain_fts_grouped(brain, "alpha beta", per_lobe=2)
+
+    def files(g):
+        return {k: [h["file"] for h in v] for k, v in g["lobes"].items()}
+
+    assert files(mem) == files(disk)        # order included, not just membership
+    assert mem["total"] == disk["total"]

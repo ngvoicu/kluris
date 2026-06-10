@@ -21,10 +21,7 @@ from kluris.pack.tools.brain import (
     search_tool,
     wake_up_tool,
 )
-from kluris.pack.tools.schemas import (
-    anthropic_schemas,
-    openai_schemas,
-)
+from kluris.pack.tools.schemas import openai_schemas
 
 
 # --- wake_up -----------------------------------------------------------------
@@ -544,7 +541,9 @@ def test_lobe_overview_missing_lobe_raises(fixture_brain):
 
 
 def test_lobe_overview_rejects_empty_lobe_name(fixture_brain):
-    with pytest.raises(NotFoundError):
+    # An empty lobe is INVALID INPUT (SandboxError → HTTP 400), not a
+    # missing resource — resolve_in_brain's own guard now applies.
+    with pytest.raises(SandboxError):
         lobe_overview_tool(fixture_brain, "", budget=4096)
 
 
@@ -635,15 +634,6 @@ def test_lobe_overview_keeps_oversized_map_body_with_note(tmp_path):
 # --- schemas -----------------------------------------------------------------
 
 
-def test_anthropic_schemas_have_all_8_tools():
-    schemas = anthropic_schemas(max_multi_read=5)
-    names = {s["name"] for s in schemas}
-    assert names == {
-        "wake_up", "search", "read_neuron", "multi_read",
-        "related", "recent", "glossary", "lobe_overview",
-    }
-
-
 def test_openai_schemas_have_all_8_tools():
     schemas = openai_schemas(max_multi_read=5)
     names = {s["function"]["name"] for s in schemas}
@@ -667,10 +657,6 @@ def test_openai_schemas_emit_strict_false():
 
 @pytest.mark.parametrize("max_paths", [3, 5, 10])
 def test_multi_read_schema_max_items_reflects_runtime(max_paths):
-    schemas = anthropic_schemas(max_multi_read=max_paths)
-    multi = next(s for s in schemas if s["name"] == "multi_read")
-    assert multi["input_schema"]["properties"]["paths"]["maxItems"] == max_paths
-
     openai = openai_schemas(max_multi_read=max_paths)
     multi_oai = next(s for s in openai if s["function"]["name"] == "multi_read")
     assert (
@@ -680,8 +666,173 @@ def test_multi_read_schema_max_items_reflects_runtime(max_paths):
 
 
 def test_lobe_overview_schema_requires_non_empty_string():
-    schemas = anthropic_schemas(max_multi_read=5)
-    lo = next(s for s in schemas if s["name"] == "lobe_overview")
-    props = lo["input_schema"]["properties"]
+    schemas = openai_schemas(max_multi_read=5)
+    lo = next(s for s in schemas if s["function"]["name"] == "lobe_overview")
+    props = lo["function"]["parameters"]["properties"]
     assert props["lobe"]["type"] == "string"
     assert props["lobe"].get("minLength") == 1
+
+
+# --- search: pagination, bodies, grouping (2.28.0) -----------------------------
+
+
+def test_search_total_is_full_match_count_and_offset_pages(fixture_brain):
+    """`total` reports the full match count; `offset` windows the same ranked
+    order deterministically."""
+    full = search_tool(fixture_brain, "auth", limit=50)
+    assert full["total"] == len(full["results"]) >= 2
+    page = search_tool(fixture_brain, "auth", limit=1, offset=1)
+    assert page["total"] == full["total"]
+    assert page["offset"] == 1
+    assert page["count"] == 1
+    assert page["results"] == full["results"][1:2]
+
+
+def test_search_snippet_chars_widens_snippet(fixture_brain):
+    narrow = search_tool(fixture_brain, "claims", snippet_chars=50)
+    wide = search_tool(fixture_brain, "claims", snippet_chars=400)
+    n_hit = next(r for r in narrow["results"] if r["file"] == "knowledge/jwt.md")
+    w_hit = next(r for r in wide["results"] if r["file"] == "knowledge/jwt.md")
+    assert len(w_hit["snippet"]) >= len(n_hit["snippet"])
+
+
+def test_search_full_bodies_attaches_clamped_bodies(fixture_brain):
+    out = search_tool(fixture_brain, "auth", limit=10, full_bodies=2)
+    with_body = [r for r in out["results"] if "body" in r]
+    assert 1 <= len(with_body) <= 2
+    # Bodies are the top-ranked hits' actual content, clamped.
+    assert all(len(r["body"].encode("utf-8")) <= 4096 + 200 for r in with_body)
+    # Default keeps the classic shape — no bodies.
+    plain = search_tool(fixture_brain, "auth", limit=10)
+    assert all("body" not in r for r in plain["results"])
+
+
+def test_search_group_by_lobe_buckets_per_lobe(fixture_brain):
+    """group_by_lobe returns top hits PER lobe — every lobe with a match is
+    present even when a flat top-K would bunch into one lobe."""
+    out = search_tool(fixture_brain, "auth jwt", limit=2, group_by_lobe=True)
+    assert out["ok"] is True
+    assert out["grouped_by_lobe"] is True
+    assert "knowledge" in out["lobes"]
+    assert "projects" in out["lobes"]
+    for bucket in out["lobes"].values():
+        assert 1 <= len(bucket) <= 2
+
+
+# --- snapshot-served tools (2.28.0) ---------------------------------------------
+
+
+@pytest.fixture
+def snapshot_brain(fixture_brain):
+    """fixture_brain with the boot snapshot registered (and cleaned up)."""
+    from kluris_runtime.snapshot import (
+        build_snapshot,
+        drop_snapshot,
+        register_snapshot,
+    )
+
+    snap = build_snapshot(fixture_brain)
+    register_snapshot(fixture_brain, snap)
+    yield fixture_brain
+    drop_snapshot(fixture_brain)
+
+
+def test_snapshot_serves_tools_identically(fixture_brain):
+    """related/recent/files/lobe_overview return the same payloads with and
+    without the registered snapshot."""
+    from kluris_runtime.snapshot import (
+        build_snapshot,
+        drop_snapshot,
+        register_snapshot,
+    )
+
+    walk = {
+        "related": related_tool(fixture_brain, "knowledge/jwt.md"),
+        "recent": recent_tool(fixture_brain, limit=10),
+        "files": files_tool(fixture_brain),
+        "lobe": lobe_overview_tool(fixture_brain, "knowledge", budget=4096),
+    }
+    register_snapshot(fixture_brain, build_snapshot(fixture_brain))
+    try:
+        assert related_tool(fixture_brain, "knowledge/jwt.md") == walk["related"]
+        assert recent_tool(fixture_brain, limit=10) == walk["recent"]
+        assert files_tool(fixture_brain) == walk["files"]
+        assert (
+            lobe_overview_tool(fixture_brain, "knowledge", budget=4096)
+            == walk["lobe"]
+        )
+    finally:
+        drop_snapshot(fixture_brain)
+
+
+def test_snapshot_served_tools_never_rewalk(snapshot_brain, monkeypatch):
+    """With the snapshot registered, the four big tools must not walk the
+    brain or re-read frontmatter — the large-brain contract."""
+    import kluris.pack.tools.brain as brain_mod
+
+    def _no_walk(*_a, **_k):
+        raise AssertionError("tool re-walked the brain despite the snapshot")
+
+    monkeypatch.setattr(brain_mod, "neuron_files", _no_walk)
+    monkeypatch.setattr(brain_mod, "read_frontmatter", _no_walk)
+
+    assert related_tool(snapshot_brain, "knowledge/jwt.md")["ok"] is True
+    assert recent_tool(snapshot_brain, limit=5)["ok"] is True
+    assert files_tool(snapshot_brain)["ok"] is True
+    # lobe_overview still reads ONLY map.md (one file) — allow that.
+    monkeypatch.setattr(
+        brain_mod, "read_frontmatter",
+        lambda p: ({}, "# Map\n"),
+    )
+    assert lobe_overview_tool(snapshot_brain, "knowledge", budget=4096)["ok"] is True
+
+
+# --- lobe_overview pagination (2.28.0) --------------------------------------------
+
+
+def test_lobe_overview_reports_total_count_and_pages(fixture_brain):
+    full = lobe_overview_tool(fixture_brain, "knowledge", budget=65536)
+    assert full["total_count"] == 3
+    assert full["offset"] == 0
+    assert "next_offset" not in full
+
+    page = lobe_overview_tool(fixture_brain, "knowledge", budget=65536, offset=1)
+    assert page["total_count"] == 3
+    assert page["offset"] == 1
+    assert page["neurons"] == full["neurons"][1:]
+
+
+def test_lobe_overview_truncation_exposes_next_offset(fixture_brain):
+    """When the budget drops trailing neurons, next_offset tells the agent
+    exactly where to resume instead of silently losing the tail."""
+    out = lobe_overview_tool(fixture_brain, "knowledge", budget=700)
+    assert out["total_count"] == 3
+    kept = len(out["neurons"])
+    assert kept < 3
+    assert out["truncated"] is True
+    assert out["next_offset"] == kept
+    # Resume from next_offset: the remaining neurons arrive.
+    rest = lobe_overview_tool(
+        fixture_brain, "knowledge", budget=65536, offset=out["next_offset"]
+    )
+    assert len(rest["neurons"]) == 3 - kept
+
+
+def test_lobe_overview_fallback_walks_only_the_lobe_subtree(
+    fixture_brain, monkeypatch
+):
+    """Without a snapshot, the walk is scoped to the lobe dir — never the
+    whole brain."""
+    import kluris.pack.tools.brain as brain_mod
+
+    roots: list = []
+    real = brain_mod.neuron_files
+
+    def _spy(root):
+        roots.append(root)
+        return real(root)
+
+    monkeypatch.setattr(brain_mod, "neuron_files", _spy)
+    lobe_overview_tool(fixture_brain, "knowledge", budget=4096)
+    assert roots, "expected the fallback walk to run"
+    assert all(str(r).endswith("knowledge") for r in roots)

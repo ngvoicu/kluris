@@ -353,3 +353,42 @@ def test_redacting_log_filter_idempotent():
     install_redacting_filter()
     after = sum(isinstance(f, RedactingLogFilter) for f in root.filters)
     assert after - before <= 1
+
+
+# --- value-based redaction (2.28.0) ---------------------------------------------
+
+
+def test_registered_literal_secret_is_redacted_in_any_shape():
+    """An opaque secret (no sk-/JWT/Bearer shape) must be scrubbed once
+    registered — gateways echo credentials in arbitrary error bodies."""
+    from kluris.pack.middleware import (
+        _clear_registered_secrets,
+        redact_secrets,
+        register_secret,
+    )
+
+    _clear_registered_secrets()
+    try:
+        register_secret("opaque-azure-key-42")
+        out = redact_secrets("invalid client_secret: opaque-azure-key-42 (denied)")
+        assert "opaque-azure-key-42" not in out
+        assert "***" in out
+    finally:
+        _clear_registered_secrets()
+
+
+def test_register_secret_ignores_short_and_empty_values():
+    from kluris.pack.middleware import (
+        _LITERAL_SECRETS,
+        _clear_registered_secrets,
+        register_secret,
+    )
+
+    _clear_registered_secrets()
+    try:
+        register_secret(None)
+        register_secret("")
+        register_secret("ab")  # too short — would shred ordinary text
+        assert _LITERAL_SECRETS == []
+    finally:
+        _clear_registered_secrets()

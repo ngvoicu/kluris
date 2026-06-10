@@ -332,8 +332,9 @@ async def test_parse_stream_tolerates_plain_dicts():
 async def test_debug_stream_emits_redacted_summary_line(fake_litellm, capsys):
     """KLURIS_DEBUG_STREAM=1 writes one stderr summary per stream — the supported
     way to diagnose an empty 'model returned no content' turn. The failing shape
-    (no text, no tool, finish='stop') is exactly what the line surfaces. Only
-    counts/booleans/finish_reason are logged — no payloads."""
+    (no text, no tool, finish='stop') is exactly what the line surfaces. The
+    summary line itself carries only counts/booleans/finish_reason; empty
+    streams additionally dump payload-free chunk shapes (covered below)."""
     cfg = _api_cfg(KLURIS_DEBUG_STREAM="1")
     fake_litellm.stream_chunks = [_c_text("", finish="stop"), _c_usage(120, 40)]
     await _drain(LiteLLMProvider(cfg).complete_stream(
@@ -354,6 +355,60 @@ async def test_debug_stream_off_by_default_writes_nothing(fake_litellm, capsys):
         [{"role": "user", "content": "q"}], [],
     ))
     assert "kluris-pack: stream" not in capsys.readouterr().err
+
+
+async def test_debug_stream_dumps_chunk_shapes_on_empty_stream(fake_litellm, capsys):
+    """A stream that ends with NO text and NO tool call additionally dumps the
+    SHAPE of each chunk (field presence + lengths) — enough to see what an
+    empty completion actually carried, without any payload."""
+    cfg = _api_cfg(KLURIS_DEBUG_STREAM="1")
+    fake_litellm.stream_chunks = [_c_text("", finish="stop"), _c_usage(120, 40)]
+    await _drain(LiteLLMProvider(cfg).complete_stream(
+        [{"role": "user", "content": "q"}], [],
+    ))
+    err = capsys.readouterr().err
+    assert "kluris-pack: empty-stream chunk 1/2:" in err
+    assert "kluris-pack: empty-stream chunk 2/2:" in err
+    assert "finish='stop'" in err
+    assert "usage=present" in err
+
+
+async def test_debug_stream_empty_dump_never_leaks_reasoning_prose(
+    fake_litellm, capsys
+):
+    """The realistic empty-completion shape for gpt-5-family models is a stream
+    of ``reasoning_content`` deltas with no visible ``content`` — hidden
+    chain-of-thought. The dump must report its LENGTH, never its text."""
+    cot = "SECRET hidden reasoning the model never said out loud"
+    chunk = ModelResponseStream(choices=[StreamingChoices(
+        index=0,
+        delta=Delta(content=None, reasoning_content=cot, role="assistant"),
+        finish_reason="stop",
+    )])
+    cfg = _api_cfg(KLURIS_DEBUG_STREAM="1")
+    fake_litellm.stream_chunks = [chunk]
+    await _drain(LiteLLMProvider(cfg).complete_stream(
+        [{"role": "user", "content": "q"}], [],
+    ))
+    err = capsys.readouterr().err
+    assert "kluris-pack: empty-stream chunk 1/1:" in err
+    assert f"reasoning_content={len(cot)}ch" in err
+    assert "SECRET" not in err  # prose must never reach the logs
+
+
+async def test_debug_stream_no_shape_dump_when_content_streamed(
+    fake_litellm, capsys
+):
+    """A stream that produced text keeps the one-line summary only — chunk
+    shapes are dumped solely for empty streams."""
+    cfg = _api_cfg(KLURIS_DEBUG_STREAM="1")
+    fake_litellm.stream_chunks = [_c_text("hi", finish="stop")]
+    await _drain(LiteLLMProvider(cfg).complete_stream(
+        [{"role": "user", "content": "q"}], [],
+    ))
+    err = capsys.readouterr().err
+    assert "kluris-pack: stream" in err
+    assert "empty-stream" not in err
 
 
 # ============================================================================

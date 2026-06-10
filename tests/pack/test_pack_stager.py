@@ -305,6 +305,7 @@ def test_runtime_contains_only_allow_listed_files(staged_brain):
         "neuron_index.py",
         "search.py",
         "search_fts.py",
+        "snapshot.py",
         "wake_up.py",
         "neuron_excerpt.py",
     }

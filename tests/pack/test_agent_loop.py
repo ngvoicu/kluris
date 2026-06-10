@@ -5,8 +5,10 @@ from __future__ import annotations
 import pytest
 
 from kluris.pack.agent import (
+    _COMPACTED_TOOL_RESULT,
     _compact_tool_results,
     _estimate_messages_tokens,
+    _flatten_for_synthesis,
     _trim_history,
     run_agent,
 )
@@ -548,12 +550,14 @@ async def test_synthesis_midstream_drop_flags_partial_incomplete(
     assert errors[0]["recoverable"] is True
 
 
-async def test_compacted_result_allows_refetch_not_dup_suppressed(
+async def test_elided_result_reserved_from_cache_not_redispatched(
     fixture_brain, tmp_path
 ):
-    """When compaction elides a tool result, an identical re-issue must
-    re-dispatch (the stub invites it) rather than be duplicate-suppressed into a
-    pointer to the discarded payload."""
+    """When eliding removes a tool result from the transcript, an identical
+    re-issue is re-served IN FULL from the turn's side store — without
+    re-running the tool, and without pointing the model at a discarded stub."""
+    import kluris.pack.tools.brain as brain_mod
+
     cfg = _config(fixture_brain, KLURIS_DATA_DIR=str(tmp_path / "data"),
                   KLURIS_MAX_TURN_TOKENS="50")
     (tmp_path / "data").mkdir()
@@ -563,7 +567,7 @@ async def test_compacted_result_allows_refetch_not_dup_suppressed(
             "args": {"query": "beta"}}
     alpha_again = {"kind": "tool_use", "name": "search", "id": "a2",
                    "args": {"query": "alpha"}}  # identical args to alpha
-    provider = _ScriptedProvider([
+    provider = _RecordingProvider([
         [alpha, {"kind": "end"}],
         [beta, {"kind": "end"}],         # 2nd result → alpha becomes "oldest"
         [alpha_again, {"kind": "end"}],  # alpha's result was compacted by now
@@ -575,9 +579,14 @@ async def test_compacted_result_allows_refetch_not_dup_suppressed(
         trace_hook=results.append,
     ))
     summaries = [r["result_summary"] for r in results]
-    assert len(summaries) == 3  # alpha, beta, alpha-again all dispatched
-    # The alpha re-issue must NOT be suppressed — its earlier result was elided.
-    assert "duplicate" not in summaries[2].lower()
+    assert len(summaries) == 3
+    # The re-issue is served from cache — full payload, no tool re-run.
+    assert "re-served" in summaries[2].lower()
+    # The transcript of the final provider call carries the re-served FULL
+    # payload for a2 (a real search result, not a stub or pointer).
+    final = provider.seen_messages[-1]
+    a2 = next(m for m in final if m.get("tool_call_id") == "a2")
+    assert '"results"' in a2["content"]
 
 
 async def test_agent_max_rounds_zero_means_unlimited(fixture_brain, tmp_path):
@@ -903,6 +912,128 @@ async def test_run_agent_compacts_old_tool_results_within_turn(
     assert '"compacted": true' not in tool_msgs[-1]["content"]  # newest kept
 
 
+# --- Flattened synthesis request (tool-free final call) -----------------------
+
+
+def _msgs_for_flatten() -> list[dict]:
+    """system + prior chat turn + question + 2 × (tool_call, tool result)."""
+    return [
+        {"role": "system", "content": "S"},
+        {"role": "user", "content": "old question"},
+        {"role": "assistant", "content": "old answer"},
+        {"role": "user", "content": "Q"},
+        {"role": "assistant", "content": "",
+         "tool_calls": [{"id": "t0", "name": "search",
+                         "args": {"query": "a"}}]},
+        {"role": "tool", "tool_call_id": "t0",
+         "content": '{"ok": true, "total": 1}'},
+        {"role": "assistant", "content": "",
+         "tool_calls": [{"id": "t1", "name": "read_neuron",
+                         "args": {"path": "p"}}]},
+        {"role": "tool", "tool_call_id": "t1",
+         "content": '{"ok": true, "body": "B"}'},
+    ]
+
+
+async def test_flatten_strips_all_tool_machinery():
+    """No ``role: tool`` message and no ``tool_calls`` block survives — the
+    transcript shape is what blanked in the field, so none of it may reach the
+    synthesis request. The plain conversation is preserved in order."""
+    out = _flatten_for_synthesis(_msgs_for_flatten(), 100000)
+    assert all(m.get("role") != "tool" for m in out)
+    assert all(not m.get("tool_calls") for m in out)
+    assert [m["role"] for m in out[:4]] == ["system", "user", "assistant", "user"]
+    assert out[1]["content"] == "old question"
+
+
+async def test_flatten_folds_evidence_into_final_user_message():
+    out = _flatten_for_synthesis(_msgs_for_flatten(), 100000)
+    final = out[-1]
+    assert final["role"] == "user"
+    assert "[search]" in final["content"]
+    assert '"total": 1' in final["content"]
+    assert "[read_neuron]" in final["content"]
+    assert '"body": "B"' in final["content"]
+    assert "Do not call any tools." in final["content"]
+
+
+async def test_flatten_skips_compacted_and_duplicate_stubs():
+    """Stubs carry no evidence: a compacted result and a duplicate-call note
+    must not be folded in; real results still are."""
+    msgs = _msgs_for_flatten()
+    msgs[5] = {**msgs[5], "content": _COMPACTED_TOOL_RESULT}
+    msgs.append({"role": "assistant", "content": "",
+                 "tool_calls": [{"id": "t2", "name": "search",
+                                 "args": {"query": "a"}}]})
+    msgs.append({"role": "tool", "tool_call_id": "t2",
+                 "content": '{"ok": true, "duplicate": true, "note": "n"}'})
+    out = _flatten_for_synthesis(msgs, 100000)
+    final = out[-1]["content"]
+    assert "compacted" not in final
+    assert '"duplicate": true' not in final
+    assert "[read_neuron]" in final
+
+
+def _msgs_with_padded_evidence(n: int, pad_chars: int) -> list[dict]:
+    msgs: list[dict] = [
+        {"role": "system", "content": "S"},
+        {"role": "user", "content": "Q"},
+    ]
+    for i in range(n):
+        msgs.append({"role": "assistant", "content": "",
+                     "tool_calls": [{"id": f"t{i}", "name": "search",
+                                     "args": {"query": str(i)}}]})
+        msgs.append({
+            "role": "tool", "tool_call_id": f"t{i}",
+            "content": f'{{"ok": true, "marker": "EV{i}", '
+                       f'"pad": "{"x" * pad_chars}"}}',
+        })
+    return msgs
+
+
+async def test_flatten_budget_keeps_newest_evidence_with_marker():
+    """Over budget, the NEWEST evidence survives (it is what the answer needs)
+    and the elision is announced in the message."""
+    out = _flatten_for_synthesis(_msgs_with_padded_evidence(3, 2000), 700)
+    final = out[-1]["content"]
+    assert "EV2" in final
+    assert "EV0" not in final
+    assert "elided to fit the budget" in final
+
+
+async def test_flatten_unbounded_keeps_all_evidence():
+    out = _flatten_for_synthesis(_msgs_with_padded_evidence(3, 2000), 0)
+    final = out[-1]["content"]
+    assert all(f"EV{i}" in final for i in range(3))
+    assert "elided to fit the budget" not in final
+
+
+async def test_synthesis_request_is_flat_and_carries_evidence(
+    fixture_brain, tmp_path
+):
+    """End-to-end: the fallback's provider call contains NO tool transcript —
+    just the plain conversation plus one user message holding the evidence —
+    and its answer reaches the user."""
+    cfg = _config(fixture_brain, KLURIS_DATA_DIR=str(tmp_path / "data"))
+    (tmp_path / "data").mkdir()
+    provider = _RecordingProvider([
+        [{"kind": "tool_use", "name": "search", "id": "tu",
+          "args": {"query": "auth"}}, {"kind": "end"}],
+        [{"kind": "end"}],  # empty round after a tool ran → synthesis
+        [{"kind": "token", "text": "flat answer"}, {"kind": "end"}],
+    ])
+    events = await _drain(run_agent(
+        config=cfg, provider=provider, history=[], user_message="x",
+    ))
+    synth = provider.seen_messages[2]
+    assert all(m.get("role") != "tool" for m in synth)
+    assert all(not m.get("tool_calls") for m in synth)
+    assert synth[-1]["role"] == "user"
+    assert "[search]" in synth[-1]["content"]
+    tokens = [e for e in events if e["kind"] == "token"]
+    assert any("flat answer" in t["text"] for t in tokens)
+
+
 async def test_run_agent_trims_old_history_before_sending(fixture_brain, tmp_path):
     """run_agent applies the sliding window: the provider receives only the
     recent turns (plus the system prompt + the new user message)."""
@@ -946,3 +1077,205 @@ async def test_run_agent_trims_old_history_before_sending(fixture_brain, tmp_pat
     joined = " ".join(m["content"] for m in history_sent)
     assert "old-turn-0" not in joined    # oldest dropped
     assert "old-turn-19" in joined       # most recent kept
+
+
+# --- Phase 4 (2.28.0): near-dup, eager eliding, cancel, offload, data note ----
+
+
+async def test_near_duplicate_search_suppressed(fixture_brain, tmp_path):
+    """Re-phrased searches with the same token set are duplicates: 'auth flow'
+    vs 'flow auth' must not re-dispatch. Different offsets must."""
+    cfg = _config(fixture_brain, KLURIS_DATA_DIR=str(tmp_path / "data"))
+    (tmp_path / "data").mkdir()
+    provider = _ScriptedProvider([
+        [{"kind": "tool_use", "name": "search", "id": "s1",
+          "args": {"query": "auth flow"}}, {"kind": "end"}],
+        [{"kind": "tool_use", "name": "search", "id": "s2",
+          "args": {"query": "flow  AUTH"}}, {"kind": "end"}],  # same tokens
+        [{"kind": "tool_use", "name": "search", "id": "s3",
+          "args": {"query": "auth flow", "offset": 10}}, {"kind": "end"}],
+        [{"kind": "token", "text": "done"}, {"kind": "end"}],
+    ])
+    results = []
+    await _drain(run_agent(
+        config=cfg, provider=provider, history=[], user_message="x",
+        trace_hook=results.append,
+    ))
+    summaries = [r["result_summary"] for r in results]
+    assert len(summaries) == 3
+    assert "duplicate" in summaries[1].lower()      # rephrasing caught
+    assert "duplicate" not in summaries[2].lower()  # paging is NOT a duplicate
+
+
+async def test_eager_eliding_stubs_old_rounds_and_restores_in_synthesis(
+    fixture_brain, tmp_path
+):
+    """With KEEP_RESULT_ROUNDS=1, a round-1 result is elided from the round-3
+    request — but the synthesis fallback still receives its full content as
+    evidence (restored from the side store)."""
+    from kluris.pack.agent import _SEEN_TOOL_RESULT
+
+    cfg = _config(
+        fixture_brain,
+        KLURIS_DATA_DIR=str(tmp_path / "data"),
+        KLURIS_KEEP_RESULT_ROUNDS="1",
+    )
+    (tmp_path / "data").mkdir()
+    provider = _RecordingProvider([
+        [{"kind": "tool_use", "name": "search", "id": "r1",
+          "args": {"query": "jwt"}}, {"kind": "end"}],
+        [{"kind": "tool_use", "name": "glossary", "id": "r2",
+          "args": {}}, {"kind": "end"}],
+        [{"kind": "end"}],  # empty round → synthesis fallback
+        [{"kind": "token", "text": "synthesized"}, {"kind": "end"}],
+    ])
+    events = await _drain(run_agent(
+        config=cfg, provider=provider, history=[], user_message="x",
+    ))
+    # Round-3 request: r1's result is stubbed, r2's is still full.
+    round3 = provider.seen_messages[2]
+    r1_msg = next(m for m in round3 if m.get("tool_call_id") == "r1")
+    assert r1_msg["content"] == _SEEN_TOOL_RESULT
+    r2_msg = next(m for m in round3 if m.get("tool_call_id") == "r2")
+    assert r2_msg["content"] != _SEEN_TOOL_RESULT
+    # Synthesis request: flat, and the r1 evidence is RESTORED in full.
+    synth = provider.seen_messages[3]
+    assert all(m.get("role") != "tool" for m in synth)
+    assert "[search]" in synth[-1]["content"]
+    assert '"jwt"' in synth[-1]["content"] or "jwt" in synth[-1]["content"]
+    tokens = [e for e in events if e["kind"] == "token"]
+    assert any("synthesized" in t["text"] for t in tokens)
+
+
+async def test_eager_eliding_disabled_with_zero_knob(fixture_brain, tmp_path):
+    """KLURIS_KEEP_RESULT_ROUNDS=0 disables eager eliding — old results stay
+    in the request (only the max_turn_tokens ceiling applies)."""
+    from kluris.pack.agent import _SEEN_TOOL_RESULT
+
+    cfg = _config(
+        fixture_brain,
+        KLURIS_DATA_DIR=str(tmp_path / "data"),
+        KLURIS_KEEP_RESULT_ROUNDS="0",
+    )
+    (tmp_path / "data").mkdir()
+    provider = _RecordingProvider([
+        [{"kind": "tool_use", "name": "search", "id": "r1",
+          "args": {"query": "jwt"}}, {"kind": "end"}],
+        [{"kind": "tool_use", "name": "glossary", "id": "r2",
+          "args": {}}, {"kind": "end"}],
+        [{"kind": "tool_use", "name": "recent", "id": "r3",
+          "args": {}}, {"kind": "end"}],
+        [{"kind": "token", "text": "done"}, {"kind": "end"}],
+    ])
+    await _drain(run_agent(
+        config=cfg, provider=provider, history=[], user_message="x",
+    ))
+    final = provider.seen_messages[-1]
+    r1_msg = next(m for m in final if m.get("tool_call_id") == "r1")
+    assert r1_msg["content"] != _SEEN_TOOL_RESULT
+
+
+async def test_should_cancel_stops_loop_between_rounds(fixture_brain, tmp_path):
+    """A disconnected client stops the loop before the next provider round —
+    no more token burn for an abandoned turn."""
+    cfg = _config(fixture_brain, KLURIS_DATA_DIR=str(tmp_path / "data"))
+    (tmp_path / "data").mkdir()
+    provider = _ScriptedProvider([
+        [{"kind": "tool_use", "name": "search", "id": "s1",
+          "args": {"query": "auth"}}, {"kind": "end"}],
+        [{"kind": "token", "text": "never sent"}, {"kind": "end"}],
+    ])
+    calls = {"n": 0}
+
+    async def _disconnected_after_first_round():
+        calls["n"] += 1
+        return calls["n"] > 1  # False for round 1, True for round 2
+
+    events = await _drain(run_agent(
+        config=cfg, provider=provider, history=[], user_message="x",
+        should_cancel=_disconnected_after_first_round,
+    ))
+    assert provider.calls == 1  # round 2 never reached the provider
+    assert events[-1]["kind"] == "end"
+    assert not any(
+        e["kind"] == "token" and "never sent" in e.get("text", "")
+        for e in events
+    )
+
+
+async def test_tool_dispatch_runs_off_the_event_loop(fixture_brain, tmp_path):
+    """Tool dispatch goes through asyncio.to_thread so blocking brain I/O
+    cannot stall other chats' streams."""
+    import threading
+
+    cfg = _config(fixture_brain, KLURIS_DATA_DIR=str(tmp_path / "data"))
+    (tmp_path / "data").mkdir()
+    dispatch_threads: list = []
+    import kluris.pack.agent as agent_mod
+    real = agent_mod._dispatch_tool
+
+    def _spy(config, name, args):
+        dispatch_threads.append(threading.current_thread())
+        return real(config, name, args)
+
+    agent_mod_dispatch = agent_mod._dispatch_tool
+    try:
+        agent_mod._dispatch_tool = _spy
+        provider = _ScriptedProvider([
+            [{"kind": "tool_use", "name": "search", "id": "s1",
+              "args": {"query": "auth"}}, {"kind": "end"}],
+            [{"kind": "token", "text": "done"}, {"kind": "end"}],
+        ])
+        await _drain(run_agent(
+            config=cfg, provider=provider, history=[], user_message="x",
+        ))
+    finally:
+        agent_mod._dispatch_tool = agent_mod_dispatch
+    assert dispatch_threads
+    assert all(
+        t is not threading.main_thread() for t in dispatch_threads
+    ), "dispatch ran on the event-loop thread"
+
+
+async def test_tool_results_carry_brain_data_note(fixture_brain, tmp_path):
+    """Every dispatched tool result is prefixed with the data-boundary note —
+    retrieved brain content must read as data, not instructions."""
+    from kluris.pack.agent import _TOOL_DATA_NOTE
+
+    cfg = _config(fixture_brain, KLURIS_DATA_DIR=str(tmp_path / "data"))
+    (tmp_path / "data").mkdir()
+    provider = _RecordingProvider([
+        [{"kind": "tool_use", "name": "search", "id": "s1",
+          "args": {"query": "auth"}}, {"kind": "end"}],
+        [{"kind": "token", "text": "done"}, {"kind": "end"}],
+    ])
+    await _drain(run_agent(
+        config=cfg, provider=provider, history=[], user_message="x",
+    ))
+    final = provider.seen_messages[-1]
+    s1 = next(m for m in final if m.get("tool_call_id") == "s1")
+    assert s1["content"].startswith(_TOOL_DATA_NOTE)
+    assert '"ok": true' in s1["content"]
+
+
+async def test_parallel_same_tool_calls_get_distinct_ids(fixture_brain, tmp_path):
+    """Two parallel same-tool calls that arrive WITHOUT provider ids must get
+    distinct fallback tool_call_ids — else the transcript carries duplicate
+    ids and one call's evidence is lost from the synthesis restore."""
+    cfg = _config(fixture_brain, KLURIS_DATA_DIR=str(tmp_path / "data"))
+    (tmp_path / "data").mkdir()
+    provider = _RecordingProvider([
+        [{"kind": "tool_use", "name": "search", "id": None,
+          "args": {"query": "jwt"}},
+         {"kind": "tool_use", "name": "search", "id": None,
+          "args": {"query": "oauth"}},
+         {"kind": "end"}],
+        [{"kind": "token", "text": "done"}, {"kind": "end"}],
+    ])
+    await _drain(run_agent(
+        config=cfg, provider=provider, history=[], user_message="x",
+    ))
+    final = provider.seen_messages[-1]
+    tool_ids = [m["tool_call_id"] for m in final if m.get("role") == "tool"]
+    assert len(tool_ids) == 2
+    assert len(set(tool_ids)) == 2  # distinct — no collision

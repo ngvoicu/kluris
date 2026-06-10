@@ -9,6 +9,7 @@ conversation rotates the cookie + creates a fresh session row.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import secrets
 import uuid
@@ -56,6 +57,19 @@ def _store(app: FastAPI) -> SessionStore:
     store = getattr(app.state, "session_store", None)
     if store is None:
         store = SessionStore(cfg.data_dir / "sessions.db")
+        # Opt-in retention sweep, once per store construction (i.e. per
+        # process): without it a long-running container accumulates a
+        # session row per page load and a full transcript per turn forever.
+        retention = getattr(cfg, "session_retention_days", 0)
+        if retention > 0:
+            pruned = store.prune_old_sessions(retention)
+            if pruned:
+                import sys
+                sys.stderr.write(
+                    f"kluris-pack: pruned {pruned} session(s) older than "
+                    f"{retention} days\n"
+                )
+                sys.stderr.flush()
         app.state.session_store = store
     return store
 
@@ -171,20 +185,29 @@ def attach_chat_routes(app: FastAPI) -> None:
                 ],
                 user_message=user_message,
                 brain_name=_brain_name(cfg),
+                # A closed SSE connection (navigate away, refresh, LB idle
+                # timeout) stops the loop between rounds — an abandoned
+                # broad query must not keep burning provider tokens.
+                should_cancel=request.is_disconnected,
             )
-            async for frame in encode_sse(_capture_assistant(
-                agent_iter, assistant_text_parts, agent_errors,
-            )):
-                yield frame
-            # Persist whatever the assistant produced — even an error
-            # — so a page reload shows the same turn the user just saw.
-            assistant_text = "".join(assistant_text_parts).strip()
-            if not assistant_text and agent_errors:
-                assistant_text = "\n\n".join(
-                    f"[error: {msg}]" for msg in agent_errors
-                )
-            if assistant_text:
-                store.append_message(sid, "assistant", assistant_text)
+            try:
+                async for frame in encode_sse(_capture_assistant(
+                    agent_iter, assistant_text_parts, agent_errors,
+                )):
+                    yield frame
+            finally:
+                # Persist whatever the assistant produced — even an error or
+                # a disconnect-truncated partial (Starlette aclose()s this
+                # generator on disconnect, raising GeneratorExit at the
+                # yield) — so a page reload shows the turn as the user last
+                # saw it instead of losing it.
+                assistant_text = "".join(assistant_text_parts).strip()
+                if not assistant_text and agent_errors:
+                    assistant_text = "\n\n".join(
+                        f"[error: {msg}]" for msg in agent_errors
+                    )
+                if assistant_text:
+                    store.append_message(sid, "assistant", assistant_text)
 
         resp = StreamingResponse(event_stream(), media_type="text/event-stream")
         resp.set_cookie(
@@ -200,13 +223,18 @@ def attach_chat_routes(app: FastAPI) -> None:
     # dispatchers the LLM agent uses, so the UI sees exactly the
     # same view of the brain the agent does.
 
+    # Tool calls below run via asyncio.to_thread: with the boot caches they
+    # are usually instant, but any fallback path does blocking file I/O, and
+    # the single event loop must keep multiplexing every other chat's SSE
+    # stream while one request reads the brain.
+
     @app.get("/api/brain/tree")
     async def brain_tree():
         cfg: Config = app.state.config
         # wake_up_tool returns the discovered snapshot: lobes,
         # recent neurons, glossary, brain.md body, deprecation
         # diagnostics. The frontend builds the tree from this.
-        return JSONResponse(wake_up_tool(cfg.brain_dir))
+        return JSONResponse(await asyncio.to_thread(wake_up_tool, cfg.brain_dir))
 
     @app.get("/api/brain/files")
     async def brain_files():
@@ -215,7 +243,7 @@ def attach_chat_routes(app: FastAPI) -> None:
         # plus glossary.md as a sibling leaf. The frontend folds this
         # into a nested folder tree — same shape the MRI viewer uses
         # for its left-panel file explorer.
-        return JSONResponse(files_tool(cfg.brain_dir))
+        return JSONResponse(await asyncio.to_thread(files_tool, cfg.brain_dir))
 
     @app.get("/api/brain/search")
     async def brain_search(q: str = "", limit: str = "20"):
@@ -236,13 +264,17 @@ def attach_chat_routes(app: FastAPI) -> None:
             limit_i = max(1, min(int(limit), 50))
         except (TypeError, ValueError):
             limit_i = 20
-        return JSONResponse(search_tool(cfg.brain_dir, q, limit=limit_i))
+        return JSONResponse(
+            await asyncio.to_thread(search_tool, cfg.brain_dir, q, limit=limit_i)
+        )
 
     @app.get("/api/brain/neuron")
     async def brain_neuron(path: str):
         cfg: Config = app.state.config
         try:
-            return JSONResponse(read_neuron_tool(cfg.brain_dir, path))
+            return JSONResponse(
+                await asyncio.to_thread(read_neuron_tool, cfg.brain_dir, path)
+            )
         except SandboxError as exc:
             return JSONResponse(
                 {"ok": False, "error": f"sandbox: {exc}"},
@@ -262,7 +294,16 @@ def attach_chat_routes(app: FastAPI) -> None:
             # not an LLM context window. 64 KB lets the lobe map_body
             # render verbatim without truncation hints.
             return JSONResponse(
-                lobe_overview_tool(cfg.brain_dir, lobe, budget=65536),
+                await asyncio.to_thread(
+                    lobe_overview_tool, cfg.brain_dir, lobe, budget=65536,
+                ),
+            )
+        except SandboxError as exc:
+            # Bad input (empty lobe, path escape) is a 400, not a 404 —
+            # mirroring brain_neuron above.
+            return JSONResponse(
+                {"ok": False, "error": f"sandbox: {exc}"},
+                status_code=400,
             )
         except NotFoundError as exc:
             return JSONResponse(

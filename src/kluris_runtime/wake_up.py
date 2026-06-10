@@ -10,7 +10,6 @@ metadata (``type`` / ``type_structure``); callers should use the live
 from __future__ import annotations
 
 import datetime
-import os
 from pathlib import Path
 
 from kluris_runtime.deprecation import detect_deprecation_issues
@@ -18,12 +17,8 @@ from kluris_runtime.frontmatter import read_frontmatter
 from kluris_runtime.neuron_index import (
     SKIP_DIRS,
     YAML_NEURON_SUFFIXES,
-    has_yaml_opt_in_block,
+    neuron_files,
 )
-
-# Matches the wake-up legacy contract: index everything except auto-
-# generated maps and the brain's local config files.
-_WAKE_UP_SKIP_FILES = {"map.md", "brain.md", "index.md", "glossary.md", "README.md", "kluris.yml"}
 
 _WAKE_UP_BRAIN_MD_MAX_BYTES = 4000
 
@@ -31,27 +26,13 @@ _WAKE_UP_BRAIN_MD_MAX_BYTES = 4000
 def _iter_neurons(root: Path):
     """Yield neuron files (markdown + opted-in yaml) under ``root``.
 
-    Walks with os.walk and prunes ``SKIP_DIRS`` in place so we never descend
-    into ``.git/`` — rglob would scandir ``.git/objects/*`` and race with
-    git's background gc deleting loose-object dirs mid-walk (FileNotFoundError).
-    Order is preserved: all ``*.md``, then ``*.yml``, then ``*.yaml``.
+    Delegates to :func:`kluris_runtime.neuron_index.neuron_files` so there is
+    exactly ONE definition of "what counts as a neuron". The walkers had
+    drifted: this one did not prune nested dot-directories, so a neuron under
+    ``lobe/.archive/`` was counted by wake-up yet invisible to search / files
+    / related — an inconsistency that grows with real-world brains.
     """
-    buckets: dict[str, list[Path]] = {".md": [], ".yml": [], ".yaml": []}
-    for dirpath, dirnames, filenames in os.walk(root):
-        dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS]
-        base = Path(dirpath)
-        for name in filenames:
-            item = base / name
-            ext = item.suffix.lower()
-            if ext not in buckets:
-                continue
-            if name in _WAKE_UP_SKIP_FILES:
-                continue
-            if ext in YAML_NEURON_SUFFIXES and not has_yaml_opt_in_block(item):
-                continue
-            buckets[ext].append(item)
-    for ext in (".md", ".yml", ".yaml"):
-        yield from buckets[ext]
+    yield from neuron_files(root)
 
 
 def _lobe_description(lobe_path: Path) -> str:
@@ -90,26 +71,53 @@ def _lobe_description(lobe_path: Path) -> str:
     return ""
 
 
-def _collect_lobes(brain_path: Path) -> list[dict]:
-    """Return top-level lobes with neuron counts and descriptions."""
+def _collect_lobes(brain_path: Path, snapshot: dict | None = None) -> list[dict]:
+    """Return top-level lobes with neuron counts and descriptions.
+
+    With a boot ``snapshot`` (see :mod:`kluris_runtime.snapshot`) the counts
+    come from its single walk instead of re-walking each lobe subtree, and
+    each lobe gains ``top_tags`` — its most frequent neuron tags — so the
+    agent can route a query to the right lobe without probing them one by
+    one. Lobes that exist on disk but hold no neurons still appear (count 0).
+    """
+    md_counts: dict[str, int] = {}
+    yaml_counts: dict[str, int] = {}
+    if snapshot is not None:
+        for entry in snapshot["entries"]:
+            rel = entry["path"]
+            if "/" not in rel:
+                continue
+            lobe = rel.split("/", 1)[0]
+            if entry["file_type"] == "yaml":
+                yaml_counts[lobe] = yaml_counts.get(lobe, 0) + 1
+            else:
+                md_counts[lobe] = md_counts.get(lobe, 0) + 1
+
     lobes = []
     for child in sorted(brain_path.iterdir()):
         if not child.is_dir():
             continue
         if child.name in SKIP_DIRS or child.name.startswith("."):
             continue
-        total = 0
-        yaml_count = 0
-        for item in _iter_neurons(child):
-            total += 1
-            if item.suffix.lower() in YAML_NEURON_SUFFIXES:
-                yaml_count += 1
-        lobes.append({
+        if snapshot is not None:
+            yaml_count = yaml_counts.get(child.name, 0)
+            total = md_counts.get(child.name, 0) + yaml_count
+        else:
+            total = 0
+            yaml_count = 0
+            for item in _iter_neurons(child):
+                total += 1
+                if item.suffix.lower() in YAML_NEURON_SUFFIXES:
+                    yaml_count += 1
+        lobe: dict = {
             "name": child.name,
             "description": _lobe_description(child),
             "neurons": total,
             "yaml_count": yaml_count,
-        })
+        }
+        if snapshot is not None:
+            lobe["top_tags"] = snapshot["lobe_tags"].get(child.name, [])
+        lobes.append(lobe)
     return lobes
 
 
@@ -128,24 +136,49 @@ def _recency_key(updated: str) -> tuple[int, str]:
         return (0, updated)
 
 
-def _collect_recent(brain_path: Path, limit: int = 5) -> list[dict]:
-    """Return up to ``limit`` most-recently-updated neurons, newest first."""
+def _collect_recent(
+    brain_path: Path, limit: int = 5, snapshot: dict | None = None
+) -> list[dict]:
+    """Return up to ``limit`` most-recently-updated neurons, newest first.
+
+    With a boot ``snapshot`` the candidates come from its single walk (no
+    per-call frontmatter re-reads); the shape and ordering are identical.
+    """
     candidates = []
-    for item in _iter_neurons(brain_path):
-        try:
-            meta, _ = read_frontmatter(item)
-        except Exception:
-            continue
-        updated = meta.get("updated")
-        if updated is None:
-            continue
-        file_type = "yaml" if item.suffix.lower() in YAML_NEURON_SUFFIXES else "markdown"
-        candidates.append({
-            "path": str(item.relative_to(brain_path)).replace("\\", "/"),
-            "updated": str(updated),
-            "file_type": file_type,
-        })
-    candidates.sort(key=lambda item: _recency_key(item["updated"]), reverse=True)
+    if snapshot is not None:
+        candidates = [
+            {
+                "path": entry["path"],
+                "updated": entry["updated"],
+                "file_type": entry["file_type"],
+            }
+            for entry in snapshot["entries"]
+            if entry["updated"] is not None
+        ]
+    else:
+        for item in _iter_neurons(brain_path):
+            try:
+                meta, _ = read_frontmatter(item)
+            except Exception:
+                continue
+            updated = meta.get("updated")
+            if updated is None:
+                continue
+            file_type = "yaml" if item.suffix.lower() in YAML_NEURON_SUFFIXES else "markdown"
+            candidates.append({
+                "path": str(item.relative_to(brain_path)).replace("\\", "/"),
+                "updated": str(updated),
+                "file_type": file_type,
+            })
+    # Break ties on `updated` by path so the order is deterministic and
+    # identical across the snapshot path (entries already path-sorted) and the
+    # walk fallback (raw os.walk order). Path descending keeps the stable
+    # recency-desc intent under reverse=True; recent_tool uses mtime+filename,
+    # but wake_up has neither here, so path is the portable tie-break.
+    candidates.sort(
+        key=lambda item: (_recency_key(item["updated"]), item["path"]),
+        reverse=True,
+    )
     return candidates[:limit]
 
 
@@ -189,6 +222,7 @@ def build_payload(
     *,
     name: str | None = None,
     description: str = "",
+    snapshot: dict | None = None,
 ) -> dict:
     """Build a discovered wake-up snapshot for ``brain_path``.
 
@@ -200,6 +234,11 @@ def build_payload(
     Callers should use the live ``lobes[]`` payload to understand the
     current brain structure.
 
+    ``snapshot`` (a :func:`kluris_runtime.snapshot.build_snapshot` result)
+    makes the whole payload come from ONE brain walk instead of three —
+    recency, deprecation diagnostics, and lobe counts all reuse its parsed
+    frontmatter — and enriches each lobe with ``top_tags`` routing hints.
+
     The brain path must exist; ``FileNotFoundError`` is the caller's
     problem (the CLI wraps it in a JSON error envelope).
     """
@@ -208,14 +247,17 @@ def build_payload(
 
     resolved_name = name or brain_path.name
 
-    lobes = _collect_lobes(brain_path)
-    recent = _collect_recent(brain_path)
+    lobes = _collect_lobes(brain_path, snapshot)
+    recent = _collect_recent(brain_path, snapshot=snapshot)
     total_neurons = sum(lobe["neurons"] for lobe in lobes)
     total_yaml_neurons = sum(lobe.get("yaml_count", 0) for lobe in lobes)
     brain_md_body = _collect_brain_md(brain_path)
     glossary_entries = _collect_glossary(brain_path)
     try:
-        deprecation_issues = detect_deprecation_issues(brain_path)
+        deprecation_issues = detect_deprecation_issues(
+            brain_path,
+            preparsed=snapshot["preparsed"] if snapshot is not None else None,
+        )
     except Exception:
         deprecation_issues = []
 

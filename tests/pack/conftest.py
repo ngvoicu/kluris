@@ -32,10 +32,16 @@ def _reset_boot_caches():
     """
     yield
     from kluris_runtime.search_fts import _clear_index_registry
+    from kluris_runtime.snapshot import _clear_snapshot_registry
+    from kluris.pack.middleware import _clear_registered_secrets
+    from kluris.pack.system_prompt import _clear_pinned_prompts
     from kluris.pack.tools.brain import _clear_wake_up_cache
 
     _clear_index_registry()
+    _clear_snapshot_registry()
     _clear_wake_up_cache()
+    _clear_registered_secrets()
+    _clear_pinned_prompts()
 
 
 # --- Fixture brain factory ---------------------------------------------------

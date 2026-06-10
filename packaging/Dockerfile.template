@@ -41,6 +41,12 @@ VOLUME ["/data"]
 
 EXPOSE 8765
 
+# Recycle a wedged server: /healthz is served even in brain-only mode, so a
+# failing probe means the process itself is stuck. python stdlib (no curl in
+# slim images).
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+  CMD ["python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8765/healthz', timeout=4).status == 200 else 1)"]
+
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV KLURIS_BRAIN_DIR=/app/brain

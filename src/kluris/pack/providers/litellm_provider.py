@@ -371,6 +371,39 @@ def _get(obj: Any, key: str, default: Any = None) -> Any:
     return getattr(obj, key, default)
 
 
+def _chunk_shape(chunk: Any) -> str:
+    """Payload-free description of one streamed chunk for the empty-stream
+    debug dump — field presence and LENGTHS only, never the text itself.
+
+    A stream the parser saw as empty is not necessarily empty on the wire:
+    gpt-5-family models emit ``reasoning_content`` deltas with no visible
+    ``content``, and that hidden chain-of-thought must not reach container
+    logs. Lengths are exactly the diagnostic needed anyway — they show whether
+    an empty completion was reasoning-only, truly blank, or carried content in
+    a field the parser does not read.
+    """
+    choices = _get(chunk, "choices") or []
+    if not choices:
+        parts = ["choices=0"]
+    else:
+        delta = _get(choices[0], "delta")
+        content = _get(delta, "content")
+        parts = [
+            f"content={len(content)}ch" if content else f"content={content!r}"
+        ]
+        reasoning = _get(delta, "reasoning_content")
+        if reasoning:
+            parts.append(f"reasoning_content={len(reasoning)}ch")
+        tool_calls = _get(delta, "tool_calls") or []
+        if tool_calls:
+            names = [_get(_get(tc, "function"), "name") for tc in tool_calls]
+            parts.append(f"tool_calls={names!r}")
+        parts.append(f"finish={_get(choices[0], 'finish_reason')!r}")
+    if _get(chunk, "usage"):
+        parts.append("usage=present")
+    return " ".join(parts)
+
+
 async def _parse_litellm_stream(
     response: AsyncIterator[Any],
     *,
@@ -388,7 +421,10 @@ async def _parse_litellm_stream(
     summary line per stream to stderr — chunk count, whether any text/tool-call
     surfaced, and the final ``finish_reason`` — so an empty "no content" turn can
     be diagnosed from the logs (the failing round is the last summary line before
-    the error). No payloads are logged.
+    the error). When a stream ends with NO text and NO tool call, the shape of
+    the last few chunks is also dumped via :func:`_chunk_shape` — field presence
+    and lengths only, never payloads, because an "empty" stream can still carry
+    hidden ``reasoning_content`` prose that must not reach the logs.
     """
     tool_buffers: dict[int, dict[str, Any]] = {}
     saw_usage = False
@@ -396,8 +432,16 @@ async def _parse_litellm_stream(
     saw_text = False
     saw_tool = False
     last_finish: str | None = None
+    tail_shapes: list[str] = []
     async for chunk in response:
         chunks += 1
+        if debug:
+            try:
+                tail_shapes.append(_chunk_shape(chunk))
+            except Exception:  # defensive: never let diagnostics break the stream
+                tail_shapes.append("<unreadable chunk>")
+            if len(tail_shapes) > 6:
+                tail_shapes.pop(0)
         usage = _get(chunk, "usage")
         if usage:
             saw_usage = True
@@ -458,6 +502,15 @@ async def _parse_litellm_stream(
             f"kluris-pack: stream chunks={chunks} text={saw_text} "
             f"tool={saw_tool} finish={last_finish!r}\n"
         )
+        if not saw_text and not saw_tool:
+            # Empty completion — show the SHAPE of what came over the wire
+            # (field lengths, no payloads: hidden reasoning prose must not
+            # land in logs) so the cause is diagnosable from logs alone.
+            for i, shape in enumerate(tail_shapes):
+                sys.stderr.write(
+                    f"kluris-pack: empty-stream chunk "
+                    f"{i + 1}/{len(tail_shapes)}: {redact_secrets(shape)}\n"
+                )
         sys.stderr.flush()
 
     if not saw_usage:

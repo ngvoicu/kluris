@@ -1006,3 +1006,25 @@ def test_search_excludes_kluris_yml_even_with_matching_content(tmp_path):
     results = search_brain(brain, "payments", limit=10)
     files = [r["file"] for r in results]
     assert "kluris.yml" not in files
+
+
+# --- pagination (search_brain_paged) ------------------------------------------
+
+
+def test_search_brain_paged_window_and_total(temp_brain):
+    """The paged substring engine windows the same ranked order and reports
+    the full match count."""
+    from kluris_runtime.search import search_brain, search_brain_paged
+
+    for i, name in enumerate(["alpha", "beta", "gamma"]):
+        target = temp_brain / "knowledge" / f"{name}.md"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(
+            f"# {name.title()}\n\npagination fodder entry {i}\n", encoding="utf-8"
+        )
+
+    full = search_brain(temp_brain, "pagination fodder", limit=10)
+    assert len(full) == 3
+    page = search_brain_paged(temp_brain, "pagination fodder", limit=1, offset=1)
+    assert page["results"] == full[1:2]
+    assert page["total"] == 3

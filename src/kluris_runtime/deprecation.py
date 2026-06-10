@@ -13,7 +13,11 @@ from kluris_runtime.frontmatter import read_frontmatter
 from kluris_runtime.neuron_index import is_within_brain, neuron_files
 
 
-def detect_deprecation_issues(brain_path: Path) -> list[dict]:
+def detect_deprecation_issues(
+    brain_path: Path,
+    *,
+    preparsed: list[tuple[Path, dict]] | None = None,
+) -> list[dict]:
     """Find deprecation-frontmatter inconsistencies.
 
     Four issue kinds are reported:
@@ -31,15 +35,23 @@ def detect_deprecation_issues(brain_path: Path) -> list[dict]:
     Neurons without a ``status`` field are treated as active.
     References from ``map.md`` files are ignored — maps are
     auto-generated indexes, not editorial endorsements.
+
+    ``preparsed`` — ``(neuron_path, frontmatter)`` pairs from an existing
+    walk (the boot snapshot) — skips this function's own walk and
+    per-neuron frontmatter reads; the diagnostics are identical.
     """
     issues: list[dict] = []
-    neurons = neuron_files(brain_path)
+    if preparsed is not None:
+        neurons = [neuron for neuron, _meta in preparsed]
+        metas = [meta for _neuron, meta in preparsed]
+    else:
+        neurons = neuron_files(brain_path)
+        metas = [read_frontmatter(neuron)[0] for neuron in neurons]
 
     status_by_path: dict[Path, str] = {}
     meta_by_path: dict[Path, dict] = {}
     neuron_paths: set[Path] = set()
-    for neuron in neurons:
-        meta, _ = read_frontmatter(neuron)
+    for neuron, meta in zip(neurons, metas):
         status = str(meta.get("status", "active")).lower()
         resolved = neuron.resolve()
         status_by_path[resolved] = status

@@ -27,13 +27,42 @@ _API_KEY_PATTERN = re.compile(r"sk-[A-Za-z0-9._-]{6,}")
 # store. ``eyJ`` is the base64 of ``{"`` that every JWT header starts with.
 _JWT_PATTERN = re.compile(r"\beyJ[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*")
 
+# Literal secret VALUES registered at boot (the configured API key, OAuth
+# client secret, access token). The regexes above only recognize well-known
+# shapes — an Azure key, an opaque gateway secret, or a client_secret echoed
+# in an IdP error body matches none of them. Value-based redaction is exact
+# and shape-independent: whatever the deployer actually configured can never
+# reach a log line or the chat UI. Registered once at boot, read-only after.
+_LITERAL_SECRETS: list[str] = []
+
+
+def register_secret(value: str | None) -> None:
+    """Register a configured secret's literal value for redaction.
+
+    Idempotent; ``None`` / empty / very short values are ignored (redacting
+    1-2 char strings would shred ordinary text).
+    """
+    if not value or len(value) < 6:
+        return
+    if value not in _LITERAL_SECRETS:
+        _LITERAL_SECRETS.append(value)
+
+
+def _clear_registered_secrets() -> None:
+    """Reset registered literals (tests only)."""
+    _LITERAL_SECRETS.clear()
+
 
 def redact_secrets(text: str) -> str:
-    """Scrub bearer tokens, ``x-api-key`` values, bare ``sk-`` keys, and JWTs.
+    """Scrub registered secret values, bearer tokens, ``x-api-key`` values,
+    bare ``sk-`` keys, and JWTs.
 
     Used both by the log filter and by the provider's error-mapping layer
     before any provider message reaches the chat UI.
     """
+    for literal in _LITERAL_SECRETS:
+        if literal in text:
+            text = text.replace(literal, _REDACTION_TOKEN)
     text = _BEARER_PATTERN.sub(r"\1" + _REDACTION_TOKEN, text)
     text = _X_API_KEY_PATTERN.sub(r"\1" + _REDACTION_TOKEN, text)
     text = _API_KEY_PATTERN.sub(_REDACTION_TOKEN, text)
@@ -62,10 +91,18 @@ class RedactingLogFilter(logging.Filter):
 
 
 def install_redacting_filter() -> None:
-    """Attach :class:`RedactingLogFilter` to the root logger.
+    """Attach :class:`RedactingLogFilter` to the root and uvicorn loggers.
 
     Idempotent — safe to call from the app factory at every boot.
+
+    uvicorn's ``uvicorn.access`` logger has ``propagate=False`` and its own
+    handler, so a filter on the root logger never sees its records. The access
+    line carries the full request target including any ``?token=`` query, so
+    the filter MUST live on that logger directly (a logger runs its own
+    filters for records it emits) to scrub the gating secret from
+    ``docker logs``.
     """
-    root = logging.getLogger()
-    if not any(isinstance(f, RedactingLogFilter) for f in root.filters):
-        root.addFilter(RedactingLogFilter())
+    for name in ("", "uvicorn.access", "uvicorn"):
+        logger = logging.getLogger(name)
+        if not any(isinstance(f, RedactingLogFilter) for f in logger.filters):
+            logger.addFilter(RedactingLogFilter())

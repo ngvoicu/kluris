@@ -88,3 +88,58 @@ def test_tool_metadata_persisted(tmp_path):
     rows = s.replay(sid)
     assert rows[0]["tool_calls_json"].startswith("[")
     assert rows[0]["tool_use_id"] == "tu-123"
+
+
+# --- retention (2.28.0) --------------------------------------------------------
+
+
+def test_prune_old_sessions_removes_expired_and_keeps_recent(tmp_path):
+    import sqlite3 as _sqlite3
+    import time as _time
+
+    from kluris.pack.history import SessionStore
+
+    store = SessionStore(tmp_path / "sessions.db")
+    old_sid = store.new_session()
+    store.append_message(old_sid, "user", "ancient question")
+    new_sid = store.new_session()
+    store.append_message(new_sid, "user", "fresh question")
+    # Age the first session 100 days into the past, directly in the DB.
+    cutoff = int(_time.time()) - 100 * 86400
+    con = _sqlite3.connect(tmp_path / "sessions.db")
+    con.execute("UPDATE sessions SET created_at = ? WHERE id = ?", (cutoff, old_sid))
+    con.commit()
+    con.close()
+
+    pruned = store.prune_old_sessions(90)
+    assert pruned == 1
+    assert not store.session_exists(old_sid)
+    assert store.session_exists(new_sid)
+    assert store.replay(old_sid) == []          # messages cascaded
+    assert len(store.replay(new_sid)) == 1
+
+
+def test_prune_old_sessions_zero_is_noop(tmp_path):
+    from kluris.pack.history import SessionStore
+
+    store = SessionStore(tmp_path / "sessions.db")
+    sid = store.new_session()
+    store.append_message(sid, "user", "keep me")
+    assert store.prune_old_sessions(0) == 0
+    assert store.session_exists(sid)
+
+
+def test_sessions_created_at_index_exists(tmp_path):
+    """The retention sweep and the list ordering both scan by created_at —
+    the index keeps them O(log n) as history accumulates."""
+    import sqlite3 as _sqlite3
+
+    from kluris.pack.history import SessionStore
+
+    SessionStore(tmp_path / "sessions.db")
+    con = _sqlite3.connect(tmp_path / "sessions.db")
+    names = {r[0] for r in con.execute(
+        "SELECT name FROM sqlite_master WHERE type = 'index'"
+    )}
+    con.close()
+    assert "idx_sessions_created" in names
