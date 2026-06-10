@@ -235,6 +235,45 @@ def test_uvicorn_access_logger_carries_redaction_filter(
         for f in acc.filters:
             f.filter(rec)
         assert "s3cret" not in rec.getMessage()
+        # The 5-tuple structure MUST survive the filter: the access logger's
+        # AccessFormatter unpacks record.args into exactly five values. Only the
+        # path arg is rewritten; the status code stays an int for "%d".
+        assert rec.args == ("1.2.3.4:0", "GET", "/?token=***", "1.1", 200)
+    finally:
+        _clear_registered_secrets()
+
+
+def test_uvicorn_access_formatter_survives_redaction_filter():
+    """Regression: the redaction filter must leave a uvicorn.access record in a
+    state its AccessFormatter can format. Clearing record.args (the old
+    behavior) made formatMessage raise "not enough values to unpack (expected
+    5, got 0)" on every request — spamming the container logs on each /healthz
+    probe. Run the REAL AccessFormatter over a post-filter record to prove it
+    formats cleanly AND redacts the gating token."""
+    import logging
+    from uvicorn.logging import AccessFormatter
+
+    from kluris.pack.middleware import (
+        RedactingLogFilter,
+        _clear_registered_secrets,
+        register_secret,
+    )
+
+    _clear_registered_secrets()
+    try:
+        register_secret("s3cret")
+        rec = logging.LogRecord(
+            "uvicorn.access", logging.INFO, __file__, 0,
+            '%s - "%s %s HTTP/%s" %d',
+            ("1.2.3.4:0", "GET", "/?token=s3cret", "1.1", 200), None,
+        )
+        RedactingLogFilter().filter(rec)
+        # format() sets record.message then calls AccessFormatter.formatMessage,
+        # which unpacks record.args into a 5-tuple — the exact call that raised
+        # "not enough values to unpack" in production (uvicorn/logging.py).
+        line = AccessFormatter().format(rec)
+        assert "s3cret" not in line
+        assert '"GET /?token=*** HTTP/1.1" 200' in line
     finally:
         _clear_registered_secrets()
 

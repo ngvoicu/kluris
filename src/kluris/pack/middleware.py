@@ -79,14 +79,28 @@ class RedactingLogFilter(logging.Filter):
     """
 
     def filter(self, record: logging.LogRecord) -> bool:
-        if record.args:
-            try:
-                record.msg = record.getMessage()
-                record.args = ()
-            except Exception:  # pragma: no cover (defensive)
-                return True
+        # Redact the message template (covers no-arg log calls) and each
+        # positional/keyword arg IN PLACE. We must NOT collapse ``record.args``
+        # to ``()``: ``uvicorn.access`` formats with a custom ``AccessFormatter``
+        # that unpacks ``record.args`` into a fixed 5-tuple, and a logger filter
+        # runs before that formatter — clearing args made it raise
+        # "not enough values to unpack" on every access line. Redacting the
+        # args' string values preserves the tuple's length and element types so
+        # the formatter (and ``%d`` status codes) keep working.
         if isinstance(record.msg, str):
             record.msg = redact_secrets(record.msg)
+        args = record.args
+        if args:
+            if isinstance(args, dict):
+                record.args = {
+                    key: redact_secrets(val) if isinstance(val, str) else val
+                    for key, val in args.items()
+                }
+            else:
+                record.args = tuple(
+                    redact_secrets(item) if isinstance(item, str) else item
+                    for item in args
+                )
         return True
 
 
