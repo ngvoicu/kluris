@@ -202,3 +202,78 @@ def test_build_payload_with_snapshot_keeps_empty_lobes(tmp_path):
     empty = next(lobe for lobe in fed["lobes"] if lobe["name"] == "empty-lobe")
     assert empty["neurons"] == 0
     assert empty["top_tags"] == []
+
+
+# --- symlink escape: search must not surface what the read sandbox refuses ------
+
+
+def test_snapshot_excludes_symlink_escaping_brain(tmp_path):
+    """A neuron symlinked to a file OUTSIDE the brain root must not be walked,
+    indexed, or have its body land in search rows — mirroring the read tools'
+    sandbox so search can't leak what read_neuron rejects."""
+    brain = _make_brain(tmp_path)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    secret = outside / "secret.md"
+    secret.write_text("---\n---\nESCAPEDSECRET\n", encoding="utf-8")
+    link = brain / "alpha" / "leak.md"
+    try:
+        link.symlink_to(secret)
+    except (OSError, NotImplementedError):  # pragma: no cover (Windows w/o priv)
+        pytest.skip("symlinks not supported on this platform/privilege level")
+
+    snap = build_snapshot(brain)
+    paths = {e["path"] for e in snap["entries"]}
+    assert "alpha/leak.md" not in paths
+    assert "alpha/auth.md" in paths  # real neurons still indexed
+    bodies = " ".join(r.get("body", "") for r in snap["rows"])
+    assert "ESCAPEDSECRET" not in bodies
+
+
+def test_snapshot_survives_symlink_loop(tmp_path):
+    """A self-referential symlink must not abort the boot walk: resolve()
+    raises RuntimeError (<=3.12) or yields an unreadable path (3.13+). Either
+    way the neuron is dropped and the snapshot still builds."""
+    brain = _make_brain(tmp_path)
+    loop = brain / "alpha" / "loop.md"
+    try:
+        loop.symlink_to(loop)
+    except (OSError, NotImplementedError):  # pragma: no cover (Windows w/o priv)
+        pytest.skip("symlinks not supported on this platform/privilege level")
+
+    snap = build_snapshot(brain)  # must not raise
+    paths = {e["path"] for e in snap["entries"]}
+    assert "alpha/loop.md" not in paths
+    assert "alpha/auth.md" in paths
+
+
+# --- parse errors: malformed frontmatter is dropped, but COUNTED --------------
+
+
+def test_snapshot_tallies_malformed_frontmatter(tmp_path):
+    """A neuron whose frontmatter won't parse is dropped from every surface —
+    so the snapshot reports the count (and a bounded sample) instead of
+    silently under-counting the brain."""
+    brain = _make_brain(tmp_path)
+    # Unbalanced flow sequence in YAML frontmatter → parse error.
+    _write(brain, "alpha/bad.md", "---\ntitle: [unclosed\n---\noops\n")
+
+    snap = build_snapshot(brain)
+    assert snap["parse_errors"] == 1
+    assert "alpha/bad.md" in snap["parse_error_sample"]
+    # The malformed neuron is absent; the good ones remain.
+    paths = {e["path"] for e in snap["entries"]}
+    assert "alpha/bad.md" not in paths
+    assert "alpha/auth.md" in paths
+
+
+def test_wake_up_payload_surfaces_parse_errors(tmp_path):
+    """build_payload threads the snapshot's parse-error count into the wake-up
+    payload so an operator can see neurons were dropped."""
+    brain = _make_brain(tmp_path)
+    _write(brain, "alpha/bad.md", "---\ntitle: [unclosed\n---\noops\n")
+    snap = build_snapshot(brain)
+    fed = build_payload(brain, snapshot=snap)
+    assert fed["parse_errors"] == 1
+    # No snapshot ⇒ the per-call walk doesn't tally, so the field is 0.
+    assert build_payload(brain)["parse_errors"] == 0

@@ -164,7 +164,7 @@ def _query_table(
     weights = ", ".join(str(w) for w in _BM25_WEIGHTS)
     return con.execute(
         f"SELECT rowid, bm25(docs, {weights}) AS score "
-        "FROM docs WHERE docs MATCH ? ORDER BY score LIMIT ? OFFSET ?",
+        "FROM docs WHERE docs MATCH ? ORDER BY score, path LIMIT ? OFFSET ?",
         (expr, limit, offset),
     ).fetchall()
 
@@ -289,7 +289,7 @@ def _query_db(db_path: Path, expr: str, limit: int, offset: int) -> tuple[list, 
         rows = con.execute(
             f"SELECT bm25(docs, {weights}) AS score, "
             "title, tags, path, body, file_type, deprecated "
-            "FROM docs WHERE docs MATCH ? ORDER BY score LIMIT ? OFFSET ?",
+            "FROM docs WHERE docs MATCH ? ORDER BY score, path LIMIT ? OFFSET ?",
             (expr, limit, offset),
         ).fetchall()
         return rows, _match_total(con, expr)
@@ -460,7 +460,7 @@ def _query_db_grouped(
             "SELECT score, title, tags, path, body, file_type, deprecated "
             "FROM ("
             "  SELECT t.*, ROW_NUMBER() OVER ("
-            "    PARTITION BY lobe ORDER BY score) AS rn"
+            "    PARTITION BY lobe ORDER BY score, path) AS rn"
             "  FROM ("
             f"    SELECT bm25(docs, {weights}) AS score, title, tags, path, "
             "          body, file_type, deprecated, "
@@ -491,9 +491,9 @@ def _query_table_grouped(
     return con.execute(
         "SELECT rid, score FROM ("
         "  SELECT t.*, ROW_NUMBER() OVER ("
-        "    PARTITION BY lobe ORDER BY score) AS rn"
+        "    PARTITION BY lobe ORDER BY score, path) AS rn"
         "  FROM ("
-        f"    SELECT rowid AS rid, bm25(docs, {weights}) AS score, "
+        f"    SELECT rowid AS rid, bm25(docs, {weights}) AS score, path, "
         "          CASE WHEN instr(path, '/') > 0 "
         "               THEN substr(path, 1, instr(path, '/') - 1) "
         "               ELSE '(root)' END AS lobe "

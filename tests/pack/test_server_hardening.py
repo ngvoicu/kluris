@@ -1,4 +1,4 @@
-"""Access gate + rate limit + single-walk boot wiring (2.28.0)."""
+"""Log redaction + single-walk boot wiring + system-prompt lock (2.28.0)."""
 
 from __future__ import annotations
 
@@ -26,88 +26,19 @@ def _app(api_key_env, fixture_brain, tmp_path, stub_provider, **extra):
     )
 
 
-# --- access gate ---------------------------------------------------------------
+# --- open server (no auth) -------------------------------------------------------
 
 
-def test_no_token_keeps_server_open_with_boot_warning(
-    api_key_env, fixture_brain, tmp_path, stub_provider, capsys
-):
-    app = _app(api_key_env, fixture_brain, tmp_path, stub_provider)
-    assert "KLURIS_ACCESS_TOKEN is not set" in capsys.readouterr().err
-    with TestClient(app) as client:
-        assert client.get("/api/brain/files").status_code == 200
-
-
-def test_access_token_gates_everything_but_healthz(
+def test_server_is_open_no_auth(
     api_key_env, fixture_brain, tmp_path, stub_provider
 ):
-    app = _app(
-        api_key_env, fixture_brain, tmp_path, stub_provider,
-        KLURIS_ACCESS_TOKEN="s3cret",
-    )
+    """The pack ships without any access gate — every route is reachable and
+    POST /chat is never rate-limited."""
+    app = _app(api_key_env, fixture_brain, tmp_path, stub_provider)
     with TestClient(app) as client:
-        # /healthz stays open for container healthchecks.
         assert client.get("/healthz").status_code == 200
-        # Everything else is 401 without the token.
-        assert client.get("/api/brain/files").status_code == 401
-        assert client.get("/").status_code == 401
-        assert client.post("/chat", json={"message": "hi"}).status_code == 401
-        # Bearer header passes.
-        ok = client.get(
-            "/api/brain/files",
-            headers={"Authorization": "Bearer s3cret"},
-        )
-        assert ok.status_code == 200
-        # Wrong token still 401.
-        bad = client.get(
-            "/api/brain/files",
-            headers={"Authorization": "Bearer nope"},
-        )
-        assert bad.status_code == 401
-
-
-def test_access_token_query_param_sets_cookie_for_browser(
-    api_key_env, fixture_brain, tmp_path, stub_provider
-):
-    app = _app(
-        api_key_env, fixture_brain, tmp_path, stub_provider,
-        KLURIS_ACCESS_TOKEN="s3cret",
-    )
-    with TestClient(app) as client:
-        first = client.get("/api/brain/files", params={"token": "s3cret"})
-        assert first.status_code == 200
-        assert client.cookies.get("kluris_access") == "s3cret"
-        # Subsequent requests ride the cookie — no header, no query.
         assert client.get("/api/brain/files").status_code == 200
-
-
-# --- rate limit ------------------------------------------------------------------
-
-
-def test_rate_limit_caps_chat_posts_per_minute(
-    api_key_env, fixture_brain, tmp_path, stub_provider
-):
-    app = _app(
-        api_key_env, fixture_brain, tmp_path, stub_provider,
-        KLURIS_RATE_LIMIT_PER_MIN="2",
-    )
-    with TestClient(app) as client:
-        r1 = client.post("/chat", json={"message": "one"})
-        r2 = client.post("/chat", json={"message": "two"})
-        assert r1.status_code == 200
-        assert r2.status_code == 200
-        r3 = client.post("/chat", json={"message": "three"})
-        assert r3.status_code == 429
-        assert "rate limit" in r3.json()["error"]
-        # Read-only routes are never limited.
-        assert client.get("/api/brain/files").status_code == 200
-
-
-def test_rate_limit_disabled_by_default(
-    api_key_env, fixture_brain, tmp_path, stub_provider
-):
-    app = _app(api_key_env, fixture_brain, tmp_path, stub_provider)
-    with TestClient(app) as client:
+        assert client.get("/").status_code == 200
         for i in range(5):
             assert client.post(
                 "/chat", json={"message": f"m{i}"}
@@ -186,32 +117,15 @@ def test_lock_system_prompt_pins_first_read(tmp_path, fixture_brain):
         _clear_pinned_prompts()
 
 
-def test_token_query_redirects_to_clean_url_and_sets_cookie(
-    api_key_env, fixture_brain, tmp_path, stub_provider
-):
-    """A browser GET ?token= is 303-redirected to the token-free URL with the
-    cookie set — the secret never lingers in history/Referer or repeats in the
-    access log on later navigation."""
-    app = _app(
-        api_key_env, fixture_brain, tmp_path, stub_provider,
-        KLURIS_ACCESS_TOKEN="s3cret",
-    )
-    with TestClient(app) as client:
-        resp = client.get(
-            "/api/brain/files", params={"token": "s3cret"},
-            follow_redirects=False,
-        )
-        assert resp.status_code == 303
-        assert "token=" not in resp.headers["location"]
-        assert client.cookies.get("kluris_access") == "s3cret"
+# --- log secret redaction --------------------------------------------------------
 
 
 def test_uvicorn_access_logger_carries_redaction_filter(
     api_key_env, fixture_brain, tmp_path, stub_provider
 ):
     """The access logger must carry the redacting filter directly (it has its
-    own handler + propagate=False), so a ?token= request line is scrubbed in
-    docker logs."""
+    own handler + propagate=False), so a registered secret in a request line
+    is scrubbed in docker logs."""
     import logging
     from kluris.pack.middleware import (
         RedactingLogFilter,
@@ -221,11 +135,10 @@ def test_uvicorn_access_logger_carries_redaction_filter(
 
     _clear_registered_secrets()
     try:
-        _app(api_key_env, fixture_brain, tmp_path, stub_provider,
-             KLURIS_ACCESS_TOKEN="s3cret")
+        _app(api_key_env, fixture_brain, tmp_path, stub_provider)
         acc = logging.getLogger("uvicorn.access")
         assert any(isinstance(f, RedactingLogFilter) for f in acc.filters)
-        # And the registered token is scrubbed from a synthetic access line.
+        # And a registered secret is scrubbed from a synthetic access line.
         register_secret("s3cret")
         rec = logging.LogRecord(
             "uvicorn.access", logging.INFO, __file__, 0,
@@ -249,7 +162,7 @@ def test_uvicorn_access_formatter_survives_redaction_filter():
     behavior) made formatMessage raise "not enough values to unpack (expected
     5, got 0)" on every request — spamming the container logs on each /healthz
     probe. Run the REAL AccessFormatter over a post-filter record to prove it
-    formats cleanly AND redacts the gating token."""
+    formats cleanly AND redacts a registered secret in the URL."""
     import logging
     from uvicorn.logging import AccessFormatter
 
@@ -276,25 +189,3 @@ def test_uvicorn_access_formatter_survives_redaction_filter():
         assert '"GET /?token=*** HTTP/1.1" 200' in line
     finally:
         _clear_registered_secrets()
-
-
-def test_rate_limit_does_not_count_unauthenticated_requests(
-    api_key_env, fixture_brain, tmp_path, stub_provider
-):
-    """The access gate runs OUTSIDE the rate limiter: a 401'd request must not
-    consume the per-IP budget, so a valid client is never locked out by an
-    attacker's rejected spam."""
-    app = _app(
-        api_key_env, fixture_brain, tmp_path, stub_provider,
-        KLURIS_ACCESS_TOKEN="s3cret",
-        KLURIS_RATE_LIMIT_PER_MIN="2",
-    )
-    with TestClient(app) as client:
-        # 5 unauthenticated POSTs — all 401, none counted.
-        for _ in range(5):
-            assert client.post("/chat", json={"message": "x"}).status_code == 401
-        # The legitimate client still has its full budget.
-        hdr = {"Authorization": "Bearer s3cret"}
-        assert client.post("/chat", json={"message": "1"}, headers=hdr).status_code == 200
-        assert client.post("/chat", json={"message": "2"}, headers=hdr).status_code == 200
-        assert client.post("/chat", json={"message": "3"}, headers=hdr).status_code == 429

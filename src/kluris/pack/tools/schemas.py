@@ -60,9 +60,11 @@ def _search_schema() -> dict[str, Any]:
                     "Return the top `limit` hits PER lobe instead of a flat "
                     "list — the one-call way to answer 'X across every "
                     "lobe/country'. Use a small limit (3-5). The result also "
-                    "lists `no_match_lobes`: lobes that were searched and "
-                    "contain NO match — treat those as definitive and do NOT "
-                    "re-search them one by one."
+                    "lists `no_match_lobes`: lobes with no keyword match for "
+                    "this query. Don't repeat this exact search per-lobe — but "
+                    "keyword search matches whole-word prefixes only, so if you "
+                    "expected content in one, try a differently-phrased query "
+                    "rather than treating it as definitively empty."
                 ),
             },
         },

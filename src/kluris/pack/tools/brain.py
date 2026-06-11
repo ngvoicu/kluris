@@ -135,6 +135,10 @@ def wake_up_tool(brain_path: Path) -> dict[str, Any]:
 _SEARCH_BODY_MAX_BYTES = 4096
 _MAX_SNIPPET_CHARS = 2000
 _MAX_FULL_BODIES = 5
+# recent() page-size ceiling — mirrors the JSON schema's maximum. The runtime
+# is the real boundary: a non-strict provider may ignore the schema maximum,
+# and an unbounded limit would return the whole brain's recent list.
+_MAX_RECENT_LIMIT = 100
 
 
 def search_tool(
@@ -280,8 +284,11 @@ def _grouped_search(
         result["no_match_lobes"] = no_match[:_MAX_NO_MATCH_LOBES_LISTED]
         result["no_match_lobe_count"] = len(no_match)
         result["no_match_note"] = (
-            "These lobes were searched and contain NO match for this query — "
-            "treat them as definitive; do not re-search them individually."
+            "These lobes had no keyword match for this query. Don't repeat the "
+            "same search per-lobe — but keyword search matches whole-word "
+            "prefixes only, so if you expected content in one of them, try a "
+            "differently-phrased query rather than treating it as definitively "
+            "empty."
         )
     return result
 
@@ -539,8 +546,9 @@ def recent_tool(
         key=lambda d: (_recency_key(d["updated"] or ""), d["_mtime"], d["_filename"]),
         reverse=True,
     )
+    n = max(0, min(int(limit), _MAX_RECENT_LIMIT))
     trimmed = [{k: v for k, v in item.items() if not k.startswith("_")}
-               for item in items[: max(0, int(limit))]]
+               for item in items[:n]]
     return {"ok": True, "results": trimmed}
 
 

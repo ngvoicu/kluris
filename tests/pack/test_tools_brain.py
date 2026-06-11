@@ -343,6 +343,16 @@ def test_recent_limit_honored(fixture_brain):
     assert len(out["results"]) <= 2
 
 
+def test_recent_clamps_oversized_limit_at_runtime(fixture_brain, monkeypatch):
+    """recent() must clamp `limit` at the runtime boundary: a non-strict
+    provider can ignore the JSON-schema maximum, so an absurd limit must not
+    return an unbounded list. (Ceiling lowered here to observe the clamp on a
+    small fixture brain.)"""
+    monkeypatch.setattr(brain_tools, "_MAX_RECENT_LIMIT", 1)
+    out = recent_tool(fixture_brain, limit=100_000)
+    assert len(out["results"]) == 1
+
+
 def test_recent_skips_unreadable_frontmatter(fixture_brain, monkeypatch):
     original = brain_tools.read_frontmatter
 
@@ -721,8 +731,8 @@ def test_search_group_by_lobe_buckets_per_lobe(fixture_brain):
 
 def test_group_by_lobe_reports_no_match_lobes_with_snapshot(snapshot_brain):
     """With the boot snapshot registered, group_by_lobe names the lobes that
-    were searched and matched NOTHING — so the model can treat absence as
-    definitive instead of re-searching each missing lobe one by one."""
+    were searched and matched NOTHING — so the model converges instead of
+    re-running the same search in each missing lobe one by one."""
     # "raw sql" lives only in the knowledge lobe (raw-sql-modern / raw-sql-old).
     out = search_tool(snapshot_brain, "raw sql", group_by_lobe=True)
     assert out["grouped_by_lobe"] is True
@@ -731,7 +741,12 @@ def test_group_by_lobe_reports_no_match_lobes_with_snapshot(snapshot_brain):
     assert out["lobes_with_matches"] == 1
     assert out["no_match_lobe_count"] == 2
     assert set(out["no_match_lobes"]) == {"infrastructure", "projects"}
-    assert "definitive" in out["no_match_note"].lower()
+    # The note discourages repeating the SAME per-lobe search, but must NOT
+    # claim the absence is definitive — FTS matches whole-word prefixes only,
+    # so a differently-phrased query could still hit.
+    note = out["no_match_note"].lower()
+    assert "keyword" in note
+    assert "differently-phrased" in note
 
 
 def test_group_by_lobe_omits_no_match_lobes_without_snapshot(fixture_brain):

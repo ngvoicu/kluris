@@ -303,22 +303,9 @@ class Config(BaseModel):
     # request (re-servable instantly on an identical re-issue). <= 0 disables.
     keep_result_rounds: int = _DEFAULT_KEEP_RESULT_ROUNDS
 
-    # Optional shared-secret gate for the whole HTTP surface (except
-    # /healthz). Unset (the default) keeps the server open and prints a loud
-    # boot warning instead — backward compatible, but every deployer sees the
-    # nudge. Accepted as ``Authorization: Bearer <token>``, the
-    # ``kluris_access`` cookie, or a one-time ``?token=`` query that sets
-    # the cookie for browser use.
-    access_token: SecretStr | None = None
-
-    # Per-IP fixed-window rate limit on POST /chat (requests per minute).
-    # 0 disables (default) — one anonymous client can otherwise drive
-    # unbounded provider spend on a public deployment.
-    rate_limit_per_min: int = 0
-
     # Opt-in retention: sessions older than this many days are pruned at
-    # boot. 0 (default) keeps everything — deleting a deployer's history
-    # must never be a surprise.
+    # boot and periodically while the server runs. 0 (default) keeps
+    # everything — deleting a deployer's history must never be a surprise.
     session_retention_days: int = 0
 
     # Pin the system prompt at boot instead of re-reading
@@ -595,9 +582,6 @@ class Config(BaseModel):
         keep_result_rounds = _read_int(
             env, "KLURIS_KEEP_RESULT_ROUNDS", _DEFAULT_KEEP_RESULT_ROUNDS
         )
-        access_token_raw = env.get("KLURIS_ACCESS_TOKEN", "").strip()
-        access_token = SecretStr(access_token_raw) if access_token_raw else None
-        rate_limit_per_min = _read_int(env, "KLURIS_RATE_LIMIT_PER_MIN", 0)
         session_retention_days = _read_int(env, "KLURIS_SESSION_RETENTION_DAYS", 0)
         lock_system_prompt = _read_bool(env, "KLURIS_LOCK_SYSTEM_PROMPT", False)
         brain_dir = Path(env.get("KLURIS_BRAIN_DIR", "/app/brain"))
@@ -646,8 +630,6 @@ class Config(BaseModel):
             max_turn_tokens=max_turn_tokens,
             max_neuron_bytes=max_neuron_bytes,
             keep_result_rounds=keep_result_rounds,
-            access_token=access_token,
-            rate_limit_per_min=rate_limit_per_min,
             session_retention_days=session_retention_days,
             lock_system_prompt=lock_system_prompt,
             brain_dir=brain_dir,

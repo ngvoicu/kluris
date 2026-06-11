@@ -254,33 +254,20 @@ _SYNTHESIS_NUDGE = (
 )
 
 
-def _flatten_for_synthesis(
+def _collect_synthesis_evidence(
     messages: list[dict[str, Any]],
-    max_tokens: int,
     stored_results: dict[str, str] | None = None,
-) -> list[dict[str, Any]]:
-    """Rebuild the turn as a plain, tool-free conversation for the synthesis
-    pass.
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """Split a turn's transcript into ``(plain_messages, evidence)``.
 
-    Re-sending the tool transcript for the final answer is exactly what blanked
-    in the field: gpt-5-family models served through LiteLLM's chat→Responses
-    translation lose their reasoning items between function calls (chat format
-    has no slot for them), and a long tool-laden transcript degrades to an
-    empty ``finish='stop'`` completion — for the main round AND for a retry
-    with the same shape. So the fallback flattens instead: system and plain
-    chat messages survive as-is, and every tool result is folded into ONE
-    closing user message that carries the gathered evidence plus the
-    answer-now nudge. No ``tool_calls`` / ``role: tool`` machinery remains for
-    the translation layer to mangle.
-
-    Evidence is fitted to ``max_tokens`` newest-first (the freshest results are
-    what the answer needs); elided older entries are counted in a marker line.
-    Stubbed results (eager eliding or budget compaction) are RESTORED from
-    ``stored_results`` (``tool_call_id`` → full content) when available, so
-    the synthesis sees everything the turn gathered, not just the trailing
-    window. Duplicate-call stubs and re-served copies carry no NEW evidence
-    and are skipped. ``max_tokens <= 0`` keeps every entry. Returns a NEW
-    list; ``messages`` is not mutated.
+    ``plain_messages`` are the system + chat turns with no ``tool_calls`` /
+    ``role: tool`` machinery. ``evidence`` is one ``[tool] <content>`` string
+    per DISTINCT tool result gathered this turn, oldest-first. Stubbed results
+    (eager eliding / budget compaction) are RESTORED from ``stored_results``
+    (``tool_call_id`` → full content) when available; duplicate-call stubs and
+    re-served copies carry no NEW evidence and are skipped. An empty
+    ``evidence`` list means the turn gathered nothing concrete to answer from.
+    ``messages`` is not mutated.
     """
     name_by_call_id: dict[str, str] = {}
     flat: list[dict[str, Any]] = []
@@ -316,7 +303,17 @@ def _flatten_for_synthesis(
             evidence.append(f"[{name}] {content}")
             continue
         flat.append(dict(msg))
+    return flat, evidence
 
+
+def _build_synthesis_request(
+    flat: list[dict[str, Any]],
+    evidence: list[str],
+    max_tokens: int,
+) -> list[dict[str, Any]]:
+    """Fold ``evidence`` into one closing user message + the answer-now nudge,
+    fitted to ``max_tokens`` newest-first (elided older entries are counted in a
+    marker line; ``max_tokens <= 0`` keeps every entry). Returns a NEW list."""
     kept = evidence
     dropped = 0
     if max_tokens > 0:
@@ -343,8 +340,41 @@ def _flatten_for_synthesis(
         )
     parts.extend(kept)
     parts.append(_SYNTHESIS_NUDGE)
-    flat.append({"role": "user", "content": "\n\n".join(parts)})
-    return flat
+    out = list(flat)
+    out.append({"role": "user", "content": "\n\n".join(parts)})
+    return out
+
+
+def _flatten_for_synthesis(
+    messages: list[dict[str, Any]],
+    max_tokens: int,
+    stored_results: dict[str, str] | None = None,
+) -> list[dict[str, Any]]:
+    """Rebuild the turn as a plain, tool-free conversation for the synthesis
+    pass.
+
+    Re-sending the tool transcript for the final answer is exactly what blanked
+    in the field: gpt-5-family models served through LiteLLM's chat→Responses
+    translation lose their reasoning items between function calls (chat format
+    has no slot for them), and a long tool-laden transcript degrades to an
+    empty ``finish='stop'`` completion — for the main round AND for a retry
+    with the same shape. So the fallback flattens instead: system and plain
+    chat messages survive as-is, and every tool result is folded into ONE
+    closing user message that carries the gathered evidence plus the
+    answer-now nudge. No ``tool_calls`` / ``role: tool`` machinery remains for
+    the translation layer to mangle.
+
+    Evidence is fitted to ``max_tokens`` newest-first (the freshest results are
+    what the answer needs); elided older entries are counted in a marker line.
+    Stubbed results (eager eliding or budget compaction) are RESTORED from
+    ``stored_results`` (``tool_call_id`` → full content) when available, so
+    the synthesis sees everything the turn gathered, not just the trailing
+    window. Duplicate-call stubs and re-served copies carry no NEW evidence
+    and are skipped. ``max_tokens <= 0`` keeps every entry. Returns a NEW
+    list; ``messages`` is not mutated.
+    """
+    flat, evidence = _collect_synthesis_evidence(messages, stored_results)
+    return _build_synthesis_request(flat, evidence, max_tokens)
 
 
 def _provider_error_event(exc: Exception) -> dict[str, Any]:
@@ -432,6 +462,8 @@ async def _run_synthesis_fallback(
 
     Outcomes, in precedence order:
 
+    - no concrete evidence gathered     → ``empty_error`` (skip the model call
+      entirely — see below), then ``end``;
     - a clean answer streamed           → just ``end``;
     - a drop mid-answer (partial text)  → an "incomplete" note, then ``end``;
     - a fatal provider error, no tokens → the classified error, then ``end``;
@@ -445,9 +477,16 @@ async def _run_synthesis_fallback(
 
     Always terminates the turn with ``{"kind": "end"}``.
     """
-    messages = _flatten_for_synthesis(
-        messages, config.max_turn_tokens, stored_results
-    )
+    flat, evidence = _collect_synthesis_evidence(messages, stored_results)
+    if not evidence:
+        # A turn that gathered no concrete evidence — e.g. only duplicate
+        # calls, or elided stubs that couldn't be restored. Forcing a
+        # tools-disabled completion on an EMPTY evidence block just invites an
+        # ungrounded answer; surface the caller's recoverable error instead.
+        yield empty_error
+        yield {"kind": "end"}
+        return
+    messages = _build_synthesis_request(flat, evidence, config.max_turn_tokens)
     produced = False
     completed = False
     error_event: dict[str, Any] | None = None

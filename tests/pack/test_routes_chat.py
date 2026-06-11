@@ -74,6 +74,9 @@ def test_get_root_always_opens_fresh_conversation(api_key_config: Config):
     with TestClient(app) as client:
         client.get("/")
         sid1 = client.cookies.get("kluris_session")
+        # GET / no longer writes a row (lazy on first message); seed it so this
+        # test can simulate a prior conversation directly through the store.
+        app.state.session_store.new_session(session_id=sid1)
         app.state.session_store.append_message(sid1, "user", "remember me please")
         reload = client.get("/")
         sid2 = client.cookies.get("kluris_session")
@@ -340,6 +343,7 @@ def test_list_sessions_endpoint_excludes_empty_and_flags_current(
         sid1 = client.cookies.get("kluris_session")
         assert sid1
         store = app.state.session_store
+        store.new_session(session_id=sid1)  # lazy: GET / no longer writes a row
         store.append_message(sid1, "user", "Hello brain, what is JWT?")
 
         # Start a fresh conversation → current session, but still empty.
@@ -383,6 +387,7 @@ def test_get_session_endpoint_returns_user_visible_messages(
         client.get("/")
         sid = client.cookies.get("kluris_session")
         store = app.state.session_store
+        store.new_session(session_id=sid)  # lazy: GET / no longer writes a row
         store.append_message(sid, "user", "Question?")
         store.append_message(sid, "assistant", "Answer.")
         store.append_message(sid, "tool", "{}")
@@ -413,6 +418,7 @@ def test_export_session_endpoint_writes_markdown_and_json(
         client.get("/")
         sid = client.cookies.get("kluris_session")
         store = app.state.session_store
+        store.new_session(session_id=sid)  # lazy: GET / no longer writes a row
         store.append_message(sid, "user", "Hi.")
         store.append_message(sid, "assistant", "Hello!")
 
@@ -468,3 +474,65 @@ def test_post_chat_new_rotates_cookie(api_key_config: Config):
         assert new_resp.status_code == 200
         new_cookie = new_resp.cookies.get("kluris_session")
         assert new_cookie and new_cookie != old_cookie
+
+
+def test_get_root_does_not_persist_a_session_row(api_key_config: Config):
+    """A page load (crawler, probe, refresh) must not leave a row behind — the
+    row is created LAZILY on the first POST /chat, for the SAME (stable) sid."""
+    app = _build_app(api_key_config)
+    with TestClient(app) as client:
+        client.get("/")
+        sid = client.cookies.get("kluris_session")
+        assert sid
+        # No row yet — the bare page load wrote nothing.
+        assert app.state.session_store.session_exists(sid) is False
+        # The first message creates the row for the SAME sid (not a new one).
+        client.post("/chat", json={"message": "hello"})
+        assert client.cookies.get("kluris_session") == sid
+        assert app.state.session_store.session_exists(sid) is True
+
+
+def test_maybe_prune_debounces_then_reprunes_after_interval(monkeypatch):
+    """Retention pruning runs at boot (first call) and again only after the
+    interval — request-triggered, so a long-running container with traffic
+    keeps sweeping instead of pruning exactly once per process."""
+    from types import SimpleNamespace
+
+    import kluris.pack.routes.chat as chat_mod
+
+    calls: list[int] = []
+    store = SimpleNamespace(
+        prune_old_sessions=lambda days: (calls.append(days) or 0)
+    )
+    app = SimpleNamespace(
+        state=SimpleNamespace(
+            config=SimpleNamespace(session_retention_days=30),
+        )
+    )
+    # First call prunes (no prior timestamp).
+    chat_mod._maybe_prune(app, store)
+    assert calls == [30]
+    # An immediate second call is debounced inside the interval.
+    chat_mod._maybe_prune(app, store)
+    assert calls == [30]
+    # Once the interval has elapsed, it prunes again.
+    monkeypatch.setattr(chat_mod, "_PRUNE_INTERVAL_SECONDS", 0)
+    chat_mod._maybe_prune(app, store)
+    assert calls == [30, 30]
+
+
+def test_maybe_prune_noop_when_retention_disabled():
+    """Retention off (the default) must never delete history."""
+    from types import SimpleNamespace
+
+    import kluris.pack.routes.chat as chat_mod
+
+    calls: list[int] = []
+    store = SimpleNamespace(
+        prune_old_sessions=lambda days: (calls.append(days) or 0)
+    )
+    app = SimpleNamespace(
+        state=SimpleNamespace(config=SimpleNamespace(session_retention_days=0))
+    )
+    chat_mod._maybe_prune(app, store)
+    assert calls == []

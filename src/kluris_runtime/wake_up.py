@@ -228,7 +228,8 @@ def build_payload(
 
     Returns a dict with: ``ok``, ``name``, ``path``, ``description``,
     ``brain_md``, ``lobes``, ``total_neurons``, ``total_yaml_neurons``,
-    ``recent``, ``glossary``, ``deprecation_count``, ``deprecation``.
+    ``recent``, ``glossary``, ``deprecation_count``, ``deprecation``,
+    ``parse_errors``.
 
     Does NOT include scaffold metadata (``type``, ``type_structure``).
     Callers should use the live ``lobes[]`` payload to understand the
@@ -274,4 +275,11 @@ def build_payload(
         "glossary": glossary_entries,
         "deprecation_count": len(deprecation_issues),
         "deprecation": deprecation_issues,
+        # Neurons dropped at the boot walk because their frontmatter wouldn't
+        # parse — they're invisible to search/listings, so report the count so
+        # an operator can tell "the brain has N files" from "N are searchable".
+        # 0 when no snapshot is available (the per-call walk doesn't tally).
+        "parse_errors": (
+            snapshot.get("parse_errors", 0) if snapshot is not None else 0
+        ),
     }

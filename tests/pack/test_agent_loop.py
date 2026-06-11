@@ -579,6 +579,48 @@ async def test_synthesis_midstream_drop_flags_partial_incomplete(
     assert errors[0]["recoverable"] is True
 
 
+async def test_synthesis_skips_provider_when_no_evidence_gathered(tmp_path):
+    """A turn whose only tool results are duplicate stubs has NOTHING concrete
+    to answer from. Synthesis must surface the caller's empty_error WITHOUT
+    calling the provider — a completion over an empty evidence block would just
+    invite an ungrounded answer."""
+    from kluris.pack.agent import _run_synthesis_fallback
+
+    class _NeverProvider(LLMProvider):
+        model = "never"
+
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def smoke_test(self) -> None:  # pragma: no cover
+            return None
+
+        async def complete_stream(self, messages, tools):
+            self.calls += 1  # pragma: no cover (must never be reached)
+            yield {"kind": "end"}
+
+    cfg = _config(tmp_path)
+    messages = [
+        {"role": "system", "content": "S"},
+        {"role": "user", "content": "Q"},
+        {"role": "assistant", "content": "",
+         "tool_calls": [{"id": "t0", "name": "search", "args": {"query": "a"}}]},
+        {"role": "tool", "tool_call_id": "t0",
+         "content": '{"ok": true, "duplicate": true, "note": "n"}'},
+    ]
+    empty_error = {"kind": "error", "message": "nothing found", "recoverable": True}
+    provider = _NeverProvider()
+    events = [
+        ev async for ev in _run_synthesis_fallback(
+            provider, messages, cfg, empty_error,
+        )
+    ]
+    assert provider.calls == 0
+    assert empty_error in events
+    assert events[-1] == {"kind": "end"}
+    assert not any(e.get("kind") == "token" for e in events)
+
+
 async def test_elided_result_reserved_from_cache_not_redispatched(
     fixture_brain, tmp_path
 ):

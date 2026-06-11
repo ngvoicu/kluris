@@ -82,10 +82,12 @@ slow `docker compose up --build` cycles.
 
 ## Public exposure
 
-By default the compose file binds to `127.0.0.1:8765`. To expose
-publicly, edit the port mapping AND put Kluris behind external
-access control — reverse proxy auth, VPN, cloud IAM, or private
-network. There is no built-in UI auth.
+By default the compose file binds the port on all interfaces
+(`8765:8765`). The server has NO built-in auth or rate limiting — run
+it on a trusted host or network. Restrict the mapping to
+`127.0.0.1:8765:8765` for local-only access, and if you expose it more
+widely, put external access control in front (reverse proxy auth, VPN,
+cloud IAM, or a private network).
 
 ## Credential rotation
 

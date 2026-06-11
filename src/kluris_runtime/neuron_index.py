@@ -51,12 +51,35 @@ def has_yaml_opt_in_block(path: Path) -> bool:
     return False
 
 
+def _escapes_brain(path: Path, brain_root: Path) -> bool:
+    """True if ``path`` is a symlink whose target resolves OUTSIDE the brain.
+
+    ``os.walk`` lists symlinked files (it just doesn't descend symlinked
+    dirs), so a neuron symlinked to a host path like ``/etc/passwd`` or the
+    ``/data`` volume would otherwise be read and indexed even though the read
+    tools' sandbox (``resolve_in_brain``) rejects the same path. Mirror that
+    sandbox here so search can never surface content the read path refuses.
+    A broken or unresolvable symlink — including a symlink LOOP, which raises
+    ``RuntimeError`` rather than ``OSError`` — is treated as an escape
+    (dropped), so one pathological link can never abort the whole walk and
+    disable every cached tool.
+    """
+    if not path.is_symlink():
+        return False
+    try:
+        resolved = path.resolve()
+    except (OSError, RuntimeError):
+        return True
+    return not is_within_brain(resolved, brain_root)
+
+
 def all_neuron_files(brain_path: Path) -> list[Path]:
     """Collect all neuron source files (markdown + opted-in yaml).
 
     Walks the brain once per suffix, filtering out tooling / hidden
     dirs and the ``SKIP_FILES`` set. Yaml files must declare themselves
-    via a ``#---`` block.
+    via a ``#---`` block. Symlinked files whose target escapes the brain
+    root are dropped (see :func:`_escapes_brain`).
     """
     # Walk with os.walk and prune skip/hidden dirs IN PLACE so we never
     # descend into them. rglob would scandir `.git/objects/*` and race with
@@ -72,11 +95,16 @@ def all_neuron_files(brain_path: Path) -> list[Path]:
         base = Path(dirpath)
         for name in filenames:
             if name.endswith(".md"):
-                md_files.append(base / name)
+                item = base / name
+                if _escapes_brain(item, brain_path):
+                    continue
+                md_files.append(item)
             elif name.endswith((".yml", ".yaml")):
                 if name in SKIP_FILES:
                     continue
                 item = base / name
+                if _escapes_brain(item, brain_path):
+                    continue
                 if not has_yaml_opt_in_block(item):
                     continue
                 yaml_files.append(item)

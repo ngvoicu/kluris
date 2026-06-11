@@ -134,7 +134,7 @@ def create_app(
     # Value-based redaction: register the ACTUAL configured secrets so a
     # gateway/IdP that echoes one in an error body (in any shape the regex
     # patterns don't recognize) still never reaches logs or the chat UI.
-    for secret in (cfg.api_key, cfg.oauth_client_secret, cfg.access_token):
+    for secret in (cfg.api_key, cfg.oauth_client_secret):
         if secret is not None:
             register_secret(secret.get_secret_value())
 
@@ -307,132 +307,16 @@ def create_app(
         sys.stderr.flush()
         app.state.wake_up_cached = False
 
-    # Order matters: Starlette runs the LAST-added middleware OUTERMOST, so
-    # the access gate must be installed AFTER the rate limit to run FIRST —
-    # otherwise an unauthenticated request consumes the per-IP budget before
-    # it is rejected.
-    _install_rate_limit(app, cfg)
-    _install_access_gate(app, cfg)
     _mount_minimal_routes(app)
-    # uvicorn binds to 0.0.0.0:8765 inside the container (required for
-    # docker port mapping), but compose maps host->127.0.0.1:8765 only.
-    # uvicorn's startup banner shows "0.0.0.0:8765" which some browsers
-    # can't resolve on Windows — print the host-reachable URL instead.
+    # uvicorn binds to 0.0.0.0:8765 inside the container (required for docker
+    # port mapping); compose maps it to the host. uvicorn's startup banner
+    # shows "0.0.0.0:8765" which some browsers can't resolve on Windows —
+    # print the host-reachable URL instead.
     sys.stderr.write(
         "kluris-pack: open http://localhost:8765 in your browser\n"
     )
     sys.stderr.flush()
     return app
-
-
-def _install_access_gate(app: FastAPI, cfg: Config) -> None:
-    """Optional shared-secret gate over the whole HTTP surface.
-
-    When ``KLURIS_ACCESS_TOKEN`` is set, every route except ``/healthz``
-    requires the token via ``Authorization: Bearer``, the ``kluris_access``
-    cookie, or a one-time ``?token=`` query parameter (which sets the cookie
-    so a browser link like ``http://host:8765/?token=...`` just works).
-    When unset, the server stays open — with a loud boot warning, because an
-    open /chat lets anyone who can reach the port spend provider tokens.
-    """
-    import hmac
-
-    from fastapi.responses import RedirectResponse
-
-    if cfg.access_token is None:
-        sys.stderr.write(
-            "kluris-pack: WARNING — KLURIS_ACCESS_TOKEN is not set; anyone "
-            "who can reach this port can chat (and spend provider tokens) "
-            "and browse the brain. Set KLURIS_ACCESS_TOKEN to require a "
-            "shared secret, especially when exposing beyond localhost.\n"
-        )
-        sys.stderr.flush()
-        return
-
-    token = cfg.access_token.get_secret_value()
-
-    def _matches(candidate: str | None) -> bool:
-        return candidate is not None and hmac.compare_digest(candidate, token)
-
-    @app.middleware("http")
-    async def _access_gate(request, call_next):
-        if request.url.path == "/healthz":
-            return await call_next(request)
-        auth = request.headers.get("authorization", "")
-        if auth.startswith("Bearer ") and _matches(auth[len("Bearer "):]):
-            return await call_next(request)
-        if _matches(request.cookies.get("kluris_access")):
-            return await call_next(request)
-        if _matches(request.query_params.get("token")):
-            secure = request.url.scheme == "https" or (
-                request.headers.get("x-forwarded-proto", "").lower() == "https"
-            )
-            # For a browser GET, redirect to the SAME path with the token
-            # stripped from the query, setting the cookie on the redirect.
-            # This keeps the secret out of browser history, the Referer
-            # header, and every subsequent access-log line (only the initial
-            # request line carries it — and that line is redacted in logs,
-            # see _install_uvicorn_access_redaction).
-            if request.method in ("GET", "HEAD"):
-                clean_qs = "&".join(
-                    f"{k}={v}" for k, v in request.query_params.multi_items()
-                    if k != "token"
-                )
-                target = request.url.path + (f"?{clean_qs}" if clean_qs else "")
-                redirect = RedirectResponse(target, status_code=303)
-                redirect.set_cookie(
-                    "kluris_access", token,
-                    httponly=True, samesite="lax", secure=secure,
-                )
-                return redirect
-            response = await call_next(request)
-            response.set_cookie(
-                "kluris_access", token,
-                httponly=True, samesite="lax", secure=secure,
-            )
-            return response
-        return JSONResponse(
-            {"ok": False, "error": "unauthorized: KLURIS_ACCESS_TOKEN required"},
-            status_code=401,
-        )
-
-
-def _install_rate_limit(app: FastAPI, cfg: Config) -> None:
-    """Per-IP fixed-window rate limit on POST /chat (0 = disabled).
-
-    A single chat turn can fan out to many provider calls, so this is the
-    server-side backstop against one client driving unbounded spend. In-
-    process and approximate by design — no extra services in the container.
-    """
-    if cfg.rate_limit_per_min <= 0:
-        return
-
-    import time
-    from collections import deque
-
-    buckets: dict[str, deque] = {}
-
-    @app.middleware("http")
-    async def _rate_limit(request, call_next):
-        if request.method == "POST" and request.url.path == "/chat":
-            ip = request.client.host if request.client else "unknown"
-            now = time.monotonic()
-            if len(buckets) > 10000:
-                # Backstop against unbounded per-IP state on a scanned
-                # public port; resetting is acceptable for an approximate
-                # limiter.
-                buckets.clear()
-            window = buckets.setdefault(ip, deque())
-            while window and now - window[0] > 60.0:
-                window.popleft()
-            if len(window) >= cfg.rate_limit_per_min:
-                return JSONResponse(
-                    {"ok": False,
-                     "error": "rate limit exceeded; try again in a minute"},
-                    status_code=429,
-                )
-            window.append(now)
-        return await call_next(request)
 
 
 def _redact(text: str) -> str:

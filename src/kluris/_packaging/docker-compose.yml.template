@@ -4,28 +4,14 @@ services:
     image: ${KLURIS_IMAGE:-kluris-pack/{brain_name}:latest}
     container_name: {brain_name}-pack
     ports:
-      # Loopback by default. Edit to "0.0.0.0:8765:8765" for public
-      # exposure — and put the app behind external auth (reverse
-      # proxy, VPN, cloud IAM) before doing so.
-      - "127.0.0.1:8765:8765"
+      # Bound on all interfaces. Restrict to "127.0.0.1:8765:8765" if you
+      # only want local access on the host.
+      - "8765:8765"
     volumes:
       - kluris-data:/data
     env_file:
       - .env
     restart: unless-stopped
-    # --- container hardening (safe defaults; loosen only deliberately) ----
-    # The app needs no Linux capabilities (non-root user, port >1024), no
-    # privilege escalation, and no writable rootfs (/data volume + /tmp
-    # tmpfs are the only writable paths; the brain is read-only by image
-    # construction).
-    security_opt:
-      - no-new-privileges:true
-    cap_drop:
-      - ALL
-    read_only: true
-    tmpfs:
-      - /tmp
-    pids_limit: 256
     # Resource caps — uncomment and size to your brain/host. A 10k-neuron
     # brain is comfortable in 1g; very large brains hold their search index
     # and snapshot in RAM, so size up before capping.

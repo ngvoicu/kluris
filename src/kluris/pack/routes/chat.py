@@ -52,25 +52,49 @@ def _new_session_id() -> str:
     return uuid.uuid4().hex + secrets.token_hex(8)
 
 
+# Re-sweep retention at most this often on a live container. Request-triggered
+# rather than a background task: a container with no traffic has nothing
+# growing, and the single uvicorn worker makes the check race-free.
+_PRUNE_INTERVAL_SECONDS = 6 * 3600
+
+
+def _maybe_prune(app: FastAPI, store: SessionStore) -> None:
+    """Sweep sessions past the retention window — on the first request that
+    touches the store (no prior timestamp) and at most once per
+    :data:`_PRUNE_INTERVAL_SECONDS` thereafter.
+
+    Opt-in (``KLURIS_SESSION_RETENTION_DAYS``); without it a long-running
+    container would accumulate a full transcript per turn forever.
+    """
+    cfg: Config = app.state.config
+    retention = getattr(cfg, "session_retention_days", 0)
+    if retention <= 0:
+        return
+    import time
+
+    now = time.monotonic()
+    last = getattr(app.state, "_last_prune_monotonic", None)
+    if last is not None and now - last < _PRUNE_INTERVAL_SECONDS:
+        return
+    app.state._last_prune_monotonic = now
+    pruned = store.prune_old_sessions(retention)
+    if pruned:
+        import sys
+
+        sys.stderr.write(
+            f"kluris-pack: pruned {pruned} session(s) older than "
+            f"{retention} days\n"
+        )
+        sys.stderr.flush()
+
+
 def _store(app: FastAPI) -> SessionStore:
     cfg: Config = app.state.config
     store = getattr(app.state, "session_store", None)
     if store is None:
         store = SessionStore(cfg.data_dir / "sessions.db")
-        # Opt-in retention sweep, once per store construction (i.e. per
-        # process): without it a long-running container accumulates a
-        # session row per page load and a full transcript per turn forever.
-        retention = getattr(cfg, "session_retention_days", 0)
-        if retention > 0:
-            pruned = store.prune_old_sessions(retention)
-            if pruned:
-                import sys
-                sys.stderr.write(
-                    f"kluris-pack: pruned {pruned} session(s) older than "
-                    f"{retention} days\n"
-                )
-                sys.stderr.flush()
         app.state.session_store = store
+    _maybe_prune(app, store)
     return store
 
 
@@ -112,12 +136,13 @@ def attach_chat_routes(app: FastAPI) -> None:
     @app.get("/", response_class=HTMLResponse)
     async def chat_page(request: Request):
         cfg: Config = app.state.config
-        store = _store(app)
+        _store(app)
         # Always open a FRESH conversation on page load — the prior session
         # (if any) is preserved in the store and reachable via "Past
-        # conversations", but is not resumed or replayed into the page.
+        # conversations", but is not resumed or replayed into the page. The
+        # row is created LAZILY on the first POST /chat (see chat_post), so a
+        # page load that never sends a message leaves no empty row behind.
         sid = _new_session_id()
-        store.new_session(session_id=sid)
         template = env.get_template("chat.html")
         html = template.render(
             brain_name=_brain_name(cfg),
@@ -151,9 +176,12 @@ def attach_chat_routes(app: FastAPI) -> None:
         provider: LLMProvider = app.state.provider
         store = _store(app)
 
-        sid = request.cookies.get(_COOKIE_NAME)
-        if not sid or not store.session_exists(sid):
-            sid = _new_session_id()
+        # Reuse the page-load cookie's session id and create its row HERE, on
+        # the first message — chat_page sets the cookie but no longer writes a
+        # row, so a page load that never chats leaves nothing behind. Only mint
+        # a fresh id when there is no cookie at all.
+        sid = request.cookies.get(_COOKIE_NAME) or _new_session_id()
+        if not store.session_exists(sid):
             store.new_session(session_id=sid)
 
         try:

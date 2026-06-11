@@ -46,6 +46,11 @@ from kluris_runtime.search import (
 # wake_up payload stays bounded regardless of brain size.
 TOP_TAGS_PER_LOBE = 8
 
+# Cap on dropped-neuron paths sampled into the snapshot's parse-error report.
+# The COUNT is always exact; only the sample list is bounded so the payload
+# stays small on a brain with many malformed files.
+MAX_PARSE_ERROR_SAMPLE = 20
+
 
 def _rel(brain_path: Path, target: Path) -> str:
     return str(target.relative_to(brain_path)).replace("\\", "/")
@@ -61,10 +66,19 @@ def build_snapshot(brain_path: Path) -> dict:
     brain_root = brain_path.resolve()
 
     parsed: list[tuple[Path, Path, str, dict, str]] = []
+    parse_error_count = 0
+    parse_error_sample: list[str] = []
     for neuron in neuron_files(brain_root):
         try:
             meta, body = read_frontmatter(neuron)
         except Exception:
+            # Malformed frontmatter (bad YAML, non-UTF8, etc.). The neuron is
+            # dropped from EVERY surface — search, listings, lobe counts — so
+            # tally it: wake-up surfaces the count so the loss is observable
+            # rather than a silent under-count of the brain.
+            parse_error_count += 1
+            if len(parse_error_sample) < MAX_PARSE_ERROR_SAMPLE:
+                parse_error_sample.append(_rel(brain_root, neuron))
             continue
         try:
             resolved = neuron.resolve()
@@ -186,6 +200,8 @@ def build_snapshot(brain_path: Path) -> dict:
         "inbound": inbound,
         "preparsed": preparsed,
         "lobe_tags": lobe_tags,
+        "parse_errors": parse_error_count,
+        "parse_error_sample": parse_error_sample,
     }
 
 
