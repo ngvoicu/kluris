@@ -614,6 +614,71 @@ def _summarize_tool_result(name: str, result: dict[str, Any]) -> str:
     return ""
 
 
+# How often (seconds) to poll ``should_cancel`` while WAITING for the next
+# provider event. The existing yield→GeneratorExit path already tears down a
+# token-STREAMING round on disconnect; this poll covers the gap a reasoning
+# model leaves when it emits NO events for many seconds — without it, an
+# abandoned high-effort turn bills the whole silent generation before the
+# round boundary's check (run_agent's top-of-loop ``should_cancel``) fires.
+_CANCEL_POLL_INTERVAL_SECONDS = 1.0
+
+
+class _Disconnected(Exception):
+    """Raised inside the streaming loop when ``should_cancel`` reports the
+    client is gone — including mid-round, during a silent reasoning phase."""
+
+
+async def _stream_until_disconnect(stream, should_cancel, poll_interval):
+    """Yield events from ``stream`` (a provider ``complete_stream`` async
+    generator), but abort with :class:`_Disconnected` the moment
+    ``should_cancel()`` reports a disconnect — even when the model is mid-round
+    and emitting nothing.
+
+    Each ``__anext__`` is raced against ``poll_interval`` with
+    ``asyncio.wait`` (which, unlike ``wait_for``, does NOT cancel the pending
+    read on timeout, so the in-flight event is never lost). All teardown lives
+    in the ``finally``: a still-pending read is cancelled and DRAINED before
+    ``aclose()`` — both on the disconnect (``_Disconnected``) path and when the
+    outer task is cancelled mid-wait — so ``aclose()`` never hits a running
+    generator and the upstream LLM request is torn down (stops billing). With
+    ``should_cancel is None`` (CLI / tests) this is a plain pass-through.
+    """
+    if should_cancel is None:
+        async for event in stream:
+            yield event
+        return
+    aiter = stream.__aiter__()
+    nxt = None
+    try:
+        while True:
+            nxt = asyncio.ensure_future(aiter.__anext__())
+            while not nxt.done():
+                await asyncio.wait({nxt}, timeout=poll_interval)
+                if not nxt.done() and await should_cancel():
+                    raise _Disconnected
+            try:
+                event = nxt.result()
+            except StopAsyncIteration:
+                nxt = None
+                return
+            nxt = None  # consumed — nothing in flight across the yield
+            yield event
+    finally:
+        # A read may still be in flight here: we raised _Disconnected with it
+        # pending, OR the outer task was cancelled while we awaited. Cancel and
+        # DRAIN it before aclose() — otherwise aclose() raises "async generator
+        # is already running" and the read (and its billing) leaks. Drain via
+        # asyncio.wait, NOT `await nxt`: awaiting a cancelled task would raise a
+        # CancelledError we'd have to catch, risking swallowing the outer task's
+        # own cancellation; asyncio.wait lets that outer cancel propagate.
+        if nxt is not None and not nxt.done():
+            nxt.cancel()
+            await asyncio.wait({nxt})
+        aclose = getattr(stream, "aclose", None)
+        if aclose is not None:
+            await aclose()
+
+
 async def run_agent(
     *,
     config: Config,
@@ -711,7 +776,11 @@ async def run_agent(
         pending_tools: list[dict[str, Any]] = []
         round_text: list[str] = []
         try:
-            async for event in provider.complete_stream(messages, tools):
+            async for event in _stream_until_disconnect(
+                provider.complete_stream(messages, tools),
+                should_cancel,
+                _CANCEL_POLL_INTERVAL_SECONDS,
+            ):
                 kind = event.get("kind")
                 if kind == "token":
                     round_text.append(str(event.get("text", "")))
@@ -729,6 +798,12 @@ async def run_agent(
                     pass  # we'll decide below whether to continue
                 else:
                     yield event
+        except _Disconnected:
+            # Client went away mid-round (incl. a silent reasoning phase). The
+            # upstream LLM request was already torn down in the helper; stop the
+            # turn without billing further rounds.
+            yield {"kind": "end"}
+            return
         except (ContextLimitError, AuthError, RequestError) as exc:
             # Surface the provider's actual message (the RequestError carries the
             # response body, capped to 200 chars), not just the class name, and

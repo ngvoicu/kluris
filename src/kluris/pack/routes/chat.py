@@ -53,9 +53,23 @@ def _new_session_id() -> str:
 
 
 # Re-sweep retention at most this often on a live container. Request-triggered
-# rather than a background task: a container with no traffic has nothing
-# growing, and the single uvicorn worker makes the check race-free.
+# (not a background task): a container with no traffic has nothing growing, and
+# the single uvicorn worker makes the due-check race-free.
 _PRUNE_INTERVAL_SECONDS = 6 * 3600
+
+# Strong refs to in-flight prune tasks so the loop doesn't GC them mid-run.
+_prune_tasks: set = set()
+
+
+def _log_pruned(pruned: int, retention: int) -> None:
+    if pruned:
+        import sys
+
+        sys.stderr.write(
+            f"kluris-pack: pruned {pruned} session(s) older than "
+            f"{retention} days\n"
+        )
+        sys.stderr.flush()
 
 
 def _maybe_prune(app: FastAPI, store: SessionStore) -> None:
@@ -64,7 +78,11 @@ def _maybe_prune(app: FastAPI, store: SessionStore) -> None:
     :data:`_PRUNE_INTERVAL_SECONDS` thereafter.
 
     Opt-in (``KLURIS_SESSION_RETENTION_DAYS``); without it a long-running
-    container would accumulate a full transcript per turn forever.
+    container would accumulate a full transcript per turn forever. The DELETE
+    runs OFF the event loop (it holds the DB lock and does real SQLite work on
+    a large history) as a fire-and-forget task — a missed sweep just runs on
+    the next interval. With no running loop (a unit test calling this directly)
+    it prunes inline.
     """
     cfg: Config = app.state.config
     retention = getattr(cfg, "session_retention_days", 0)
@@ -77,15 +95,31 @@ def _maybe_prune(app: FastAPI, store: SessionStore) -> None:
     if last is not None and now - last < _PRUNE_INTERVAL_SECONDS:
         return
     app.state._last_prune_monotonic = now
-    pruned = store.prune_old_sessions(retention)
-    if pruned:
-        import sys
 
-        sys.stderr.write(
-            f"kluris-pack: pruned {pruned} session(s) older than "
-            f"{retention} days\n"
-        )
-        sys.stderr.flush()
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+    if loop is None:
+        _log_pruned(store.prune_old_sessions(retention), retention)
+        return
+
+    async def _sweep() -> None:
+        try:
+            pruned = await asyncio.to_thread(store.prune_old_sessions, retention)
+        except Exception as exc:  # pragma: no cover (degrades, never fatal)
+            import sys
+
+            sys.stderr.write(
+                f"kluris-pack: session prune failed ({type(exc).__name__})\n"
+            )
+            sys.stderr.flush()
+            return
+        _log_pruned(pruned, retention)
+
+    task = loop.create_task(_sweep())
+    _prune_tasks.add(task)
+    task.add_done_callback(_prune_tasks.discard)
 
 
 def _store(app: FastAPI) -> SessionStore:
@@ -181,8 +215,8 @@ def attach_chat_routes(app: FastAPI) -> None:
         # row, so a page load that never chats leaves nothing behind. Only mint
         # a fresh id when there is no cookie at all.
         sid = request.cookies.get(_COOKIE_NAME) or _new_session_id()
-        if not store.session_exists(sid):
-            store.new_session(session_id=sid)
+        if not await asyncio.to_thread(store.session_exists, sid):
+            await asyncio.to_thread(store.new_session, session_id=sid)
 
         try:
             payload = await request.json()
@@ -195,10 +229,10 @@ def attach_chat_routes(app: FastAPI) -> None:
                 status_code=400,
             )
 
-        history = store.replay(sid)
+        history = await asyncio.to_thread(store.replay, sid)
         # Persist the user's turn before streaming so a refresh-mid-
         # answer doesn't lose the prompt.
-        store.append_message(sid, "user", user_message)
+        await asyncio.to_thread(store.append_message, sid, "user", user_message)
 
         async def event_stream():
             assistant_text_parts: list[str] = []
@@ -235,6 +269,10 @@ def attach_chat_routes(app: FastAPI) -> None:
                         f"[error: {msg}]" for msg in agent_errors
                     )
                 if assistant_text:
+                    # One small INSERT, kept synchronous: this runs during the
+                    # SSE generator's teardown (GeneratorExit on disconnect),
+                    # where awaiting is fragile. A single bounded INSERT on the
+                    # loop is an acceptable tradeoff for not awaiting mid-aclose.
                     store.append_message(sid, "assistant", assistant_text)
 
         resp = StreamingResponse(event_stream(), media_type="text/event-stream")
@@ -346,7 +384,10 @@ def attach_chat_routes(app: FastAPI) -> None:
         # caller's current session so the UI can highlight it.
         store = _store(app)
         current_sid = request.cookies.get(_COOKIE_NAME) or ""
-        sessions = store.list_sessions(limit=200)
+        # The correlated COUNT/first-user subqueries can run long once the
+        # messages table is large — off the event loop so it can't stall every
+        # concurrent SSE stream.
+        sessions = await asyncio.to_thread(store.list_sessions, limit=200)
         for s in sessions:
             s["is_current"] = (s["id"] == current_sid)
         return JSONResponse({"ok": True, "sessions": sessions})
@@ -357,11 +398,11 @@ def attach_chat_routes(app: FastAPI) -> None:
         # so the picker shows only the user-visible turns; the export
         # endpoint preserves them for fidelity.
         store = _store(app)
-        if not store.session_exists(sid):
+        if not await asyncio.to_thread(store.session_exists, sid):
             return JSONResponse(
                 {"ok": False, "error": "not_found"}, status_code=404,
             )
-        rows = store.replay(sid)
+        rows = await asyncio.to_thread(store.replay, sid)
         messages = [
             {
                 "role": m["role"],
@@ -384,11 +425,11 @@ def attach_chat_routes(app: FastAPI) -> None:
         # a Content-Disposition: attachment so the browser saves it
         # rather than rendering inline.
         store = _store(app)
-        if not store.session_exists(sid):
+        if not await asyncio.to_thread(store.session_exists, sid):
             return JSONResponse(
                 {"ok": False, "error": "not_found"}, status_code=404,
             )
-        rows = store.replay(sid)
+        rows = await asyncio.to_thread(store.replay, sid)
         short = sid[:8] if len(sid) >= 8 else sid
         fmt = (format or "md").lower()
         if fmt == "json":
@@ -442,7 +483,7 @@ def attach_chat_routes(app: FastAPI) -> None:
         # specific session, or wipe the docker volume to drop them all.
         store = _store(app)
         new_sid = _new_session_id()
-        store.new_session(session_id=new_sid)
+        await asyncio.to_thread(store.new_session, session_id=new_sid)
         resp = JSONResponse({"ok": True, "session_id": new_sid})
         resp.set_cookie(
             _COOKIE_NAME, new_sid,

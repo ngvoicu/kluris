@@ -143,3 +143,46 @@ def test_sessions_created_at_index_exists(tmp_path):
     )}
     con.close()
     assert "idx_sessions_created" in names
+
+
+def test_store_enables_wal_and_busy_timeout(tmp_path):
+    """WAL (readers don't block the writer) + a 5s busy_timeout (wait instead
+    of erroring 'database is locked') — both matter now that store calls run
+    on worker threads off the event loop."""
+    store = _store(tmp_path)
+    try:
+        mode = store._conn.execute("PRAGMA journal_mode").fetchone()[0]
+        assert mode.lower() == "wal"
+        assert store._conn.execute("PRAGMA busy_timeout").fetchone()[0] == 5000
+    finally:
+        store.close()
+
+
+def test_store_concurrent_writes_are_safe(tmp_path):
+    """The internal lock makes the single shared connection safe under
+    concurrent threads — mirroring the asyncio.to_thread offload the chat
+    routes use. Without it, concurrent cursor use raises or corrupts."""
+    import threading
+
+    store = _store(tmp_path)
+    try:
+        store.new_session(session_id="s1")
+        errors: list[Exception] = []
+
+        def worker(n: int) -> None:
+            try:
+                for i in range(25):
+                    store.append_message("s1", "user", f"m{n}-{i}")
+            except Exception as exc:  # pragma: no cover (failure path)
+                errors.append(exc)
+
+        threads = [threading.Thread(target=worker, args=(n,)) for n in range(8)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert errors == []
+        assert len(store.replay("s1")) == 8 * 25
+    finally:
+        store.close()

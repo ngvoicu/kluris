@@ -621,6 +621,110 @@ async def test_synthesis_skips_provider_when_no_evidence_gathered(tmp_path):
     assert not any(e.get("kind") == "token" for e in events)
 
 
+async def test_disconnect_cancels_silent_reasoning_round(
+    fixture_brain, tmp_path, monkeypatch
+):
+    """A client that disconnects DURING a silent (no-token) reasoning phase
+    must abort the round promptly — the loop polls should_cancel WHILE waiting
+    for the next event, not only at the round boundary — and the provider
+    stream is torn down so spend stops."""
+    import asyncio
+
+    import kluris.pack.agent as agent_mod
+
+    monkeypatch.setattr(agent_mod, "_CANCEL_POLL_INTERVAL_SECONDS", 0.01)
+
+    cfg = _config(fixture_brain, KLURIS_DATA_DIR=str(tmp_path / "data"))
+    (tmp_path / "data").mkdir()
+
+    state = {"disconnected": False, "closed": False}
+
+    class _SilentReasoningProvider(LLMProvider):
+        model = "silent"
+
+        async def smoke_test(self):  # pragma: no cover
+            return None
+
+        async def complete_stream(self, messages, tools):
+            try:
+                yield {"kind": "token", "text": "thinking"}
+                # Client goes away, then the model enters a long SILENT
+                # reasoning phase emitting nothing.
+                state["disconnected"] = True
+                await asyncio.sleep(30)
+                yield {"kind": "token", "text": "SHOULD_NOT_APPEAR"}  # pragma: no cover
+                yield {"kind": "end"}  # pragma: no cover
+            finally:
+                state["closed"] = True
+
+    async def should_cancel():
+        return state["disconnected"]
+
+    # wait_for guards against a regression hanging the whole suite.
+    events = await asyncio.wait_for(
+        _drain(run_agent(
+            config=cfg, provider=_SilentReasoningProvider(), history=[],
+            user_message="x", should_cancel=should_cancel,
+        )),
+        timeout=5,
+    )
+    texts = "".join(e.get("text", "") for e in events if e.get("kind") == "token")
+    assert "thinking" in texts
+    assert "SHOULD_NOT_APPEAR" not in texts  # aborted before the silent gap ended
+    assert events[-1]["kind"] == "end"
+    assert state["closed"] is True  # provider stream torn down (spend stops)
+
+
+async def test_external_cancellation_during_silent_round_closes_stream(
+    fixture_brain, tmp_path
+):
+    """If the SSE task is cancelled EXTERNALLY (e.g. server shutdown) while the
+    model is mid-silent-round, teardown must still drain the in-flight read and
+    close the provider stream — the buggy version would aclose() a running
+    generator ('already running') and leak the upstream request instead."""
+    import asyncio
+
+    cfg = _config(fixture_brain, KLURIS_DATA_DIR=str(tmp_path / "data"))
+    (tmp_path / "data").mkdir()
+
+    started = asyncio.Event()
+    state = {"closed": False}
+
+    class _SilentForever(LLMProvider):
+        model = "silent"
+
+        async def smoke_test(self):  # pragma: no cover
+            return None
+
+        async def complete_stream(self, messages, tools):
+            try:
+                yield {"kind": "token", "text": "thinking"}
+                started.set()
+                await asyncio.sleep(3600)  # silent — never yields again
+                yield {"kind": "end"}  # pragma: no cover
+            finally:
+                state["closed"] = True
+
+    async def never_cancel():
+        # Disconnect is NOT signalled; the cancellation is purely external.
+        return False
+
+    async def drive():
+        async for _ in run_agent(
+            config=cfg, provider=_SilentForever(), history=[],
+            user_message="x", should_cancel=never_cancel,
+        ):
+            pass
+
+    task = asyncio.ensure_future(drive())
+    await asyncio.wait_for(started.wait(), timeout=5)
+    await asyncio.sleep(0.05)  # let it settle into the silent sleep
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert state["closed"] is True  # cleanly torn down on external cancellation
+
+
 async def test_elided_result_reserved_from_cache_not_redispatched(
     fixture_brain, tmp_path
 ):

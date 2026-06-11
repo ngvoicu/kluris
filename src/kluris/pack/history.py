@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import os
 import sqlite3
+import threading
 import time
 import uuid
 from contextlib import contextmanager
@@ -54,7 +55,15 @@ CREATE INDEX IF NOT EXISTS idx_sessions_created
 
 
 class SessionStore:
-    """Thin wrapper over a single :class:`sqlite3.Connection`."""
+    """Thin wrapper over a single :class:`sqlite3.Connection`.
+
+    The connection is shared, and the pack offloads store calls to
+    ``asyncio.to_thread`` (see :mod:`kluris.pack.routes.chat`) so a slow query
+    never stalls the single event loop. Because one ``sqlite3.Connection`` is
+    NOT safe for concurrent use across threads, every operation is serialized
+    by ``self._lock`` (held only for the duration of one cursor block); WAL +
+    ``busy_timeout`` keep that wait short.
+    """
 
     def __init__(self, db_path: Path) -> None:
         self.db_path = Path(db_path)
@@ -69,18 +78,29 @@ class SessionStore:
                 os.chmod(self.db_path, 0o600)
             except OSError:
                 pass
+        self._lock = threading.Lock()
         self._conn = sqlite3.connect(str(self.db_path), isolation_level=None,
                                      check_same_thread=False)
         self._conn.execute("PRAGMA foreign_keys = ON")
+        # Wait (up to 5s) for a competing writer instead of erroring out with
+        # "database is locked"; WAL lets the sessions-picker read run without
+        # blocking the writer. Both matter once calls run on worker threads.
+        self._conn.execute("PRAGMA busy_timeout = 5000")
+        self._conn.execute("PRAGMA journal_mode = WAL")
         self._conn.executescript(_SCHEMA)
 
     @contextmanager
     def cursor(self):
-        cur = self._conn.cursor()
-        try:
-            yield cur
-        finally:
-            cur.close()
+        # Serialize the shared connection: with store calls offloaded to
+        # worker threads, two requests can reach the DB at once, and a single
+        # sqlite3.Connection is not safe for concurrent use. The lock makes
+        # each cursor block atomic; it is released as soon as the block exits.
+        with self._lock:
+            cur = self._conn.cursor()
+            try:
+                yield cur
+            finally:
+                cur.close()
 
     def close(self) -> None:
         self._conn.close()
@@ -163,9 +183,9 @@ class SessionStore:
 
         Returns the number of sessions removed. ``retention_days <= 0`` is a
         no-op — retention is strictly opt-in, deleting a deployer's history
-        must never be a surprise default. Called at boot; a long-running
-        container otherwise accumulates a session row per page load and a
-        full transcript per turn, forever.
+        must never be a surprise default. Swept periodically while the server
+        handles requests (see ``routes.chat._maybe_prune``); a long-running
+        container otherwise accumulates a full transcript per turn, forever.
         """
         if retention_days <= 0:
             return 0
