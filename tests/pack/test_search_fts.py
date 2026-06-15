@@ -469,3 +469,68 @@ def test_grouped_within_lobe_ranking_identical_on_both_paths(tmp_path):
 
     assert files(mem) == files(disk)        # order included, not just membership
     assert mem["total"] == disk["total"]
+
+
+# --- phrase pre-pass promotion (v2.28.8) -------------------------------------
+
+
+def _phrase_brain(tmp_path: Path) -> Path:
+    """A neuron whose ONLY phrase match is in its body (short body, no query
+    terms in its title), competing with term-dense neurons that contain the
+    same words scattered (and in their titles) but never as the contiguous
+    phrase. Plain BM25 ranks the phrase match LAST; only the phrase pre-pass
+    surfaces it — so a test on this fixture fails if promotion is removed."""
+    b = tmp_path / "pbrain"
+    (b / "scheme").mkdir(parents=True)
+    (b / "brain.md").write_text("# Demo\n", encoding="utf-8")
+    (b / "glossary.md").write_text("# Glossary\n", encoding="utf-8")
+    (b / "scheme" / "buried.md").write_text(
+        "# Settlement Detail\n\nNote: the acquirer transaction fee applies "
+        "to cleared items.\n",
+        encoding="utf-8",
+    )
+    # Term-dense competitors: acquirer/transaction/fee many times each (also in
+    # the title), but never the contiguous phrase — high OR score, no phrase.
+    scatter = ("This acquirer assessment covers transaction volume and a "
+               "separate fee. ") * 12
+    for name in ("overview", "assessment", "clearing", "switching",
+                 "reports", "authorization"):
+        (b / "scheme" / f"{name}.md").write_text(
+            f"# {name.title()} Acquirer Transaction Volume Fee\n\n{scatter}\n",
+            encoding="utf-8")
+    return b
+
+
+@requires_fts
+def test_phrase_promotion_surfaces_buried_phrase_match(tmp_path):
+    """A contiguous-phrase match buried by plain BM25 (it ranks LAST under the
+    OR window — verified) is promoted to #1 by the phrase pre-pass. Regression
+    guard with teeth: covers the in-memory AND persistent-index paths plus the
+    grouped path — remove promotion and this fails."""
+    brain = _phrase_brain(tmp_path)
+    q = "acquirer transaction fee"
+
+    paged = sf.search_brain_fts_paged(brain, q, limit=8)
+    assert paged["results"], "phrase query returned nothing"
+    assert paged["results"][0]["file"] == "scheme/buried.md", \
+        [r["file"] for r in paged["results"]]
+
+    grouped = sf.search_brain_fts_grouped(brain, q, per_lobe=2)
+    assert grouped["lobes"]["scheme"][0]["file"] == "scheme/buried.md"
+
+    # Same contract over the persistent on-disk index path.
+    assert _build_db(brain, tmp_path / "p.sqlite")
+    assert sf.search_brain_fts_paged(brain, q, limit=8)["results"][0]["file"] \
+        == "scheme/buried.md"
+    assert sf.search_brain_fts_grouped(
+        brain, q, per_lobe=2)["lobes"]["scheme"][0]["file"] == "scheme/buried.md"
+
+
+@requires_fts
+def test_phrase_promotion_preserves_or_recall(tmp_path):
+    """When the contiguous phrase matches nothing, the OR/BM25 recall path is
+    unchanged — a scattered multi-term query still returns its full match set."""
+    brain = _phrase_brain(tmp_path)
+    # 'transaction acquirer' never appears contiguously, but both terms do.
+    out = sf.search_brain_fts_paged(brain, "transaction acquirer", limit=10)
+    assert out["total"] > 0 and out["results"], "recall lost for scattered query"

@@ -97,6 +97,75 @@ def _match_expr(query: str) -> tuple[str | None, list[str]]:
     return expr, tokens
 
 
+# Cap on phrase-pre-pass hits promoted ahead of the OR window. A CONTIGUOUS
+# phrase is far rarer than its OR token-set, so this is generous headroom.
+_PHRASE_PROMOTE_CAP = 50
+
+
+def _phrase_expr(query: str) -> str | None:
+    """FTS5 CONTIGUOUS-phrase expression for ``query``, or ``None`` for a
+    single token.
+
+    The OR expression (:func:`_match_expr`) tokenizes a multi-word query into
+    independent prefix terms. On a homogeneous corpus where each term is
+    near-zero-IDF (e.g. ``acquirer``/``transaction``/``fee`` each occur in most
+    neurons), bm25 collapses to a near-flat score and the exact-named neuron
+    loses to term-dense overview pages — even with the 10x title weight, which
+    multiplies a near-zero IDF. A phrase MATCH requires the tokens CONTIGUOUS,
+    which is rare enough to rank an exact/near-exact match decisively. Phrase
+    hits are a SUBSET of the OR hits, so promoting them ahead of the OR results
+    only re-orders the same match set — ``total`` is unchanged. Single-token
+    queries need no phrase pass (phrase == OR), so return ``None`` to skip it.
+    """
+    tokens = re.findall(r"\w+", query.lower())
+    if len(tokens) < 2:
+        return None
+    return '"' + " ".join(tokens) + '"'
+
+
+def _phrase_promote(
+    phrase_results: list[dict], or_results: list[dict], limit: int, offset: int
+) -> list[dict]:
+    """Merge ``phrase_results`` ahead of ``or_results``, dedup, and page.
+
+    Dedup key is ``(file, title)`` — NOT ``file`` — because every glossary
+    entry shares ``file == "glossary.md"`` but is a distinct result. Phrase
+    hits lead (precision); OR hits backfill (recall). Returns the
+    ``[offset:offset+limit]`` slice of the merged order.
+    """
+    seen: set[tuple[str, str]] = set()
+    merged: list[dict] = []
+    for r in phrase_results + or_results:
+        key = (r["file"], r.get("title", ""))
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append(r)
+    return merged[offset:offset + limit]
+
+
+def _bucket_promote(
+    lobes: dict[str, list[dict]], phrase_results: list[dict], per_lobe: int
+) -> dict[str, list[dict]]:
+    """Promote contiguous-phrase hits to the front of each lobe's bucket,
+    re-capping at ``per_lobe``. Dedup key ``(file, title)``. Mutates and
+    returns ``lobes``."""
+    by_lobe: dict[str, list[dict]] = {}
+    for r in phrase_results:
+        by_lobe.setdefault(_lobe_of(r["file"]), []).append(r)
+    for lobe, hits in by_lobe.items():
+        seen: set[tuple[str, str]] = set()
+        merged: list[dict] = []
+        for r in hits + lobes.get(lobe, []):
+            key = (r["file"], r.get("title", ""))
+            if key in seen:
+                continue
+            seen.add(key)
+            merged.append(r)
+        lobes[lobe] = merged[:per_lobe]
+    return lobes
+
+
 def _passes(item: dict, lobe_filter: str | None, tag_filter: str | None) -> bool:
     """Same lobe (path-prefix) + tag (exact membership) filtering as
     ``search_brain``, applied before indexing so the budget/limit is spent on
@@ -375,20 +444,28 @@ def search_brain_fts_paged(
         )
 
     resolved = brain_path.resolve()
+    phrase = _phrase_expr(query)
+    # When promoting, phrase hits (<= cap) prepended can push OR rows past the
+    # requested page, so widen the OR fetch enough to refill it after the merge.
+    or_limit = limit if phrase is None else offset + limit + _PHRASE_PROMOTE_CAP
+    or_offset = offset if phrase is None else 0
 
     if lobe_filter is None and tag_filter is None:
         db_path = _DB_REGISTRY.get(resolved)
         if db_path is not None:
             try:
-                rows, total = _query_db(db_path, expr, limit, offset)
-                return {
-                    "results": _db_rows_to_results(
-                        rows, tokens,
-                        snippet_chars=snippet_chars,
-                        include_bodies=include_bodies,
-                    ),
-                    "total": total,
-                }
+                or_rows, total = _query_db(db_path, expr, or_limit, or_offset)
+                or_res = _db_rows_to_results(
+                    or_rows, tokens, snippet_chars=snippet_chars,
+                    include_bodies=include_bodies)
+                if phrase is None:
+                    return {"results": or_res, "total": total}
+                ph_rows, _ = _query_db(db_path, phrase, _PHRASE_PROMOTE_CAP, 0)
+                ph_res = _db_rows_to_results(
+                    ph_rows, tokens, snippet_chars=snippet_chars,
+                    include_bodies=include_bodies)
+                return {"results": _phrase_promote(ph_res, or_res, limit, offset),
+                        "total": total}
             except sqlite3.Error:
                 pass  # degrade to the in-memory build below
 
@@ -400,22 +477,30 @@ def search_brain_fts_paged(
         # Filter BEFORE indexing so BM25 IDF is scoped to the eligible rows,
         # exactly as today. The fresh per-query connection lives only on this
         # thread, so the engine is thread-safe however requests are dispatched.
+        # The OR and phrase queries run on the SAME table — built once.
         items = [it for it in source if _passes(it, lobe_filter, tag_filter)]
         if not items:
             return {"results": [], "total": 0}
         con = _build_fts_table(items)
         try:
-            rows = _query_table(con, expr, limit, offset)
+            or_rows = _query_table(con, expr, or_limit, or_offset)
             total = _match_total(con, expr)
+            or_res = _rows_to_results(
+                items, or_rows, tokens,
+                snippet_chars=snippet_chars, include_bodies=include_bodies)
+            if phrase is None:
+                ph_res = None
+            else:
+                ph_rows = _query_table(con, phrase, _PHRASE_PROMOTE_CAP, 0)
+                ph_res = _rows_to_results(
+                    items, ph_rows, tokens,
+                    snippet_chars=snippet_chars, include_bodies=include_bodies)
         finally:
             con.close()
-        return {
-            "results": _rows_to_results(
-                items, rows, tokens,
-                snippet_chars=snippet_chars, include_bodies=include_bodies,
-            ),
-            "total": total,
-        }
+        if ph_res is None:
+            return {"results": or_res, "total": total}
+        return {"results": _phrase_promote(ph_res, or_res, limit, offset),
+                "total": total}
     except sqlite3.Error:
         return search_brain_paged(
             brain_path, query, limit=limit, offset=offset,
@@ -548,6 +633,13 @@ def search_brain_fts_grouped(
                 rows, tokens, snippet_chars=snippet_chars
             ):
                 lobes.setdefault(_lobe_of(result["file"]), []).append(result)
+            phrase = _phrase_expr(query)
+            if phrase is not None:
+                ph_rows, _ = _query_db(db_path, phrase, _PHRASE_PROMOTE_CAP, 0)
+                lobes = _bucket_promote(
+                    lobes,
+                    _db_rows_to_results(ph_rows, tokens, snippet_chars=snippet_chars),
+                    per_lobe)
             return {"lobes": lobes, "total": total}
         except sqlite3.Error:
             pass  # degrade to the in-memory path below
@@ -564,13 +656,23 @@ def search_brain_fts_grouped(
         try:
             rows = _query_table_grouped(con, expr, per_lobe)
             total = _match_total(con, expr)
+            lobes = {}
+            for result in _rows_to_results(
+                source, rows, tokens, snippet_chars=snippet_chars
+            ):
+                lobes.setdefault(_lobe_of(result["file"]), []).append(result)
+            # Phrase pre-pass on the SAME table (no extra build): promote
+            # contiguous-phrase hits to the front of each lobe.
+            phrase = _phrase_expr(query)
+            if phrase is not None:
+                ph_rows = _query_table(con, phrase, _PHRASE_PROMOTE_CAP, 0)
+                lobes = _bucket_promote(
+                    lobes,
+                    _rows_to_results(source, ph_rows, tokens,
+                                     snippet_chars=snippet_chars),
+                    per_lobe)
         finally:
             con.close()
-        lobes = {}
-        for result in _rows_to_results(
-            source, rows, tokens, snippet_chars=snippet_chars
-        ):
-            lobes.setdefault(_lobe_of(result["file"]), []).append(result)
         return {"lobes": lobes, "total": total}
     except sqlite3.Error:
         # FTS5 genuinely unavailable mid-flight: bucket the substring engine's
