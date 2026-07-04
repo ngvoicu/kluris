@@ -75,7 +75,7 @@ a { color: var(--accent); }
 }
 .header-left { display: flex; align-items: center; gap: 12px; min-width: 0; }
 
-/* Kluris brand lockup (logo + gradient wordmark) — mirrors kluris.io. The
+/* Kluris brand lockup (logo + gradient wordmark) — mirrors kluris.ngvoicu.dev. The
    wordmark falls back to Georgia since the pack ships no web fonts (offline,
    self-contained); the gradient + logo carry the brand. */
 .brand { display: flex; align-items: center; gap: 9px; flex-shrink: 0; }

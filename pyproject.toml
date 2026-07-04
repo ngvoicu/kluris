@@ -22,7 +22,7 @@ dependencies = [
 kluris = "kluris.cli:cli"
 
 [project.urls]
-Homepage = "https://kluris.io"
+Homepage = "https://kluris.ngvoicu.dev"
 Repository = "https://github.com/ngvoicu/kluris"
 Issues = "https://github.com/ngvoicu/kluris/issues"
 

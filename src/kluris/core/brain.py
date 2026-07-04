@@ -213,7 +213,7 @@ def _generate_readme(name: str, description: str) -> str:
 This is a **Kluris brain** -- shared team knowledge that turns AI agents into
 subject matter experts. Curated by humans, read by every agent on the team.
 
-> **New to kluris?** The [guided tour at kluris.io](https://kluris.io/presentation.html)
+> **New to kluris?** The [guided tour at kluris.ngvoicu.dev](https://kluris.ngvoicu.dev/presentation.html)
 > walks through install, first brain, agent workflows, multi-brain, git
 > collaboration, and the MRI visualization end to end.
 

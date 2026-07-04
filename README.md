@@ -4,7 +4,7 @@
 
 *When your best engineer sleeps, Kluris doesn't. When they leave, Kluris stays.*
 
-> 🎥 **New here?** Take the [guided tour at kluris.io](https://kluris.io/presentation.html) — install, first brain, agent workflows, multi-brain, git collaboration, and the MRI visualization, end to end.
+> 🎥 **New here?** Take the [guided tour at kluris.ngvoicu.dev](https://kluris.ngvoicu.dev/presentation.html) — install, first brain, agent workflows, multi-brain, git collaboration, and the MRI visualization, end to end.
 
 ## What is Kluris?
 
@@ -359,7 +359,7 @@ brain as an interactive map. The MRI opens with a **brain-architecture view**
 (lobes + cross-lobe synapses); click a lobe to drill into sublobes, click a
 sublobe to see neurons. Toggle **Expert mode** for the legacy force graph.
 
-![kluris mri — overview of the ngvoicu-sme brain, with coloured lobes and synapse links](https://kluris.io/mri-overview.png)
+![kluris mri — overview of the ngvoicu-sme brain, with coloured lobes and synapse links](https://kluris.ngvoicu.dev/mri-overview.png)
 
 The HTML file is yours — no server, no account, no external calls. Commit it
 to the brain repo, email it, drop it in Slack.

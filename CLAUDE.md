@@ -19,7 +19,7 @@ Topics relevant to this repo: kluris-cli overview, architecture, multi-brain res
 ```bash
 source .venv/bin/activate        # or: pipx install -e .
 pip install -e ".[dev]"          # dev install with pytest
-pytest tests/ -v                 # run all tests (482 tests)
+pytest tests/ -v                 # run all tests (979 tests)
 pytest tests/ --cov=kluris -q    # with coverage (90%+)
 pytest tests/test_create.py -v   # single test file
 ```
@@ -152,7 +152,7 @@ create, register, list, status, search, wake-up, companion, dream, pack, mri, re
 
 ## Testing
 
-- conftest.py has 5 fixtures: `cli_runner`, `temp_config`, `temp_home`, `temp_brain`, `bare_remote` (bare git remote with `HEAD = refs/heads/main` for CI compat)
+- conftest.py has 5 fixtures: `cli_runner`, `temp_config`, `temp_home`, `temp_brain`, `counting_git_run` (counts git subprocess invocations to enforce subprocess-count assertions on dream/mri batch behavior)
 - Tests use monkeypatch for KLURIS_CONFIG and HOME env vars
 - Git tests use real git in tmp_path (not mocked)
 - Picker tests monkeypatch `kluris.cli._is_interactive`, NOT `sys.stdin.isatty` (CliRunner stdin swap)
