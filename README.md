@@ -538,7 +538,7 @@ Most agents load the generated skill as `/kluris-<name>`. Hermes users can load 
 
 ## Pair with Specmint
 
-Kluris is the brain. [Specmint](https://specmint.io) turns a feature request
+Kluris is the brain. [Specmint](https://specmint.ngvoicu.dev) turns a feature request
 into a persistent spec built from deep research and iterative interviews.
 Pair them and the research phase starts half-done — grounded in your code
 *and* the knowledge your team already agreed to.
@@ -587,7 +587,7 @@ kluris companion add specmint-core-html --brain all
 kluris companion add specmint-tdd-html --brain all
 ```
 
-More at [specmint.io](https://specmint.io).
+More at [specmint.ngvoicu.dev](https://specmint.ngvoicu.dev).
 
 ## License
 
