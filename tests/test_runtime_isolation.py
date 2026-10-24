@@ -27,6 +27,8 @@ RUNTIME_MODULES = [
     "kluris_runtime.neuron_index",
     "kluris_runtime.deprecation",
     "kluris_runtime.search",
+    "kluris_runtime.search_fts",
+    "kluris_runtime.snapshot",
     "kluris_runtime.wake_up",
     "kluris_runtime.neuron_excerpt",
 ]

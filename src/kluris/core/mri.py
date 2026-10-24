@@ -1227,11 +1227,13 @@ canvas.dragging { cursor: grabbing; }
 # with `layoutGrid` (never a single row for n>=3) and draws only the
 # clearest aggregate edges between siblings.
 #
-# Caveat: this whole string is consumed as the body of an f-string in
-# `_render_mri_html`. Inside this constant we are NOT in an f-string, so
-# `{` / `}` and `\n` / `\\n` follow normal Python rules — `\\n` is a real
-# backslash-n in the emitted JS, and a single `\n` becomes a real newline
-# in Python. JS string literals that need an actual `\n` use `\\n`.
+# Caveat: `_MRI_JS` is a RAW string (`r"""..."""`) and `_render_mri_html`
+# interpolates it into its f-string as a value (`{_MRI_JS}`), so the JS is
+# emitted verbatim: no Python escape processing, no brace doubling. Write JS
+# escapes with single backslashes (`/\r?\n/`, `/\b\w/`, `'\n'`). Doubling them
+# (`\\n`) would emit two literal backslashes and break the page; the old
+# non-raw string needed exactly that, and a missed one shipped a broken
+# `brain-mri.html` (fixed in v2.15.6, raw since v2.17.0).
 # ---------------------------------------------------------------------------
 
 _MRI_JS = r"""

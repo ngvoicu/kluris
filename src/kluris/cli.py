@@ -108,7 +108,7 @@ def _brain_directories(brain_path: Path) -> list[Path]:
 
 
 def _run_dream_on_brain(brain_path: Path) -> None:
-    """Regenerate maps, brain.md, and index.md for a single brain."""
+    """Regenerate every map.md and brain.md for a single brain."""
     try:
         brain_config = read_brain_config(brain_path)
         directories = _brain_directories(brain_path)
@@ -1057,9 +1057,9 @@ def companion_remove(name: str | None, brain_name: str | None, as_json: bool):
 
 
 # Wake-up implementation lives in kluris_runtime.wake_up.build_payload.
-# The CLI command (`kluris wake-up`) wraps it to add brain registration
-# context and scaffold-type metadata that the runtime intentionally does
-# not know about.
+# The CLI command (`kluris wake-up`) wraps it to add the brain registration
+# context (name, description) that the runtime intentionally does not know
+# about. Scaffold-type metadata was dropped in v2.16.0.
 
 
 @cli.command("search")
@@ -1362,7 +1362,8 @@ def pack_cmd(brain_name: str | None, output_dir: str | None,
         )
     else:
         console.print(
-            "\nNext: edit [bold].env[/bold] in that directory, then "
+            "\nNext: in that directory run [bold]cp .env.example .env[/bold], "
+            "edit [bold].env[/bold] with your LLM settings, then "
             "[bold]docker compose up --build[/bold]."
         )
 
@@ -2016,7 +2017,7 @@ def help_cmd(command: str | None, as_json: bool):
         ("companion", "Opt brains into embedded companion playbooks"),
         ("dream", "Regenerate maps, auto-fix safe issues, and validate links"),
         ("pack", "Pack a brain into a self-contained Docker chat server"),
-        ("mri", "Generate interactive brain visualization and open in browser"),
+        ("mri", "Generate interactive brain visualization; prints a file:// link"),
         ("remove", "Unregister a brain (keeps files on disk)"),
         ("doctor", "Check prerequisites and refresh installed agent skills (--no-refresh to skip)"),
         ("help", "Show this help"),

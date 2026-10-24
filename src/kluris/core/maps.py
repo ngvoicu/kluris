@@ -1,4 +1,4 @@
-"""Generation of brain.md, map.md, and index.md files."""
+"""Generation of brain.md and map.md files."""
 
 from __future__ import annotations
 

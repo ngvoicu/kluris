@@ -16,7 +16,7 @@ class BrainEntry(BaseModel):
 
 
 class GlobalConfig(BaseModel):
-    """Global kluris config at ~/.config/kluris/config.yml."""
+    """Global kluris config at ~/.kluris/config.yml (override: KLURIS_CONFIG)."""
     brains: dict[str, BrainEntry] = Field(default_factory=dict)
 
 
