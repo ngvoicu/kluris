@@ -13,7 +13,7 @@ description: >
 license: MIT
 metadata:
   author: Gabriel Voicu
-  version: "3.0.0"
+  version: "3.0.1"
 ---
 
 # Spec Mint Core HTML
@@ -230,8 +230,9 @@ When asked to forge, plan, spec out, or "write a spec for X", follow the
 full forge workflow: setup, research deeply, interview the user, iterate
 until clear, then write the spec.
 
-If the environment is in read-only plan mode, do not run forge in that mode.
-Ask the user to exit plan mode (Shift+Tab) and start the forge workflow again.
+If your tool is in a read-only plan mode, do not run forge in that mode. Ask
+the user to leave it (in Claude Code: Shift+Tab) and start the forge workflow
+again.
 
 **The forge workflow never produces application code.** Its outputs are only
 `.specs/` files: research notes, interview notes, refreshed shared assets,
@@ -280,13 +281,14 @@ Research runs on two parallel tracks to maximize thoroughness and speed:
 
 #### Track A: Spawn a Research Subagent
 
-**Always spawn a research subagent** for codebase + internet
-research, using the brief in `references/researcher.md`. Don't skip this —
-the research subagent is purpose-built for exhaustive multi-source analysis
-and runs in parallel so it doesn't slow down the workflow.
+Research is never skipped. A research subagent is the preferred way to run it
+— it is purpose-built for exhaustive multi-source analysis and runs in
+parallel so it doesn't slow down the workflow — but without one you do the
+same work yourself.
 
-Spawn it with the Task tool, using the brief in `references/researcher.md`
-and providing:
+**If your tool supports subagents:** Spawn a research subagent with your
+tool's subagent/task feature (e.g. Claude Code's Agent tool), using the brief
+in `references/researcher.md`, for codebase + internet research. Provide:
 - The user's request (what they want to build/change)
 - The spec ID and output path: `.specs/<id>/research-01.md`
 - Any Context7 findings you've already gathered (Track B)
@@ -300,10 +302,18 @@ The research subagent will:
 - Assess security risks and performance implications
 - Produce a structured research document with a completeness checklist
 
+**If subagents are not available:** Perform the research inline yourself,
+using `references/researcher.md` as your checklist — map the project structure
+(manifests, lock files, directory tree), read 15-30 relevant files and trace
+their dependency chains, search the web for best practices and current
+patterns, compare 2-4 library candidates for every choice point, and assess
+security risks and performance implications. Save findings to
+`.specs/<id>/research-01.md`.
+
 #### Track B: Context7 & Cross-Skill Research (in parallel)
 
-While the research subagent runs, do these yourself — they use MCP tools that
-the research subagent doesn't have access to:
+While the research subagent runs (or between inline research steps), do these
+yourself — they use MCP tools that a spawned subagent doesn't have access to:
 
 - **Context7**: If available (resolve-library-id / query-docs tools), pull
   up-to-date documentation for every key library involved. Check API changes,
@@ -321,10 +331,10 @@ the research subagent doesn't have access to:
 
 #### Merging Research
 
-When the research subagent completes, read its output at
-`.specs/<id>/research-01.md`. Merge your Context7 and cross-skill findings
-into the research notes — either append to the file or keep them in mind
-for the interview. The combined research should cover:
+When the research is complete — the subagent has finished, or your inline
+research is saved — read `.specs/<id>/research-01.md`. Merge your Context7
+and cross-skill findings into the research notes — either append to the file
+or keep them in mind for the interview. The combined research should cover:
 architecture, relevant code, tech stack, library comparisons, internet
 research, Context7 docs, UI research (if applicable), risk assessment,
 and open questions.

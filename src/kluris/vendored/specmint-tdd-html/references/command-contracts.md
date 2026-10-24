@@ -144,9 +144,10 @@ it as a review checklist before releases.
 4. `SKILL.md` must be self-contained for standalone users (`npx skills add`).
    Any content essential for spec creation must be inlined (e.g., the SPEC.html
    template skeleton). References to `references/*.md` are plain pointers.
-5. The research subagent (references/researcher.md) is spawned via the Task
-   tool as described in SKILL.md, with a graceful inline fallback for tools
-   that don't support subagents.
+5. The research subagent (references/researcher.md) is spawned via the tool's
+   subagent/task feature (e.g. Claude Code's Agent tool) as described in
+   SKILL.md, with a graceful inline fallback for tools that don't support
+   subagents.
 
 ## TDD Contracts
 

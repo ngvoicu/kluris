@@ -13,7 +13,7 @@ description: >
 license: MIT
 metadata:
   author: Gabriel Voicu
-  version: "3.0.0"
+  version: "3.0.1"
 ---
 
 # Spec Mint TDD
@@ -538,9 +538,9 @@ When asked to forge, plan, spec out, or "write a spec for X", follow the
 full forge workflow: setup, research deeply, interview the user, iterate
 until clear, then write the spec.
 
-**Plan mode:** In Claude Code, if the environment is in read-only plan mode,
-ask the user to exit plan mode (Shift+Tab) and start the forge workflow again.
-Other tools: proceed normally.
+**Plan mode:** If your tool is in a read-only plan mode, do not run forge in
+that mode. Ask the user to leave it (in Claude Code: Shift+Tab) and start the
+forge workflow again.
 
 **The forge workflow never produces application code.** Its outputs are only
 `.specs/` files: research notes, interview notes, and the SPEC.md.
@@ -567,19 +567,20 @@ Research runs on two parallel tracks:
 
 #### Track A: Spawn a Research Subagent
 
-**If your tool supports subagents:** Spawn a research subagent with the Task
-tool, using the brief in `references/researcher.md`. Provide: the user's
-request, spec ID, output path `.specs/<id>/research-01.md`, and any Context7
-findings from Track B. The research subagent maps the project architecture,
-reads 15-30 files, runs 3+ web searches, compares library candidates, assesses
-risks, and analyzes the full test infrastructure.
+**If your tool supports subagents:** Spawn a research subagent with your
+tool's subagent/task feature (e.g. Claude Code's Agent tool), using the brief
+in `references/researcher.md`. Provide: the user's request, spec ID, output
+path `.specs/<id>/research-01.md`, and any Context7 findings from Track B.
+The research subagent maps the project architecture, reads 15-30 files, runs
+3+ web searches, compares library candidates, assesses risks, and analyzes the
+full test infrastructure.
 
-**If subagents are not available:** Perform the research inline yourself —
-scan the project structure, read relevant files (15-30 for non-trivial
-features), search the web for best practices and library comparisons, and
-analyze the existing test infrastructure (frameworks, runners, mocking
-patterns, testcontainers, coverage tools). Save findings to
-`.specs/<id>/research-01.md`.
+**If subagents are not available:** Perform the research inline yourself,
+using `references/researcher.md` as your checklist — scan the project
+structure, read relevant files (15-30 for non-trivial features), search the
+web for best practices and library comparisons, and analyze the existing test
+infrastructure (frameworks, runners, mocking patterns, testcontainers,
+coverage tools). Save findings to `.specs/<id>/research-01.md`.
 
 #### Track B: Context7 & Cross-Skill Research (in parallel)
 

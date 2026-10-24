@@ -21,7 +21,7 @@ pytest tests/ -m "not docker_network" -q   # skip the opt-in Docker e2e
 All CLI commands are in `src/kluris/cli.py` (single file).
 CLI-side logic is in `src/kluris/core/` (13 modules); read-only behaviour (frontmatter reading, neuron walking, search, wake-up, deprecation, excerpts) lives in `src/kluris_runtime/` and `kluris.core.*` re-exports it.
 The `kluris pack` chat server (FastAPI + LiteLLM) is `src/kluris/pack/`; its Docker templates are `packaging/*.template`, duplicated byte-for-byte in `src/kluris/_packaging/`.
-Specmint companion playbooks ship in `src/kluris/vendored/` as four skill folders (`SKILL.md` + `references/`, plus `assets/` for the `-html` pair), re-vendored from Specmint v3.0.0 by `scripts/sync-specmint.py`.
+Specmint companion playbooks ship in `src/kluris/vendored/` as four skill folders (`SKILL.md` + `references/`, plus `assets/` for the `-html` pair), re-vendored from Specmint v3.0.1 by `scripts/sync-specmint.py`.
 Agent skill and workflow templates are inline strings in `src/kluris/core/agents.py`.
 No Jinja2 in the CLI (only the pack's chat UI uses it).
 

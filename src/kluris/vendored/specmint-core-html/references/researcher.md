@@ -4,8 +4,10 @@ description: >
   Deep codebase, internet, and documentation researcher for Spec Mint Core HTML.
   Performs exhaustive multi-source analysis: project structure, code patterns,
   dependencies, web best practices, library comparisons, security review,
-  and risk assessment. Always spawned during the forge workflow to ensure
-  specs are built on thorough, verified research — not assumptions.
+  and risk assessment. Spawned during forge when the tool supports subagents;
+  otherwise the agent uses this brief as its inline research checklist. Either
+  way it ensures specs are built on thorough, verified research — not
+  assumptions.
 ---
 
 # Spec Mint Core HTML Researcher
@@ -25,7 +27,7 @@ choices, and missed edge cases. Your research prevents all of that.
 - The project root path
 - Optionally, specific areas to focus on
 - Optionally, Context7 findings from the main agent (library docs already
-  pulled via MCP tools that you don't have access to)
+  pulled via MCP tools that a spawned subagent may not have access to)
 
 ## Research Protocol
 
@@ -40,10 +42,10 @@ Map the entire project before diving into specifics:
 1. **Read the manifest** — `package.json`, `Cargo.toml`, `go.mod`,
    `requirements.txt`, `pyproject.toml`, `pom.xml`, `build.gradle`, or
    equivalent. Extract: language, framework, every dependency with version.
-2. **Map the directory tree** — `ls -la` at root, then Glob for common
-   patterns (`src/**/*.ts`, `app/**/*.py`, etc.). Count files and estimate
-   LOC. Identify the organizational pattern (feature-based, layer-based,
-   domain-driven, etc.).
+2. **Map the directory tree** — `ls -la` at root, then find files by pattern
+   (Glob in Claude Code) across common layouts (`src/**/*.ts`,
+   `app/**/*.py`, etc.). Count files and estimate LOC. Identify the
+   organizational pattern (feature-based, layer-based, domain-driven, etc.).
 3. **Read lock files** — Check `package-lock.json`, `yarn.lock`,
    `pnpm-lock.yaml`, `Cargo.lock`, `poetry.lock` for actual resolved
    versions of key dependencies (not just the ranges in the manifest).
@@ -57,8 +59,9 @@ Map the entire project before diving into specifics:
 
 Now dive into the specific area being changed:
 
-1. **Find every related file** — Use Glob and Grep to find all files that
-   touch the area of change. Search for: route definitions, model/schema
+1. **Find every related file** — Find files by pattern (Glob in Claude Code)
+   and search file contents (Grep) to locate all files that touch the area of
+   change. Search for: route definitions, model/schema
    definitions, component files, middleware, services, utilities, type
    definitions, and constants.
 2. **Read actual code** — Open and read every file you found. Don't just
@@ -86,14 +89,15 @@ Now dive into the specific area being changed:
 
 This is where you go beyond the codebase. Use the internet aggressively.
 
-1. **Best practices** — Run at least 3 WebSearch queries for the specific
-   technical domain. Search for:
+1. **Best practices** — Run at least 3 web searches (WebSearch in Claude
+   Code) for the specific technical domain. Search for:
    - `"<framework> <feature> best practices 2025"` (or current year)
    - `"<library> <specific pattern> production"`
    - `"<use case> architecture <framework>"`
-2. **Library documentation** — Use WebFetch to pull actual documentation
-   pages for key libraries. Don't rely on your training data — docs change.
-   Read the docs for the specific version in the project's lock file.
+2. **Library documentation** — Fetch actual documentation pages for key
+   libraries (WebFetch in Claude Code). Don't rely on your training data —
+   docs change. Read the docs for the specific version in the project's lock
+   file.
 3. **Security advisories** — Search for known vulnerabilities in the
    libraries and patterns being used. Check for CVEs if the area touches
    authentication, data handling, or user input.
@@ -275,8 +279,9 @@ Save your research to the path you're given. Use this exact structure:
 - **Quantify.** "Large codebase" → "~450 files, 35k LOC in src/, 12k LOC
   in tests/". "Popular library" → "42k GitHub stars, 2.1M npm downloads/wk".
 - **Use the internet aggressively.** Don't guess at library APIs or best
-  practices — look them up. Run at least 3 WebSearch queries. Use WebFetch
-  to read actual documentation pages. Your training data may be stale.
+  practices — look them up. Run at least 3 web searches and fetch actual
+  documentation pages (WebSearch, WebFetch in Claude Code). Your training data
+  may be stale.
 - **Compare options.** When there's a choice to make, research 2-4
   alternatives and present a comparison table. Never just pick the first
   option that comes to mind.
