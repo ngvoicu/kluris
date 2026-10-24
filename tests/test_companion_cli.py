@@ -21,7 +21,10 @@ def test_companion_add_specmint_core(tmp_path, monkeypatch):
     assert result.exit_code == 0, result.output
     brain = tmp_path / "my-brain"
     assert read_brain_config(brain).companions == ["specmint-core"]
-    assert (tmp_path / ".kluris" / "companions" / "specmint-core" / "SKILL.md").exists()
+    installed = tmp_path / ".kluris" / "companions" / "specmint-core"
+    assert (installed / "SKILL.md").exists()
+    assert (installed / "references" / "researcher.md").is_file()
+    assert (installed / "references" / "spec-format.md").is_file()
     content = (tmp_path / ".claude" / "skills" / "kluris-my-brain" / "SKILL.md").read_text(encoding="utf-8")
     assert "## Spec-worthy work first" in content
 

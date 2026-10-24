@@ -10,6 +10,10 @@ description: >
   trigger when a `.specs/` directory exists at session start. Do NOT trigger
   on general feature requests, coding tasks, or questions that don't mention
   specs or forging — those are normal coding tasks, not spec management.
+license: MIT
+metadata:
+  author: Gabriel Voicu
+  version: "3.0.0"
 ---
 
 # Spec Mint Core
@@ -160,10 +164,6 @@ hooked up to the `/auth/refresh` endpoint yet."
 5. Set target status to `active` in frontmatter and in `.specs/registry.md`.
 6. Resume the target spec (full resume workflow).
 
-## Embedded Companion Mode
-
-This `SKILL.md` is embedded by Kluris as the `specmint-core` companion. Do not load plugin sidecar folders or slash-command files; all runtime instructions needed by Kluris users are in this file.
-
 ## Spec Format
 
 ### Frontmatter
@@ -222,7 +222,7 @@ Markdown table tracking where implementation diverged from the spec:
 task, what the spec said, what was actually done, and why. Only log
 changes that would surprise someone comparing the spec to the code.
 
-Use the Spec Format section in this file as the canonical SPEC.md template.
+See `references/spec-format.md` for the full SPEC.md template.
 
 ## Forging Specs
 
@@ -231,7 +231,7 @@ full forge workflow: setup, research deeply, interview the user, iterate
 until clear, then write the spec.
 
 If the environment is in read-only plan mode, do not run forge in that mode.
-Ask the user to exit plan mode (Shift+Tab) and rerun `/specmint-core:forge`.
+Ask the user to exit plan mode (Shift+Tab) and start the forge workflow again.
 
 **The forge workflow never produces application code.** Its outputs are only
 `.specs/` files: research notes, interview notes, and the SPEC.md. If the
@@ -269,12 +269,12 @@ mid-build.
 
 Research runs on two parallel tracks to maximize thoroughness and speed:
 
-#### Track A: Spawn the Researcher Agent
+#### Track A: Spawn a Research Subagent
 
-**Always spawn the `specmint-core:researcher` agent** for codebase + internet
-research. Don't skip this — the researcher is purpose-built for exhaustive
-multi-source analysis and runs in parallel so it doesn't slow down the
-workflow.
+**Always spawn a research subagent** with the Task tool, using the brief in
+`references/researcher.md`, for codebase + internet research. Don't skip this —
+the research subagent is purpose-built for exhaustive multi-source analysis and
+runs in parallel so it doesn't slow down the workflow.
 
 Spawn it with the Task tool, providing:
 - The user's request (what they want to build/change)
@@ -282,7 +282,7 @@ Spawn it with the Task tool, providing:
 - Any Context7 findings you've already gathered (Track B)
 - Specific areas to focus on, if known
 
-The researcher will:
+The research subagent will:
 - Map the full project architecture (read manifests, lock files, directory tree)
 - Read 15-30 relevant code files and trace dependency chains
 - Run 3+ web searches for best practices and current patterns
@@ -292,8 +292,8 @@ The researcher will:
 
 #### Track B: Context7 & Cross-Skill Research (in parallel)
 
-While the researcher runs, do these yourself — they use MCP tools that
-the researcher agent doesn't have access to:
+While the research subagent runs, do these yourself — they use MCP tools that
+the research subagent doesn't have access to:
 
 - **Context7**: If available (resolve-library-id / query-docs tools), pull
   up-to-date documentation for every key library involved. Check API changes,
@@ -311,7 +311,7 @@ the researcher agent doesn't have access to:
 
 #### Merging Research
 
-When the researcher agent completes, read its output at
+When the research subagent completes, read its output at
 `.specs/<id>/research-01.md`. Merge your Context7 and cross-skill findings
 into the research notes — either append to the file or keep them in mind
 for the interview. The combined research should cover:
@@ -365,7 +365,7 @@ Two rounds is typical. Don't rush it — but don't drag it out either.
 ### Step 5: Write the Spec
 
 Synthesize all research notes, interview answers, and decisions into a
-comprehensive SPEC.md using the Spec Format section in this file.
+comprehensive SPEC.md. See `references/spec-format.md` for the full template.
 
 The spec should be thorough and detailed — someone reading it should be able
 to implement the feature without guessing. Include:
@@ -662,7 +662,12 @@ This is irreversible — consider archiving instead if you might need it later.
 
 ## Kluris Companion Compatibility
 
-When this file is referenced from a Kluris-generated skill, read and follow it directly from `~/.kluris/companions/<name>/SKILL.md`. Do not ask the user to install specmint separately. Specs remain plain markdown/YAML files that humans can edit and Git can diff.
+Kluris embeds this playbook as the `specmint-core` companion. Read and
+follow it directly from `~/.kluris/companions/specmint-core/SKILL.md`.
+Paths in this file that start with `references/` resolve against
+`~/.kluris/companions/specmint-core/`. `.specs/...` paths are project
+paths. Do not ask the user to install specmint separately. Specs remain
+plain markdown/YAML files that humans can edit and Git can diff.
 
 ## Behavioral Notes
 

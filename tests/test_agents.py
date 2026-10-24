@@ -496,6 +496,10 @@ def test_specmint_block_html_companions():
     assert "/tmp/kluris-companions/specmint-core/SKILL.md" not in content
     assert "/tmp/kluris-companions/specmint-tdd/SKILL.md" not in content
     assert "canonical SPEC.html" in content
+    assert "Each playbook is a folder" in content
+    assert "start with `references/` or `assets/`" in content
+    assert "`.specs/...` paths are project paths" in content
+    assert "`/tmp/kluris-companions/specmint-core-html/`" in content
 
 
 def test_brain_vs_current_project_heading():

@@ -1,0 +1,234 @@
+<!--
+  Canonical empty SPEC.html template.
+
+  When forging a new spec, copy this file to .specs/<spec-id>/SPEC.html
+  and fill in the placeholders. The assets (spec-styles.css + spec-runtime.js)
+  live at .specs/assets/ and are written once per project on first forge.
+
+  Placeholders:
+    <SPEC-ID>           lowercase-hyphenated slug
+    <SPEC-TITLE>        human-readable title
+    <YYYY-MM-DD>        ISO date
+    <PRIO>              high | medium | low
+    <STATUS>            active | paused | completed | archived
+    <FIDELITY>          wireframe | hi-fi | none
+    <TAG1>, <TAG2>      lowercase tags
+
+  Every region sentinel pair (<!-- region:X --> ... <!-- endregion:X -->)
+  must be preserved. Use Edit tool with these comments as stable anchors.
+
+  See references/spec-format.md for the full format reference and
+  references/edit-recipes.md for surgical edit operations.
+-->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title><SPEC-TITLE> — SPEC</title>
+  <link rel="stylesheet" href="../assets/spec-styles.css">
+  <script src="../assets/spec-runtime.js" defer></script>
+  <!-- region:meta -->
+  <script type="application/json" id="spec-meta">{"id":"<SPEC-ID>","title":"<SPEC-TITLE>","status":"<STATUS>","created":"<YYYY-MM-DD>","updated":"<YYYY-MM-DD>","priority":"<PRIO>","tags":["<TAG1>"],"mockup-fidelity":"<FIDELITY>"}</script>
+  <!-- endregion:meta -->
+</head>
+<body>
+<div class="page">
+
+  <!-- region:toc -->
+  <nav class="toc" data-toc aria-label="Spec sections">
+    <h4>Sections</h4>
+    <ol>
+      <li><a href="#overview">Overview</a></li>
+      <li><a href="#acceptance">Acceptance Criteria</a></li>
+      <li><a href="#architecture">Architecture</a></li>
+      <li><a href="#libraries">Library Choices</a></li>
+      <li><a href="#phases">Phases &amp; Tasks</a></li>
+      <li><a href="#code">Code Previews</a></li>
+      <li><a href="#mockups">UI Mockups</a></li>
+      <li><a href="#decisions">Decision Log</a></li>
+      <li><a href="#deviations">Deviations</a></li>
+    </ol>
+  </nav>
+  <!-- endregion:toc -->
+
+  <main class="content">
+
+    <!-- region:header -->
+    <header class="spec-header" id="spec-header">
+      <div class="spec-header__top">
+        <div>
+          <h1 class="spec-header__title"><SPEC-TITLE></h1>
+          <div class="spec-header__id"><SPEC-ID></div>
+        </div>
+        <div class="spec-header__chips">
+          <span class="pill pill--in-progress">Active</span>
+        </div>
+      </div>
+      <dl class="spec-header__meta">
+        <div><dt>Created</dt><dd><YYYY-MM-DD></dd></div>
+        <div><dt>Updated</dt><dd><YYYY-MM-DD></dd></div>
+        <div><dt>Tags</dt><dd><span class="chip"><TAG1></span></dd></div>
+        <div><dt>Mockup fidelity</dt><dd><FIDELITY></dd></div>
+      </dl>
+      <div class="scorecard">
+        <div class="scorecard__cell"><div class="scorecard__label">Tasks</div><div class="scorecard__value"><span data-progress-target="spec-total">0/0</span></div><div class="scorecard__sub"><span data-progress-target="spec-pct">0%</span> complete</div></div>
+        <div class="scorecard__cell"><div class="scorecard__label">Phases</div><div class="scorecard__value"><span data-progress-target="phases-done">0</span> / <span data-progress-target="phases-total">0</span></div><div class="scorecard__sub">done</div></div>
+        <div class="scorecard__cell"><div class="scorecard__label">Acceptance</div><div class="scorecard__value"><span data-progress-target="ac-done">0</span> / <span data-progress-target="ac-total">0</span></div><div class="scorecard__sub">criteria met</div></div>
+        <div class="scorecard__cell"><div class="scorecard__label">Blockers</div><div class="scorecard__value"><span data-progress-target="blockers">0</span></div><div class="scorecard__sub">open</div></div>
+      </div>
+    </header>
+    <!-- endregion:header -->
+
+    <!-- region:overview -->
+    <section class="section" id="overview">
+      <div class="section__header"><h2 class="section__title">Overview</h2></div>
+      <p><!-- 2-4 sentences: what is being built and why. --></p>
+    </section>
+    <!-- endregion:overview -->
+
+    <!-- region:acceptance -->
+    <section class="section" id="acceptance">
+      <div class="section__header">
+        <h2 class="section__title">Acceptance Criteria</h2>
+        <span class="pill pill--accent pill--no-dot"><span data-progress-target="ac-done">0</span>/<span data-progress-target="ac-total">0</span></span>
+      </div>
+      <span class="progress progress--strip mb-3" data-progress-bar="ac" aria-hidden="true"></span>
+      <ul class="ac-list">
+        <!--
+          Canonical AC item shape — checkbox is CSS-generated, do NOT add a
+          <span class="ac-check"> in markup. The only required child is
+          <span class="ac-text">. State lives in data-status on the <li>.
+        -->
+        <li class="ac-item" id="ac-1" data-ac="1" data-status="pending">
+          <span class="ac-text"><!-- testable condition --></span>
+        </li>
+        <li class="ac-item" id="ac-2" data-ac="2" data-status="pending">
+          <span class="ac-text"><!-- testable condition --></span>
+        </li>
+        <!-- For unresolved questions, use: <span class="ac-text"><span class="ac-flag">Needs clarification</span> ...</span> -->
+      </ul>
+    </section>
+    <!-- endregion:acceptance -->
+
+    <!-- region:architecture -->
+    <section class="section" id="architecture">
+      <div class="section__header"><h2 class="section__title">Architecture</h2></div>
+      <figure class="diagram">
+        <div class="diagram__label">System flow</div>
+<pre class="mermaid">
+flowchart LR
+  A[Start] --> B[Middle] --> C[End]
+</pre>
+      </figure>
+      <!-- Add more <figure class="diagram"> blocks for ER, sequence, state, etc. -->
+    </section>
+    <!-- endregion:architecture -->
+
+    <!-- region:libraries -->
+    <section class="section" id="libraries">
+      <div class="section__header"><h2 class="section__title">Library Choices</h2></div>
+      <table class="table">
+        <thead><tr><th>Need</th><th>Library</th><th>Version</th><th>Alternatives</th><th>Rationale</th></tr></thead>
+        <tbody>
+          <tr><td><!-- need --></td><td><code><!-- lib --></code></td><td><!-- ver --></td><td><!-- alts --></td><td><!-- rationale --></td></tr>
+        </tbody>
+      </table>
+    </section>
+    <!-- endregion:libraries -->
+
+    <!-- region:phases -->
+    <section class="section" id="phases">
+      <div class="section__header">
+        <h2 class="section__title">Phases &amp; Tasks</h2>
+        <span class="pill pill--accent pill--no-dot"><span data-progress-target="spec-total">0/0</span> tasks</span>
+      </div>
+      <div class="phases">
+
+        <details class="phase" open data-phase="1" data-status="in-progress">
+          <summary class="phase__header">
+            <span class="phase__index">Phase 1</span>
+            <h3 class="phase__title"><!-- Phase name --></h3>
+            <span class="pill pill--in-progress">In progress</span>
+            <span class="phase__progress"><span data-progress-target="phase-1-total">0/0</span></span>
+          </summary>
+          <div class="phase__body">
+            <span class="progress progress--strip mb-3" data-progress-bar="phase-1" aria-hidden="true"></span>
+            <ul class="task-list">
+              <!--
+                Canonical task shape — checkbox is CSS-generated, do NOT add a
+                <span class="task__check"> in markup. Required children are
+                .task__code and .task__text; .task__tags is optional. State
+                lives in data-status on the <li>.
+              -->
+              <li class="task" id="task-PFX-01" data-task="PFX-01" data-status="pending">
+                <span class="task__code">PFX-01</span>
+                <span class="task__text"><!-- Task description with file paths in <code> --></span>
+                <span class="task__tags"><span class="task__tag">#tag</span></span>
+              </li>
+              <li class="task" id="task-PFX-02" data-task="PFX-02" data-status="pending">
+                <span class="task__code">PFX-02</span>
+                <span class="task__text"><!-- Task description --></span>
+              </li>
+              <!-- More tasks; numbers auto-increment across all phases -->
+            </ul>
+          </div>
+        </details>
+
+        <!-- More <details class="phase" open> blocks -->
+
+      </div>
+    </section>
+    <!-- endregion:phases -->
+
+    <!-- region:code -->
+    <section class="section" id="code">
+      <div class="section__header"><h2 class="section__title">Code Previews</h2></div>
+      <!--
+        For each preview, add a <figure class="code-diff">. Use language-diff-LANG
+        + diff-highlight classes. Default view is unified; for >30 lines or
+        multi-hunk changes, add data-view="split".
+      -->
+    </section>
+    <!-- endregion:code -->
+
+    <!-- region:mockups -->
+    <section class="section" id="mockups">
+      <div class="section__header"><h2 class="section__title">UI Mockups</h2></div>
+      <!--
+        For each mockup, add a <figure class="mockup mockup--wireframe"> or
+        <figure class="mockup mockup--hifi">. See references/wireframe-library.md
+        and references/mockup-library.md for ready-to-use patterns.
+        Omit this section if mockup-fidelity is "none".
+      -->
+    </section>
+    <!-- endregion:mockups -->
+
+    <!-- region:decisions -->
+    <section class="section" id="decisions">
+      <div class="section__header"><h2 class="section__title">Decision Log</h2></div>
+      <table class="log-table">
+        <thead><tr><th>Date</th><th>Decision</th><th>Rationale</th></tr></thead>
+        <tbody>
+          <!-- <tr><td class="log-table__date"><YYYY-MM-DD></td><td>...</td><td>...</td></tr> -->
+        </tbody>
+      </table>
+    </section>
+    <!-- endregion:decisions -->
+
+    <!-- region:deviations -->
+    <section class="section" id="deviations">
+      <div class="section__header"><h2 class="section__title">Deviations</h2></div>
+      <table class="log-table">
+        <thead><tr><th>Task</th><th>Spec said</th><th>Actually did</th><th>Why</th></tr></thead>
+        <tbody>
+          <!-- Empty at forge time; filled during implementation -->
+        </tbody>
+      </table>
+    </section>
+    <!-- endregion:deviations -->
+
+  </main>
+</div>
+</body>
+</html>

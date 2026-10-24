@@ -10,6 +10,10 @@ description: >
   when a `.specs/` directory exists at session start. Do NOT trigger on
   general feature requests, coding tasks, or questions that don't mention
   specs or forging.
+license: MIT
+metadata:
+  author: Gabriel Voicu
+  version: "3.0.0"
 ---
 
 # Spec Mint TDD
@@ -326,10 +330,6 @@ rotation. Next step: hook up rotation logic to the `/auth/refresh` endpoint."
 5. Set target status to `active` in frontmatter and in `.specs/registry.md`.
 6. Resume the target spec (full resume workflow).
 
-## Embedded Companion Mode
-
-This `SKILL.md` is embedded by Kluris as the `specmint-tdd` companion. Do not load plugin sidecar folders or slash-command files; all runtime instructions needed by Kluris users are in this file.
-
 ## Spec Format
 
 ### Frontmatter
@@ -439,8 +439,8 @@ changes that would surprise someone comparing the spec to the code.
 
 ### SPEC.md Template
 
-Use this skeleton when creating new specs. For plugin users,
-The Spec Format section in this file has the template rules.
+Use this skeleton when creating new specs.
+`references/spec-format.md` has the full template with examples.
 
 ```markdown
 ---
@@ -539,7 +539,7 @@ full forge workflow: setup, research deeply, interview the user, iterate
 until clear, then write the spec.
 
 **Plan mode:** In Claude Code, if the environment is in read-only plan mode,
-ask the user to exit plan mode (Shift+Tab) and rerun `/specmint-tdd:forge`.
+ask the user to exit plan mode (Shift+Tab) and start the forge workflow again.
 Other tools: proceed normally.
 
 **The forge workflow never produces application code.** Its outputs are only
@@ -565,25 +565,25 @@ available resource so the spec won't need revision mid-build.
 
 Research runs on two parallel tracks:
 
-#### Track A: Researcher Agent
+#### Track A: Spawn a Research Subagent
 
-**In Claude Code:** Spawn the `specmint-tdd:researcher` agent (Task tool)
-for exhaustive parallel research. Provide: the user's request, spec ID,
-output path `.specs/<id>/research-01.md`, and any Context7 findings from
-Track B. The researcher maps the project architecture, reads 15-30 files,
-runs 3+ web searches, compares library candidates, assesses risks, and
-analyzes the full test infrastructure.
+**If your tool supports subagents:** Spawn a research subagent with the Task
+tool, using the brief in `references/researcher.md`. Provide: the user's
+request, spec ID, output path `.specs/<id>/research-01.md`, and any Context7
+findings from Track B. The research subagent maps the project architecture,
+reads 15-30 files, runs 3+ web searches, compares library candidates, assesses
+risks, and analyzes the full test infrastructure.
 
-**In other tools (Cursor, Windsurf, Codex, Cline, Gemini):** Agent spawning
-is not available. Perform the research inline yourself — scan the project
-structure, read relevant files (15-30 for non-trivial features), search
-the web for best practices and library comparisons, and analyze the existing
-test infrastructure (frameworks, runners, mocking patterns, testcontainers,
-coverage tools). Save findings to `.specs/<id>/research-01.md`.
+**If subagents are not available:** Perform the research inline yourself —
+scan the project structure, read relevant files (15-30 for non-trivial
+features), search the web for best practices and library comparisons, and
+analyze the existing test infrastructure (frameworks, runners, mocking
+patterns, testcontainers, coverage tools). Save findings to
+`.specs/<id>/research-01.md`.
 
 #### Track B: Context7 & Cross-Skill Research (in parallel)
 
-While the researcher runs (or between inline research steps):
+While the research subagent runs (or between inline research steps):
 
 - **Context7**: If available, pull up-to-date documentation for 2-5 key
   libraries. Check API changes, deprecated features, and recommended patterns.
@@ -701,8 +701,6 @@ reusable `$ref` schemas, and accurate parameters/responses/security. Write
 per-endpoint docs under `.openapi/endpoints/{method}-{path-slug}.md`.
 Preserve manual additions when updating existing files. Report totals.
 
-Use the OpenAPI workflow in this section; no sidecar command file is required.
-
 ## Before Session Ends
 
 If the session is ending:
@@ -798,7 +796,12 @@ This is irreversible — consider archiving instead.
 
 ## Kluris Companion Compatibility
 
-When this file is referenced from a Kluris-generated skill, read and follow it directly from `~/.kluris/companions/<name>/SKILL.md`. Do not ask the user to install specmint separately. Specs remain plain markdown/YAML files that humans can edit and Git can diff.
+Kluris embeds this playbook as the `specmint-tdd` companion. Read and
+follow it directly from `~/.kluris/companions/specmint-tdd/SKILL.md`. Paths
+in this file that start with `references/` resolve against
+`~/.kluris/companions/specmint-tdd/`. `.specs/...` paths are project paths.
+Do not ask the user to install specmint separately. Specs remain plain
+markdown/YAML files that humans can edit and Git can diff.
 
 ## Behavioral Notes
 

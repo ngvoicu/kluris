@@ -100,7 +100,31 @@ def test_doctor_refreshes_referenced_companion(tmp_path, monkeypatch):
     data = json.loads(result.output)
     assert result.exit_code == 0, result.output
     assert (companion_dir / "SKILL.md").exists()
+    assert (companion_dir / "references" / "researcher.md").is_file()
     assert data["companions"] == [{"name": "specmint-core", "refreshed": True}]
+
+
+def test_doctor_refresh_replaces_old_single_file_companion(tmp_path, monkeypatch):
+    monkeypatch.setenv("KLURIS_CONFIG", str(tmp_path / "config.yml"))
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    runner = CliRunner()
+    create_test_brain(runner, "my-brain", tmp_path)
+    companion_dir = tmp_path / ".kluris" / "companions" / "specmint-core-html"
+    companion_dir.mkdir(parents=True)
+    (companion_dir / "SKILL.md").write_text("old single-file playbook", encoding="utf-8")
+
+    result = runner.invoke(cli, ["doctor", "--json"])
+
+    data = json.loads(result.output)
+    assert result.exit_code == 0, result.output
+    assert data["companions"] == [{"name": "specmint-core-html", "refreshed": True}]
+    assert sorted(p.name for p in companion_dir.iterdir()) == ["SKILL.md", "assets", "references"]
+    assert "old single-file" not in (companion_dir / "SKILL.md").read_text(encoding="utf-8")
+    assert (companion_dir / "references" / "researcher.md").is_file()
+    assert (companion_dir / "assets" / "spec-runtime.js").is_file()
+    leftovers = [p.name for p in companion_dir.parent.iterdir() if p.name.startswith(".")]
+    assert leftovers == []
 
 
 def test_doctor_no_refresh_skips_companion_refresh(tmp_path, monkeypatch):
