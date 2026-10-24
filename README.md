@@ -114,7 +114,7 @@ pipx install kluris
 
 ```bash
 kluris doctor        # check prerequisites
-kluris create        # interactive wizard -- name, type, location, git
+kluris create        # interactive wizard -- name, description, location, type, git, companions
 ```
 
 Then, **inside your AI coding agent** (Claude Code, Cursor, Windsurf, …) — open any project directory and use your brain's named skill:
@@ -158,7 +158,7 @@ CLI commands prompt interactively when 2+ brains are registered:
 
 - Fan-out commands (`dream`, `status`, `mri`, `companion` commands) show
   `[1] acme [2] personal [3] all`. Pick a single brain or apply to every brain.
-- Single-brain commands (`wake-up`, `search`) show
+- Single-brain commands (`wake-up`, `search`, `pack`) show
   `[1] acme [2] personal` (no `all` option).
 
 Pass `--brain NAME` to skip the picker, or `--brain all` on fan-out commands
@@ -333,6 +333,7 @@ acme-brain/
 ├── brain.md                # Root lobes directory (auto-generated)
 ├── glossary.md             # Domain terms (hand-edited)
 ├── README.md               # Usage guide
+├── .gitignore              # Secrets, kluris.yml, brain-mri.html
 ├── projects/
 │   ├── map.md              # Lobe index (auto-generated)
 │   └── btb-core/
@@ -354,15 +355,63 @@ keep everything navigable.
 
 ## Visualize with `kluris mri`
 
-Run `kluris mri` to generate a self-contained HTML file that renders the whole
-brain as an interactive map. The MRI opens with a **brain-architecture view**
-(lobes + cross-lobe synapses); click a lobe to drill into sublobes, click a
-sublobe to see neurons. Toggle **Expert mode** for the legacy force graph.
+Run `kluris mri` to generate a self-contained HTML file that renders the brain
+as an interactive, C4-style architecture map. Kluris prints a `file://` link to
+the file; it does not open a browser for you. The file is written to
+`brain-mri.html` in the brain directory (gitignored by default) — pass
+`--output <file>` to put it somewhere else.
 
-![kluris mri — overview of the ngvoicu-sme brain, with coloured lobes and synapse links](https://kluris.ngvoicu.dev/mri-overview.png)
+The map shows one level at a time, as flat cards on a canvas:
 
-The HTML file is yours — no server, no account, no external calls. Commit it
-to the brain repo, email it, drop it in Slack.
+- It opens on the brain's top-level lobes (plus `glossary.md`). Click a folder
+  to drill into it — lobe, then sublobe, then neurons, as deep as your folders
+  go. The breadcrumb and the back / forward buttons walk you back up.
+- Every card shows its kind (`LOBE`, `SUBLOBE`, `NEURON`), a title and a stats
+  line. Synapses between sibling cards are drawn as edges with a count.
+- Click a neuron to read it in a detail modal. Drag to pan, scroll to zoom.
+- The left panel is the file tree. The right panel searches neurons, paths,
+  lobes, tags and YAML (press `/` to focus it) and lists recently updated
+  neurons.
+
+![kluris mri — the root view of the ngvoicu-sme brain: its lobes and glossary as C4-style boxes joined by synapse counts, with the file tree on the left and Find and Recent on the right](https://kluris.ngvoicu.dev/mri-overview.png)
+
+The HTML file is yours — no server, no account, no external calls. Email it,
+drop it in Slack, or open it straight from disk.
+
+## Pack a brain as a Docker chat server
+
+Not everyone on your team has a coding agent. `kluris pack` turns a brain into
+a self-contained **Docker chat server**: a web chat that answers questions by
+searching and reading the brain, next to a read-only explorer of its files. The
+brain is baked into the image read-only — the chat cannot change it.
+
+**In your terminal** — you need Docker with Compose v2:
+
+```bash
+kluris pack --brain acme       # writes ./acme-pack/ (--output <dir> to choose)
+cd acme-pack
+cp .env.example .env           # then fill in your LLM settings
+docker compose up --build
+# open http://localhost:8765
+```
+
+- **LLM settings** go in `.env`: the endpoint, key and model of an Anthropic or
+  OpenAI-compatible provider, or OAuth client credentials for an internal
+  gateway. `.env.example` documents every setting.
+- **Where the pack lands.** By default `./<brain-name>-pack`, and never inside a
+  brain. `--exclude '<glob>'` (repeatable) keeps files out of the bundled brain.
+  After you edit the brain, `kluris pack --brain acme --force` (same output
+  directory) rebuilds the pack and keeps your `.env`; then run
+  `docker compose up --build` again.
+- **There is no authentication, by design.** Anyone who can reach port `8765`
+  can chat, read everything in the bundled brain and read the saved
+  conversations, and compose publishes the port on all interfaces. Run it on a
+  trusted host or network, and put your own access control (reverse proxy, VPN,
+  private network) in front if it is reachable more widely.
+
+The generated pack carries its own `README.md` that covers configuration: LLM
+settings and tuning, TLS for private gateways, the system prompt, pushing the
+image to a registry, and re-packing.
 
 ## Brain types (scaffolding only)
 
@@ -458,7 +507,7 @@ Kluris has two surfaces — the terminal CLI and the per-brain skills you load i
 
 ### In your terminal — `$ kluris *`
 
-Run these in bash, zsh, fish, or PowerShell. They handle setup, git, maintenance, and anything the agent calls internally.
+Run these in bash, zsh, fish, or PowerShell. They handle setup, maintenance, and anything the agent calls internally.
 
 | Command | What it does |
 |---------|-------------|
@@ -471,9 +520,9 @@ Run these in bash, zsh, fish, or PowerShell. They handle setup, git, maintenance
 | `kluris companion add specmint-core\|specmint-tdd\|specmint-core-html\|specmint-tdd-html` | Opt a brain into an embedded companion playbook |
 | `kluris companion list` | List known companions, installed runtime copies, and brain opt-ins |
 | `kluris companion remove specmint-core\|specmint-tdd\|specmint-core-html\|specmint-tdd-html` | Remove a companion opt-in from a brain |
-| `kluris dream` | Regenerate maps, fix links, validate structure |
-| `kluris pack` | Pack a brain into a self-contained Docker chat server |
-| `kluris mri` | Visualize the brain (opens in browser by default) |
+| `kluris dream` | Regenerate maps, fix links, validate structure (`--json`, `--broken-only`) |
+| `kluris pack` | Pack a brain into a self-contained Docker chat server — see [Pack](#pack-a-brain-as-a-docker-chat-server) (`--output`, `--exclude`, `--force`, `--json`) |
+| `kluris mri` | Generate the brain visualization as a standalone HTML file and print its link (`--output`) |
 | `kluris remove <name>` | Unregister a brain (keeps files on disk) |
 | `kluris doctor` | Check prerequisites, refresh agent skills, and refresh companion playbooks after `pipx upgrade kluris`. Pass `--no-refresh` to skip writes. |
 | `kluris help` | Show command help |
@@ -499,11 +548,10 @@ Type these inside Claude Code, Cursor, Windsurf, GitHub Copilot, Codex, Gemini C
 | `/kluris-acme use brain knowledge and codebase and let's ...` | Grounds spec-writing or implementation in **both** the brain and the actual code |
 | `/kluris-acme implement <task>` | Implements a task following your brain's conventions |
 | `/kluris-acme fix <bug>` | Fixes a bug using brain knowledge, flags any conflicts |
-| `/kluris-acme create a decision` | Creates a decision-record neuron |
-| `/kluris-acme create an incident` | Creates an incident-report neuron |
-| `/kluris-acme create a runbook` | Creates a runbook neuron |
-| `/kluris-acme open <file>` | Opens a neuron and reads it |
-| `/kluris-acme deprecate <file>` | Marks a neuron as deprecated |
+| `/kluris-acme create a decision record about ...` | Walks you through a new neuron section by section, e.g. a decision record or an incident postmortem |
+| `/kluris-acme create a new section for monitoring` | Proposes a new lobe and creates it once you approve |
+| `/kluris-acme fix the broken synapses` | Repairs the broken links `kluris dream` reports, one proposal at a time |
+| `/kluris-acme setup this project` | Adds the `## Knowledge base` pointer to the project's `CLAUDE.md` and `AGENTS.md` |
 
 Agent patterns are free-form — say it naturally. Under the hood the agent calls `kluris search` for lookups and `kluris wake-up` for the session bootstrap, but you never type those yourself when using the generated skill.
 
@@ -515,8 +563,24 @@ not shared. Each team member can have different settings.
 ```yaml
 name: my-brain
 description: my-brain knowledge base
-# `companions:` and `agents:` may also appear here.
+agents:
+  commands_for:       # agents that get a kluris-<name> skill (all nine by default)
+  - claude
+  - cursor
+  - windsurf
+  - copilot
+  - codex
+  - gemini
+  - hermes
+  - kilocode
+  - junie
+companions: []        # see "Pair with Specmint"
 ```
+
+Trim `agents.commands_for` to the agents you use and run `kluris doctor`:
+Kluris then stops writing skills for the others (it installs for every agent
+listed by any registered brain, and it does not delete skills it already
+installed).
 
 ## Brain vocabulary
 
@@ -532,7 +596,23 @@ description: my-brain knowledge base
 
 ## Supported agents
 
-Claude Code, Cursor, Windsurf, GitHub Copilot, Codex, Gemini CLI, Hermes Agent, Kilo Code, Junie
+Kluris installs a skill into nine agents: Claude Code, Cursor, Windsurf, GitHub Copilot, Codex, Gemini CLI, Hermes Agent, Kilo Code, Junie
+
+Kluris writes one `kluris-<name>/SKILL.md` per brain into each of these agents' skill folders:
+
+| Agent | Skills directory |
+|-------|------------------|
+| Claude Code | `~/.claude/skills/` |
+| Cursor | `~/.cursor/skills/` |
+| Windsurf | `~/.codeium/windsurf/skills/` (plus a `kluris-<name>.md` workflow in `~/.codeium/windsurf/global_workflows/`) |
+| GitHub Copilot | `~/.copilot/skills/` |
+| Codex | `~/.codex/skills/` |
+| Gemini CLI | `~/.gemini/skills/` |
+| Hermes Agent | `~/.hermes/skills/` and every `~/.hermes/profiles/*/skills/` |
+| Kilo Code | `~/.kilo/skills/` |
+| Junie | `~/.junie/skills/` |
+
+It also writes the universal `~/.agents/skills/` folder. The skill is plain instructions plus shell calls to the `kluris` CLI, so any other agent that loads `SKILL.md` skills from one of those folders (or is pointed at the file) and can run a shell can use it too. [OpenCode](https://opencode.ai/docs/skills/), for one, loads skills from `~/.claude/skills/` and `~/.agents/skills/`.
 
 Most agents load the generated skill as `/kluris-<name>`. Hermes users can load it with `/skill kluris-<name>` inside a session or start Hermes with `hermes -s kluris-<name>`. If you create a new Hermes profile after creating/registering a brain, run `kluris doctor` to refresh that profile's skills.
 
@@ -549,10 +629,11 @@ Pair them and the research phase starts half-done — grounded in your code
 > /kluris-acme let's spec out adding OAuth sign-in with GitHub
 ```
 
-The `kluris-<name>` skill sees this is multi-step work and follows the embedded
-specmint playbook. Phase 1a reads your codebase. Phase 1b consults the brain.
-Phase 2 asks only the questions neither can answer. Phase 3 writes a spec
-where every decision references a neuron.
+When a brain has a companion enabled, its `kluris-<name>` skill tells the agent
+to pause before multi-step work (a new feature, a refactor across files, a
+migration) and follow the embedded Specmint playbook: set up, research,
+interview, then write the spec. Small single-file edits skip it. The skill's
+brain-first rules ("query first -- never guess") stay in force alongside it.
 
 Four flavors are installable per brain as Kluris companions:
 
@@ -565,9 +646,15 @@ Four flavors are installable per brain as Kluris companions:
 
 Use the HTML variants when you want the spec itself to be a visual, shareable, presentation-ready HTML document. Use the non-HTML variants when you prefer plain markdown specs as the canonical source of truth.
 
-Companions ship inside the `kluris` Python package. Enabling one copies only
-its `SKILL.md` into `~/.kluris/companions/<name>/SKILL.md` and adds a short
-reference snippet to that brain's generated Kluris skill.
+Companions ship inside the `kluris` Python package, re-vendored from Specmint
+v3. Each one is a folder: a `SKILL.md` plus the `references/` it points at and,
+for the two HTML flavors, `assets/` (the spec's runtime script and stylesheet).
+Enabling one copies that folder into `~/.kluris/companions/<name>/` and adds a
+short reference snippet to that brain's generated Kluris skill; the companions
+are read from there, never installed as skills of their own. `kluris doctor`
+refreshes the installed copies, so `pipx upgrade kluris && kluris doctor` also
+brings the playbooks up to date. `kluris companion remove` drops a brain's
+opt-in and keeps the copy under `~/.kluris/companions/`.
 
 **Enable for one brain:**
 
