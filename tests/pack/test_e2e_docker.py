@@ -28,9 +28,6 @@ import pytest
 from kluris.core.pack import stage_pack
 
 
-pytestmark = pytest.mark.docker_network
-
-
 def _docker_available() -> bool:
     if shutil.which("docker") is None:
         return False
@@ -47,14 +44,18 @@ def _docker_available() -> bool:
 
 _DOCKER_AVAILABLE = _docker_available()
 
-
-@pytest.mark.skipif(
-    not _DOCKER_AVAILABLE,
-    reason=(
-        "Docker e2e requires a running daemon AND "
-        "KLURIS_RUN_DOCKER_E2E=1; default CI skips this module."
+pytestmark = [
+    pytest.mark.docker_network,
+    pytest.mark.skipif(
+        not _DOCKER_AVAILABLE,
+        reason=(
+            "Docker e2e requires a running daemon AND "
+            "KLURIS_RUN_DOCKER_E2E=1; default CI skips this module."
+        ),
     ),
-)
+]
+
+
 def _run(args: list[str], *, cwd: Path | None = None) -> subprocess.CompletedProcess:
     return subprocess.run(
         args,
