@@ -5,7 +5,8 @@ implements two methods:
 
 - :meth:`smoke_test` — sends a tiny ``ping`` tool schema at boot and
   raises if the configured endpoint cannot be reached, refuses the
-  tool schema, or times out. Result drives the fail-fast at app boot.
+  tool schema, or times out. A failure disables chat (brain-only mode, chat
+  returns 503); the process keeps running.
 - :meth:`complete_stream` — streams a chat completion as
   ``{kind: "token"|"tool_use"|"usage"|"end", ...}`` events. LiteLLM
   normalizes every provider (Anthropic / OpenAI Chat Completions /

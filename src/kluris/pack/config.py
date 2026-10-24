@@ -4,12 +4,16 @@ The packed app reads its config from environment variables at process
 start. There is no in-app config UI and no persisted ``config.yml`` —
 credential rotation is ``edit .env + docker compose down && up``.
 
-Two auth shapes are supported:
+The pack has no server auth (removed in v2.28.5). The credentials configured
+here are the LLM credentials the server uses to call the model. Two shapes
+are supported:
 
 - API key (Anthropic-style or OpenAI-style)
 - OAuth 2.0 client_credentials (token URL + client ID + secret)
 
-Exactly one must be configured. Both → fail-fast at boot.
+Exactly one must be configured. Neither or both is a :class:`ConfigError`;
+``create_app`` catches it and starts in brain-only mode (chat returns 503,
+the brain explorer and ``/healthz`` keep working).
 """
 
 from __future__ import annotations
@@ -308,8 +312,8 @@ class Config(BaseModel):
     # everything — deleting a deployer's history must never be a surprise.
     session_retention_days: int = 0
 
-    # Pin the system prompt at boot instead of re-reading
-    # /data/config/system_prompt.md on every request. Live-editing stays the
+    # Pin the system prompt as read on the first chat request instead of
+    # re-reading /data/config/system_prompt.md on every request. Live-editing stays the
     # default; pinning closes the "a /data write instantly rewires the
     # agent's behavior" channel on hardened deployments.
     lock_system_prompt: bool = False
@@ -357,11 +361,13 @@ class Config(BaseModel):
     def is_anthropic_shape(self) -> bool:
         """True only for the Anthropic api-key path.
 
-        Drives which OpenAI-only params (``store``, ``reasoning_effort``,
+        Drives which OpenAI-only params (``reasoning_effort``,
         ``stream_options``) the provider may send: LiteLLM rejects them for
         Anthropic, and ``reasoning_effort`` in particular would make LiteLLM
         enable adaptive thinking — which the pack's tool loop cannot
-        round-trip — so the provider gates them off here.
+        round-trip — so the provider gates them off here. ``store=False`` is
+        gated separately, by ``_is_openai_proper`` in ``litellm_provider.py``:
+        it goes only to OpenAI proper.
         """
         return self.auth_mode == "api_key" and self.provider_shape == "anthropic"
 

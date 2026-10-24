@@ -125,8 +125,18 @@ def test_uvicorn_access_logger_carries_redaction_filter(
 ):
     """The access logger must carry the redacting filter directly (it has its
     own handler + propagate=False), so a registered secret in a request line
-    is scrubbed in docker logs."""
+    is scrubbed in docker logs.
+
+    The record runs through the logger's WHOLE filter chain, the path uvicorn
+    takes: LiteLLM attaches its own access-log filter to ``uvicorn.access`` at
+    import, and it rewrites credential-looking query params (``?token=``) with
+    its own placeholder before ours runs. Which placeholder lands is therefore
+    filter order, not a contract. The contract is: the secret is gone and the
+    args are still the 5-tuple with the int status after every filter."""
     import logging
+
+    from uvicorn.logging import AccessFormatter
+
     from kluris.pack.middleware import (
         RedactingLogFilter,
         _clear_registered_secrets,
@@ -138,20 +148,34 @@ def test_uvicorn_access_logger_carries_redaction_filter(
         _app(api_key_env, fixture_brain, tmp_path, stub_provider)
         acc = logging.getLogger("uvicorn.access")
         assert any(isinstance(f, RedactingLogFilter) for f in acc.filters)
-        # And a registered secret is scrubbed from a synthetic access line.
         register_secret("s3cret")
-        rec = logging.LogRecord(
-            "uvicorn.access", logging.INFO, __file__, 0,
-            '%s - "%s %s HTTP/%s" %d',
-            ("1.2.3.4:0", "GET", "/?token=s3cret", "1.1", 200), None,
-        )
-        for f in acc.filters:
-            f.filter(rec)
-        assert "s3cret" not in rec.getMessage()
-        # The 5-tuple structure MUST survive the filter: the access logger's
-        # AccessFormatter unpacks record.args into exactly five values. Only the
-        # path arg is rewritten; the status code stays an int for "%d".
-        assert rec.args == ("1.2.3.4:0", "GET", "/?token=***", "1.1", 200)
+
+        def _filtered(path):
+            rec = logging.LogRecord(
+                "uvicorn.access", logging.INFO, __file__, 0,
+                '%s - "%s %s HTTP/%s" %d',
+                ("1.2.3.4:0", "GET", path, "1.1", 200), None,
+            )
+            assert acc.filter(rec)
+            return rec
+
+        for path in ("/?token=s3cret", "/?q=s3cret"):
+            rec = _filtered(path)
+            # The 5-tuple structure MUST survive every filter: the access
+            # logger's AccessFormatter unpacks record.args into exactly five
+            # values. Only the path arg is rewritten; the status code stays an
+            # int for "%d".
+            assert len(rec.args) == 5
+            assert rec.args[:2] == ("1.2.3.4:0", "GET")
+            assert rec.args[3:] == ("1.1", 200)
+            assert "s3cret" not in rec.args[2]
+            line = AccessFormatter().format(rec)
+            assert "s3cret" not in line
+            assert line.endswith(' HTTP/1.1" 200')
+
+        # A secret in a param no generic credential heuristic recognizes is
+        # caught by value, by OUR filter: the exact placeholder proves it.
+        assert _filtered("/?q=s3cret").args[2] == "/?q=***"
     finally:
         _clear_registered_secrets()
 

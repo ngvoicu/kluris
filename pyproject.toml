@@ -40,7 +40,9 @@ dev = [
     "httpx>=0.28.1",
     "respx>=0.21",
     "pytest-asyncio>=0.23",
-    "litellm>=1.87",
+    # <1.106 tracks the image pin: every 1.106.x breaks tool calls without
+    # the mcp extra (BerriAI/litellm#46045). Drop the cap when the image moves.
+    "litellm>=1.105.4,<1.106",
 ]
 
 [tool.hatch.build.targets.wheel]

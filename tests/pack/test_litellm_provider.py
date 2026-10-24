@@ -10,7 +10,10 @@ behavior) is NOT exercised here and must be checked by hand against a live key.
 from __future__ import annotations
 
 import asyncio
+import json
 import ssl
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
@@ -247,8 +250,19 @@ async def test_openai_gateway_routes_chat_completions(fake_litellm):
     assert last["model"] == "openai/gpt-4o"
     # /v1 restored so LiteLLM's leaf-only append lands on /v1/chat/completions.
     assert last["api_base"] == "https://openrouter.ai/api/v1"
-    assert last["store"] is False
+    # store goes to OpenAI proper only: a gateway may reject an unknown field.
+    assert "store" not in last
     assert last["stream_options"] == {"include_usage": True}
+
+
+async def test_openai_gateway_responses_opt_in_omits_store(fake_litellm):
+    cfg = _api_cfg(base="https://gw.example", model="gpt-5",
+                   KLURIS_USE_RESPONSES_API="1")
+    await LiteLLMProvider(cfg).smoke_test()
+    last = fake_litellm.last
+    assert last["model"] == "openai/responses/gpt-5"
+    assert last["api_base"] == "https://gw.example/v1"
+    assert "store" not in last
 
 
 async def test_temperature_forwarded_only_when_set(fake_litellm):
@@ -599,7 +613,7 @@ async def test_oauth_bearer_passed_as_api_key(fake_litellm, respx_mock):
     assert last["model"] == "openai/internal-model"
     assert last["api_base"] == "https://gw.test/v1"
     assert last["api_key"] == "tok-abc"
-    assert last["store"] is False
+    assert "store" not in last
 
 
 @respx.mock
@@ -755,10 +769,13 @@ async def test_configure_litellm_insecure_verify_false(monkeypatch):
     assert litellm.ssl_verify is False
 
 
-async def test_configure_litellm_ca_bundle_passes_sslcontext(monkeypatch):
-    bundle = Path(ssl.get_default_verify_paths().cafile or "")
-    if not bundle or not bundle.exists():
-        pytest.skip("no system CA bundle available to use as a fixture")
+_PRIVATE_CA = Path(__file__).parent / "fixtures" / "tls" / "private-ca.pem"
+
+
+async def test_configure_litellm_ca_bundle_sslcontext_and_path(monkeypatch):
+    """A CA bundle reaches aclient_session as an SSLContext (httpx 0.28+ form)
+    and litellm.ssl_verify as the bundle PATH (the only non-bool form LiteLLM's
+    generic handler honors from the global)."""
     captured = {}
 
     class _CaptureClient:
@@ -767,9 +784,31 @@ async def test_configure_litellm_ca_bundle_passes_sslcontext(monkeypatch):
 
     monkeypatch.setattr(
         "kluris.pack.providers.litellm_provider.httpx.AsyncClient", _CaptureClient)
-    configure_litellm(_api_cfg(KLURIS_CA_BUNDLE=str(bundle)))
+    configure_litellm(_api_cfg(KLURIS_CA_BUNDLE=str(_PRIVATE_CA)))
     assert isinstance(captured["verify"], ssl.SSLContext)
-    assert isinstance(litellm.ssl_verify, ssl.SSLContext)
+    assert litellm.ssl_verify == str(_PRIVATE_CA)
+
+
+async def test_configure_litellm_ca_bundle_trusted_by_generic_handler(monkeypatch):
+    """Regression: the Anthropic and Responses routes build their client from
+    LiteLLM's get_ssl_configuration(), which ignored an SSLContext set on
+    litellm.ssl_verify and fell back to certifi, so KLURIS_CA_BUNDLE never
+    reached them and a private-CA endpoint failed verification. The context
+    those routes get must trust the deployer's CA."""
+    from litellm.llms.custom_httpx.http_handler import get_ssl_configuration
+
+    # Either env var would override litellm.ssl_verify / the bundle.
+    monkeypatch.delenv("SSL_VERIFY", raising=False)
+    monkeypatch.delenv("SSL_CERT_FILE", raising=False)
+
+    configure_litellm(_api_cfg(
+        shape="anthropic", base="https://llm.internal", model="claude-sonnet-4-5",
+        KLURIS_CA_BUNDLE=str(_PRIVATE_CA),
+    ))
+    ctx = get_ssl_configuration()
+    assert isinstance(ctx, ssl.SSLContext)
+    subjects = [str(cert.get("subject")) for cert in ctx.get_ca_certs()]
+    assert any("kluris-test-private-ca" in s for s in subjects)
 
 
 async def test_configure_litellm_ssl_verify_is_consumed_by_resolver(monkeypatch):
@@ -789,7 +828,195 @@ async def test_configure_litellm_ssl_verify_is_consumed_by_resolver(monkeypatch)
     configure_litellm(_api_cfg(KLURIS_TLS_INSECURE="1"))
     assert get_ssl_verify() is False
 
-    bundle = Path(ssl.get_default_verify_paths().cafile or "")
-    if bundle and bundle.exists():
-        configure_litellm(_api_cfg(KLURIS_CA_BUNDLE=str(bundle)))
-        assert isinstance(get_ssl_verify(), ssl.SSLContext)
+    configure_litellm(_api_cfg(KLURIS_CA_BUNDLE=str(_PRIVATE_CA)))
+    assert get_ssl_verify() == str(_PRIVATE_CA)
+
+
+# ============================================================================
+# Wire-level request bodies: real LiteLLM against a local mock endpoint
+# ============================================================================
+
+
+def _sse(events: list[dict[str, Any]]) -> str:
+    return "".join(
+        f"event: {e.get('type', '')}\ndata: {json.dumps(e)}\n\n" for e in events
+    )
+
+
+_RESP_MSG = {
+    "type": "message", "id": "m1", "status": "completed", "role": "assistant",
+    "content": [{"type": "output_text", "text": "pong", "annotations": []}],
+}
+_RESP_USAGE = {
+    "input_tokens": 1, "output_tokens": 1, "total_tokens": 2,
+    "input_tokens_details": {"cached_tokens": 0},
+    "output_tokens_details": {"reasoning_tokens": 0},
+}
+
+
+def _resp_obj(status: str, output: list, usage: dict | None) -> dict[str, Any]:
+    return {
+        "id": "resp1", "object": "response", "created_at": 1, "status": status,
+        "model": "m", "output": output, "parallel_tool_calls": True,
+        "tool_choice": "auto", "tools": [], "usage": usage, "error": None,
+        "incomplete_details": None, "instructions": None, "metadata": {},
+        "temperature": None, "top_p": None, "text": {"format": {"type": "text"}},
+    }
+
+
+def _mock_reply(path: str, stream: bool) -> tuple[str, str]:
+    """(content-type, body) for one mock LLM request: a one-word "pong"."""
+    if path.endswith("/token"):
+        return "application/json", json.dumps(
+            {"access_token": "tok-wire", "expires_in": 3600})
+    if path.endswith("/messages"):
+        if not stream:
+            return "application/json", json.dumps({
+                "id": "msg0", "type": "message", "role": "assistant", "model": "m",
+                "content": [{"type": "text", "text": "pong"}],
+                "stop_reason": "end_turn",
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            })
+        return "text/event-stream", _sse([
+            {"type": "message_start", "message": {
+                "id": "msg1", "type": "message", "role": "assistant", "model": "m",
+                "content": [], "stop_reason": None,
+                "usage": {"input_tokens": 1, "output_tokens": 1}}},
+            {"type": "content_block_start", "index": 0,
+             "content_block": {"type": "text", "text": ""}},
+            {"type": "content_block_delta", "index": 0,
+             "delta": {"type": "text_delta", "text": "pong"}},
+            {"type": "content_block_stop", "index": 0},
+            {"type": "message_delta", "delta": {"stop_reason": "end_turn"},
+             "usage": {"output_tokens": 1}},
+            {"type": "message_stop"},
+        ])
+    if path.endswith("/responses"):
+        if not stream:
+            return "application/json", json.dumps(
+                _resp_obj("completed", [_RESP_MSG], _RESP_USAGE))
+        return "text/event-stream", _sse([
+            {"type": "response.created", "sequence_number": 0,
+             "response": _resp_obj("in_progress", [], None)},
+            {"type": "response.output_item.added", "sequence_number": 1,
+             "output_index": 0,
+             "item": {**_RESP_MSG, "status": "in_progress", "content": []}},
+            {"type": "response.content_part.added", "sequence_number": 2,
+             "output_index": 0, "item_id": "m1", "content_index": 0,
+             "part": {"type": "output_text", "text": "", "annotations": []}},
+            {"type": "response.output_text.delta", "sequence_number": 3,
+             "output_index": 0, "item_id": "m1", "content_index": 0,
+             "delta": "pong", "logprobs": []},
+            {"type": "response.output_text.done", "sequence_number": 4,
+             "output_index": 0, "item_id": "m1", "content_index": 0,
+             "text": "pong", "logprobs": []},
+            {"type": "response.output_item.done", "sequence_number": 5,
+             "output_index": 0, "item": _RESP_MSG},
+            {"type": "response.completed", "sequence_number": 6,
+             "response": _resp_obj("completed", [_RESP_MSG], _RESP_USAGE)},
+        ])
+    # /chat/completions
+    if not stream:
+        return "application/json", json.dumps({
+            "id": "c0", "object": "chat.completion", "created": 1, "model": "m",
+            "choices": [{"index": 0, "finish_reason": "stop",
+                         "message": {"role": "assistant", "content": "pong"}}],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+        })
+    chunks = [
+        {"id": "c1", "object": "chat.completion.chunk", "created": 1, "model": "m",
+         "choices": [{"index": 0, "delta": {"role": "assistant", "content": "pong"},
+                      "finish_reason": "stop"}]},
+        {"id": "c1", "object": "chat.completion.chunk", "created": 1, "model": "m",
+         "choices": [],
+         "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}},
+    ]
+    return "text/event-stream", (
+        "".join(f"data: {json.dumps(c)}\n\n" for c in chunks) + "data: [DONE]\n\n"
+    )
+
+
+@pytest.fixture
+def mock_llm_server():
+    """A local plain-HTTP LLM endpoint that records every request body."""
+    bodies: list[tuple[str, dict[str, Any]]] = []
+
+    class _Handler(BaseHTTPRequestHandler):
+        def log_message(self, *args):  # keep test output quiet
+            pass
+
+        def do_POST(self):
+            raw = self.rfile.read(int(self.headers.get("content-length") or 0))
+            body = {}
+            if not self.path.endswith("/token"):
+                body = json.loads(raw or b"{}")
+                bodies.append((self.path, body))
+            ctype, text = _mock_reply(self.path, bool(body.get("stream")))
+            data = text.encode("utf-8")
+            self.send_response(200)
+            self.send_header("content-type", ctype)
+            self.send_header("content-length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_address[1]}", bodies
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+@pytest.mark.parametrize(
+    "route, path, sends_store",
+    [
+        ("anthropic", "/v1/messages", False),
+        ("responses", "/v1/responses", True),
+        ("gateway", "/v1/chat/completions", False),
+        ("oauth", "/v1/chat/completions", False),
+    ],
+)
+async def test_wire_body_store_per_route(
+    mock_llm_server, monkeypatch, route, path, sends_store
+):
+    """Pin what LiteLLM actually puts on the wire, per route: ``store: false``
+    reaches OpenAI proper (the Responses route) and nothing else. LiteLLM
+    1.87.0 silently dropped ``store`` on the gateway routes and later versions
+    forward it, so a fake ``acompletion`` alone cannot catch a strict gateway
+    receiving a field it never got before."""
+    base, bodies = mock_llm_server
+    for name in ("drop_params", "suppress_debug_info", "ssl_verify", "aclient_session"):
+        monkeypatch.setattr(litellm, name, getattr(litellm, name))
+    monkeypatch.delenv("OPENAI_API_BASE", raising=False)
+    if route == "anthropic":
+        cfg = _api_cfg(shape="anthropic", base=base, model="claude-sonnet-4-5")
+    elif route == "responses":
+        # OpenAI proper: api.openai.com → api_base None → LiteLLM's default
+        # OpenAI base, redirected to the mock through its own env override.
+        monkeypatch.setenv("OPENAI_BASE_URL", base + "/v1")
+        cfg = _api_cfg(base="https://api.openai.com", model="gpt-5")
+    elif route == "gateway":
+        cfg = _api_cfg(base=base, model="gw-model")
+    else:
+        cfg = _oauth_cfg(KLURIS_OAUTH_TOKEN_URL=base + "/token",
+                         KLURIS_OAUTH_API_BASE_URL=base)
+    configure_litellm(cfg)
+    provider = LiteLLMProvider(cfg)
+
+    await provider.smoke_test()
+    events = await _drain(provider.complete_stream(
+        [{"role": "user", "content": "q"}],
+        [{"type": "function", "function": {
+            "name": "search", "description": "s",
+            "parameters": {"type": "object", "properties": {}}}}],
+    ))
+
+    assert {"kind": "token", "text": "pong"} in events
+    assert [p for p, _ in bodies] == [path, path]
+    for _, body in bodies:
+        if sends_store:
+            assert body["store"] is False
+        else:
+            assert "store" not in body

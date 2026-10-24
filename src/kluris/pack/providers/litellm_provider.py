@@ -8,7 +8,8 @@ so today's ``.env`` keeps working unchanged.
 
 The agent loop and SSE layer are untouched: ``complete_stream`` still yields the
 common ``{kind: token|tool_use|usage|end}`` event dicts, and ``smoke_test``
-still fails fast at boot.
+still raises at boot when the endpoint is unusable; the app then runs in
+brain-only mode (chat disabled) instead of exiting.
 
 LiteLLM normalizes every provider to OpenAI-shaped messages, tool schemas, and
 streamed chunks, so a single ``_messages_for_openai`` converter and a single
@@ -27,7 +28,7 @@ from typing import Any, AsyncIterator
 import httpx
 import litellm
 
-from ..config import Config
+from ..config import Config, _is_openai_proper_host
 from ..middleware import redact_secrets
 from .base import (
     AuthError,
@@ -59,9 +60,9 @@ _PING_TOOL_OPENAI = {
         },
     },
 }
-# Force the ping tool. On the ``openai/responses/`` path LiteLLM does not yet
-# pass ``tool_choice`` through and drops it (``drop_params=True``); the smoke is
-# structural (a non-empty completion), so a dropped force is harmless there.
+# Force the ping tool. LiteLLM sends it on every path (on ``openai/responses/``
+# as ``{"type": "function", "name": "ping"}``); the smoke is structural (a
+# non-empty completion), so a model that ignores the force still passes.
 _PING_TOOL_CHOICE = {"type": "function", "function": {"name": "ping"}}
 
 
@@ -69,16 +70,22 @@ def configure_litellm(config: Config) -> None:
     """Set the process-wide LiteLLM globals once at boot.
 
     - ``drop_params=True`` — silently drop params a given model/endpoint does
-      not accept (e.g. ``tool_choice`` on the Responses API). Load-bearing for
-      the Responses smoke-test, and a safety net behind the explicit per-shape
-      gating in :meth:`LiteLLMProvider._auth_route_kwargs`.
+      not accept instead of raising (e.g. a ``temperature`` a gpt-5 reasoning
+      model rejects). ``tool_choice`` is not one of them: it is sent on every
+      path, including the Responses API. A safety net behind the explicit
+      per-shape gating in :meth:`LiteLLMProvider._auth_route_kwargs`.
     - TLS is set on TWO globals because they reach different handlers.
       ``aclient_session`` (a shared async httpx client) is read ONLY by
       LiteLLM's OpenAI handler — OpenAI Chat Completions, the Responses API, and
       OAuth gateways. The generic/Anthropic handler builds its own client and
       resolves TLS from ``ssl_verify``. Setting both makes every path honor
-      ``KLURIS_CA_BUNDLE`` / ``KLURIS_TLS_INSECURE``. ``httpx_verify`` returns
-      exactly the ``True | False | ssl.SSLContext`` forms both globals accept.
+      ``KLURIS_CA_BUNDLE`` / ``KLURIS_TLS_INSECURE``.
+    - The two globals take different forms of a CA bundle. ``aclient_session``
+      gets the ``ssl.SSLContext`` from ``httpx_verify``. ``ssl_verify`` gets
+      the bundle's PATH: LiteLLM's ``get_ssl_configuration()`` honors an
+      SSLContext only when one is passed in as an argument, and builds a
+      certifi context in place of one found in the global, so the
+      Anthropic and Responses routes would not trust a private CA.
     """
     litellm.drop_params = True
     # Quiet LiteLLM's stdout debug banner (model/provider hints printed on some
@@ -102,7 +109,11 @@ def configure_litellm(config: Config) -> None:
         message=r"(?s)Pydantic serializer warnings.*ResponseAPIUsage",
         category=UserWarning,
     )
-    litellm.ssl_verify = config.httpx_verify
+    litellm.ssl_verify = (
+        str(config.tls_ca_bundle)
+        if config.tls_ca_bundle is not None
+        else config.httpx_verify
+    )
     litellm.aclient_session = httpx.AsyncClient(verify=config.httpx_verify)
 
 
@@ -115,6 +126,11 @@ class LiteLLMProvider(LLMProvider):
         self._model_string = config.litellm_model
         self._api_base = config.litellm_api_base
         self._is_anthropic = config.is_anthropic_shape
+        self._is_openai_proper = (
+            config.auth_mode == "api_key"
+            and config.provider_shape == "openai"
+            and _is_openai_proper_host(config.base_url)
+        )
         # Escape hatch for gateways that need more than a bearer; no env knob
         # today, kept as the documented seam.
         self._extra_headers: dict[str, str] | None = None
@@ -203,16 +219,20 @@ class LiteLLMProvider(LLMProvider):
     def _auth_route_kwargs(self, api_key: str) -> dict[str, Any]:
         """Auth + routing kwargs shared by smoke + stream.
 
-        ``store=False`` (privacy: never retain the conversation) is sent only on
-        the OpenAI-shaped paths — LiteLLM does not accept ``store`` for
-        Anthropic, and the explicit gate avoids relying on ``drop_params``.
+        ``store=False`` (privacy: never retain the conversation) is sent only to
+        OpenAI proper (the Responses route on ``api.openai.com``). LiteLLM does
+        not accept ``store`` for Anthropic, and an OpenAI-compatible gateway
+        (api-key or OAuth, including the ``KLURIS_USE_RESPONSES_API`` opt-in)
+        may reject a field it does not know. LiteLLM up to 1.87.0 silently
+        dropped it there and later versions forward it, so the explicit gate
+        keeps gateway request bodies unchanged across upgrades.
         """
         kwargs: dict[str, Any] = {"api_key": api_key}
         if self._api_base:
             kwargs["api_base"] = self._api_base
         if self._extra_headers:
             kwargs["extra_headers"] = self._extra_headers
-        if not self._is_anthropic:
+        if self._is_openai_proper:
             kwargs["store"] = False
         return kwargs
 

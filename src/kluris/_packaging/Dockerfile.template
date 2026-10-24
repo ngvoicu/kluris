@@ -5,6 +5,8 @@ WORKDIR /app
 # Pinned runtime deps for reproducible builds. litellm unifies LLM access
 # (Anthropic / OpenAI Chat Completions / OpenAI Responses API / OAuth gateways)
 # and pulls httpx>=0.28 + pydantic>=2.10; those floors are pinned here too.
+# litellm stays on 1.105.x: every 1.106.x raises "No module named 'mcp'" on any
+# tools call (BerriAI/litellm#46045).
 RUN pip install --no-cache-dir \
     fastapi==0.136.3 \
     "uvicorn[standard]==0.48.0" \
@@ -14,7 +16,7 @@ RUN pip install --no-cache-dir \
     pyyaml==6.0.3 \
     python-frontmatter==1.3.0 \
     pydantic==2.13.4 \
-    litellm==1.87.0
+    litellm==1.105.4
 
 # Copy the chat server, the read-only Kluris runtime, and the brain.
 COPY app/ /app/app/
