@@ -135,8 +135,17 @@ def _with_endings(data: bytes, crlf: bool) -> bytes:
     return data.replace(b"\n", b"\r\n") if crlf else data
 
 
+def _emulate_v2_on_windows(files) -> None:
+    """Give the setup files CRLF endings, as v2 (Python text mode) writes
+    them on Windows, so the test proves it does not depend on the endings
+    the host's v2 wrote."""
+    for f in files:
+        f.write_bytes(f.read_bytes().replace(b"\r\n", b"\n").replace(b"\n", b"\r\n"))
+
+
+@pytest.mark.parametrize("v2_host", ["native", "windows"], ids=["v2-native", "v2-windows"])
 @pytest.mark.parametrize("crlf", [False, True], ids=["lf", "crlf"])
-def test_v2_reads_a_config_rewritten_by_v3(sandbox: Sandbox, crlf: bool):
+def test_v2_reads_a_config_rewritten_by_v3(sandbox: Sandbox, crlf: bool, v2_host: str):
     """v3 rewrites what v2 wrote byte for byte (PAR-003 aside), keeps the
     file's line endings, and v2 reads the result."""
     brains = sandbox.work / "brains"
@@ -153,9 +162,12 @@ def test_v2_reads_a_config_rewritten_by_v3(sandbox: Sandbox, crlf: bool):
     )
     _oracle_ok(sandbox, ["companion", "add", "specmint-tdd", "--brain", "alpha", "--json"])
     files = {"config": sandbox.config, "custom": custom, "beta": brains / "beta" / "kluris.yml"}
-    if crlf:  # as v2 writes them on Windows
-        for f in files.values():
-            f.write_bytes(f.read_bytes().replace(b"\r\n", b"\n").replace(b"\n", b"\r\n"))
+    if v2_host == "windows":
+        _emulate_v2_on_windows(files.values())
+    # Each case starts from the same bytes on every host: v2's files with LF,
+    # then CRLF (as v2 writes them on Windows) when the case asks for it.
+    for f in files.values():
+        f.write_bytes(_with_endings(f.read_bytes().replace(b"\r\n", b"\n"), crlf))
     v2_bytes = {k: f.read_bytes() for k, f in files.items()}
     assert all((b"\r\n" in b) == crlf for b in v2_bytes.values())
     v2_list = run_v2(["list", "--json"], sandbox.env)
