@@ -1,0 +1,15 @@
+[project]
+name = "kluris-parity"
+version = "0.0.0"
+description = "Parity harness: the frozen Kluris v2.28.11 oracle against the Kluris 3 binary"
+requires-python = ">=3.11"
+dependencies = [
+    "pytest>=8,<9",
+    "hypothesis>=6,<7",
+]
+
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+testpaths = ["."]

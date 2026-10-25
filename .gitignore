@@ -12,3 +12,6 @@ build/
 Thumbs.db
 *.egg
 .specs/
+target/
+parity/.venv/
+parity/.oracle/
