@@ -1,12 +1,12 @@
-//! Reading frontmatter: markdown `---` blocks (python-frontmatter's YAML
-//! handler) and the `#---` comment block of YAML neurons.
+//! Reading and writing frontmatter: markdown `---` blocks (python-frontmatter's
+//! YAML handler) and the `#---` comment block of YAML neurons.
 
 use std::fmt;
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
-use crate::yaml::{self, Map, Value, YamlError, is_py_space};
+use crate::yaml::{self, Map, Profile, Value, YamlError, is_py_space};
 
 /// The line ending a file uses, for the writer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -321,4 +321,52 @@ pub fn is_yaml_neuron(path: &Path) -> bool {
     (name.ends_with(".yml") || name.ends_with(".yaml"))
         && name != "kluris.yml"
         && has_yaml_opt_in_block(path)
+}
+
+/// The body as v2 writes it after reading it back: universal newlines, the
+/// leading whitespace-only lines and all trailing whitespace removed. Kluris 3
+/// keeps the first text line's indentation (python-frontmatter strips it).
+fn markdown_body(body: &str) -> String {
+    let body = universal_newlines(body);
+    let Some(first_text) = body.find(|c: char| !is_py_space(c)) else {
+        return String::new();
+    };
+    let line_start = body[..first_text].rfind('\n').map_or(0, |i| i + 1);
+    body[line_start..].trim_end_matches(is_py_space).to_string()
+}
+
+/// A markdown neuron as v2 writes it: python-frontmatter's
+/// `dumps(Post(body, **meta))` plus a final newline, i.e. `---`, the sorted
+/// libyaml YAML, `---`, a blank line, the body (see [`markdown_body`]) and
+/// `\n`; without a body the file ends at the closing `---`. Written LF;
+/// `LineEnding::Crlf` gives every line `\r\n`, as v2's text-mode write does on
+/// Windows.
+pub fn write_markdown(meta: &Map, body: &str, line_ending: LineEnding) -> String {
+    let yaml = yaml::emit(meta, Profile::Md);
+    let mut out = format!("---\n{}\n---\n", yaml.trim_matches(is_py_space));
+    let body = markdown_body(body);
+    if !body.is_empty() {
+        out.push('\n');
+        out.push_str(&body);
+        out.push('\n');
+    }
+    match line_ending {
+        LineEnding::Lf => out,
+        LineEnding::Crlf => out.replace('\n', "\r\n"),
+    }
+}
+
+/// A YAML neuron as v2's `_write_yaml_neuron` writes it: the `yaml.safe_dump`
+/// output with every line prefixed `# ` (`#` when empty) between `#---` lines,
+/// LF, then the body byte for byte.
+pub fn write_yaml_neuron(meta: &Map, body: &str) -> String {
+    let dumped = yaml::emit(meta, Profile::Yml);
+    let lines: Vec<String> = py_splitlines(dumped.trim_end_matches('\n'))
+        .into_iter()
+        .map(|line| match line.trim_end_matches(is_py_line_break) {
+            "" => "#".to_string(),
+            line => format!("# {line}"),
+        })
+        .collect();
+    format!("#---\n{}\n#---\n{body}", lines.join("\n"))
 }
