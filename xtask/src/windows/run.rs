@@ -21,6 +21,9 @@ pub const TIMED_OUT: i32 = 124;
 
 const UPLOAD_BOUND: Duration = Duration::from_secs(10 * 60);
 const STOP_BOUND: Duration = Duration::from_secs(60);
+/// The cleanup of a failed upload: a short connect and a short whole.
+const CLEANUP_CONNECT_S: u32 = 10;
+const CLEANUP_BOUND: Duration = Duration::from_secs(30);
 /// ssh ends a session whose machine stops answering for this long (15 s × 8).
 const KEEPALIVE: [&str; 4] = [
     "-o",
@@ -109,8 +112,13 @@ fn go(options: &Options, ctx: &mut Ctx) -> Result<i32, String> {
         } else {
             format!("it ended with {:?}: {}", sent.code, sent.stderr.trim())
         };
-        // A tarball half sent is the machine's sweep's to remove.
-        return Err(format!("scp of the tree to {} failed: {why}", machine.name));
+        say(
+            ctx.err,
+            &format!("windows: scp of the tree to {} failed: {why}", machine.name),
+        )?;
+        let cleaned = remove_upload(ctx, &machine, &id)?;
+        say(ctx.err, &format!("windows: {cleaned}"))?;
+        return Ok(1);
     }
     if (ctx.stop)() {
         end_there(ctx, &machine, &stop);
@@ -180,6 +188,58 @@ fn go(options: &Options, ctx: &mut Ctx) -> Result<i32, String> {
     };
     say(ctx.err, &summary(&machine, &id, &commit, &said, code))?;
     Ok(code)
+}
+
+/// Removes what a failed upload left of the run's tarball there, and says how it went.
+fn remove_upload(ctx: &mut Ctx, machine: &Machine, id: &str) -> Result<String, String> {
+    let name = script::tarball_name(id);
+    let args = vec![
+        "-o".into(),
+        "BatchMode=yes".into(),
+        "-o".into(),
+        format!("ConnectTimeout={CLEANUP_CONNECT_S}"),
+        machine.host.into(),
+        script::powershell_line(&script::cleanup_script(id))?,
+    ];
+    let sweep = "the next run's sweep removes it after a day";
+    let answer = ctx.runner.capture(&Call::new("ssh", args, CLEANUP_BOUND));
+    Ok(match answer {
+        Ok(answer) if answer.code == Some(0) => match answer.stdout.trim() {
+            "removed" => format!(
+                "the run's partial tarball {name} on {} was removed",
+                machine.name
+            ),
+            "absent" => format!(
+                "the run's tarball {name} was not there on {}: nothing to remove",
+                machine.name
+            ),
+            said => match said.strip_prefix("failed: ") {
+                Some(why) => format!(
+                    "the run's tarball {name} on {} could not be removed: {why}; {sweep}",
+                    machine.name
+                ),
+                None => format!(
+                    "the cleanup of {name} on {} said {said:?}; {sweep}",
+                    machine.name
+                ),
+            },
+        },
+        Ok(answer) if answer.timed_out => format!(
+            "could not reach {} to remove {name} (no answer in {}s); {sweep}",
+            machine.name,
+            CLEANUP_BOUND.as_secs()
+        ),
+        Ok(answer) => format!(
+            "could not reach {} to remove {name} (ssh ended with {:?}: {}); {sweep}",
+            machine.name,
+            answer.code,
+            answer.stderr.trim()
+        ),
+        Err(why) => format!(
+            "could not reach {} to remove {name} ({why}); {sweep}",
+            machine.name
+        ),
+    })
 }
 
 /// Sends the stop; whether the machine said it was done.

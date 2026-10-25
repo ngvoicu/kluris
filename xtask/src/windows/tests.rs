@@ -409,6 +409,10 @@ mod scripts {
             ("run", script::run_script(&spec(false, &[]))),
             ("run --parity", script::run_script(&spec(true, &extra))),
             ("stop", script::stop_script("kluris-0000abcd-12345678")),
+            (
+                "cleanup",
+                script::cleanup_script("kluris-0000abcd-12345678"),
+            ),
             ("state", script::state_script()),
         ]
     }
@@ -597,12 +601,15 @@ mod scripts {
             "Invoke-Step 'toolchain' 30 $rustup 'toolchain install 1.99.0 --profile minimal --component clippy --component rustfmt --no-self-update'"
         ), "{text}");
         assert!(text.contains(
-            "$cargo 'test --workspace -p kluris-core --test list -- --nocapture \"\\\"two\" \"words\\\"\"'"
+            "$cargo 'test --workspace --no-fail-fast -p kluris-core --test list -- --nocapture \"\\\"two\" \"words\\\"\"'"
         ), "{text}");
         assert!(text.contains("$cargo 'build --release --package kluris-cli'"));
         assert!(text.contains("$uv 'run --project parity --locked pytest parity -q'"));
         let plain = script::run_script(&spec(false, &[]));
-        assert!(plain.contains("$cargo 'test --workspace'"), "{plain}");
+        assert!(
+            plain.contains("$cargo 'test --workspace --no-fail-fast'"),
+            "{plain}"
+        );
         assert!(!plain.contains("pytest") && !plain.contains("uv.exe"));
     }
 
@@ -615,6 +622,28 @@ mod scripts {
             "{text}"
         );
         assert!(text.contains("-Filter 'kluris-*.tgz'"), "{text}");
+    }
+
+    #[test]
+    fn the_upload_cleanup_removes_only_its_own_tarball() {
+        let text = script::cleanup_script("kluris-0000abcd-12345678");
+        assert!(
+            text.contains("$tarball = Join-Path $env:USERPROFILE 'kluris-0000abcd-12345678.tgz'"),
+            "{text}"
+        );
+        assert_eq!(text.matches("Remove-Item").count(), 1, "{text}");
+        assert!(
+            text.contains("Remove-Item -LiteralPath $tarball -Force"),
+            "{text}"
+        );
+        for never in ["consensflow-build", "Open(", "taskkill", "Recurse", "*"] {
+            assert!(!text.contains(never), "the cleanup holds {never:?}: {text}");
+        }
+        for said in ["'removed'", "'absent'", "\"failed: "] {
+            assert!(text.contains(said), "{said}: {text}");
+        }
+        let line = script::powershell_line(&text).unwrap();
+        assert_eq!(decoded(&line), text);
     }
 
     #[test]
@@ -898,11 +927,88 @@ mod runs {
     }
 
     #[test]
-    fn a_failed_upload_runs_nothing() {
-        let ran = ran(on(Name::Zeewin, false), vec![said(1, "")]);
+    fn a_failed_upload_runs_nothing_and_removes_its_tarball() {
+        let ran = ran(
+            on(Name::Zeewin, false),
+            vec![said(1, ""), said(0, "removed\r\n")],
+        );
         assert_eq!(ran.code, 1);
-        assert_eq!(ran.fake.calls.len(), 1);
         assert!(ran.err.contains("scp"), "{}", ran.err);
+        let calls = &ran.fake.calls;
+        assert_eq!(calls.len(), 2, "{:?}", ran.fake.called());
+        let id = calls[0]
+            .args
+            .last()
+            .unwrap()
+            .trim_start_matches("zeewin:")
+            .trim_end_matches(".tgz")
+            .to_owned();
+        let cleanup = &calls[1];
+        assert_eq!(cleanup.program, "ssh");
+        assert!(cleanup.args.contains(&"zeewin".to_owned()));
+        assert!(
+            cleanup.bound <= Duration::from_secs(30),
+            "{:?}",
+            cleanup.bound
+        );
+        let line = cleanup.args.join(" ");
+        assert!(
+            line.contains("BatchMode=yes") && line.contains("ConnectTimeout="),
+            "{line}"
+        );
+        assert_eq!(
+            decoded(cleanup.args.last().unwrap()),
+            script::cleanup_script(&id)
+        );
+        assert!(
+            ran.err.contains(&format!("{id}.tgz")) && ran.err.contains("removed"),
+            "{}",
+            ran.err
+        );
+    }
+
+    #[test]
+    fn an_upload_cleanup_that_finds_nothing_says_so() {
+        let ran = ran(
+            on(Name::Zeewin, false),
+            vec![said(1, ""), said(0, "absent\n")],
+        );
+        assert_eq!(ran.code, 1);
+        assert!(ran.err.contains("was not there"), "{}", ran.err);
+    }
+
+    #[test]
+    fn an_upload_cleanup_that_cannot_reach_the_machine_says_so() {
+        for cleanup in [said(255, ""), timed_out()] {
+            let ran = ran(
+                on(Name::Zeewin2, false),
+                vec![
+                    said(0, "free\n"),
+                    said(0, "free 600\n"),
+                    timed_out(),
+                    cleanup,
+                ],
+            );
+            assert_eq!(ran.code, 1);
+            assert_eq!(ran.fake.calls.len(), 4, "{:?}", ran.fake.called());
+            assert!(ran.err.contains("not done in 10 min"), "{}", ran.err);
+            assert!(ran.err.contains("could not reach zeewin2"), "{}", ran.err);
+            assert!(ran.err.contains("sweep"), "{}", ran.err);
+        }
+    }
+
+    #[test]
+    fn an_upload_cleanup_that_fails_there_says_why() {
+        let ran = ran(
+            on(Name::Zeewin, false),
+            vec![said(1, ""), said(0, "failed: access denied\n")],
+        );
+        assert_eq!(ran.code, 1);
+        assert!(
+            ran.err.contains("could not be removed: access denied"),
+            "{}",
+            ran.err
+        );
     }
 
     fn stop_sent(fake: &Fake) -> String {

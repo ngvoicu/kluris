@@ -96,7 +96,7 @@ pub struct Spec<'a> {
     /// `CARGO_BUILD_JOBS` on this machine.
     pub jobs: u32,
     pub parity: bool,
-    /// Appended to `cargo test --workspace`.
+    /// Appended to `cargo test --workspace --no-fail-fast`.
     pub cargo_args: &'a [String],
 }
 
@@ -216,7 +216,12 @@ pub fn bootstrap(id: &str) -> String {
 }
 
 pub fn run_script(spec: &Spec) -> String {
-    let mut test = vec!["test".to_owned(), "--workspace".to_owned()];
+    // Every test binary runs, so one failing binary does not hide the others'.
+    let mut test = vec![
+        "test".to_owned(),
+        "--workspace".to_owned(),
+        "--no-fail-fast".to_owned(),
+    ];
     test.extend(spec.cargo_args.iter().cloned());
     let toolchain = format!(
         "toolchain install {} --profile minimal --component clippy --component rustfmt --no-self-update",
@@ -265,6 +270,12 @@ pub fn stop_script(id: &str) -> String {
             ("tarball", &tarball_name(id)),
         ],
     )
+}
+
+/// Removes the run's own tarball after a failed upload, and says `removed`,
+/// `absent` or `failed: <why>`. The name is the run's alone, so no lock is taken.
+pub fn cleanup_script(id: &str) -> String {
+    fill(CLEANUP, &[("tarball", &tarball_name(id))])
 }
 
 /// Says `free N` (whole GiB free on C:) and, while a run of either project
@@ -495,6 +506,15 @@ $owner = Join-Path $lockdir '«owner»'
 $of = @(Get-Content $owner -ErrorAction SilentlyContinue)
 if ($of[0] -eq '«id»') { taskkill /PID ($of[1]) /T /F 2>&1 | Out-Null; Remove-Item -LiteralPath $owner -Force -ErrorAction SilentlyContinue; if ((Get-Content $running -ErrorAction SilentlyContinue) -eq $of[1]) { Remove-Item -LiteralPath $running -Force -ErrorAction SilentlyContinue } }
 Remove-Item -LiteralPath (Join-Path $env:USERPROFILE '«tarball»') -Force -ErrorAction SilentlyContinue
+exit 0
+"##;
+
+/// The cleanup of a failed upload: the run's tarball and nothing else.
+const CLEANUP: &str = r##"
+$ProgressPreference = 'SilentlyContinue'
+$tarball = Join-Path $env:USERPROFILE '«tarball»'
+if (-not (Test-Path -LiteralPath $tarball)) { 'absent'; exit 0 }
+try { Remove-Item -LiteralPath $tarball -Force -ErrorAction Stop; 'removed' } catch { "failed: $($_.Exception.Message)" }
 exit 0
 "##;
 

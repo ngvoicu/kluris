@@ -54,7 +54,7 @@ machines over ssh, the way ConsensFlow's runner does (`xtask/src/windows.rs`
 has the whole design):
 
 ```bash
-cargo xtask windows --machine zeewin --parity     # cargo test --workspace, then parity
+cargo xtask windows --machine zeewin --parity     # cargo test --workspace --no-fail-fast, then parity
 cargo xtask windows --machine zeewin2 -- -p kluris-core   # extra cargo test args after --
 cargo xtask windows --parity                      # zeewin2 if free and allowed, else zeewin
 ```
@@ -94,7 +94,9 @@ cargo xtask windows --parity                      # zeewin2 if free and allowed,
   cargo-test 90, release-build 60, parity 90; a step past it is ended, status
   124), the whole run one more (this side kills ssh and sends the stop), and
   every probe a few seconds. The bootstrap's `finally` always removes the
-  run's tarball and its lock records and closes the lock; run folders older
+  run's tarball and its lock records and closes the lock (after a failed
+  upload, a 30-second ssh with no lock removes that run's own tarball and says
+  whether it could); run folders older
   than a day and stray `kluris-*.tgz` are swept by the next run, under the lock.
   Ctrl-C ends the run there too (130).
 - **The answer.** The output streams back; the status is the machine's last

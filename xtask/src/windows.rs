@@ -15,7 +15,10 @@
 //! 2. The tarball ([`pack`]): `git archive` of HEAD, or of a `git stash create`
 //!    commit when tracked files have uncommitted changes, without `target/`,
 //!    `parity/.oracle/` and `parity/.venv/`, with the run script beside the
-//!    files. It is sent by scp to `%USERPROFILE%\<run id>.tgz`.
+//!    files. It is sent by scp to `%USERPROFILE%\<run id>.tgz`; when the upload
+//!    fails, that one file is removed there at once (a bounded ssh that takes
+//!    no lock, the name being the run's own), and the command says whether it
+//!    was removed, was not there, or the machine could not be reached.
 //! 3. The bootstrap ([`script`]), on ssh's command line: it takes the
 //!    per-machine one-run lock it shares with ConsensFlow
 //!    (`%USERPROFILE%\consensflow-build\.windows-run.lock`, opened for the run
@@ -28,7 +31,7 @@
 //! 4. The run script: the run in a job (at most 64 processes, all ended with the
 //!    run), run folders older than a day swept, then each step with its own
 //!    bound: the tree's Rust toolchain into Kluris's own `RUSTUP_HOME`,
-//!    `cargo test --workspace`, and with `--parity` uv (fetched once, its hash
+//!    `cargo test --workspace --no-fail-fast`, and with `--parity` uv (fetched once, its hash
 //!    checked), a release `kluris.exe` and the parity harness with
 //!    `KLURIS_V3_BIN` pointing at it. Tools and caches live under
 //!    `%USERPROFILE%\.kluris-ci\` (`tools\`, `cache\target` as
