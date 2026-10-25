@@ -34,7 +34,13 @@ pub fn pack(root: &Path, tarball: &Path, run_script: &str) -> Result<String, Str
     } else {
         stash
     };
+    // The committed bytes, whatever line ends the checkout's git is told to
+    // write: Git for Windows sets core.autocrlf=true system-wide.
     let mut args = vec![
+        "-c".to_owned(),
+        "core.autocrlf=false".to_owned(),
+        "-c".to_owned(),
+        "core.eol=lf".to_owned(),
         "archive".to_owned(),
         "--format=tar.gz".to_owned(),
         "-o".to_owned(),

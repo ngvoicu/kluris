@@ -1092,6 +1092,23 @@ mod tarball {
     }
 
     #[test]
+    fn the_tarball_holds_the_committed_bytes_whatever_autocrlf_says() {
+        // Git for Windows sets core.autocrlf=true system-wide, and git archive
+        // then writes CRLF (zeewin, 2026-10-25).
+        let dir = repo();
+        let root = dir.path();
+        git(root, &["config", "core.autocrlf", "true"]);
+        fs::write(root.join("parity").join("harness.py"), "changed\n").unwrap();
+        let tarball = dir.path().join("out.tgz");
+        super::super::pack::pack(root, &tarball, "s\n").unwrap();
+        assert_eq!(member(&tarball, "kept.txt").as_deref(), Some("committed\n"));
+        assert_eq!(
+            member(&tarball, "parity/harness.py").as_deref(),
+            Some("changed\n")
+        );
+    }
+
+    #[test]
     fn the_toolchain_channel_is_read_from_the_tree() {
         let dir = tempfile::tempdir().unwrap();
         fs::write(
