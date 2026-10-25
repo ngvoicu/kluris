@@ -3,12 +3,14 @@
 Each case is loaded the way v2 reads frontmatter (PyYAML ``SafeLoader``) as the
 value of ``v: <case>`` and printed as a Rust row for
 ``crates/kluris-core/tests/yaml_read.rs``: ``scalars()`` by default, ``tagged()``
-(explicit tags) with ``--tagged``. A case PyYAML rejects, or one outside the v3
-value model, prints ``err()``.
+(explicit tags) with ``--tagged``. With ``--documents`` each case is a whole
+YAML text (``documents()``), loaded as it is. A case PyYAML rejects, or one
+outside the v3 value model, prints ``err()``. Every case must load the same
+with ``SafeLoader`` and libyaml's ``CSafeLoader``.
 
 Run it with the oracle venv (PyYAML 6.0.3):
 
-    parity/.oracle/venv/bin/python -I parity/tools/yaml_expectations.py [--tagged]
+    parity/.oracle/venv/bin/python -I parity/tools/yaml_expectations.py [--tagged | --documents]
 """
 
 from __future__ import annotations
@@ -101,6 +103,76 @@ TAGGED = [
     "!!python/tuple [1]", "!!python/name:os.system x", "!!python/str x",
     "!foo x", "!foo [a]", "!foo {a: 1}", "!!merge x", "!!value =",
     "!<tag:example.com,2000:str> x",
+    # Python's int()/float() read any Unicode decimal digit (category Nd) and
+    # skip Unicode whitespace; other numeric characters are not digits
+    '!!int "\u0663"', '!!float "\u0663.\u0661"', '!!int "\uff11\uff12"', '!!int "-\u0663"',
+    '!!int "\u0663_\u0661"', '!!float "1e\u0663"', '!!int "0x\u0663"', '!!int "0\u0663"',
+    '!!int "0b\u0661"', '!!int "\u0663:\u0663\u0660"', '!!float "\u0663:\u0663\u0660"',
+    '!!int "\U0001D7D9"', '!!int "\u0660"', '!!float "\uff11.\uff15"', '!!float "\u0663e\u0661"',
+    '!!int " \u0663 "', '!!int "\u2003\u0663\u3000"', '!!float "\u3000\u0663.5\u2003"',
+    '!!float "\u00b2"', '!!int "\u00b2"', '!!int "\u216b"', '!!int "\uff41"', '!!int "0x\uff41"',
+    '!!float "\u0663\u066b\u0665"', '!!int "\u0e53\u0e52"', '!!int "\u1040"', '! "\u0663"',
+]
+
+# Whole documents (``--documents``).
+CHOMPING = ["|", "|-", "|+", ">", ">-", ">+"]
+BLOCK_PREFIXES = ["", "x: \u00e9\n", "\u65e5\u672c: \u00e9\u00e9\n"]
+BLOCK_CONTENT = ["abc", "\u00e9", "a\n  \u00e9 b\n\n  \U0001F680"]
+BLOCK_ENDINGS = ["", "\n", "\n\n", "\n  ", "\n\n  \n  ", "\nw: 1", "\n# \u00e9"]
+BLOCKS = [
+    f"{prefix}v: {indicator}\n  {content}{ending}"
+    for prefix in BLOCK_PREFIXES
+    for indicator in CHOMPING
+    for content in BLOCK_CONTENT
+    for ending in BLOCK_ENDINGS
+] + [
+    "- |\n  \u00e9", "- >-\n  \u00e9\n  \u00e9", "- |+\n  \u00e9\n\n",
+    "v: |\r\n  \u00e9", "v: |+\r\n  \u00e9\r\n\r\n", "v: >\r\n  \u00e9\r\n  b",
+    "v: |2\n   \u00e9", "v: |-2\n   \u00e9\n", "v: \u00e9\nw: |\n  x",
+    "v: '\u00e9'\nw: >\n  x", 'v: "\u00e9"\nw: |-\n  x\n', "v: |\n  \u00e9\n...",
+    # empty block scalars, and a last line shorter or longer than the indentation
+    "v: |\nw: 1", "v: |+\n\nw: 1", "- |\n- x", "v: |+\n  \n\nw: 1", "v: |\n", "v: |+\n",
+    "v: |+\n\n", "v: |\n  \n", "v: |+\n  \n", "v: |-\n\n", "v: |\n\n  ", "v: |+", "v: >+\n  ",
+    "v: |+\r\n  ", "v: |\n  abc\n ", "v: |\n  abc\n   ", "v: |+\n  abc\n\n ",
+    "v: |2\n    abc\n   ", "v: |2\n    abc\n  ", "v: |2\n    abc\n ", "v: |1\n   ", "v: |1+\n   \n  ",
+    "- |\n abc\n ", "k:\n  - |\n    abc\n    ", "k:\n  - |\n    abc\n   ", "k:\n- |\n x\n ",
+    "x:\n  v: |\n    abc\n  ", "x:\n  v: |\n    abc\n    ", "v: |\n  abc\n\n\n  ",
+    "v: >\n  a\n\n  b\n   c\n  d\n ", "v: >-\n   a\n  b", "v: | # c | >\n  abc",
+    "v: # c\n  |\n  abc", "v: !!str &a |\n  abc\nw: *a", "|\n abc", "--- >\n abc\n  ",
+    "? |\n  k\n: v", "v: |\n\n\n  abc\n", "v: |\n   \n  abc",
+    "v: !<tag:yaml.org,2002:str> &n0 |-\n  abc\n", "v: !<tag:yaml.org,2002:str> >\n  a\n  b",
+]
+DOCUMENTS = BLOCKS + [
+    # `=` (the value tag): a mapping key becomes the string, anywhere else it
+    # has no constructor
+    "=: x", "{=: x}", "? =\n: 1", "! =: x", "'=': x", "a:\n  =: x", "a: [{=: 1}]",
+    "!!value =: x", "!!value foo: x", "=: =", "a: =", "[=]", "- =", "=", "a: {=: 1, b: =}",
+    "=:\n  =: 1",
+    # SafeConstructor.construct_scalar: a scalar tag on a mapping takes the text
+    # of its first `=` value (its other entries are never constructed); a
+    # mapping is filled after the scalars beside it, which can still see `=`
+    "!!str {=: a, 1: x, b: !!binary zz}", "!!int {=: 0x1F}", "!!str {=: !!int abc}", "!!str {=: =}",
+    "!!str {=: {=: deep}}", "!!str {=: [1]}", "!!null {=: x}", "!!null {a: 1}",
+    "!!timestamp {=: 2026-01-02}", "!!value {=: x}", "? !!str {=: k}\n: v", "!!seq {=: x}",
+    "!!map {=: x}", "! {=: x}", "!!str {a: 1, =: x, =: y}", "x: !!int\n  =: 7\n  1: 2",
+    "!!bool {=: yes}", "!!float {=: 1:30.5}", "!!str {<<: {a: 1}, =: q}",
+    "a: !!str {=: x, b: &n !!int abc}\nc: 1", "a: !!str {=: x, b: &n !!int abc}\nc: *n",
+    "a: !!str {=: x, b: &n 5}\nc: *n", "a: !!str {=: x, b: &r [*r]}",
+    "a: {&k =: 1}\nb: !!str {*k : z}", "a: {&k =: 1}\nb: *k", "- {&k =: 1}\n- [*k]",
+    "a: [{&k =: 1}]\nb: [*k]", "a: [{&k =: 1}]\nb: [[*k]]", "a: {&k =: 1}\nb: [*k]",
+    "a: {&k =: 1, *k : 2}", "!!str\n=: a",
+    # anchors: a name defined twice is an error, even without an alias
+    "a: &x [1]\nb: &x [2]\nc: *x", "a: &x 1\nb: &x 1", "a: &x [&x 1]",
+    "a: &x 1\nb: *x\nc: &x 2", "&x\n- 1\n- &x 2", "a: &x !!int '5'\nb: &x 6",
+    "a: !!str &x 5\nb: &x 6", "{a: &x 1, b: &x 2}", "[&x 1, &x 2]", "? &k a\n: &k b",
+    "a: &x\nb: &x", "- &x\n- &x",
+    # anchor-like text that is not an anchor
+    "a: &x 1\nb: &y 2\nc: *x", "a: &x 1 # &x\nb: 2", "a: &x '&x'\nb: \"&x\"",
+    "a: b &x\nc: &x 1", "a: &x |\n  &x\nb: 1", "a: b\n  &x c\nd: &x 1",
+    "a: &x 1\n# &x\nb: *x", "- &a 1\n- &b [*a]\n- *b", "a: &x-y_9 1\nb: *x-y_9",
+    "&x a: *x", "--- &x\na: 1", "a: &x\n  b: 1\nc: *x",
+    # anchor names PyYAML does not accept
+    "a: &\u00e9 1", "a: &x\u00e9 1", "a: &x. 1", "a: &x: 1", "&x: 1",
 ]
 
 
@@ -109,9 +181,9 @@ class OutsideModel(Exception):
 
 
 def rust_str(text: str) -> str:
-    if any(ord(ch) < 0x20 for ch in text):
+    if any(ord(ch) < 0x20 for ch in text) or not text.isprintable():
         escaped = "".join(
-            f"\\u{{{ord(ch):x}}}" if ord(ch) < 0x20 or ch in '"\\' else ch for ch in text
+            f"\\u{{{ord(ch):x}}}" if not ch.isprintable() or ch in '"\\' else ch for ch in text
         )
         return f'"{escaped}"'
     if '"#' in text:
@@ -147,11 +219,29 @@ def rust_value(value: object) -> str:
     raise OutsideModel(repr(value))
 
 
-def main() -> int:
-    for case in TAGGED if "--tagged" in sys.argv[1:] else CASES:
+def load_both(text: str) -> object:
+    """``text`` loaded by both PyYAML loaders, which must agree."""
+    results = []
+    for loader in (yaml.SafeLoader, yaml.CSafeLoader):
         try:
-            value = yaml.safe_load(f"v: {case}")["v"]
+            results.append(("value", yaml.load(text, Loader=loader)))
         except Exception:  # noqa: BLE001 -- any PyYAML failure is an error value
+            results.append(("error", None))
+    if repr(results[0]) != repr(results[1]):
+        raise SystemExit(f"the loaders disagree on {text!r}: {results}")
+    kind, value = results[0]
+    if kind == "error":
+        raise ValueError(text)
+    return value
+
+
+def main() -> int:
+    documents = "--documents" in sys.argv[1:]
+    cases = DOCUMENTS if documents else TAGGED if "--tagged" in sys.argv[1:] else CASES
+    for case in cases:
+        try:
+            value = load_both(case) if documents else load_both(f"v: {case}")["v"]
+        except ValueError:
             expected = "err()"
         else:
             try:
