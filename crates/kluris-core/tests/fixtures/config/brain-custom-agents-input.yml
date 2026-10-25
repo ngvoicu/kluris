@@ -1,0 +1,9 @@
+companions: []
+agents:
+  commands_for:
+  - claude
+  - devin
+  - antigravity
+  - bogus-agent
+description: d
+name: delta

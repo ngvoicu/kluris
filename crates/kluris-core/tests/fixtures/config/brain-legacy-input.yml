@@ -1,0 +1,13 @@
+name: gamma
+description: Registered brain
+agents:
+  commands_for:
+  - junie
+  - claude
+  - cursor
+  - windsurf
+  - copilot
+  - codex
+  - gemini
+  - kilocode
+companions: []

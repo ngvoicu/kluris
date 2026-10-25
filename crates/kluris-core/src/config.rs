@@ -1,55 +1,158 @@
-//! Minimal config reading for `kluris list`: the global config
-//! (`~/.kluris/config.yml`) and a brain's `kluris.yml` companions.
+//! The global config (`~/.kluris/config.yml`) and each brain's `kluris.yml`,
+//! read and written exactly as v2's `core/config.py` does.
 //!
-//! Validation follows v2's pydantic models: string fields must be YAML strings,
-//! unknown keys are ignored, `path` is required.
+//! Reading follows v2's pydantic models: `yaml.safe_load(text) or {}`, string
+//! fields must be YAML strings, unknown keys are ignored (and so dropped by
+//! the next write). Writing is `yaml.dump(model_dump(), sort_keys=False)`:
+//! the [`Profile::Config`] emitter, in the models' field order.
 
+use std::collections::BTreeSet;
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::{fmt, fs, io};
 
 use indexmap::IndexMap;
 
 use crate::companions;
-use crate::yaml::{self, Map, Value};
+use crate::yaml::{self, Map, Profile, Value};
+
+/// The default `commands_for` (v2 `DEFAULT_AGENT_COMMANDS`, v2's order), with
+/// `windsurf` as `devin`: Windsurf became Devin.
+pub const DEFAULT_AGENT_COMMANDS: [&str; 9] = [
+    "claude", "cursor", "devin", "copilot", "codex", "gemini", "hermes", "kilocode", "junie",
+];
+
+/// v2's default list before Hermes (`_LEGACY_DEFAULT_AGENT_COMMANDS`): a
+/// `commands_for` with exactly these names reads as the default list.
+const LEGACY_DEFAULT_AGENT_COMMANDS: [&str; 8] = [
+    "claude", "cursor", "windsurf", "copilot", "codex", "gemini", "kilocode", "junie",
+];
 
 /// One registered brain (v2 `BrainEntry`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BrainEntry {
-    /// Exactly as stored in config.yml; never re-resolved.
+    /// Exactly as stored in config.yml (v2 stores `str(path)`); never
+    /// re-resolved.
     pub path: String,
     pub description: String,
 }
 
-/// The global config (v2 `GlobalConfig`); brains in file order.
+/// The global config (v2 `GlobalConfig`); brains in file order, which is
+/// registration order.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct GlobalConfig {
     pub brains: IndexMap<String, BrainEntry>,
 }
 
-/// A config file that exists but cannot be read or does not validate.
+/// Agent installation settings for a brain (v2 `AgentsConfig`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentsConfig {
+    /// Agent names as written, except `windsurf`, which reads as `devin`.
+    /// Unknown names are kept.
+    pub commands_for: Vec<String>,
+}
+
+impl Default for AgentsConfig {
+    fn default() -> AgentsConfig {
+        AgentsConfig {
+            commands_for: DEFAULT_AGENT_COMMANDS.map(String::from).to_vec(),
+        }
+    }
+}
+
+/// A brain's local `kluris.yml` (v2 `BrainConfig`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BrainConfig {
+    pub name: String,
+    pub description: String,
+    pub agents: AgentsConfig,
+    /// As written; [`companions::normalize`] gives the known ones.
+    pub companions: Vec<String>,
+}
+
+impl BrainConfig {
+    /// `BrainConfig(name=name)`: every other field at its default.
+    pub fn new(name: impl Into<String>) -> BrainConfig {
+        BrainConfig {
+            name: name.into(),
+            description: String::new(),
+            agents: AgentsConfig::default(),
+            companions: Vec::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConfigErrorKind {
+    /// The file does not exist (only an error for a brain's `kluris.yml`).
+    NotFound,
+    /// Reading or writing failed.
+    Io,
+    /// The file is not YAML or does not validate.
+    Invalid,
+}
+
+/// A config file that cannot be read, validated or written.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConfigError {
     pub path: PathBuf,
+    pub kind: ConfigErrorKind,
     pub reason: String,
+}
+
+impl ConfigError {
+    fn new(path: &Path, kind: ConfigErrorKind, reason: impl Into<String>) -> ConfigError {
+        ConfigError {
+            path: path.to_path_buf(),
+            kind,
+            reason: reason.into(),
+        }
+    }
+
+    /// A failed read: a missing file is [`ConfigErrorKind::NotFound`].
+    fn read(path: &Path, err: &io::Error) -> ConfigError {
+        let kind = if err.kind() == io::ErrorKind::NotFound {
+            ConfigErrorKind::NotFound
+        } else {
+            ConfigErrorKind::Io
+        };
+        ConfigError::new(path, kind, err.to_string())
+    }
+
+    /// A failed write (a missing directory included).
+    fn write(path: &Path, err: &io::Error) -> ConfigError {
+        ConfigError::new(path, ConfigErrorKind::Io, err.to_string())
+    }
 }
 
 impl fmt::Display for ConfigError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "Invalid config file {}: {}",
-            self.path.display(),
-            self.reason
-        )
+        let what = match self.kind {
+            ConfigErrorKind::Invalid => "Invalid config file",
+            ConfigErrorKind::NotFound | ConfigErrorKind::Io => "Cannot access config file",
+        };
+        write!(f, "{what} {}: {}", self.path.display(), self.reason)
     }
 }
 
 impl std::error::Error for ConfigError {}
 
-/// The global config path: `KLURIS_CONFIG` when set and non-empty, else
-/// `<home>/.kluris/config.yml` where home is `HOME` when set and non-empty,
-/// else the OS home. `None` when no home can be found.
+// --- paths ------------------------------------------------------------------
+
+/// The home directory: `HOME` when set and non-empty, else the OS home
+/// (`os_home`, e.g. `std::env::home_dir()`). One rule on every OS, also on
+/// Windows, where v2 used `$HOME` for skills and `Path.home()` for the config.
+pub fn home_dir(home: Option<&OsStr>, os_home: Option<PathBuf>) -> Option<PathBuf> {
+    match home.filter(|h| !h.is_empty()) {
+        Some(h) => Some(PathBuf::from(h)),
+        None => os_home,
+    }
+}
+
+/// The global config path: `KLURIS_CONFIG` verbatim when set and non-empty,
+/// else `<home>/.kluris/config.yml` ([`home_dir`]). `None` when no home can
+/// be found.
 pub fn global_config_path(
     kluris_config: Option<&OsStr>,
     home: Option<&OsStr>,
@@ -58,12 +161,10 @@ pub fn global_config_path(
     if let Some(path) = kluris_config.filter(|p| !p.is_empty()) {
         return Some(PathBuf::from(path));
     }
-    let home = match home.filter(|h| !h.is_empty()) {
-        Some(h) => PathBuf::from(h),
-        None => os_home?,
-    };
-    Some(home.join(".kluris").join("config.yml"))
+    Some(home_dir(home, os_home)?.join(".kluris").join("config.yml"))
 }
+
+// --- reading ----------------------------------------------------------------
 
 /// Parse a YAML document the way v2's `yaml.safe_load(text) or {}` does
 /// (YAML 1.1 types): any falsy document (empty, `null`, `false`, `0`, `""`,
@@ -76,13 +177,9 @@ fn load_mapping(text: &str) -> Result<Map, String> {
     }
 }
 
-fn get<'a>(map: &'a Map, key: &str) -> Option<&'a Value> {
-    map.get(key)
-}
-
 /// A pydantic `str` field: only a YAML string validates.
 fn string_field(map: &Map, key: &str, default: Option<&str>) -> Result<String, String> {
-    match get(map, key) {
+    match map.get(key) {
         Some(Value::Str(s)) => Ok(s.clone()),
         Some(_) => Err(format!("'{key}' must be a string")),
         None => default
@@ -91,18 +188,17 @@ fn string_field(map: &Map, key: &str, default: Option<&str>) -> Result<String, S
     }
 }
 
-/// A pydantic `list[str]` field with a default of `[]`.
-fn string_list_field(map: &Map, key: &str) -> Result<Vec<String>, String> {
-    match get(map, key) {
-        None => Ok(Vec::new()),
+/// A pydantic `list[str]` field; `None` when the key is missing.
+fn string_list_field(map: &Map, key: &str) -> Result<Option<Vec<String>>, String> {
+    let error = || format!("'{key}' must be a list of strings");
+    match map.get(key) {
+        None => Ok(None),
         Some(Value::Seq(items)) => items
             .iter()
-            .map(|item| match item {
-                Value::Str(s) => Ok(s.clone()),
-                _ => Err(format!("'{key}' must be a list of strings")),
-            })
-            .collect(),
-        Some(_) => Err(format!("'{key}' must be a list of strings")),
+            .map(|item| item.as_str().map(str::to_string).ok_or_else(error))
+            .collect::<Result<_, _>>()
+            .map(Some),
+        Some(_) => Err(error()),
     }
 }
 
@@ -110,7 +206,7 @@ fn string_list_field(map: &Map, key: &str) -> Result<Vec<String>, String> {
 pub fn parse_global_config(text: &str) -> Result<GlobalConfig, String> {
     let root = load_mapping(text)?;
     let mut brains = IndexMap::new();
-    match get(&root, "brains") {
+    match root.get("brains") {
         None => {}
         Some(Value::Map(entries)) => {
             for (name, entry) in entries {
@@ -131,92 +227,212 @@ pub fn parse_global_config(text: &str) -> Result<GlobalConfig, String> {
 
 /// Read the global config; a missing file is an empty config.
 pub fn read_global_config(path: &Path) -> Result<GlobalConfig, ConfigError> {
-    let error = |reason: String| ConfigError {
-        path: path.to_path_buf(),
-        reason,
-    };
     let text = match fs::read_to_string(path) {
         Ok(text) => text,
         Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(GlobalConfig::default()),
-        Err(e) => return Err(error(e.to_string())),
+        Err(e) => return Err(ConfigError::read(path, &e)),
     };
-    parse_global_config(&text).map_err(error)
+    parse_global_config(&text).map_err(|e| ConfigError::new(path, ConfigErrorKind::Invalid, e))
 }
 
-/// Validate a brain config the way v2's `BrainConfig` model does and return
-/// its `companions` list as written.
-fn brain_config_companions(text: &str) -> Result<Vec<String>, String> {
-    let root = load_mapping(text)?;
-    string_field(&root, "name", None)?;
-    string_field(&root, "description", Some(""))?;
-    match get(&root, "agents") {
-        None => {}
-        Some(Value::Map(agents)) => {
-            string_list_field(agents, "commands_for")?;
-        }
-        Some(_) => return Err("'agents' must be a mapping".into()),
+/// v2's `AgentsConfig` validation plus the v3 rename: the pre-Hermes default
+/// set (compared as written, like v2's `frozenset`) becomes the default list;
+/// otherwise each `windsurf` reads as `devin`.
+fn agent_commands(names: Vec<String>) -> Vec<String> {
+    let written: BTreeSet<&str> = names.iter().map(String::as_str).collect();
+    if written == BTreeSet::from(LEGACY_DEFAULT_AGENT_COMMANDS) {
+        return AgentsConfig::default().commands_for;
     }
-    string_list_field(&root, "companions")
+    names
+        .into_iter()
+        .map(|n| if n == "windsurf" { "devin".into() } else { n })
+        .collect()
+}
+
+/// Parse a brain's `kluris.yml` text the way v2's `BrainConfig` model does.
+pub fn parse_brain_config(text: &str) -> Result<BrainConfig, String> {
+    let root = load_mapping(text)?;
+    let name = string_field(&root, "name", None)?;
+    let description = string_field(&root, "description", Some(""))?;
+    let agents = match root.get("agents") {
+        None => AgentsConfig::default(),
+        Some(Value::Map(agents)) => match string_list_field(agents, "commands_for")? {
+            None => AgentsConfig::default(),
+            Some(names) => AgentsConfig {
+                commands_for: agent_commands(names),
+            },
+        },
+        Some(_) => return Err("'agents' must be a mapping".into()),
+    };
+    let companions = string_list_field(&root, "companions")?.unwrap_or_default();
+    Ok(BrainConfig {
+        name,
+        description,
+        agents,
+        companions,
+    })
+}
+
+/// The `kluris.yml` path of the brain at `brain_path`.
+fn brain_config_file(brain_path: &Path) -> PathBuf {
+    brain_path.join("kluris.yml")
+}
+
+/// Read the `kluris.yml` of the brain at `brain_path`; a missing file is a
+/// [`ConfigErrorKind::NotFound`] error (v2 raises).
+pub fn read_brain_config(brain_path: &Path) -> Result<BrainConfig, ConfigError> {
+    let path = brain_config_file(brain_path);
+    let text = fs::read_to_string(&path).map_err(|e| ConfigError::read(&path, &e))?;
+    parse_brain_config(&text).map_err(|e| ConfigError::new(&path, ConfigErrorKind::Invalid, e))
 }
 
 /// Companions from a brain's `kluris.yml` text, normalized; `None` when the
 /// text does not validate as a brain config (v2 `_read_companion_state`).
 pub fn parse_brain_companions(text: &str) -> Option<Vec<String>> {
-    brain_config_companions(text)
+    parse_brain_config(text)
         .ok()
-        .map(|names| companions::normalize(&names))
+        .map(|cfg| companions::normalize(&cfg.companions))
 }
 
 /// Companions of the brain at `brain_path`; `None` when its `kluris.yml` is
 /// missing, unreadable or invalid.
 pub fn brain_companions(brain_path: &Path) -> Option<Vec<String>> {
-    let text = fs::read_to_string(brain_path.join("kluris.yml")).ok()?;
-    parse_brain_companions(&text)
+    read_brain_config(brain_path)
+        .ok()
+        .map(|cfg| companions::normalize(&cfg.companions))
+}
+
+// --- writing ----------------------------------------------------------------
+
+fn str_value(s: &str) -> Value {
+    Value::Str(s.to_string())
+}
+
+fn str_seq(items: &[String]) -> Value {
+    Value::Seq(items.iter().map(|s| str_value(s)).collect())
+}
+
+/// The global config as v2 writes it (`model_dump` order: brains, then each
+/// entry's `path` and `description`).
+pub fn global_config_to_yaml(config: &GlobalConfig) -> String {
+    let brains = config
+        .brains
+        .iter()
+        .map(|(name, entry)| {
+            let fields = Map::from([
+                ("path".to_string(), str_value(&entry.path)),
+                ("description".to_string(), str_value(&entry.description)),
+            ]);
+            (name.clone(), Value::Map(fields))
+        })
+        .collect();
+    let root = Map::from([("brains".to_string(), Value::Map(brains))]);
+    yaml::emit(&root, Profile::Config)
+}
+
+/// A brain's `kluris.yml` as v2 writes it (`model_dump` order: name,
+/// description, agents.commands_for, companions).
+pub fn brain_config_to_yaml(config: &BrainConfig) -> String {
+    let agents = Map::from([(
+        "commands_for".to_string(),
+        str_seq(&config.agents.commands_for),
+    )]);
+    let root = Map::from([
+        ("name".to_string(), str_value(&config.name)),
+        ("description".to_string(), str_value(&config.description)),
+        ("agents".to_string(), Value::Map(agents)),
+        ("companions".to_string(), str_seq(&config.companions)),
+    ]);
+    yaml::emit(&root, Profile::Config)
+}
+
+/// Write the global config, creating its directory (`~/.kluris/`) when
+/// missing.
+pub fn write_global_config(path: &Path, config: &GlobalConfig) -> Result<(), ConfigError> {
+    if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+        fs::create_dir_all(parent).map_err(|e| ConfigError::write(path, &e))?;
+    }
+    write_atomic(path, &global_config_to_yaml(config)).map_err(|e| ConfigError::write(path, &e))
+}
+
+/// Write the `kluris.yml` of the brain at `brain_path` (which must exist).
+pub fn write_brain_config(brain_path: &Path, config: &BrainConfig) -> Result<(), ConfigError> {
+    let path = brain_config_file(brain_path);
+    write_atomic(&path, &brain_config_to_yaml(config)).map_err(|e| ConfigError::write(&path, &e))
+}
+
+/// Add (or replace, keeping its position like a Python dict) a brain in the
+/// global config at `path`.
+pub fn register_brain(path: &Path, name: &str, entry: BrainEntry) -> Result<(), ConfigError> {
+    let mut config = read_global_config(path)?;
+    config.brains.insert(name.to_string(), entry);
+    write_global_config(path, &config)
+}
+
+/// Remove a brain from the global config at `path`, keeping the others'
+/// order; an unknown name still rewrites the file, as v2 does.
+pub fn unregister_brain(path: &Path, name: &str) -> Result<(), ConfigError> {
+    let mut config = read_global_config(path)?;
+    config.brains.shift_remove(name);
+    write_global_config(path, &config)
+}
+
+static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+/// Replace `path` with `text` atomically: write a temp file in the same
+/// directory, then rename it over the target. A symlinked target is followed
+/// (the link stays, its target is replaced) and an existing file's
+/// permissions are kept, as v2's in-place `write_text` does.
+fn write_atomic(path: &Path, text: &str) -> io::Result<()> {
+    let target = match fs::canonicalize(path) {
+        Ok(real) => real,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => path.to_path_buf(),
+        Err(e) => return Err(e),
+    };
+    let existing = fs::metadata(&target).ok().map(|m| m.permissions());
+    let dir = target
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    let file_name = target.file_name().unwrap_or(OsStr::new("config"));
+
+    let (tmp, mut file) = loop {
+        let mut name = OsStr::new(".").to_os_string();
+        name.push(file_name);
+        name.push(format!(
+            ".{}.{}.tmp",
+            std::process::id(),
+            TEMP_COUNTER.fetch_add(1, Ordering::Relaxed)
+        ));
+        let tmp = dir.join(name);
+        match fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&tmp)
+        {
+            Ok(file) => break (tmp, file),
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(e),
+        }
+    };
+    let result = (|| {
+        io::Write::write_all(&mut file, text.as_bytes())?;
+        file.sync_all()?;
+        drop(file);
+        if let Some(perms) = existing {
+            fs::set_permissions(&tmp, perms)?;
+        }
+        fs::rename(&tmp, &target)
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&tmp);
+    }
+    result
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn p(s: &str) -> PathBuf {
-        PathBuf::from(s)
-    }
-
-    #[test]
-    fn config_path_prefers_kluris_config() {
-        let got = global_config_path(
-            Some(OsStr::new("/custom/c.yml")),
-            Some(OsStr::new("/h")),
-            Some(p("/os")),
-        );
-        assert_eq!(got, Some(p("/custom/c.yml")));
-    }
-
-    #[test]
-    fn config_path_ignores_empty_kluris_config_and_uses_home() {
-        let got = global_config_path(Some(OsStr::new("")), Some(OsStr::new("/h")), Some(p("/os")));
-        assert_eq!(got, Some(p("/h").join(".kluris").join("config.yml")));
-    }
-
-    #[test]
-    fn config_path_falls_back_to_os_home() {
-        let got = global_config_path(None, Some(OsStr::new("")), Some(p("/os")));
-        assert_eq!(got, Some(p("/os").join(".kluris").join("config.yml")));
-        assert_eq!(global_config_path(None, None, None), None);
-    }
-
-    #[test]
-    fn empty_global_config_has_no_brains() {
-        assert_eq!(parse_global_config(""), Ok(GlobalConfig::default()));
-        assert_eq!(
-            parse_global_config("# nothing\n"),
-            Ok(GlobalConfig::default())
-        );
-        assert_eq!(
-            parse_global_config("brains: {}\n"),
-            Ok(GlobalConfig::default())
-        );
-    }
 
     #[test]
     fn global_config_keeps_order_defaults_description_ignores_extras() {
@@ -247,15 +463,6 @@ mod tests {
         ] {
             assert!(parse_global_config(text).is_err(), "should reject {text:?}");
         }
-    }
-
-    #[test]
-    fn read_global_config_missing_file_is_empty() {
-        let dir = std::env::temp_dir().join("kluris-core-missing-config-test");
-        assert_eq!(
-            read_global_config(&dir.join("nope.yml")),
-            Ok(GlobalConfig::default())
-        );
     }
 
     #[test]
@@ -330,5 +537,17 @@ mod tests {
                 "should be unknown: {text:?}"
             );
         }
+    }
+
+    #[test]
+    fn legacy_set_is_compared_as_a_set() {
+        let mut names: Vec<String> = LEGACY_DEFAULT_AGENT_COMMANDS.map(String::from).to_vec();
+        names.push("claude".into());
+        assert_eq!(agent_commands(names), AgentsConfig::default().commands_for);
+        let names: Vec<String> = LEGACY_DEFAULT_AGENT_COMMANDS[1..]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        assert_eq!(agent_commands(names).len(), 7);
     }
 }

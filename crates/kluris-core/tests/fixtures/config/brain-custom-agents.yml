@@ -1,0 +1,10 @@
+name: delta
+description: d
+agents:
+  commands_for:
+  - claude
+  - devin
+  - antigravity
+  - bogus-agent
+companions:
+- specmint-core
