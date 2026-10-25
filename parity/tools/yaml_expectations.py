@@ -161,6 +161,19 @@ DOCUMENTS = BLOCKS + [
     "a: {&k =: 1}\nb: !!str {*k : z}", "a: {&k =: 1}\nb: *k", "- {&k =: 1}\n- [*k]",
     "a: [{&k =: 1}]\nb: [*k]", "a: [{&k =: 1}]\nb: [[*k]]", "a: {&k =: 1}\nb: [*k]",
     "a: {&k =: 1, *k : 2}", "!!str\n=: a",
+    # PyYAML builds non-string keys, bytes, sets and lists of pairs; v3 cannot
+    # hold them, so they are an error only if they stay in the value (a
+    # repeated key drops them). Unhashable keys and bad content fail at once.
+    "a:\n  - {~: 'a'}\na: a", "a: !!binary 1_000\na: 1", "a: !!binary x\na: 1",
+    "a: !!binary abc\na: 1", "a: !!binary a===\na: 1", "a: !!binary ab=c\na: 1",
+    "a: !!binary \u00e9\na: 1", "a: {1: x, 1.0: y, true: z}\na: 2", "a: {[1]: x}\na: 2",
+    "? !!binary aGk=\n: x", "? !!set {a}\n: x", "? !!omap []\n: x", "a: !!set {[1]: x}\na: 1",
+    "a: !!set [1]\na: 1", "a: !!set {a: !!int x}\na: 1", "a: !!set {a}\na: 1",
+    "a: !!omap [{[1]: 2}]\na: 1", "a: !!omap [{a: 1, b: 2}]\na: 1", "a: !!omap [a]\na: 1",
+    "a: !!omap [{a: !!int x}]\na: 1", "a: !!pairs {a: 1}\na: 1", "a: !!pairs [{a: 1}]\na: 1",
+    "a: !!binary {=: aGk=}\na: 1", "a: !!binary aGk=", "a: {1: x}", "a: !!set {a}",
+    # a recursive alias is an error only if the cycle stays in the value
+    "&n0\na: *n0\na: []", "&n0\na: *n0", "a: &x [*x]\na: 1", "- &x [*x, 1]\n- 2",
     # anchors: a name defined twice is an error, even without an alias
     "a: &x [1]\nb: &x [2]\nc: *x", "a: &x 1\nb: &x 1", "a: &x [&x 1]",
     "a: &x 1\nb: *x\nc: &x 2", "&x\n- 1\n- &x 2", "a: &x !!int '5'\nb: &x 6",
@@ -246,7 +259,7 @@ def main() -> int:
         else:
             try:
                 expected = rust_value(value)
-            except OutsideModel:
+            except (OutsideModel, RecursionError):  # a cycle is outside the model too
                 expected = "err()"
         print(f"    ({rust_str(case)}, {expected}),")
     return 0
