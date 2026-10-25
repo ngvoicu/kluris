@@ -1,0 +1,15 @@
+[package]
+name = "kluris-core"
+description = "Kluris 3 core library: every brain operation, no printing"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license-file.workspace = true
+repository.workspace = true
+
+[dependencies]
+indexmap.workspace = true
+yaml-rust2.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
