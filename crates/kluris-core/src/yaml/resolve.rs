@@ -109,30 +109,70 @@ fn dollar(text: &str) -> &str {
     text.strip_suffix('\n').unwrap_or(text)
 }
 
+/// The tag PyYAML's implicit resolvers give a plain scalar.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum ImplicitTag {
+    Bool,
+    Float,
+    Int,
+    Merge,
+    Null,
+    Timestamp,
+    Value,
+    Str,
+}
+
+/// `Resolver.resolve` for a plain scalar: the resolvers registered for the
+/// first character (`''` for the empty string), in registration order.
+pub(super) fn implicit_tag(text: &str) -> ImplicitTag {
+    use ImplicitTag::*;
+    let candidates: &[ImplicitTag] = match text.chars().next() {
+        None => &[Null],
+        Some('y' | 'Y' | 't' | 'T' | 'f' | 'F' | 'o' | 'O') => &[Bool],
+        Some('n' | 'N') => &[Bool, Null],
+        Some('0'..='9') => &[Float, Int, Timestamp],
+        Some('-' | '+') => &[Float, Int],
+        Some('.') => &[Float],
+        Some('<') => &[Merge],
+        Some('~') => &[Null],
+        Some('=') => &[Value],
+        Some(_) => &[],
+    };
+    let probe = dollar(text);
+    candidates
+        .iter()
+        .copied()
+        .find(|tag| {
+            let pattern: &Regex = match tag {
+                Bool => &BOOL,
+                Float => &FLOAT,
+                Int => &INT,
+                Merge => &MERGE,
+                Null => &NULL,
+                Timestamp => &TIMESTAMP,
+                Value => &VALUE,
+                Str => return false,
+            };
+            pattern.is_match(probe)
+        })
+        .unwrap_or(Str)
+}
+
 /// Resolve and construct a scalar with PyYAML's implicit resolvers: a plain
 /// scalar, or any scalar tagged with the non-specific `!`. `Err` carries the
 /// reason for a value PyYAML rejects or that is outside the value model.
 pub fn implicit_scalar(text: &str) -> Result<Value, String> {
-    // PyYAML tries the resolvers registered for the first character in
-    // registration order; each pattern only matches its own first characters,
-    // so trying them all in that order is the same.
-    let probe = dollar(text);
-    if BOOL.is_match(probe) {
-        construct_bool(text)
-    } else if FLOAT.is_match(probe) {
-        construct_float(text)
-    } else if INT.is_match(probe) {
-        construct_int(text)
-    } else if MERGE.is_match(probe) {
-        Err("merge keys (<<) are not supported".into())
-    } else if NULL.is_match(probe) {
-        Ok(Value::Null)
-    } else if TIMESTAMP.is_match(probe) {
-        construct_timestamp(text)
-    } else if VALUE.is_match(probe) {
-        Err("could not determine a constructor for the tag 'tag:yaml.org,2002:value'".into())
-    } else {
-        Ok(Value::Str(text.to_string()))
+    match implicit_tag(text) {
+        ImplicitTag::Bool => construct_bool(text),
+        ImplicitTag::Float => construct_float(text),
+        ImplicitTag::Int => construct_int(text),
+        ImplicitTag::Merge => Err("merge keys (<<) are not supported".into()),
+        ImplicitTag::Null => Ok(Value::Null),
+        ImplicitTag::Timestamp => construct_timestamp(text),
+        ImplicitTag::Value => {
+            Err("could not determine a constructor for the tag 'tag:yaml.org,2002:value'".into())
+        }
+        ImplicitTag::Str => Ok(Value::Str(text.to_string())),
     }
 }
 
