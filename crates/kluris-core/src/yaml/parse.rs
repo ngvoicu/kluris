@@ -189,7 +189,7 @@ impl Builder {
     }
 
     fn alias(&mut self, id: usize, mark: Marker) -> Result<(), YamlError> {
-        let Some((value, size)) = self.anchors.get(&id).cloned() else {
+        let Some(size) = self.anchors.get(&id).map(|(_, size)| *size) else {
             let message = if self.stack.iter().any(|f| f.anchor == id) {
                 "recursive aliases are not supported"
             } else {
@@ -197,7 +197,10 @@ impl Builder {
             };
             return Err(YamlError::at(mark, message));
         };
-        self.complete(value, size, 0, mark)
+        // Check the budget before copying, so an alias bomb never clones.
+        self.count(size, mark)?;
+        let value = self.anchors[&id].0.clone();
+        self.attach(value, size, 0, mark)
     }
 
     /// Hand a finished node to its parent (or make it the document).

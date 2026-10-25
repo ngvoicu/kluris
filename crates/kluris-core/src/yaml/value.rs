@@ -140,6 +140,8 @@ pub enum Value {
 
 /// Structural equality. Floats compare by bit pattern, except that every NaN
 /// equals every NaN: `0.0` and `-0.0` differ (Python writes them differently).
+/// Maps compare in order (unlike Python dicts): key order is part of what the
+/// writer reproduces.
 impl PartialEq for Value {
     fn eq(&self, other: &Value) -> bool {
         match (self, other) {
