@@ -7,14 +7,14 @@ import json
 
 import pytest
 
-from harness import Sandbox, assert_json_equal, normalize, run_both, run_v2
+from harness import Sandbox, assert_json_equal, normalize_version_output, run_both, run_v2
 
 
 def test_version(sandbox: Sandbox):
     results = run_both(sandbox, ["--version"])
     for side, r in results.items():
         assert r.code == 0, f"{side}: {r.stderr}"
-        assert normalize(r.stdout, sandbox.root) == "kluris <VERSION>\n", side
+        assert normalize_version_output(r.stdout) == "kluris <VERSION>\n", side
 
 
 def test_list_json_without_config(sandbox: Sandbox):

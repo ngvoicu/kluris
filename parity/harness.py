@@ -36,7 +36,9 @@ IS_WINDOWS = sys.platform == "win32"
 # Filled by oracle_kluris(); reported by conftest's terminal summary.
 ORACLE_STATS: dict[str, object] = {}
 
-_VERSION_RE = re.compile(r"kluris \d+\.\d+\.\d+(?:[-+.][0-9A-Za-z.+-]*)?")
+_VERSION = r"\d+\.\d+\.\d+(?:[-+.][0-9A-Za-z.+-]*)?"
+_VERSION_RE = re.compile(_VERSION)
+_VERSION_OUTPUT_RE = re.compile(rf"kluris {_VERSION}\n")
 
 
 @dataclass
@@ -203,17 +205,32 @@ class Sandbox:
         return dest
 
 
-def _decode(stream: bytes) -> str:
+def _decode(stream: bytes, name: str = "output") -> str:
     """A stream as text, with CRLF read as LF: Python's text streams write CRLF
-    on Windows and Rust's ``println!`` writes LF (allowlist PAR-004)."""
-    return stream.decode("utf-8", errors="replace").replace("\r\n", "\n")
+    on Windows and Rust's ``println!`` writes LF (allowlist PAR-004).
+
+    Decoding is strict: invalid UTF-8 fails the test and names the bytes, so
+    two different invalid streams can never compare equal."""
+    try:
+        text = stream.decode("utf-8")
+    except UnicodeDecodeError as e:
+        pytest.fail(
+            f"{name} is not valid UTF-8: {e.reason} at byte {e.start}, "
+            f"bytes {stream[e.start:e.end]!r} in {stream[max(0, e.start - 20):e.end + 20]!r}"
+        )
+    return text.replace("\r\n", "\n")
 
 
 def _run(exe: Path, args: list[str], env: dict[str, str], cwd: Path | None) -> Result:
     proc = subprocess.run(
         [str(exe), *args], env=env, cwd=str(cwd) if cwd else None, capture_output=True,
     )
-    return Result(proc.returncode, _decode(proc.stdout), _decode(proc.stderr))
+    what = f"{exe.name} {' '.join(args)}".strip()
+    return Result(
+        proc.returncode,
+        _decode(proc.stdout, f"stdout of `{what}`"),
+        _decode(proc.stderr, f"stderr of `{what}`"),
+    )
 
 
 def run_v2(args: list[str], env: dict[str, str], cwd: Path | None = None) -> Result:
@@ -279,15 +296,54 @@ def _root_forms(root: Path) -> list[str]:
 
 def normalize(text: str, root: Path) -> str:
     """Replace the temp root (raw, JSON-escaped and ``C:/`` forms) with
-    ``<ROOT>`` and any ``kluris <version>`` with ``kluris <VERSION>``."""
+    ``<ROOT>``. Version text is left alone: it may be user data."""
     for form in _root_forms(root):
         text = text.replace(form, "<ROOT>")
-    return _VERSION_RE.sub("kluris <VERSION>", text)
+    return text
 
 
-def assert_json_equal(a: str, b: str, root: Path) -> None:
+def normalize_version_output(text: str) -> str:
+    """``kluris <version>\\n`` (the whole of a ``--version`` stdout) becomes
+    ``kluris <VERSION>\\n``; any other text is returned unchanged."""
+    if _VERSION_OUTPUT_RE.fullmatch(text):
+        return "kluris <VERSION>\n"
+    return text
+
+
+JsonPath = tuple[str | int, ...]
+
+
+def _mark_versions(doc: object, paths: list[JsonPath], side: str) -> None:
+    """Replace the version string at each of ``paths`` in ``doc`` with
+    ``<VERSION>``; a missing path or a value that is not a version is a
+    difference (AssertionError)."""
+    for path in paths:
+        parent = doc
+        try:
+            for key in path[:-1]:
+                parent = parent[key]  # type: ignore[index]
+            value = parent[path[-1]]  # type: ignore[index]
+        except (KeyError, IndexError, TypeError):
+            raise AssertionError(f"{side} output has no version field at {path!r}") from None
+        assert isinstance(value, str), f"{side} version field {path!r} is not a string: {value!r}"
+        replaced, count = _VERSION_RE.subn("<VERSION>", value)
+        assert count == 1 and replaced in ("<VERSION>", "kluris <VERSION>"), (
+            f"{side} version field {path!r} does not hold a version: {value!r}"
+        )
+        parent[path[-1]] = replaced  # type: ignore[index]
+
+
+def assert_json_equal(
+    a: str, b: str, root: Path, *, version_fields: list[JsonPath] = (),
+) -> None:
     """Assert two JSON stdouts are equal: parsed, then raw bytes, both after
-    normalization (``a`` is v2, ``b`` is v3)."""
+    root normalization (``a`` is v2, ``b`` is v3).
+
+    ``version_fields`` lists the JSON paths (keys and list indexes) where the
+    application prints its own version; only those values are normalized.
+    With such fields the raw check becomes: each side's bytes are exactly
+    Python's ``json.dumps`` of its own parse, which together with the parsed
+    comparison leaves the marked values as the only possible difference."""
     na, nb = normalize(a, root), normalize(b, root)
     try:
         ja = json.loads(na)
@@ -297,5 +353,12 @@ def assert_json_equal(a: str, b: str, root: Path) -> None:
         jb = json.loads(nb)
     except json.JSONDecodeError as e:
         pytest.fail(f"v3 output is not JSON ({e}): {b!r}")
+    if version_fields:
+        for side, text, doc in (("v2", na, ja), ("v3", nb, jb)):
+            canonical = json.dumps(doc) + "\n" * text.endswith("\n")
+            assert text == canonical, f"{side} raw JSON is not json.dumps of its parse: {text!r}"
+        _mark_versions(ja, list(version_fields), "v2")
+        _mark_versions(jb, list(version_fields), "v3")
     assert jb == ja, "parsed JSON differs (left v3, right v2)"
-    assert nb == na, "raw JSON bytes differ after normalization (left v3, right v2)"
+    if not version_fields:
+        assert nb == na, "raw JSON bytes differ after normalization (left v3, right v2)"
