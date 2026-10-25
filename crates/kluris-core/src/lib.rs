@@ -5,4 +5,5 @@ pub mod companions;
 pub mod config;
 pub mod frontmatter;
 pub mod list;
+pub mod pyrepr;
 pub mod yaml;

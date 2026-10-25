@@ -86,29 +86,9 @@ fn write_str(out: &mut String, s: &str) {
     out.push('"');
 }
 
-/// Python `float.__repr__`: the shortest round-trip digits, positional when
-/// the decimal exponent is in -4..16, else `d.ddde+XX`.
+/// `json.dumps` of a float: Python's `float.__repr__`, `Infinity`, `NaN`.
 fn write_float(out: &mut String, x: f64) {
-    if x.is_nan() {
-        out.push_str("NaN");
-    } else if x.is_infinite() {
-        out.push_str(if x > 0.0 { "Infinity" } else { "-Infinity" });
-    } else {
-        // `{:e}` gives the shortest round-trip digits as `<mantissa>e<exp>`.
-        let sci = format!("{x:e}");
-        let (mantissa, exp) = sci.split_once('e').unwrap_or((sci.as_str(), "0"));
-        let exp: i32 = exp.parse().unwrap_or(0);
-        if (-4..16).contains(&exp) {
-            let fixed = x.to_string();
-            out.push_str(&fixed);
-            if !fixed.contains('.') {
-                out.push_str(".0");
-            }
-        } else {
-            let sign = if exp < 0 { '-' } else { '+' };
-            out.push_str(&format!("{mantissa}e{sign}{:02}", exp.abs()));
-        }
-    }
+    out.push_str(&kluris_core::pyrepr::json_float(x));
 }
 
 #[cfg(test)]
@@ -233,6 +213,10 @@ mod tests {
             (f64::INFINITY, "Infinity"),
             (f64::NEG_INFINITY, "-Infinity"),
             (f64::NAN, "NaN"),
+            // exact ties: Python rounds half to even (T-54 finding 4)
+            (70368744177664.12, "70368744177664.12"),
+            (2.9802322387695312e-08, "2.9802322387695312e-08"),
+            (0.0018625259399414062, "0.0018625259399414062"),
         ];
         for (value, expected) in cases {
             assert_eq!(

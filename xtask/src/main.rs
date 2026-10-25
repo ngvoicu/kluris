@@ -1,5 +1,6 @@
 //! Development tasks for the Kluris 3 workspace (`cargo xtask <task>`).
 
+mod float_repr;
 mod windows;
 mod yaml_emit;
 
@@ -8,6 +9,9 @@ use std::process::ExitCode;
 const USAGE: &str = "usage: cargo xtask <task>
 
 Tasks:
+  float-repr
+      Read one f64 bit pattern (16 hex digits) per stdin line and answer each
+      with Python's repr(x), a tab and json.dumps(x).
   windows [--machine zeewin|zeewin2] [--parity] [-- <cargo test args>]
       Run cargo test (and with --parity the parity harness) on a household
       Windows machine over ssh. `cargo xtask windows --help` says more.
@@ -27,6 +31,7 @@ fn main() -> ExitCode {
             println!("{USAGE}");
             return ExitCode::SUCCESS;
         }
+        Some("float-repr") => float_repr::main(&args[1..]),
         Some("windows") => return windows::main(&args[1..]),
         Some("yaml-emit") => yaml_emit::emit(&args[1..]),
         Some("yaml-load") => yaml_emit::load(&args[1..]),
