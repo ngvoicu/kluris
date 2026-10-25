@@ -35,8 +35,12 @@ One entry per difference, under its own heading:
 - Decision: Kluris 3 decision (T-52 brief, Phase 1, IMPL-K3-06; research-01 §1 "Body handling")
 - Tests: `crates/kluris-core/tests/yaml_emit.rs::markdown_framing_matches_python_frontmatter` (rows "indented first line", "blank lines then indented line"; no parity scenario yet)
 
-### PAR-003: `windsurf` agent is `devin`
+### PAR-003: `windsurf` agent is `devin`; `antigravity` joins the default
 - Command: every command that reads a brain's `kluris.yml` and every command that rewrites it (`create`, `register`, `companion add`, `companion remove`, `doctor`)
-- Differs: an agent name `windsurf` in `agents.commands_for` reads as `devin`, so when v3 writes a `kluris.yml` the line `  - windsurf` is `  - devin` (the default list is v2's `DEFAULT_AGENT_COMMANDS` in v2's order with `devin` in Windsurf's place, also for v2's pre-Hermes legacy set, which still migrates to the default). Every other byte is v2's. Unknown agent names are kept, as in v2; v2.28.11 reads a file with `devin` or `antigravity` without error (it skips names outside its registry).
-- Decision: Windsurf became Devin (SPEC decision log 2026-10-24, research-04, interview-01 #15-16; SPEC acceptance "a `windsurf` entry in an existing `kluris.yml` is treated as `devin`"; T-53 brief)
-- Tests: `crates/kluris-core/tests/config.rs::{v2_brain_config_round_trips_with_windsurf_written_as_devin, windsurf_is_read_as_devin_and_unknown_agents_are_kept, pre_hermes_default_list_migrates_to_the_default_like_v2}`, `parity/test_config_roundtrip.py::test_v2_reads_v3_agent_names` (no v3 command writes `kluris.yml` yet)
+- Differs:
+  - An agent name `windsurf` in `agents.commands_for` reads as `devin`, so a `kluris.yml` written by v3 has `  - devin` where v2 has `  - windsurf`.
+  - The default `commands_for` (what `create` and `register` write, and what an empty selection means) is v2's `DEFAULT_AGENT_COMMANDS` in v2's order with `devin` in place of `windsurf`, then `antigravity`: `claude, cursor, devin, copilot, codex, gemini, hermes, kilocode, junie, antigravity`. v2 writes its 9 names with `windsurf`.
+  - A `commands_for` equal as a set to v2's pre-Hermes 8 names (v2 migrates these too, to its own 9) or to v2.28's 9 names (with `windsurf` or with `devin`) reads as the v3 default, so a brain created by v2 gets `antigravity` without editing its file; v2 keeps the 9 names. Any other list is kept as written (only `windsurf` -> `devin`), unknown names included, as in v2.
+  - Every other byte of `kluris.yml` is v2's. v2.28.11 reads a file with `devin` or `antigravity` without error (it skips names outside its registry).
+- Decision: Windsurf became Devin (SPEC decision log 2026-10-24, research-04, interview-01 #15-16; SPEC acceptance "a `windsurf` entry in an existing `kluris.yml` is treated as `devin`"; T-53 brief); default list with `antigravity` and the v2-default migration decided by the chief on T-53 (m-4244), 2026-10-25
+- Tests: `crates/kluris-core/tests/config.rs::{defaults_are_v2_defaults_with_devin_then_antigravity, v2_default_lists_migrate_to_the_v3_default, v2_brain_config_round_trips_with_the_v3_default_agents, windsurf_is_read_as_devin_and_unknown_agents_are_kept}`, `parity/test_config_roundtrip.py::test_v2_reads_v3_agent_names` (no v3 command writes `kluris.yml` yet)

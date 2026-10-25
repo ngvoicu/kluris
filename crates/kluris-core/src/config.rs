@@ -17,16 +17,38 @@ use indexmap::IndexMap;
 use crate::companions;
 use crate::yaml::{self, Map, Profile, Value};
 
-/// The default `commands_for` (v2 `DEFAULT_AGENT_COMMANDS`, v2's order), with
-/// `windsurf` as `devin`: Windsurf became Devin.
-pub const DEFAULT_AGENT_COMMANDS: [&str; 9] = [
-    "claude", "cursor", "devin", "copilot", "codex", "gemini", "hermes", "kilocode", "junie",
+/// The default `commands_for`: v2's `DEFAULT_AGENT_COMMANDS` in v2's order
+/// with `devin` in place of `windsurf` (Windsurf became Devin), then
+/// `antigravity`.
+pub const DEFAULT_AGENT_COMMANDS: [&str; 10] = [
+    "claude",
+    "cursor",
+    "devin",
+    "copilot",
+    "codex",
+    "gemini",
+    "hermes",
+    "kilocode",
+    "junie",
+    "antigravity",
 ];
 
-/// v2's default list before Hermes (`_LEGACY_DEFAULT_AGENT_COMMANDS`): a
-/// `commands_for` with exactly these names reads as the default list.
-const LEGACY_DEFAULT_AGENT_COMMANDS: [&str; 8] = [
-    "claude", "cursor", "windsurf", "copilot", "codex", "gemini", "kilocode", "junie",
+/// Earlier default lists: a `commands_for` with exactly one of these sets of
+/// names reads as [`DEFAULT_AGENT_COMMANDS`], so upgraded brains get the new
+/// agents (v2 did the same for its pre-Hermes list).
+const LEGACY_DEFAULT_AGENT_COMMANDS: [&[&str]; 3] = [
+    // v2 before Hermes (`_LEGACY_DEFAULT_AGENT_COMMANDS`).
+    &[
+        "claude", "cursor", "windsurf", "copilot", "codex", "gemini", "kilocode", "junie",
+    ],
+    // v2.28 (`DEFAULT_AGENT_COMMANDS`).
+    &[
+        "claude", "cursor", "windsurf", "copilot", "codex", "gemini", "hermes", "kilocode", "junie",
+    ],
+    // v2.28 with windsurf read as devin.
+    &[
+        "claude", "cursor", "devin", "copilot", "codex", "gemini", "hermes", "kilocode", "junie",
+    ],
 ];
 
 /// One registered brain (v2 `BrainEntry`).
@@ -235,12 +257,15 @@ pub fn read_global_config(path: &Path) -> Result<GlobalConfig, ConfigError> {
     parse_global_config(&text).map_err(|e| ConfigError::new(path, ConfigErrorKind::Invalid, e))
 }
 
-/// v2's `AgentsConfig` validation plus the v3 rename: the pre-Hermes default
-/// set (compared as written, like v2's `frozenset`) becomes the default list;
-/// otherwise each `windsurf` reads as `devin`.
+/// v2's `AgentsConfig` validation plus the v3 rename: an earlier default set
+/// (compared as written, like v2's `frozenset`) becomes the default list;
+/// any other list is kept, with each `windsurf` read as `devin`.
 fn agent_commands(names: Vec<String>) -> Vec<String> {
     let written: BTreeSet<&str> = names.iter().map(String::as_str).collect();
-    if written == BTreeSet::from(LEGACY_DEFAULT_AGENT_COMMANDS) {
+    let is_legacy = LEGACY_DEFAULT_AGENT_COMMANDS
+        .iter()
+        .any(|legacy| written == legacy.iter().copied().collect());
+    if is_legacy {
         return AgentsConfig::default().commands_for;
     }
     names
@@ -541,13 +566,12 @@ mod tests {
 
     #[test]
     fn legacy_set_is_compared_as_a_set() {
-        let mut names: Vec<String> = LEGACY_DEFAULT_AGENT_COMMANDS.map(String::from).to_vec();
-        names.push("claude".into());
-        assert_eq!(agent_commands(names), AgentsConfig::default().commands_for);
-        let names: Vec<String> = LEGACY_DEFAULT_AGENT_COMMANDS[1..]
-            .iter()
-            .map(|s| s.to_string())
-            .collect();
-        assert_eq!(agent_commands(names).len(), 7);
+        for legacy in LEGACY_DEFAULT_AGENT_COMMANDS {
+            let mut names: Vec<String> = legacy.iter().map(|s| s.to_string()).collect();
+            names.push("claude".into());
+            assert_eq!(agent_commands(names), AgentsConfig::default().commands_for);
+            let names: Vec<String> = legacy[1..].iter().map(|s| s.to_string()).collect();
+            assert_eq!(agent_commands(names).len(), legacy.len() - 1);
+        }
     }
 }

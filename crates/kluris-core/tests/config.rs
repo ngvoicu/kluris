@@ -23,9 +23,19 @@ const V2_DEFAULT_AGENTS: [&str; 9] = [
     "claude", "cursor", "windsurf", "copilot", "codex", "gemini", "hermes", "kilocode", "junie",
 ];
 
-/// v2's default list read by v3: `windsurf` is `devin`.
-const V3_DEFAULT_AGENTS: [&str; 9] = [
-    "claude", "cursor", "devin", "copilot", "codex", "gemini", "hermes", "kilocode", "junie",
+/// v3's default list: v2's in v2's order, `devin` in place of `windsurf`,
+/// then `antigravity`. v2's default list (and its pre-Hermes one) reads as it.
+const V3_DEFAULT_AGENTS: [&str; 10] = [
+    "claude",
+    "cursor",
+    "devin",
+    "copilot",
+    "codex",
+    "gemini",
+    "hermes",
+    "kilocode",
+    "junie",
+    "antigravity",
 ];
 
 fn fixture(name: &str) -> String {
@@ -66,9 +76,17 @@ fn brain(name: &str, description: &str, agents: &[&str], companions: &[&str]) ->
     }
 }
 
-/// A v2-written file with `- windsurf` as v3 writes it back (`- devin`).
+fn commands_yaml(agents: &[&str]) -> String {
+    let items: String = agents.iter().map(|a| format!("  - {a}\n")).collect();
+    format!("  commands_for:\n{items}")
+}
+
+/// A v2-written file with v2's default agent list as v3 writes it back: the
+/// v3 default list.
 fn as_v3_writes(v2_text: &str) -> String {
-    v2_text.replace("  - windsurf\n", "  - devin\n")
+    let v2 = commands_yaml(&V2_DEFAULT_AGENTS);
+    assert!(v2_text.contains(&v2), "not v2's default list: {v2_text}");
+    v2_text.replace(&v2, &commands_yaml(&V3_DEFAULT_AGENTS))
 }
 
 fn three_brains() -> GlobalConfig {
@@ -226,7 +244,7 @@ fn writes_brain_config_byte_identical_to_v2_for_the_same_model() {
 }
 
 #[test]
-fn v2_brain_config_round_trips_with_windsurf_written_as_devin() {
+fn v2_brain_config_round_trips_with_the_v3_default_agents() {
     for name in [
         "brain-created.yml",
         "brain-registered.yml",
@@ -280,8 +298,8 @@ fn missing_companions_and_agents_take_v2_defaults() {
 }
 
 #[test]
-fn defaults_are_v2_defaults_with_devin() {
-    assert_eq!(DEFAULT_AGENT_COMMANDS, V3_DEFAULT_AGENTS);
+fn defaults_are_v2_defaults_with_devin_then_antigravity() {
+    assert_eq!(DEFAULT_AGENT_COMMANDS[..], V3_DEFAULT_AGENTS[..]);
     assert_eq!(
         AgentsConfig::default().commands_for,
         strings(&V3_DEFAULT_AGENTS)
@@ -326,7 +344,7 @@ fn windsurf_is_read_as_devin_and_unknown_agents_are_kept() {
 }
 
 #[test]
-fn pre_hermes_default_list_migrates_to_the_default_like_v2() {
+fn v2_default_lists_migrate_to_the_v3_default() {
     let cfg = parse_brain_config(&fixture("brain-legacy-input.yml")).unwrap();
     assert_eq!(
         cfg,
@@ -338,7 +356,44 @@ fn pre_hermes_default_list_migrates_to_the_default_like_v2() {
         brain_config_to_yaml(&cfg),
         as_v3_writes(&fixture("brain-legacy-rewritten.yml"))
     );
-    // A custom list is kept: a subset, or the legacy set plus one more.
+    // v2.28's 9 names, with windsurf or with devin, in any order and with
+    // repeats (compared as a set): the v3 default.
+    for names in [
+        "[claude, cursor, windsurf, copilot, codex, gemini, hermes, kilocode, junie]",
+        "[claude, cursor, devin, copilot, codex, gemini, hermes, kilocode, junie]",
+        "[junie, kilocode, hermes, gemini, codex, copilot, devin, cursor, claude]",
+        "[claude, claude, cursor, windsurf, copilot, codex, gemini, hermes, kilocode, junie]",
+        "[gemini, windsurf, claude, cursor, copilot, codex, kilocode, junie]",
+    ] {
+        let text = format!("name: b\nagents:\n  commands_for: {names}\n");
+        assert_eq!(
+            parse_brain_config(&text).unwrap().agents,
+            AgentsConfig::default(),
+            "{names}"
+        );
+    }
+    // Any other list is kept exactly as written (windsurf still reads as
+    // devin): a subset, a legacy set plus one more, both windsurf and devin.
+    let text = "name: b\nagents:\n  commands_for: [claude, cursor, devin, copilot, codex, gemini, hermes, kilocode]\n";
+    assert_eq!(
+        parse_brain_config(text).unwrap().agents.commands_for,
+        strings(&[
+            "claude", "cursor", "devin", "copilot", "codex", "gemini", "hermes", "kilocode"
+        ])
+    );
+    let text = "name: b\nagents:\n  commands_for: [claude, cursor, windsurf, devin, copilot, codex, gemini, hermes, kilocode, junie]\n";
+    assert_eq!(
+        parse_brain_config(text).unwrap().agents.commands_for,
+        strings(&[
+            "claude", "cursor", "devin", "devin", "copilot", "codex", "gemini", "hermes",
+            "kilocode", "junie"
+        ])
+    );
+    let text = "name: b\nagents:\n  commands_for: [claude, cursor, devin, copilot, codex, gemini, hermes, kilocode, junie, bogus]\n";
+    assert_eq!(
+        parse_brain_config(text).unwrap().agents.commands_for.len(),
+        10
+    );
     let text = "name: b\nagents:\n  commands_for: [claude, cursor]\n";
     assert_eq!(
         parse_brain_config(text).unwrap().agents.commands_for,
