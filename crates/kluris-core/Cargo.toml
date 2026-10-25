@@ -9,7 +9,9 @@ repository.workspace = true
 
 [dependencies]
 indexmap.workspace = true
-yaml-rust2.workspace = true
+num-bigint.workspace = true
+regex.workspace = true
+saphyr-parser.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

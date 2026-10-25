@@ -13,7 +13,9 @@ repository = "https://github.com/ngvoicu/kluris"
 kluris-core = { path = "crates/kluris-core" }
 clap = { version = "4.6", features = ["derive"] }
 indexmap = "2.14"
-yaml-rust2 = "0.13"
+num-bigint = "0.5.1"
+regex = "1.13"
+saphyr-parser = "0.2.2"
 assert_cmd = "2.2"
 assert_fs = "1.1"
 predicates = "3.1"

@@ -9,10 +9,9 @@ use std::path::{Path, PathBuf};
 use std::{fmt, fs, io};
 
 use indexmap::IndexMap;
-use yaml_rust2::yaml::Hash;
-use yaml_rust2::{Yaml, YamlLoader};
 
 use crate::companions;
+use crate::yaml::{self, Map, Value};
 
 /// One registered brain (v2 `BrainEntry`).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -66,29 +65,25 @@ pub fn global_config_path(
     Some(home.join(".kluris").join("config.yml"))
 }
 
-/// Parse a YAML document the way v2's `yaml.safe_load(text) or {}` does:
-/// an empty (or null) document is an empty mapping; more than one document
-/// is an error.
-fn load_mapping(text: &str) -> Result<Hash, String> {
-    let mut docs = YamlLoader::load_from_str(text).map_err(|e| e.to_string())?;
-    if docs.len() > 1 {
-        return Err("expected a single YAML document".into());
-    }
-    match docs.pop() {
-        None | Some(Yaml::Null) => Ok(Hash::new()),
-        Some(Yaml::Hash(map)) => Ok(map),
-        Some(_) => Err("the top level is not a mapping".into()),
+/// Parse a YAML document the way v2's `yaml.safe_load(text) or {}` does
+/// (YAML 1.1 types): any falsy document (empty, `null`, `false`, `0`, `""`,
+/// `[]`) is an empty mapping; more than one document is an error.
+fn load_mapping(text: &str) -> Result<Map, String> {
+    match yaml::load(text).map_err(|e| e.to_string())? {
+        doc if doc.is_falsy() => Ok(Map::new()),
+        Value::Map(map) => Ok(map),
+        _ => Err("the top level is not a mapping".into()),
     }
 }
 
-fn get<'a>(map: &'a Hash, key: &str) -> Option<&'a Yaml> {
-    map.get(&Yaml::String(key.to_string()))
+fn get<'a>(map: &'a Map, key: &str) -> Option<&'a Value> {
+    map.get(key)
 }
 
 /// A pydantic `str` field: only a YAML string validates.
-fn string_field(map: &Hash, key: &str, default: Option<&str>) -> Result<String, String> {
+fn string_field(map: &Map, key: &str, default: Option<&str>) -> Result<String, String> {
     match get(map, key) {
-        Some(Yaml::String(s)) => Ok(s.clone()),
+        Some(Value::Str(s)) => Ok(s.clone()),
         Some(_) => Err(format!("'{key}' must be a string")),
         None => default
             .map(str::to_string)
@@ -97,13 +92,13 @@ fn string_field(map: &Hash, key: &str, default: Option<&str>) -> Result<String, 
 }
 
 /// A pydantic `list[str]` field with a default of `[]`.
-fn string_list_field(map: &Hash, key: &str) -> Result<Vec<String>, String> {
+fn string_list_field(map: &Map, key: &str) -> Result<Vec<String>, String> {
     match get(map, key) {
         None => Ok(Vec::new()),
-        Some(Yaml::Array(items)) => items
+        Some(Value::Seq(items)) => items
             .iter()
             .map(|item| match item {
-                Yaml::String(s) => Ok(s.clone()),
+                Value::Str(s) => Ok(s.clone()),
                 _ => Err(format!("'{key}' must be a list of strings")),
             })
             .collect(),
@@ -117,12 +112,9 @@ pub fn parse_global_config(text: &str) -> Result<GlobalConfig, String> {
     let mut brains = IndexMap::new();
     match get(&root, "brains") {
         None => {}
-        Some(Yaml::Hash(entries)) => {
+        Some(Value::Map(entries)) => {
             for (name, entry) in entries {
-                let Yaml::String(name) = name else {
-                    return Err("brain names must be strings".into());
-                };
-                let Yaml::Hash(entry) = entry else {
+                let Value::Map(entry) = entry else {
                     return Err(format!("brain '{name}' must be a mapping"));
                 };
                 let path = string_field(entry, "path", None)
@@ -159,7 +151,7 @@ fn brain_config_companions(text: &str) -> Result<Vec<String>, String> {
     string_field(&root, "description", Some(""))?;
     match get(&root, "agents") {
         None => {}
-        Some(Yaml::Hash(agents)) => {
+        Some(Value::Map(agents)) => {
             string_list_field(agents, "commands_for")?;
         }
         Some(_) => return Err("'agents' must be a mapping".into()),
@@ -297,6 +289,40 @@ mod tests {
             "name: b\nagents:\n  commands_for: [1]\n",
             "name: b\ndescription: [x]\n",
             "name: [unclosed\n",
+        ] {
+            assert_eq!(
+                parse_brain_companions(text),
+                None,
+                "should be unknown: {text:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn falsy_documents_are_an_empty_config() {
+        for text in ["false\n", "0\n", "''\n", "[]\n", "null\n", "~\n"] {
+            assert_eq!(
+                parse_global_config(text),
+                Ok(GlobalConfig::default()),
+                "{text:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn yaml_1_1_scalars_are_not_strings() {
+        for text in [
+            "brains:\n  a:\n    path: /x\n    description: yes\n",
+            "brains:\n  a:\n    path: 2026-01-02\n",
+            "brains:\n  a:\n    path: 0755\n",
+            "brains:\n  1:\n    path: /x\n",
+        ] {
+            assert!(parse_global_config(text).is_err(), "should reject {text:?}");
+        }
+        for text in [
+            "name: yes\n",
+            "name: b\ncompanions: [on]\n",
+            "name: b\ndescription: 2026-01-02\n",
         ] {
             assert_eq!(
                 parse_brain_companions(text),
