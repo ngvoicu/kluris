@@ -51,10 +51,10 @@ impl std::error::Error for YamlError {}
 
 /// Load a single YAML document like `yaml.safe_load`: an empty stream is
 /// `Null`; more than one document is an error.
-pub fn load(text: &str) -> Result<Value, YamlError> {
+pub fn load(source: &str) -> Result<Value, YamlError> {
     let mut builder = Builder::default();
     let mut documents = 0;
-    for item in Parser::new_from_str(text) {
+    for item in Parser::new_from_str(source) {
         let (event, span) = item.map_err(|e| YamlError::at(*e.marker(), e.info().to_string()))?;
         let mark = span.start;
         match event {
@@ -67,21 +67,40 @@ pub fn load(text: &str) -> Result<Value, YamlError> {
                     ));
                 }
             }
-            Event::Scalar(text, style, anchor, tag) => {
-                refuse_tag(tag.as_deref(), mark)?;
-                let value = if style == ScalarStyle::Plain {
-                    resolve::plain_scalar(&text).map_err(|e| YamlError::at(mark, e))?
-                } else {
-                    Value::Str(text.into_owned())
-                };
+            Event::Scalar(mut text, style, anchor, tag) => {
+                // At the end of input with no final line break, saphyr-parser
+                // gives a block scalar one `\n` more than PyYAML does.
+                if matches!(style, ScalarStyle::Literal | ScalarStyle::Folded)
+                    && span.end.index() == source.len()
+                    && !source.ends_with(['\n', '\r'])
+                    && text.ends_with('\n')
+                {
+                    text.to_mut().pop();
+                }
+                let value = match classify(tag.as_deref()) {
+                    Kind::Default if style == ScalarStyle::Plain => resolve::implicit_scalar(&text),
+                    Kind::Default => Ok(Value::Str(text.into_owned())),
+                    // PyYAML resolves `!` content like a plain scalar, quoted
+                    // or not.
+                    Kind::NonSpecific => resolve::implicit_scalar(&text),
+                    Kind::Scalar(tag) => resolve::tagged_scalar(tag, &text),
+                    other => Err(other.mismatch("a scalar")),
+                }
+                .map_err(|e| YamlError::at(mark, e))?;
                 builder.complete(value, 1, anchor, mark)?;
             }
             Event::SequenceStart(anchor, tag) => {
-                refuse_tag(tag.as_deref(), mark)?;
+                match classify(tag.as_deref()) {
+                    Kind::Default | Kind::NonSpecific | Kind::Seq => {}
+                    other => return Err(YamlError::at(mark, other.mismatch("a sequence"))),
+                }
                 builder.open(Node::Seq(Vec::new()), anchor, mark)?;
             }
             Event::MappingStart(anchor, tag) => {
-                refuse_tag(tag.as_deref(), mark)?;
+                match classify(tag.as_deref()) {
+                    Kind::Default | Kind::NonSpecific | Kind::Map => {}
+                    other => return Err(YamlError::at(mark, other.mismatch("a mapping"))),
+                }
                 builder.open(Node::Map(Map::new(), None), anchor, mark)?;
             }
             Event::SequenceEnd | Event::MappingEnd => builder.close(mark)?,
@@ -92,21 +111,56 @@ pub fn load(text: &str) -> Result<Value, YamlError> {
     Ok(builder.root.unwrap_or(Value::Null))
 }
 
-/// Every explicit tag is outside the value model, the core ones included.
-fn refuse_tag(tag: Option<&Tag>, mark: Marker) -> Result<(), YamlError> {
-    match tag {
-        None => Ok(()),
-        Some(tag) => {
-            let name = if tag.is_yaml_core_schema() {
-                format!("!!{}", tag.suffix)
-            } else {
-                format!("{}{}", tag.handle, tag.suffix)
-            };
-            Err(YamlError::at(
-                mark,
-                format!("explicit tags are not supported ({name})"),
-            ))
-        }
+const CORE: &str = "tag:yaml.org,2002:";
+
+/// What a node's tag asks for.
+enum Kind {
+    /// No tag: implicit resolution for plain scalars, strings otherwise.
+    Default,
+    /// `!`: implicit resolution for any scalar.
+    NonSpecific,
+    Scalar(resolve::ScalarTag),
+    Seq,
+    Map,
+    /// A tag outside the value model (`!!binary`, `!!set`, `!foo`, ...).
+    Other(String),
+}
+
+impl Kind {
+    /// Why this tag cannot go on a node of the given kind.
+    fn mismatch(&self, node: &str) -> String {
+        let tag = match self {
+            Kind::Other(name) => return format!("unsupported tag {name}"),
+            Kind::Scalar(tag) => tag.name(),
+            Kind::Seq => "!!seq",
+            Kind::Map => "!!map",
+            Kind::Default | Kind::NonSpecific => "!",
+        };
+        format!("the tag {tag} cannot go on {node}")
+    }
+}
+
+/// The full tag (`!!` expanded, verbatim tags as written), matched like
+/// SafeLoader's constructors: only the core tags inside the value model are
+/// read.
+fn classify(tag: Option<&Tag>) -> Kind {
+    use resolve::ScalarTag;
+    let Some(tag) = tag else {
+        return Kind::Default;
+    };
+    let full = format!("{}{}", tag.handle, tag.suffix);
+    match full.strip_prefix(CORE) {
+        _ if full == "!" => Kind::NonSpecific,
+        Some("str") => Kind::Scalar(ScalarTag::Str),
+        Some("int") => Kind::Scalar(ScalarTag::Int),
+        Some("float") => Kind::Scalar(ScalarTag::Float),
+        Some("bool") => Kind::Scalar(ScalarTag::Bool),
+        Some("null") => Kind::Scalar(ScalarTag::Null),
+        Some("timestamp") => Kind::Scalar(ScalarTag::Timestamp),
+        Some("seq") => Kind::Seq,
+        Some("map") => Kind::Map,
+        Some(other) => Kind::Other(format!("!!{other}")),
+        None => Kind::Other(full),
     }
 }
 

@@ -6,4 +6,5 @@ mod resolve;
 mod value;
 
 pub use parse::{YamlError, load};
+pub(crate) use resolve::is_py_space;
 pub use value::{Date, DateTime, Map, Value};

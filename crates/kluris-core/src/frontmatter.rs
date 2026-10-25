@@ -6,7 +6,7 @@ use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
-use crate::yaml::{self, Map, Value, YamlError};
+use crate::yaml::{self, Map, Value, YamlError, is_py_space};
 
 /// The line ending a file uses, for the writer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -59,11 +59,6 @@ impl fmt::Display for FrontmatterError {
 
 impl std::error::Error for FrontmatterError {}
 
-/// Python's `str.isspace()` (what `strip()` and the regex `\s` match).
-fn is_py_space(c: char) -> bool {
-    c.is_whitespace() || ('\u{1c}'..='\u{1f}').contains(&c)
-}
-
 /// Lines as Python's text mode sees them: `\n`, `\r\n` and a lone `\r` end a
 /// line. Yields `(line start, line end, next line start)` byte offsets.
 fn text_mode_lines(text: &str, from: usize) -> impl Iterator<Item = (usize, usize, usize)> + '_ {
@@ -108,6 +103,10 @@ fn line_ending(text: &str) -> LineEnding {
 }
 
 /// The YAML text as v2's text-mode read hands it to PyYAML.
+///
+/// Known gap, left as is (decided 2026-10-25): PyYAML (YAML 1.1) also breaks
+/// lines at `\u{85}`, `\u{2028}` and `\u{2029}`; saphyr-parser (YAML 1.2)
+/// reads them as ordinary characters, and they are not converted here.
 fn universal_newlines(text: &str) -> String {
     text.replace("\r\n", "\n").replace('\r', "\n")
 }
