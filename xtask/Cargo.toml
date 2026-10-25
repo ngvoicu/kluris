@@ -6,3 +6,6 @@ rust-version.workspace = true
 publish = false
 
 [dependencies]
+kluris-core.workspace = true
+num-bigint.workspace = true
+serde_json.workspace = true

@@ -15,3 +15,4 @@ Thumbs.db
 target/
 parity/.venv/
 parity/.oracle/
+.hypothesis/

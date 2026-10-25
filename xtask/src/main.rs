@@ -1,17 +1,36 @@
 //! Development tasks for the Kluris 3 workspace (`cargo xtask <task>`).
 
+mod yaml_emit;
+
 use std::process::ExitCode;
 
-const USAGE: &str = "usage: cargo xtask <task>\n\nNo tasks yet.";
+const USAGE: &str = "usage: cargo xtask <task>
+
+Tasks:
+  yaml-emit --profile md|yml|config
+      Read one tagged-JSON mapping per stdin line and answer each with the
+      YAML Kluris writes for it, as one JSON string per stdout line.
+  yaml-load
+      Read one JSON string of YAML per stdin line and answer each with
+      {\"value\": <tagged JSON>} or {\"error\": <message>}.
+
+Tagged JSON: parity/tools/tagged_json.py.";
 
 fn main() -> ExitCode {
-    match std::env::args().nth(1).as_deref() {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let result = match args.first().map(String::as_str) {
         None | Some("help" | "--help" | "-h") => {
             println!("{USAGE}");
-            ExitCode::SUCCESS
+            return ExitCode::SUCCESS;
         }
-        Some(task) => {
-            eprintln!("unknown task '{task}'\n\n{USAGE}");
+        Some("yaml-emit") => yaml_emit::emit(&args[1..]),
+        Some("yaml-load") => yaml_emit::load(&args[1..]),
+        Some(task) => Err(format!("unknown task '{task}'")),
+    };
+    match result {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(message) => {
+            eprintln!("{message}\n\n{USAGE}");
             ExitCode::from(2)
         }
     }

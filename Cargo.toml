@@ -16,6 +16,7 @@ indexmap = "2.14"
 num-bigint = "0.5.1"
 regex = "1.13"
 saphyr-parser = "0.2.2"
+serde_json = { version = "1.0", features = ["preserve_order"] }
 assert_cmd = "2.2"
 assert_fs = "1.1"
 predicates = "3.1"
