@@ -34,3 +34,9 @@ One entry per difference, under its own heading:
 - Differs: when the body's first non-blank line is indented (`    code first`), v3 writes it with its indentation; v2 writes it without (python-frontmatter strips the whole body on read). Leading whitespace-only lines and all trailing whitespace are still removed, as in v2.
 - Decision: Kluris 3 decision (T-52 brief, Phase 1, IMPL-K3-06; research-01 §1 "Body handling")
 - Tests: `crates/kluris-core/tests/yaml_emit.rs::markdown_framing_matches_python_frontmatter` (rows "indented first line", "blank lines then indented line"; no parity scenario yet)
+
+### PAR-003: `windsurf` agent is `devin`
+- Command: every command that reads a brain's `kluris.yml` and every command that rewrites it (`create`, `register`, `companion add`, `companion remove`, `doctor`)
+- Differs: an agent name `windsurf` in `agents.commands_for` reads as `devin`, so when v3 writes a `kluris.yml` the line `  - windsurf` is `  - devin` (the default list is v2's `DEFAULT_AGENT_COMMANDS` in v2's order with `devin` in Windsurf's place, also for v2's pre-Hermes legacy set, which still migrates to the default). Every other byte is v2's. Unknown agent names are kept, as in v2; v2.28.11 reads a file with `devin` or `antigravity` without error (it skips names outside its registry).
+- Decision: Windsurf became Devin (SPEC decision log 2026-10-24, research-04, interview-01 #15-16; SPEC acceptance "a `windsurf` entry in an existing `kluris.yml` is treated as `devin`"; T-53 brief)
+- Tests: `crates/kluris-core/tests/config.rs::{v2_brain_config_round_trips_with_windsurf_written_as_devin, windsurf_is_read_as_devin_and_unknown_agents_are_kept, pre_hermes_default_list_migrates_to_the_default_like_v2}`, `parity/test_config_roundtrip.py::test_v2_reads_v3_agent_names` (no v3 command writes `kluris.yml` yet)
