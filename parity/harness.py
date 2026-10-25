@@ -341,9 +341,11 @@ def assert_json_equal(
 
     ``version_fields`` lists the JSON paths (keys and list indexes) where the
     application prints its own version; only those values are normalized.
-    With such fields the raw check becomes: each side's bytes are exactly
-    Python's ``json.dumps`` of its own parse, which together with the parsed
-    comparison leaves the marked values as the only possible difference."""
+    With such fields each side's bytes must be exactly Python's ``json.dumps``
+    of its own parse (plus its final newline, if any); the marked values are
+    then replaced with ``<VERSION>`` and the two re-serialized byte strings,
+    final newline included, are compared. Key order, ``true`` vs ``1``,
+    ``1`` vs ``1.0`` and ``-0.0`` vs ``0.0`` all still differ."""
     na, nb = normalize(a, root), normalize(b, root)
     try:
         ja = json.loads(na)
@@ -354,11 +356,14 @@ def assert_json_equal(
     except json.JSONDecodeError as e:
         pytest.fail(f"v3 output is not JSON ({e}): {b!r}")
     if version_fields:
+        marked = []
         for side, text, doc in (("v2", na, ja), ("v3", nb, jb)):
-            canonical = json.dumps(doc) + "\n" * text.endswith("\n")
-            assert text == canonical, f"{side} raw JSON is not json.dumps of its parse: {text!r}"
-        _mark_versions(ja, list(version_fields), "v2")
-        _mark_versions(jb, list(version_fields), "v3")
+            newline = "\n" * text.endswith("\n")
+            assert text == json.dumps(doc) + newline, (
+                f"{side} raw JSON is not json.dumps of its parse: {text!r}"
+            )
+            _mark_versions(doc, list(version_fields), side)
+            marked.append(json.dumps(doc) + newline)
+        na, nb = marked
     assert jb == ja, "parsed JSON differs (left v3, right v2)"
-    if not version_fields:
-        assert nb == na, "raw JSON bytes differ after normalization (left v3, right v2)"
+    assert nb == na, "raw JSON bytes differ after normalization (left v3, right v2)"

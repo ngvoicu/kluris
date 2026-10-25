@@ -101,3 +101,22 @@ def test_run_fails_on_invalid_utf8_output(tmp_path: Path):
     with pytest.raises(pytest.fail.Exception) as info:
         _run(Path(sys.executable), [str(script)], dict(os.environ), None)
     assert "\\xff" in str(info.value) and "stdout" in str(info.value)
+
+
+# --- with marked version fields, everything else is still compared byte for
+# byte (re-review T-62, finding 1)
+
+
+@pytest.mark.parametrize(
+    ("v2", "v3"),
+    [
+        ('{"version": "2.28.11", "n": 1}\n', '{"version": "3.0.0", "n": 1}'),
+        ('{"version": "2.28.11", "a": 1, "b": 2}\n', '{"version": "3.0.0", "b": 2, "a": 1}\n'),
+        ('{"version": "2.28.11", "n": true}\n', '{"version": "3.0.0", "n": 1}\n'),
+        ('{"version": "2.28.11", "n": 1}\n', '{"version": "3.0.0", "n": 1.0}\n'),
+        ('{"version": "2.28.11", "n": -0.0}\n', '{"version": "3.0.0", "n": 0.0}\n'),
+    ],
+    ids=["final-newline", "key-order", "true-vs-1", "1-vs-1.0", "-0.0-vs-0.0"],
+)
+def test_marked_version_field_hides_nothing_else(v2: str, v3: str):
+    _assert_differs(v2, v3, version_fields=[("version",)])
