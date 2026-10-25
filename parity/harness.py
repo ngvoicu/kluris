@@ -203,15 +203,17 @@ class Sandbox:
         return dest
 
 
+def _decode(stream: bytes) -> str:
+    """A stream as text, with CRLF read as LF: Python's text streams write CRLF
+    on Windows and Rust's ``println!`` writes LF (allowlist PAR-004)."""
+    return stream.decode("utf-8", errors="replace").replace("\r\n", "\n")
+
+
 def _run(exe: Path, args: list[str], env: dict[str, str], cwd: Path | None) -> Result:
     proc = subprocess.run(
         [str(exe), *args], env=env, cwd=str(cwd) if cwd else None, capture_output=True,
     )
-    return Result(
-        proc.returncode,
-        proc.stdout.decode("utf-8", errors="replace"),
-        proc.stderr.decode("utf-8", errors="replace"),
-    )
+    return Result(proc.returncode, _decode(proc.stdout), _decode(proc.stderr))
 
 
 def run_v2(args: list[str], env: dict[str, str], cwd: Path | None = None) -> Result:

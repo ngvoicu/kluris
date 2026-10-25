@@ -1,0 +1,1106 @@
+//! Unit tests of `cargo xtask windows`: the words, the machines, the PowerShell
+//! the machine is sent, the answer a run ends with, and a whole run against a
+//! fake ssh. Nothing here reaches the network; the pack tests run git on a
+//! repository made for the case.
+
+use std::collections::VecDeque;
+use std::fs;
+use std::io;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+use std::time::Duration;
+
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD;
+
+use super::machine::{self, FLOOR_GIB, Machine, Ready};
+use super::options::{self, Name, Options, Parsed};
+use super::remote::{Call, Captured, Runner, Stream, Streamed};
+use super::run::{self, Ctx};
+use super::script::{self, Spec};
+
+fn words(line: &str) -> Vec<String> {
+    line.split_whitespace().map(str::to_owned).collect()
+}
+
+/// The script a `powershell -EncodedCommand` line carries, decoded.
+fn decoded(line: &str) -> String {
+    let encoded = line
+        .rsplit(' ')
+        .next()
+        .expect("the line ends with the encoded script");
+    let bytes = STANDARD.decode(encoded).expect("base64");
+    let units: Vec<u16> = bytes
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|pair| u16::from_le_bytes(*pair))
+        .collect();
+    String::from_utf16(&units).expect("UTF-16")
+}
+
+fn spec<'a>(parity: bool, cargo_args: &'a [String]) -> Spec<'a> {
+    Spec {
+        id: "kluris-0000abcd-12345678",
+        channel: "1.99.0",
+        jobs: 2,
+        parity,
+        cargo_args,
+    }
+}
+
+// --- the words --------------------------------------------------------------
+
+mod words_of_the_command {
+    use super::*;
+
+    fn run_of(line: &str) -> Options {
+        match options::parse(&words(line)) {
+            Ok(Parsed::Run(options)) => options,
+            other => panic!("{line:?} parsed as {other:?}"),
+        }
+    }
+
+    #[test]
+    fn no_words_is_the_default_machine_without_parity() {
+        assert_eq!(
+            run_of(""),
+            Options {
+                machine: None,
+                parity: false,
+                cargo_args: vec![],
+            }
+        );
+    }
+
+    #[test]
+    fn machine_and_parity_in_both_spellings() {
+        let options = run_of("--machine zeewin --parity");
+        assert_eq!(options.machine, Some(Name::Zeewin));
+        assert!(options.parity);
+        assert_eq!(run_of("--machine=zeewin2").machine, Some(Name::Zeewin2));
+    }
+
+    #[test]
+    fn words_after_the_dashes_go_to_cargo_test_as_they_are() {
+        let options = run_of("--machine zeewin -- -p kluris-core -- --nocapture --parity");
+        assert_eq!(
+            options.cargo_args,
+            words("-p kluris-core -- --nocapture --parity")
+        );
+        assert!(!options.parity, "--parity after -- is cargo's");
+    }
+
+    #[test]
+    fn help() {
+        assert_eq!(options::parse(&words("--help")), Ok(Parsed::Help));
+        assert_eq!(options::parse(&words("-h")), Ok(Parsed::Help));
+    }
+
+    #[test]
+    fn refusals() {
+        for (line, says) in [
+            ("--machine zeewin3", "zeewin, zeewin2"),
+            ("--machine", "--machine takes"),
+            ("--machine --parity", "--machine takes"),
+            ("--bogus", "unknown option: --bogus"),
+            ("--parity=yes", "--parity takes no value"),
+            ("test", "after --"),
+            ("--machine zeewin --machine zeewin2", "once"),
+        ] {
+            let refused = options::parse(&words(line)).expect_err(line);
+            assert!(refused.contains(says), "{line:?}: {refused}");
+        }
+    }
+}
+
+// --- the fake ssh -------------------------------------------------------------
+
+/// What the fake answers a call with, in the order the calls come.
+enum Answer {
+    Capture(Result<Captured, String>),
+    Stream(Vec<(Stream, &'static str)>, Result<Streamed, String>),
+}
+
+#[derive(Default)]
+struct Fake {
+    answers: VecDeque<Answer>,
+    calls: Vec<Call>,
+}
+
+impl Fake {
+    fn new(answers: Vec<Answer>) -> Self {
+        Self {
+            answers: answers.into(),
+            calls: Vec::new(),
+        }
+    }
+
+    fn next(&mut self, call: &Call) -> Answer {
+        self.calls.push(call.clone());
+        self.answers
+            .pop_front()
+            .unwrap_or_else(|| panic!("no answer left for {call:?}"))
+    }
+
+    /// The programs called, each with its last word (the host's command, or scp's target).
+    fn called(&self) -> Vec<String> {
+        self.calls
+            .iter()
+            .map(|call| format!("{} {}", call.program, call.args.join(" ")))
+            .collect()
+    }
+}
+
+impl Runner for Fake {
+    fn capture(&mut self, call: &Call) -> Result<Captured, String> {
+        match self.next(call) {
+            Answer::Capture(answer) => answer,
+            Answer::Stream(..) => panic!("{call:?} was captured, the fake had a stream for it"),
+        }
+    }
+
+    fn stream(
+        &mut self,
+        call: &Call,
+        sink: &mut dyn FnMut(Stream, &[u8]) -> io::Result<()>,
+        _stop: &dyn Fn() -> bool,
+    ) -> Result<Streamed, String> {
+        match self.next(call) {
+            Answer::Stream(chunks, ended) => {
+                for (stream, text) in chunks {
+                    sink(stream, text.as_bytes()).map_err(|e| e.to_string())?;
+                }
+                ended
+            }
+            Answer::Capture(_) => panic!("{call:?} was streamed, the fake had a capture for it"),
+        }
+    }
+}
+
+fn said(code: i32, stdout: &str) -> Answer {
+    Answer::Capture(Ok(Captured {
+        code: Some(code),
+        stdout: stdout.into(),
+        stderr: String::new(),
+        timed_out: false,
+    }))
+}
+
+fn timed_out() -> Answer {
+    Answer::Capture(Ok(Captured {
+        code: None,
+        stdout: String::new(),
+        stderr: String::new(),
+        timed_out: true,
+    }))
+}
+
+// --- the machines -------------------------------------------------------------
+
+mod machines {
+    use super::*;
+
+    fn zeewin2() -> Machine {
+        Machine::named(Name::Zeewin2)
+    }
+
+    #[test]
+    fn the_two_machines() {
+        let zeewin = Machine::named(Name::Zeewin);
+        assert_eq!((zeewin.name, zeewin.host), ("zeewin", "zeewin"));
+        assert!(zeewin.shared.is_none());
+        let laptop = zeewin2();
+        assert_eq!((laptop.name, laptop.host), ("zeewin2", "zeewin2"));
+        let shared = laptop.shared.expect("zeewin2 is shared with poker-lab");
+        assert_eq!(
+            (shared.linux, shared.lock, shared.floor_gib),
+            ("zeelin", ".compile-lock/owner", 50)
+        );
+        assert_eq!(FLOOR_GIB, 50);
+        assert!(zeewin.jobs < laptop.jobs, "zeewin is short of memory");
+    }
+
+    #[test]
+    fn zeewin_is_asked_nothing_before_a_run() {
+        let mut fake = Fake::default();
+        let ready = machine::ready(&Machine::named(Name::Zeewin), &mut fake).unwrap();
+        assert_eq!(ready, Ready::Go(vec![]));
+        assert!(fake.calls.is_empty());
+    }
+
+    #[test]
+    fn zeewin2_is_refused_while_poker_lab_holds_its_lock() {
+        let mut fake = Fake::new(vec![said(0, "held\n")]);
+        let Ready::Refused(why) = machine::ready(&zeewin2(), &mut fake).unwrap() else {
+            panic!("not refused")
+        };
+        assert!(
+            why.contains("poker-lab") && why.contains("~/.compile-lock/owner"),
+            "{why}"
+        );
+        assert_eq!(fake.calls.len(), 1, "nothing is asked of Windows then");
+    }
+
+    #[test]
+    fn the_poker_lab_check_is_bounded_and_only_looks() {
+        let mut fake = Fake::new(vec![said(0, "free\n"), said(0, "free 600\n")]);
+        machine::ready(&zeewin2(), &mut fake).unwrap();
+        let zeelin = &fake.calls[0];
+        assert_eq!(zeelin.program, "ssh");
+        let line = zeelin.args.join(" ");
+        assert!(
+            line.contains("ConnectTimeout=5") && line.contains("BatchMode=yes"),
+            "{line}"
+        );
+        assert!(zeelin.args.contains(&"zeelin".to_owned()), "{line}");
+        assert!(
+            zeelin.bound <= Duration::from_secs(20),
+            "{:?}",
+            zeelin.bound
+        );
+        let asked = zeelin.args.last().unwrap();
+        assert_eq!(
+            asked,
+            "if [ -e ~/.compile-lock/owner ]; then echo held; else echo free; fi"
+        );
+        let state = &fake.calls[1];
+        assert!(state.bound <= Duration::from_secs(60), "{:?}", state.bound);
+        assert!(state.args.contains(&"zeewin2".to_owned()));
+    }
+
+    #[test]
+    fn zeelin_not_answering_is_ubuntu_not_running_and_passes() {
+        for zeelin in [
+            said(255, ""),
+            timed_out(),
+            Answer::Capture(Err("no ssh".into())),
+        ] {
+            let mut fake = Fake::new(vec![zeelin, said(0, "free 600\n")]);
+            let Ready::Go(notes) = machine::ready(&zeewin2(), &mut fake).unwrap() else {
+                panic!("refused")
+            };
+            assert_eq!(notes.len(), 1, "{notes:?}");
+            assert!(notes[0].contains("Ubuntu is not running"), "{notes:?}");
+        }
+    }
+
+    #[test]
+    fn zeewin2_is_refused_under_the_disk_floor() {
+        let mut fake = Fake::new(vec![said(0, "free\n"), said(0, "free 49\r\n")]);
+        let Ready::Refused(why) = machine::ready(&zeewin2(), &mut fake).unwrap() else {
+            panic!("not refused")
+        };
+        assert!(why.contains("50 GiB") && why.contains("49"), "{why}");
+
+        let mut fake = Fake::new(vec![said(0, "free\n"), said(0, "free 50\r\n")]);
+        assert_eq!(
+            machine::ready(&zeewin2(), &mut fake).unwrap(),
+            Ready::Go(vec![])
+        );
+    }
+
+    #[test]
+    fn a_held_run_lock_is_left_to_the_lock_itself() {
+        let mut fake = Fake::new(vec![
+            said(0, "free\n"),
+            said(0, "free 600\r\nheld 0000abcd-12345678 4242\r\n"),
+        ]);
+        assert_eq!(
+            machine::ready(&zeewin2(), &mut fake).unwrap(),
+            Ready::Go(vec![])
+        );
+    }
+
+    #[test]
+    fn a_windows_that_does_not_answer_is_an_error() {
+        let mut fake = Fake::new(vec![said(0, "free\n"), said(255, "")]);
+        let error = machine::ready(&zeewin2(), &mut fake).unwrap_err();
+        assert!(error.contains("zeewin2"), "{error}");
+        let mut fake = Fake::new(vec![said(0, "free\n"), said(0, "nonsense")]);
+        assert!(machine::ready(&zeewin2(), &mut fake).is_err());
+    }
+
+    #[test]
+    fn the_state_script_reads_c_and_the_shared_lock_owner() {
+        let script = script::state_script();
+        assert!(script.contains("Get-PSDrive -Name C"), "{script}");
+        assert!(
+            script.contains(r"consensflow-build\.windows-run.id"),
+            "{script}"
+        );
+        assert!(!script.contains("Open("), "the probe never opens the lock");
+    }
+
+    fn chosen(answers: Vec<Answer>) -> (Machine, String, Fake) {
+        let mut fake = Fake::new(answers);
+        let (machine, why) = machine::choose(&mut fake);
+        (machine, why, fake)
+    }
+
+    #[test]
+    fn the_default_is_zeewin2_while_it_is_free_and_allowed() {
+        let (machine, why, _) = chosen(vec![said(0, "free\n"), said(0, "free 600\n")]);
+        assert_eq!(machine.name, "zeewin2");
+        assert_eq!(why, "windows: on zeewin2");
+    }
+
+    #[test]
+    fn the_default_is_zeewin_when_zeewin2_is_not() {
+        for (answers, says) in [
+            (vec![said(0, "held\n")], "poker-lab"),
+            (vec![said(0, "free\n"), said(0, "free 10\n")], "50 GiB"),
+            (
+                vec![
+                    said(0, "free\n"),
+                    said(0, "free 600\nheld 0000abcd-12345678 4242\n"),
+                ],
+                "0000abcd-12345678",
+            ),
+            (vec![said(0, "free\n"), said(255, "")], "did not say"),
+        ] {
+            let (machine, why, _) = chosen(answers);
+            assert_eq!(machine.name, "zeewin", "{why}");
+            assert!(
+                why.starts_with("windows: on zeewin, as zeewin2 is not free: "),
+                "{why}"
+            );
+            assert!(why.contains(says), "{why}");
+        }
+    }
+}
+
+// --- the scripts ----------------------------------------------------------------
+
+mod scripts {
+    use super::*;
+
+    /// Words no script may hold: they would change the machine's settings, its
+    /// PATH, Defender, the firewall or the registry, install software, or log in.
+    const FORBIDDEN: [&str; 22] = [
+        "setx",
+        "SetEnvironmentVariable",
+        "Set-ItemProperty",
+        "New-ItemProperty",
+        "reg add",
+        "reg.exe",
+        "HKLM",
+        "HKCU",
+        "netsh",
+        "Set-MpPreference",
+        "Add-MpPreference",
+        "NetFirewall",
+        "Set-ExecutionPolicy",
+        "msiexec",
+        "winget",
+        "choco",
+        "RunAs",
+        "rustup-init",
+        "self update",
+        "rustup default",
+        "login",
+        "Register-ScheduledTask",
+    ];
+
+    fn every_script() -> Vec<(&'static str, String)> {
+        let extra = words("-p kluris-core");
+        vec![
+            ("bootstrap", script::bootstrap("kluris-0000abcd-12345678")),
+            ("run", script::run_script(&spec(false, &[]))),
+            ("run --parity", script::run_script(&spec(true, &extra))),
+            ("stop", script::stop_script("kluris-0000abcd-12345678")),
+            ("state", script::state_script()),
+        ]
+    }
+
+    #[test]
+    fn no_script_changes_the_machine() {
+        for (name, text) in every_script() {
+            let lower = text.to_lowercase();
+            for word in FORBIDDEN {
+                assert!(
+                    !lower.contains(&word.to_lowercase()),
+                    "{name} holds {word:?}"
+                );
+            }
+            // PATH is changed for the run's own process only.
+            for (at, _) in text.match_indices("Path") {
+                let line = text[..at].rsplit('\n').next().unwrap_or("").to_owned()
+                    + text[at..].split('\n').next().unwrap_or("");
+                if line.contains("Path =") {
+                    assert!(
+                        line.trim_start().starts_with("$env:Path = "),
+                        "{name}: {line}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_bootstrap_takes_the_shared_lock_first() {
+        let text = script::bootstrap("kluris-0000abcd-12345678");
+        let at = |what: &str| {
+            text.find(what)
+                .unwrap_or_else(|| panic!("the bootstrap has no {what:?}:\n{text}"))
+        };
+        let open = at("[IO.File]::Open(");
+        assert!(text[open..].starts_with(
+            "[IO.File]::Open((Join-Path $lockdir '.windows-run.lock'), 'OpenOrCreate', 'ReadWrite', 'None')"
+        ));
+        assert!(text.contains("$lockdir = Join-Path $env:USERPROFILE 'consensflow-build'"));
+        for later in [
+            "Set-Content",
+            "tar.exe",
+            "-xmzf",
+            "$run =",
+            ".kluris-run.ps1",
+        ] {
+            assert!(open < at(later), "{later:?} comes before the lock");
+        }
+        // Before the lock only the lock's own folder is made.
+        let before = &text[..open];
+        assert_eq!(before.matches("New-Item").count(), 1, "{before}");
+        assert!(before.contains("New-Item -ItemType Directory -Force $lockdir"));
+    }
+
+    #[test]
+    fn a_held_lock_is_refused_with_75_naming_the_holder() {
+        let text = script::bootstrap("kluris-0000abcd-12345678");
+        assert!(text.contains("Exit-Run 75"), "{text}");
+        assert!(text.contains("a ConsensFlow run"), "{text}");
+        assert!(text.contains("a Kluris run"), "{text}");
+        // ConsensFlow's own record of an older run is honoured as its scripts do.
+        assert!(
+            text.contains("$_.StartTime -le (Get-Item $running).LastWriteTime"),
+            "{text}"
+        );
+        for never in ["Start-Sleep", "while", "Remove-Item -LiteralPath $lockfile"] {
+            assert!(!text.contains(never), "the bootstrap holds {never:?}");
+        }
+    }
+
+    #[test]
+    fn the_bootstrap_cleans_up_in_a_finally() {
+        let text = script::bootstrap("kluris-0000abcd-12345678");
+        let finally = text.find("} finally {").expect("a finally");
+        let cleanup = &text[finally..];
+        assert!(
+            cleanup.contains("Remove-Item -LiteralPath $tarball -Force"),
+            "{cleanup}"
+        );
+        assert!(cleanup.contains("$lock.Dispose()"), "{cleanup}");
+        assert!(
+            cleanup.contains("if ($held)"),
+            "only its own records: {cleanup}"
+        );
+        assert!(
+            text.contains("$tarball = Join-Path $env:USERPROFILE 'kluris-0000abcd-12345678.tgz'")
+        );
+        assert!(text.contains(
+            r"$run = Join-Path $env:USERPROFILE '.kluris-ci\runs\kluris-0000abcd-12345678'"
+        ));
+        assert!(
+            text.contains("Set-Content -Path $owner -Value @('kluris-0000abcd-12345678', $PID)")
+        );
+    }
+
+    #[test]
+    fn what_goes_on_the_command_line_fits_it() {
+        for text in [
+            script::bootstrap("kluris-0000abcd-12345678"),
+            script::stop_script("kluris-0000abcd-12345678"),
+            script::state_script(),
+        ] {
+            let line = script::powershell_line(&text).unwrap();
+            assert!(line.starts_with("powershell -NoProfile -NonInteractive -EncodedCommand "));
+            assert!(line.len() <= script::ENCODED_LIMIT + 60, "{}", line.len());
+            assert_eq!(decoded(&line), text);
+        }
+        let long = "x".repeat(script::ENCODED_LIMIT);
+        assert!(script::powershell_line(&long).is_err());
+    }
+
+    #[test]
+    fn the_run_is_bounded_in_processes_and_time() {
+        let text = script::run_script(&spec(true, &[]));
+        assert!(text.contains(&format!("[KlurisJob]::Enter({})", script::PROCESS_LIMIT)));
+        const { assert!(script::PROCESS_LIMIT <= 64) };
+        assert!(
+            text.contains("0x2000 | 0x8"),
+            "kill on close and the process limit"
+        );
+        assert!(text.contains("Exit-Run 1"), "no run without its job");
+        assert!(text.contains("WaitForExit($minutes * 60000)"), "{text}");
+        assert!(text.contains("taskkill /PID $process.Id /T /F"), "{text}");
+        for step in script::steps(&spec(true, &[])) {
+            assert!(step.minutes > 0 && step.minutes <= 120, "{step:?}");
+            assert!(
+                text.contains(&format!("Invoke-Step '{}' {} ", step.name, step.minutes)),
+                "{step:?} is not run with its bound"
+            );
+        }
+        let all: u32 = script::steps(&spec(true, &[]))
+            .iter()
+            .map(|s| s.minutes)
+            .sum();
+        assert!(script::bound(&spec(true, &[])) > Duration::from_secs(u64::from(all) * 60));
+        assert!(script::bound(&spec(true, &[])) < Duration::from_secs(8 * 3600));
+    }
+
+    #[test]
+    fn the_steps_of_a_run() {
+        let names = |parity| {
+            script::steps(&spec(parity, &[]))
+                .iter()
+                .map(|step| step.name)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(names(false), ["toolchain", "cargo-test"]);
+        assert_eq!(
+            names(true),
+            ["toolchain", "cargo-test", "release-build", "parity"]
+        );
+    }
+
+    #[test]
+    fn tools_and_caches_stay_in_klurises_own_folder() {
+        let text = script::run_script(&spec(true, &[]));
+        for line in [
+            "$ci = Join-Path $env:USERPROFILE '.kluris-ci'",
+            "$env:RUSTUP_HOME = Join-Path $tools 'rustup'",
+            "$env:CARGO_HOME = Join-Path $tools 'cargo'",
+            "$env:CARGO_TARGET_DIR = Join-Path $cache 'target'",
+            "$env:CARGO_BUILD_JOBS = '2'",
+            "$env:UV_CACHE_DIR = Join-Path $cache 'uv'",
+            "$env:UV_PYTHON_INSTALL_DIR = Join-Path $tools 'python'",
+            "$env:UV_PYTHON_PREFERENCE = 'only-managed'",
+            "$env:UV_PROJECT_ENVIRONMENT = Join-Path $cache 'parity-venv'",
+            "$env:KLURIS_PARITY_ORACLE_DIR = Join-Path $cache 'oracle'",
+            r"$env:KLURIS_V3_BIN = Join-Path $env:CARGO_TARGET_DIR 'release\kluris.exe'",
+        ] {
+            assert!(text.contains(line), "no {line:?} in\n{text}");
+        }
+        assert!(text.contains(script::UV_SHA256) && text.contains(script::UV_VERSION));
+        assert!(text.contains("Get-FileHash -Algorithm SHA256"));
+        assert!(
+            text.contains("Missing on"),
+            "a machine without rustup is told, not fixed"
+        );
+    }
+
+    #[test]
+    fn the_commands_of_a_run() {
+        let extra = words("-p kluris-core --test list -- --nocapture \"two words\"");
+        let text = script::run_script(&spec(true, &extra));
+        assert!(text.contains(
+            "Invoke-Step 'toolchain' 30 $rustup 'toolchain install 1.99.0 --profile minimal --component clippy --component rustfmt --no-self-update'"
+        ), "{text}");
+        assert!(text.contains(
+            "$cargo 'test --workspace -p kluris-core --test list -- --nocapture \"\\\"two\" \"words\\\"\"'"
+        ), "{text}");
+        assert!(text.contains("$cargo 'build --release --package kluris-cli'"));
+        assert!(text.contains("$uv 'run --project parity --locked pytest parity -q'"));
+        let plain = script::run_script(&spec(false, &[]));
+        assert!(plain.contains("$cargo 'test --workspace'"), "{plain}");
+        assert!(!plain.contains("pytest") && !plain.contains("uv.exe"));
+    }
+
+    #[test]
+    fn old_runs_are_swept_under_the_lock() {
+        let text = script::run_script(&spec(false, &[]));
+        assert!(text.contains("(Get-Date).AddDays(-1)"), "{text}");
+        assert!(
+            text.contains("$_.Name -ne 'kluris-0000abcd-12345678'"),
+            "{text}"
+        );
+        assert!(text.contains("-Filter 'kluris-*.tgz'"), "{text}");
+    }
+
+    #[test]
+    fn the_stop_ends_only_its_own_run() {
+        let text = script::stop_script("kluris-0000abcd-12345678");
+        assert!(
+            text.contains(
+                "if ($of[0] -eq 'kluris-0000abcd-12345678') { taskkill /PID ($of[1]) /T /F"
+            )
+        );
+        assert!(text.contains("'kluris-0000abcd-12345678.tgz'"));
+        assert!(text.trim_end().ends_with("exit 0"));
+    }
+
+    #[test]
+    fn run_ids_are_unique_and_never_consensflows() {
+        let a = script::run_id();
+        let b = script::run_id();
+        assert_ne!(a, b);
+        for id in [a, b] {
+            let hex = id.strip_prefix("kluris-").expect("a Kluris id");
+            let parts: Vec<&str> = hex.split('-').collect();
+            assert_eq!(parts.len(), 2, "{id}");
+            assert!(
+                parts
+                    .iter()
+                    .all(|p| p.len() == 8 && p.bytes().all(|b| b.is_ascii_hexdigit())),
+                "{id}"
+            );
+        }
+        assert_eq!(script::tarball_name("kluris-1-2"), "kluris-1-2.tgz");
+    }
+
+    #[test]
+    fn exit_lines() {
+        assert_eq!(script::exit_said("== exit 0"), Some(0));
+        assert_eq!(script::exit_said("== exit 75\r"), Some(75));
+        assert_eq!(
+            script::exit_said("== exit -1073741819"),
+            Some(-1_073_741_819)
+        );
+        for line in [
+            "== exit",
+            "== exit x",
+            "== exit 7 8",
+            " == exit 7",
+            "== exit -",
+        ] {
+            assert_eq!(script::exit_said(line), None, "{line:?}");
+        }
+    }
+
+    #[test]
+    fn windows_command_lines() {
+        for (args, line) in [
+            (vec!["a", "b"], "a b"),
+            (vec!["two words"], "\"two words\""),
+            (vec![""], "\"\""),
+            (vec!["say \"hi\""], "\"say \\\"hi\\\"\""),
+            (vec![r"C:\a b\"], "\"C:\\a b\\\\\""),
+            (vec![r"a\\b"], r"a\\b"),
+        ] {
+            let args: Vec<String> = args.into_iter().map(str::to_owned).collect();
+            assert_eq!(script::command_line(&args), line, "{args:?}");
+        }
+    }
+}
+
+// --- the answer -------------------------------------------------------------------
+
+mod answers {
+    use super::*;
+
+    #[test]
+    fn the_machine_says_the_status() {
+        assert_eq!(run::answer(Some(1), Some(75), false).0, 75);
+        assert_eq!(run::answer(Some(1), Some(101), true).0, 101);
+        assert_eq!(run::answer(Some(0), Some(0), true), (0, None));
+    }
+
+    #[test]
+    fn a_pass_needs_the_tree_said() {
+        let (code, note) = run::answer(Some(0), Some(0), false);
+        assert_eq!(code, 1);
+        assert!(note.unwrap().contains("== tree"));
+    }
+
+    #[test]
+    fn statuses_no_program_ends_with_are_1() {
+        let (code, note) = run::answer(Some(1), Some(-1_073_741_819), true);
+        assert_eq!(code, 1);
+        assert!(note.unwrap().contains("-1073741819"));
+    }
+
+    #[test]
+    fn without_the_line_ssh_is_the_answer_but_never_0() {
+        assert_eq!(run::answer(Some(255), None, false).0, 255);
+        assert_eq!(run::answer(Some(0), None, true).0, 1);
+        assert_eq!(run::answer(None, None, false).0, 1);
+        assert!(run::answer(Some(255), None, false).1.is_some());
+    }
+}
+
+// --- a whole run ----------------------------------------------------------------------
+
+mod runs {
+    use super::*;
+
+    struct Ran {
+        code: i32,
+        out: String,
+        err: String,
+        fake: Fake,
+        packed: Vec<PathBuf>,
+    }
+
+    fn ran(options: Options, answers: Vec<Answer>) -> Ran {
+        let mut fake = Fake::new(answers);
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let mut packed = Vec::new();
+        let code = {
+            let mut pack = |tarball: &Path, run_script: &str| -> Result<String, String> {
+                assert!(run_script.contains("Invoke-Step 'cargo-test'"));
+                packed.push(tarball.to_path_buf());
+                fs::write(tarball, b"tarball").map_err(|e| e.to_string())?;
+                Ok("5f54983aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into())
+            };
+            let mut ctx = Ctx {
+                runner: &mut fake,
+                out: &mut out,
+                err: &mut err,
+                stop: &|| false,
+                channel: "1.99.0".into(),
+                pack: &mut pack,
+            };
+            run::windows(&options, &mut ctx)
+        };
+        Ran {
+            code,
+            out: String::from_utf8(out).unwrap(),
+            err: String::from_utf8(err).unwrap(),
+            fake,
+            packed,
+        }
+    }
+
+    fn on(name: Name, parity: bool) -> Options {
+        Options {
+            machine: Some(name),
+            parity,
+            cargo_args: vec![],
+        }
+    }
+
+    const PASSED: &str = "== tree 5f54983aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\r\n\
+        == step toolchain: rustup toolchain install\r\n\
+        == step toolchain exit 0 3s\r\n\
+        test result: ok. 12 passed\n\
+        == step cargo-test exit 0 412s\r\n\
+        \r\n== exit 0\r\n";
+
+    #[test]
+    fn a_run_on_zeewin_sends_the_tree_and_streams_the_answer() {
+        let ran = ran(
+            on(Name::Zeewin, false),
+            vec![
+                said(0, ""),
+                Answer::Stream(
+                    vec![(Stream::Out, PASSED), (Stream::Err, "warning: x\n")],
+                    Ok(Streamed::Exited(Some(1))),
+                ),
+            ],
+        );
+        assert_eq!(ran.code, 0, "{}", ran.err);
+        assert!(ran.out.contains("test result: ok. 12 passed"));
+        assert!(ran.err.contains("warning: x"));
+        let calls = &ran.fake.calls;
+        assert_eq!(calls.len(), 2, "{:?}", ran.fake.called());
+        assert_eq!(calls[0].program, "scp");
+        let target = calls[0].args.last().unwrap();
+        assert!(
+            target.starts_with("zeewin:kluris-") && target.ends_with(".tgz"),
+            "{target}"
+        );
+        assert_eq!(
+            calls[0].args[calls[0].args.len() - 2],
+            ran.packed[0].to_string_lossy()
+        );
+        assert_eq!(calls[1].program, "ssh");
+        assert!(calls[1].args.contains(&"zeewin".to_owned()));
+        let line = calls[1].args.join(" ");
+        assert!(line.contains("ServerAliveInterval"), "{line}");
+        let bootstrap = decoded(calls[1].args.last().unwrap());
+        let id = target
+            .trim_start_matches("zeewin:")
+            .trim_end_matches(".tgz");
+        assert_eq!(bootstrap, script::bootstrap(id));
+        assert!(calls[1].bound >= script::bound(&spec(false, &[])));
+        let summary = ran.err.lines().last().unwrap();
+        assert!(
+            summary.starts_with(&format!("windows: zeewin run {id} tree 5f54983aaaaa")),
+            "{summary}"
+        );
+        assert!(
+            summary.contains("toolchain 0 (3s), cargo-test 0 (412s)"),
+            "{summary}"
+        );
+        assert!(summary.ends_with("exit 0"), "{summary}");
+    }
+
+    #[test]
+    fn a_held_lock_is_75_with_the_holder_named() {
+        let ran = ran(
+            on(Name::Zeewin, true),
+            vec![
+                said(0, ""),
+                Answer::Stream(
+                    vec![(
+                        Stream::Out,
+                        "The machine's one-run lock is held by a ConsensFlow run (0000abcd-12345678, process 4242): one run at a time, not waiting.\r\n\n== exit 75\r\n",
+                    )],
+                    Ok(Streamed::Exited(Some(1))),
+                ),
+            ],
+        );
+        assert_eq!(ran.code, 75);
+        assert!(ran.out.contains("ConsensFlow run (0000abcd-12345678"));
+        assert!(ran.err.lines().last().unwrap().ends_with("exit 75"));
+        assert_eq!(ran.fake.calls.len(), 2, "nothing waits, nothing retries");
+    }
+
+    #[test]
+    fn zeewin2_refused_sends_nothing_and_is_75() {
+        let ran = ran(on(Name::Zeewin2, true), vec![said(0, "held\n")]);
+        assert_eq!(ran.code, 75);
+        assert!(ran.err.contains("poker-lab"), "{}", ran.err);
+        assert_eq!(ran.fake.calls.len(), 1);
+        assert!(ran.packed.is_empty());
+
+        let ran = ran_low_disk();
+        assert_eq!(ran.code, 75);
+        assert!(ran.err.contains("50 GiB"), "{}", ran.err);
+    }
+
+    fn ran_low_disk() -> Ran {
+        ran(
+            on(Name::Zeewin2, false),
+            vec![said(0, "free\n"), said(0, "free 12\n")],
+        )
+    }
+
+    #[test]
+    fn no_machine_takes_zeewin_when_zeewin2_is_held() {
+        let ran = ran(
+            Options {
+                machine: None,
+                parity: false,
+                cargo_args: vec![],
+            },
+            vec![
+                said(0, "held\n"),
+                said(0, ""),
+                Answer::Stream(vec![(Stream::Out, PASSED)], Ok(Streamed::Exited(Some(0)))),
+            ],
+        );
+        assert_eq!(ran.code, 0, "{}", ran.err);
+        assert!(
+            ran.err
+                .starts_with("windows: on zeewin, as zeewin2 is not free"),
+            "{}",
+            ran.err
+        );
+        assert!(
+            ran.fake.calls[1]
+                .args
+                .last()
+                .unwrap()
+                .starts_with("zeewin:")
+        );
+    }
+
+    #[test]
+    fn a_failed_upload_runs_nothing() {
+        let ran = ran(on(Name::Zeewin, false), vec![said(1, "")]);
+        assert_eq!(ran.code, 1);
+        assert_eq!(ran.fake.calls.len(), 1);
+        assert!(ran.err.contains("scp"), "{}", ran.err);
+    }
+
+    fn stop_sent(fake: &Fake) -> String {
+        let stop = fake.calls.last().unwrap();
+        assert_eq!(stop.program, "ssh");
+        assert!(stop.bound <= Duration::from_secs(120));
+        decoded(stop.args.last().unwrap())
+    }
+
+    #[test]
+    fn a_stopped_run_is_ended_there_and_is_130() {
+        let ran = ran(
+            on(Name::Zeewin, false),
+            vec![
+                said(0, ""),
+                Answer::Stream(vec![(Stream::Out, "== tree x\n")], Ok(Streamed::Stopped)),
+                said(0, ""),
+            ],
+        );
+        assert_eq!(ran.code, 130);
+        let id = ran.fake.calls[0]
+            .args
+            .last()
+            .unwrap()
+            .trim_start_matches("zeewin:")
+            .trim_end_matches(".tgz")
+            .to_owned();
+        assert_eq!(stop_sent(&ran.fake), script::stop_script(&id));
+    }
+
+    #[test]
+    fn a_run_past_its_bound_is_ended_there_and_is_124() {
+        let ran = ran(
+            on(Name::Zeewin, false),
+            vec![
+                said(0, ""),
+                Answer::Stream(vec![], Ok(Streamed::TimedOut)),
+                said(0, ""),
+            ],
+        );
+        assert_eq!(ran.code, 124);
+        assert!(stop_sent(&ran.fake).contains("taskkill"));
+        assert!(ran.err.contains("bound"), "{}", ran.err);
+    }
+
+    #[test]
+    fn a_lost_connection_ends_the_run_there_too() {
+        let ran = ran(
+            on(Name::Zeewin, false),
+            vec![
+                said(0, ""),
+                Answer::Stream(
+                    vec![(Stream::Out, "== tree x\nCompiling")],
+                    Ok(Streamed::Exited(Some(255))),
+                ),
+                said(255, ""),
+            ],
+        );
+        assert_eq!(ran.code, 255);
+        stop_sent(&ran.fake);
+        assert!(ran.err.contains("may still be going on"), "{}", ran.err);
+    }
+}
+
+// --- the tarball --------------------------------------------------------------------
+
+mod tarball {
+    use super::*;
+
+    fn git(dir: &Path, args: &[&str]) -> String {
+        let out = Command::new("git")
+            .args([
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@t",
+                "-c",
+                "commit.gpgsign=false",
+            ])
+            .args(args)
+            .current_dir(dir)
+            .env_remove("GIT_DIR")
+            .env_remove("GIT_WORK_TREE")
+            .env_remove("GIT_INDEX_FILE")
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8(out.stdout).unwrap().trim().to_owned()
+    }
+
+    fn tar_program() -> PathBuf {
+        match std::env::var_os("SystemRoot") {
+            Some(root) if cfg!(windows) => Path::new(&root).join("System32").join("tar.exe"),
+            _ => PathBuf::from("tar"),
+        }
+    }
+
+    /// `name` from the tarball, or none.
+    fn member(tarball: &Path, name: &str) -> Option<String> {
+        let out = Command::new(tar_program())
+            .arg("-xOzf")
+            .arg(tarball)
+            .arg(name)
+            .output()
+            .unwrap();
+        out.status
+            .success()
+            .then(|| String::from_utf8(out.stdout).unwrap())
+    }
+
+    fn repo() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        fs::write(root.join(".gitignore"), "target/\nparity/.oracle/\n").unwrap();
+        fs::write(root.join("kept.txt"), "committed\n").unwrap();
+        fs::create_dir_all(root.join("parity")).unwrap();
+        fs::write(root.join("parity").join("harness.py"), "old\n").unwrap();
+        git(root, &["init", "-q"]);
+        git(root, &["add", "-A"]);
+        git(root, &["commit", "-q", "-m", "one"]);
+        dir
+    }
+
+    #[test]
+    fn a_clean_tree_is_its_head() {
+        let dir = repo();
+        let tarball = dir.path().join("out.tgz");
+        let head = git(dir.path(), &["rev-parse", "HEAD"]);
+        let commit = super::super::pack::pack(dir.path(), &tarball, "the run script\n").unwrap();
+        assert_eq!(commit, head);
+        assert_eq!(member(&tarball, "kept.txt").as_deref(), Some("committed\n"));
+        assert_eq!(
+            member(&tarball, ".kluris-run.ps1").as_deref(),
+            Some("the run script\n")
+        );
+        assert_eq!(member(&tarball, ".kluris-tree"), Some(format!("{head}\n")));
+    }
+
+    #[test]
+    fn uncommitted_tracked_changes_go_and_nothing_else() {
+        let dir = repo();
+        let root = dir.path();
+        fs::write(root.join("parity").join("harness.py"), "changed\n").unwrap();
+        fs::write(root.join("untracked.txt"), "new\n").unwrap();
+        fs::create_dir_all(root.join("target")).unwrap();
+        fs::write(root.join("target").join("big"), "x").unwrap();
+        fs::create_dir_all(root.join("parity").join(".oracle")).unwrap();
+        fs::write(root.join("parity").join(".oracle").join("v"), "x").unwrap();
+        let head = git(root, &["rev-parse", "HEAD"]);
+        let status_before = git(root, &["status", "--porcelain"]);
+
+        let tarball = dir.path().join("target").join("out.tgz");
+        let commit = super::super::pack::pack(root, &tarball, "s").unwrap();
+        assert_ne!(commit, head, "the tree with its changes is another commit");
+        assert_eq!(
+            member(&tarball, "parity/harness.py").as_deref(),
+            Some("changed\n")
+        );
+        assert_eq!(member(&tarball, "untracked.txt"), None);
+        assert_eq!(member(&tarball, "target/big"), None);
+        assert_eq!(member(&tarball, "parity/.oracle/v"), None);
+        // The checkout is left as it was: no stash, no change.
+        assert_eq!(git(root, &["status", "--porcelain"]), status_before);
+        assert_eq!(git(root, &["stash", "list"]), "");
+        assert_eq!(
+            fs::read_to_string(root.join("parity").join("harness.py")).unwrap(),
+            "changed\n"
+        );
+    }
+
+    #[test]
+    fn tracked_files_under_excluded_folders_do_not_go() {
+        let dir = repo();
+        let root = dir.path();
+        fs::create_dir_all(root.join("parity").join(".venv")).unwrap();
+        fs::write(root.join("parity").join(".venv").join("pyvenv.cfg"), "x").unwrap();
+        git(root, &["add", "-f", "parity/.venv/pyvenv.cfg"]);
+        git(root, &["commit", "-q", "-m", "a venv by mistake"]);
+        let tarball = dir.path().join("out.tgz");
+        super::super::pack::pack(root, &tarball, "s").unwrap();
+        assert_eq!(member(&tarball, "parity/.venv/pyvenv.cfg"), None);
+        assert_eq!(member(&tarball, "kept.txt").as_deref(), Some("committed\n"));
+    }
+
+    #[test]
+    fn the_toolchain_channel_is_read_from_the_tree() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("rust-toolchain.toml"),
+            "[toolchain]\nchannel = \"1.99.0\"\ncomponents = [\"rustfmt\"]\n",
+        )
+        .unwrap();
+        assert_eq!(super::super::pack::channel(dir.path()).unwrap(), "1.99.0");
+        fs::write(dir.path().join("rust-toolchain.toml"), "[toolchain]\n").unwrap();
+        assert!(super::super::pack::channel(dir.path()).is_err());
+    }
+}

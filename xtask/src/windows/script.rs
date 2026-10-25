@@ -1,0 +1,506 @@
+//! The PowerShell a run sends, as text, so the tests can read it. Windows
+//! PowerShell 5.1 takes each as `-EncodedCommand` (base64 of UTF-16LE).
+//!
+//! - The bootstrap ([`bootstrap`]) goes on ssh's command line, which holds
+//!   [`ENCODED_LIMIT`] characters of it: it takes the shared lock, unpacks the
+//!   run's tarball into the run's folder and dot-sources the run script that
+//!   came in it; its `finally` removes the tarball and the lock records it wrote
+//!   and closes the lock, however the run ends.
+//! - The run script ([`run_script`]) rides in the tarball: the run put in a job
+//!   (at most [`PROCESS_LIMIT`] processes, every one ended when the run ends),
+//!   old runs swept, then each [`Step`] run with its own bound in minutes.
+//! - The stop ([`stop_script`]) ends a run that was stopped on this side, which
+//!   Windows' SSH server does not pass on.
+//! - The state ([`state_script`]) is what zeewin2 is asked before a run: C:'s
+//!   free space and who holds the shared lock, read without opening it.
+//!
+//! Every script that runs a command ends its output with the line `== exit N`
+//! ([`EXIT_MARK`]): ssh to a PowerShell answers 1 for any failure, so the
+//! status is read from the line.
+
+use std::collections::hash_map::RandomState;
+use std::hash::{BuildHasher, Hasher};
+use std::time::Duration;
+
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD;
+
+/// ConsensFlow's copy folder under the profile, whose lock Kluris shares: one
+/// run of either project per machine at a time.
+pub const LOCK_DIR: &str = "consensflow-build";
+/// The lock, opened by a run for itself alone (`FileShare.None`) and held until it ends.
+pub const LOCK: &str = ".windows-run.lock";
+/// The holder's process id: what ConsensFlow's scripts before the lock file read.
+pub const RUNNING: &str = ".windows-run.pid";
+/// The holder's run id and process, two lines.
+pub const OWNER: &str = ".windows-run.id";
+
+/// Kluris's own folder under the profile: `runs\<id>`, `cache\`, `tools\`.
+pub const CI_DIR: &str = ".kluris-ci";
+/// The run script, at the root of the tarball.
+pub const RUN_FILE: &str = ".kluris-run.ps1";
+/// The commit the tarball was made from, at the root of the tarball.
+pub const TREE_FILE: &str = ".kluris-tree";
+
+pub const EXIT_MARK: &str = "== exit ";
+pub const TREE_MARK: &str = "== tree ";
+pub const STEP_MARK: &str = "== step ";
+
+/// What cmd.exe reads of a command line (8191), less ssh's `powershell
+/// -NoProfile -NonInteractive -EncodedCommand ` and a margin.
+pub const ENCODED_LIMIT: usize = 8000;
+
+/// The most processes a run's job holds at once: cargo's jobs, the linker,
+/// test binaries, git, Python and the two kluris binaries fit well within it.
+pub const PROCESS_LIMIT: u32 = 64;
+
+/// uv, fetched into Kluris's tools folder when the machine has none there.
+pub const UV_VERSION: &str = "0.12.8";
+pub const UV_SHA256: &str = "e07acf3f8a29fe41f9e04b799c3325cb0e0893836bb222bf102829b45c679ad6";
+const UV_URL: &str =
+    "https://github.com/astral-sh/uv/releases/download/0.12.8/uv-x86_64-pc-windows-msvc.zip";
+
+/// One program a run starts, with its bound.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Step {
+    pub name: &'static str,
+    pub minutes: u32,
+}
+
+const TOOLCHAIN: Step = Step {
+    name: "toolchain",
+    minutes: 30,
+};
+const CARGO_TEST: Step = Step {
+    name: "cargo-test",
+    minutes: 90,
+};
+const RELEASE_BUILD: Step = Step {
+    name: "release-build",
+    minutes: 60,
+};
+const PARITY: Step = Step {
+    name: "parity",
+    minutes: 90,
+};
+
+/// What the unpack, the sweep and uv's download may take besides the steps.
+const MARGIN_MINUTES: u32 = 20;
+
+/// What a run is asked for.
+#[derive(Debug, Clone, Copy)]
+pub struct Spec<'a> {
+    pub id: &'a str,
+    /// The tree's `rust-toolchain.toml` channel.
+    pub channel: &'a str,
+    /// `CARGO_BUILD_JOBS` on this machine.
+    pub jobs: u32,
+    pub parity: bool,
+    /// Appended to `cargo test --workspace`.
+    pub cargo_args: &'a [String],
+}
+
+pub fn steps(spec: &Spec) -> Vec<Step> {
+    let mut steps = vec![TOOLCHAIN, CARGO_TEST];
+    if spec.parity {
+        steps.extend([RELEASE_BUILD, PARITY]);
+    }
+    steps
+}
+
+/// How long the whole run may take, as this side waits for it.
+pub fn bound(spec: &Spec) -> Duration {
+    let minutes: u32 = steps(spec).iter().map(|step| step.minutes).sum::<u32>() + MARGIN_MINUTES;
+    Duration::from_secs(u64::from(minutes) * 60)
+}
+
+/// A run's name: `kluris-`, this process's id and a random part, each as eight
+/// hex digits. ConsensFlow's ids are the same without the prefix, so a lock
+/// record says whose run holds it.
+pub fn run_id() -> String {
+    let random = RandomState::new().build_hasher().finish();
+    format!(
+        "kluris-{:08x}-{:08x}",
+        std::process::id(),
+        random & 0xffff_ffff
+    )
+}
+
+/// The tarball's name in the profile there.
+pub fn tarball_name(id: &str) -> String {
+    format!("{id}.tgz")
+}
+
+/// The line ssh hands the machine's shell for `script`, or why it does not fit.
+pub fn powershell_line(script: &str) -> Result<String, String> {
+    let bytes: Vec<u8> = script.encode_utf16().flat_map(u16::to_le_bytes).collect();
+    let encoded = STANDARD.encode(bytes);
+    if encoded.len() > ENCODED_LIMIT {
+        return Err(format!(
+            "the script is {} characters encoded, and the machine's shell reads {ENCODED_LIMIT}",
+            encoded.len()
+        ));
+    }
+    Ok(format!(
+        "powershell -NoProfile -NonInteractive -EncodedCommand {encoded}"
+    ))
+}
+
+/// The status a line says the run ended with: `== exit N`, nothing else.
+pub fn exit_said(line: &str) -> Option<i32> {
+    let number = line.trim_end().strip_prefix(EXIT_MARK)?;
+    let digits = number.strip_prefix('-').unwrap_or(number);
+    if digits.is_empty() || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    number.parse().ok()
+}
+
+/// `args` as one Windows command line, quoted the way the C runtime (and Rust's
+/// `std::env::args`) splits it again.
+pub fn command_line(args: &[String]) -> String {
+    args.iter()
+        .map(|arg| quote_arg(arg))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn quote_arg(arg: &str) -> String {
+    if !arg.is_empty() && !arg.contains([' ', '\t', '\n', '"']) {
+        return arg.to_owned();
+    }
+    let mut quoted = String::from('"');
+    let mut backslashes = 0;
+    for c in arg.chars() {
+        match c {
+            '\\' => backslashes += 1,
+            '"' => {
+                quoted.push_str(&"\\".repeat(backslashes * 2 + 1));
+                quoted.push('"');
+                backslashes = 0;
+            }
+            _ => {
+                quoted.push_str(&"\\".repeat(backslashes));
+                backslashes = 0;
+                quoted.push(c);
+            }
+        }
+    }
+    quoted.push_str(&"\\".repeat(backslashes * 2));
+    quoted.push('"');
+    quoted
+}
+
+/// `text` as PowerShell takes it between single quotes.
+fn quoted(text: &str) -> String {
+    format!("'{}'", text.replace('\'', "''"))
+}
+
+pub fn bootstrap(id: &str) -> String {
+    fill(
+        BOOTSTRAP,
+        &[
+            ("lock_dir", LOCK_DIR),
+            ("lock", LOCK),
+            ("running", RUNNING),
+            ("owner", OWNER),
+            ("tarball", &tarball_name(id)),
+            ("id", id),
+            ("ci", CI_DIR),
+            ("tree_mark", TREE_MARK),
+            ("tree_file", TREE_FILE),
+            ("run_file", RUN_FILE),
+            ("exit", EXIT_MARK),
+        ],
+    )
+}
+
+pub fn run_script(spec: &Spec) -> String {
+    let mut test = vec!["test".to_owned(), "--workspace".to_owned()];
+    test.extend(spec.cargo_args.iter().cloned());
+    let toolchain = format!(
+        "toolchain install {} --profile minimal --component clippy --component rustfmt --no-self-update",
+        spec.channel
+    );
+    let parity = if spec.parity {
+        fill(
+            PARITY_TEMPLATE,
+            &[
+                ("uv_version", UV_VERSION),
+                ("uv_url", UV_URL),
+                ("uv_sha256", UV_SHA256),
+                ("release", &RELEASE_BUILD.minutes.to_string()),
+                ("parity", &PARITY.minutes.to_string()),
+            ],
+        )
+    } else {
+        String::new()
+    };
+    fill(
+        RUN_TEMPLATE,
+        &[
+            ("job", JOB_SOURCE),
+            ("processes", &PROCESS_LIMIT.to_string()),
+            ("ci", CI_DIR),
+            ("id", spec.id),
+            ("jobs", &spec.jobs.to_string()),
+            ("toolchain_minutes", &TOOLCHAIN.minutes.to_string()),
+            ("toolchain", &quoted(&toolchain)),
+            ("test_minutes", &CARGO_TEST.minutes.to_string()),
+            ("test", &quoted(&command_line(&test))),
+            ("parity_steps", &parity),
+            ("step_mark", STEP_MARK),
+        ],
+    )
+}
+
+pub fn stop_script(id: &str) -> String {
+    fill(
+        STOP,
+        &[
+            ("lock_dir", LOCK_DIR),
+            ("running", RUNNING),
+            ("owner", OWNER),
+            ("id", id),
+            ("tarball", &tarball_name(id)),
+        ],
+    )
+}
+
+/// Says `free N` (whole GiB free on C:) and, while a run of either project
+/// holds the shared lock, `held <id> <process>` from its record.
+pub fn state_script() -> String {
+    fill(STATE, &[("lock_dir", LOCK_DIR), ("owner", OWNER)])
+}
+
+/// `template` with each `«name»` replaced by its part, in one pass, so that a
+/// part holding a mark is only text.
+fn fill(template: &str, parts: &[(&str, &str)]) -> String {
+    let mut text = String::with_capacity(template.len() + 256);
+    let mut rest = template;
+    while let Some((before, after)) = rest.split_once('«') {
+        text.push_str(before);
+        let Some((name, tail)) = after.split_once('»') else {
+            text.push('«');
+            rest = after;
+            continue;
+        };
+        match parts.iter().find(|(part, _)| *part == name) {
+            Some((_, value)) => text.push_str(value),
+            None => {
+                text.push('«');
+                text.push_str(name);
+                text.push('»');
+            }
+        }
+        rest = tail;
+    }
+    text.push_str(rest);
+    text
+}
+
+/// The bootstrap. The lock is ConsensFlow's, taken the way its runner takes it
+/// (tools/xtask/src/windows/script.rs there): opened for this run alone before
+/// anything else is done; a run holding it, or a ConsensFlow record of an older
+/// script's run that is still a live PowerShell, refuses this one with 75 and the
+/// holder's name, at once. The records are written as ConsensFlow writes them, so
+/// its runs refuse a Kluris run's machine the same way.
+const BOOTSTRAP: &str = r##"
+$ProgressPreference = 'SilentlyContinue'
+$ErrorActionPreference = 'Stop'
+try { [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false) } catch {}
+$OutputEncoding = [Text.UTF8Encoding]::new($false)
+function Exit-Run([int]$code) { Write-Output "`n«exit»$code"; exit $code }
+$lockdir = Join-Path $env:USERPROFILE '«lock_dir»'
+$tarball = Join-Path $env:USERPROFILE '«tarball»'
+$running = Join-Path $lockdir '«running»'
+$owner = Join-Path $lockdir '«owner»'
+$held = $false
+$lock = $null
+try {
+New-Item -ItemType Directory -Force $lockdir | Out-Null
+try { $lock = [IO.File]::Open((Join-Path $lockdir '«lock»'), 'OpenOrCreate', 'ReadWrite', 'None') } catch [IO.IOException] {} catch { $why = $_.Exception.Message }
+$holder = Get-Content $running -ErrorAction SilentlyContinue
+$other = if ($holder) { try { Get-Process -Id $holder -ErrorAction Stop | Where-Object { ($_.Name -in @('powershell', 'pwsh')) -and $_.StartTime -le (Get-Item $running).LastWriteTime } } catch {} }
+if (-not $lock -or $other) {
+  $of = @(Get-Content $owner -ErrorAction SilentlyContinue)
+  $who = if ($of[0] -like 'kluris-*') { "a Kluris run ($($of[0]), process $($of[1]))" } elseif ($of[0]) { "a ConsensFlow run ($($of[0]), process $($of[1]))" } elseif ($other) { "process $($other.Id)" } else { 'a run that left no record' }
+  Write-Output "The machine's one-run lock is held by $who$(if ($why) { " (the lock could not be opened: $why)" }): one run at a time, not waiting."
+  Exit-Run 75
+}
+Set-Content -Path $running -Value $PID
+Set-Content -Path $owner -Value @('«id»', $PID)
+$held = $true
+$run = Join-Path $env:USERPROFILE '«ci»\runs\«id»'
+New-Item -ItemType Directory -Force $run | Out-Null
+$tar = Join-Path $env:SystemRoot 'System32\tar.exe'
+& $tar -xmzf $tarball -C $run
+if ($LASTEXITCODE -ne 0) { Exit-Run $LASTEXITCODE }
+Write-Output "«tree_mark»$(Get-Content -LiteralPath (Join-Path $run '«tree_file»') -TotalCount 1)"
+. ([scriptblock]::Create([IO.File]::ReadAllText((Join-Path $run '«run_file»'))))
+} finally {
+  Remove-Item -LiteralPath $tarball -Force -ErrorAction SilentlyContinue
+  if ($held) {
+    Remove-Item -LiteralPath $owner -Force -ErrorAction SilentlyContinue
+    if ((Get-Content $running -ErrorAction SilentlyContinue) -eq $PID) { Remove-Item -LiteralPath $running -Force -ErrorAction SilentlyContinue }
+  }
+  if ($lock) { $lock.Dispose() }
+}
+"##;
+
+/// The run script, dot-sourced by the bootstrap with `$run` its folder.
+///
+/// - The run's process enters a job that ends every process in it when the run's
+///   process ends (`KILL_ON_JOB_CLOSE`, 0x2000) and holds at most
+///   [`PROCESS_LIMIT`] at once (`ACTIVE_PROCESS`, 0x8): what a step leaves
+///   behind (the linker's `mspdbsrv`, a test's child) ends with the run.
+/// - Each step is started with the run's standard handles (its output streams
+///   back as it comes, never through PowerShell) and waited on for its minutes;
+///   one still running then is ended with its tree, and its status is 124.
+/// - The tools are the machine's rustup by its full path, with Kluris's own
+///   `RUSTUP_HOME`, `CARGO_HOME`, target folder and temp folder; PATH is changed
+///   for this process only.
+/// - A machine without rustup is told about and not fixed.
+const RUN_TEMPLATE: &str = r##"
+$ErrorActionPreference = 'Continue'
+$state = @{ failed = 0; last = 0; job = [IntPtr]::Zero }
+try {
+  Add-Type -TypeDefinition @'
+«job»
+'@
+  $state.job = [KlurisJob]::Enter(«processes»)
+  if ($state.job -eq [IntPtr]::Zero) { throw [KlurisJob]::Why }
+} catch { Write-Output "== no job ($($_.Exception.Message)): no run starts without its bound on processes"; Exit-Run 1 }
+Write-Output "== job: at most «processes» processes, all ended with the run"
+$ci = Join-Path $env:USERPROFILE '«ci»'
+$tools = Join-Path $ci 'tools'
+$cache = Join-Path $ci 'cache'
+$tmp = Join-Path $run 'tmp'
+foreach ($folder in @($tools, $cache, $tmp)) { New-Item -ItemType Directory -Force $folder | Out-Null }
+$cutoff = (Get-Date).AddDays(-1)
+foreach ($old in @(Get-ChildItem -LiteralPath (Join-Path $ci 'runs') -Directory | Where-Object { $_.Name -ne '«id»' -and $_.LastWriteTime -lt $cutoff })) {
+  Remove-Item -LiteralPath $old.FullName -Recurse -Force -ErrorAction SilentlyContinue
+  if (Test-Path -LiteralPath $old.FullName) { Write-Output "== sweep: could not remove runs\$($old.Name)" } else { Write-Output "== sweep: removed runs\$($old.Name)" }
+}
+Get-ChildItem -LiteralPath $env:USERPROFILE -File -Filter 'kluris-*.tgz' | Where-Object { $_.LastWriteTime -lt $cutoff } | Remove-Item -Force -ErrorAction SilentlyContinue
+$rustup = Join-Path $env:USERPROFILE '.cargo\bin\rustup.exe'
+$cargo = Join-Path $env:USERPROFILE '.cargo\bin\cargo.exe'
+if (-not ((Test-Path -LiteralPath $rustup -PathType Leaf) -and (Test-Path -LiteralPath $cargo -PathType Leaf))) {
+  Write-Output "Missing on $($env:COMPUTERNAME): rustup for this user ($rustup and $cargo). Kluris installs no Rust there: install rustup at the machine, then run again."
+  Exit-Run 1
+}
+$env:RUSTUP_HOME = Join-Path $tools 'rustup'
+$env:CARGO_HOME = Join-Path $tools 'cargo'
+$env:CARGO_TARGET_DIR = Join-Path $cache 'target'
+$env:CARGO_BUILD_JOBS = '«jobs»'
+$env:CARGO_TERM_COLOR = 'never'
+$env:TEMP = $tmp
+$env:TMP = $tmp
+$env:Path = "$(Split-Path $cargo);" + $env:Path
+function Invoke-Step([string]$name, [int]$minutes, [string]$exe, [string]$line) {
+  Write-Output "«step_mark»${name}: $exe $line (at most $minutes min)"
+  $started = Get-Date
+  $code = 1
+  try {
+    $start = [Diagnostics.ProcessStartInfo]::new($exe, $line)
+    $start.UseShellExecute = $false
+    $start.WorkingDirectory = $run
+    $process = [Diagnostics.Process]::Start($start)
+    if ($process.WaitForExit($minutes * 60000)) {
+      $process.WaitForExit()
+      $code = $process.ExitCode
+    } else {
+      Write-Output "«step_mark»${name}: still running after $minutes min, ended"
+      taskkill /PID $process.Id /T /F 2>&1 | Out-Null
+      $code = 124
+    }
+  } catch { Write-Output "«step_mark»${name}: could not start: $($_.Exception.Message)" }
+  $state.last = $code
+  if ($code -ne 0 -and $state.failed -eq 0) { $state.failed = $code }
+  Write-Output "«step_mark»$name exit $code $([int]((Get-Date) - $started).TotalSeconds)s"
+}
+Invoke-Step 'toolchain' «toolchain_minutes» $rustup «toolchain»
+if ($state.failed) { Exit-Run $state.failed }
+Invoke-Step 'cargo-test' «test_minutes» $cargo «test»
+«parity_steps»Exit-Run $state.failed
+"##;
+
+/// The parity steps: uv fetched (and its hash checked) into the tools folder
+/// when it is not there, a release `kluris.exe`, then the harness, with the
+/// oracle's venv, uv's cache and Python kept in Kluris's folder.
+const PARITY_TEMPLATE: &str = r##"$uvdir = Join-Path $tools 'uv-«uv_version»'
+$uv = Join-Path $uvdir 'uv.exe'
+if (-not (Test-Path -LiteralPath $uv -PathType Leaf)) {
+  $started = Get-Date
+  $zip = Join-Path $tools 'uv-«uv_version».zip'
+  try {
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+    Invoke-WebRequest -UseBasicParsing -TimeoutSec 300 -Uri '«uv_url»' -OutFile $zip
+    $sha = (Get-FileHash -Algorithm SHA256 -LiteralPath $zip).Hash.ToLowerInvariant()
+    if ($sha -ne '«uv_sha256»') { throw "the zip hashes to $sha, not «uv_sha256»" }
+    Expand-Archive -LiteralPath $zip -DestinationPath $uvdir -Force
+  } catch { Write-Output "== step uv: could not fetch uv «uv_version»: $($_.Exception.Message)" } finally { Remove-Item -LiteralPath $zip -Force -ErrorAction SilentlyContinue }
+  $code = if (Test-Path -LiteralPath $uv -PathType Leaf) { 0 } else { 1 }
+  if ($code -and -not $state.failed) { $state.failed = $code }
+  Write-Output "== step uv exit $code $([int]((Get-Date) - $started).TotalSeconds)s"
+}
+if (Test-Path -LiteralPath $uv -PathType Leaf) {
+  $env:UV_CACHE_DIR = Join-Path $cache 'uv'
+  $env:UV_PYTHON_INSTALL_DIR = Join-Path $tools 'python'
+  $env:UV_PYTHON_PREFERENCE = 'only-managed'
+  $env:UV_PROJECT_ENVIRONMENT = Join-Path $cache 'parity-venv'
+  $env:KLURIS_PARITY_ORACLE_DIR = Join-Path $cache 'oracle'
+  $env:KLURIS_V3_BIN = Join-Path $env:CARGO_TARGET_DIR 'release\kluris.exe'
+  $env:Path = "$uvdir;" + $env:Path
+  Invoke-Step 'release-build' «release» $cargo 'build --release --package kluris-cli'
+  if ($state.last -eq 0) { Invoke-Step 'parity' «parity» $uv 'run --project parity --locked pytest parity -q' }
+}
+"##;
+
+/// The C# of the job: `Enter` makes it (end-on-close and the process limit),
+/// puts this process in it (and with it every process it starts) and answers
+/// it, or zero with `Why` said. The structures are the system's
+/// (`JOBOBJECT_EXTENDED_LIMIT_INFORMATION`; 9 is its information class).
+const JOB_SOURCE: &str = r#"using System;
+using System.Runtime.InteropServices;
+public static class KlurisJob {
+  [StructLayout(LayoutKind.Sequential)] struct Basic { public long UserTime, JobUserTime; public uint Flags; public UIntPtr MinWs, MaxWs; public uint Active; public UIntPtr Affinity; public uint Priority, Scheduling; }
+  [StructLayout(LayoutKind.Sequential)] struct Io { public ulong A, B, C, D, E, F; }
+  [StructLayout(LayoutKind.Sequential)] struct Extended { public Basic Basic; public Io Io; public UIntPtr ProcessMem, JobMem, PeakProcess, PeakJob; }
+  [DllImport("kernel32.dll", SetLastError = true)] static extern IntPtr CreateJobObject(IntPtr attributes, string name);
+  [DllImport("kernel32.dll", SetLastError = true)] static extern bool SetInformationJobObject(IntPtr job, int kind, ref Extended info, int size);
+  [DllImport("kernel32.dll", SetLastError = true)] static extern bool AssignProcessToJobObject(IntPtr job, IntPtr process);
+  [DllImport("kernel32.dll")] static extern IntPtr GetCurrentProcess();
+  public static string Why = "";
+  public static IntPtr Enter(uint processes) {
+    IntPtr job = CreateJobObject(IntPtr.Zero, null);
+    if (job == IntPtr.Zero) { Why = "CreateJobObject failed: " + Marshal.GetLastWin32Error(); return IntPtr.Zero; }
+    var limits = new Extended();
+    limits.Basic.Flags = 0x2000 | 0x8;
+    limits.Basic.Active = processes;
+    if (!SetInformationJobObject(job, 9, ref limits, Marshal.SizeOf(typeof(Extended)))) { Why = "SetInformationJobObject failed: " + Marshal.GetLastWin32Error(); return IntPtr.Zero; }
+    if (!AssignProcessToJobObject(job, GetCurrentProcess())) { Why = "AssignProcessToJobObject failed: " + Marshal.GetLastWin32Error(); return IntPtr.Zero; }
+    return job;
+  }
+}"#;
+
+/// The stop: the run's process tree ended (its job ends the rest) only if the
+/// lock's record names this run, its records and tarball removed. It ends with 0
+/// whether or not there was anything left to end.
+const STOP: &str = r##"
+$ProgressPreference = 'SilentlyContinue'
+$lockdir = Join-Path $env:USERPROFILE '«lock_dir»'
+$running = Join-Path $lockdir '«running»'
+$owner = Join-Path $lockdir '«owner»'
+$of = @(Get-Content $owner -ErrorAction SilentlyContinue)
+if ($of[0] -eq '«id»') { taskkill /PID ($of[1]) /T /F 2>&1 | Out-Null; Remove-Item -LiteralPath $owner -Force -ErrorAction SilentlyContinue; if ((Get-Content $running -ErrorAction SilentlyContinue) -eq $of[1]) { Remove-Item -LiteralPath $running -Force -ErrorAction SilentlyContinue } }
+Remove-Item -LiteralPath (Join-Path $env:USERPROFILE '«tarball»') -Force -ErrorAction SilentlyContinue
+exit 0
+"##;
+
+const STATE: &str = r##"
+$ProgressPreference = 'SilentlyContinue'
+"free $([math]::Floor((Get-PSDrive -Name C).Free / 1GB))"
+$of = @(Get-Content -LiteralPath (Join-Path $env:USERPROFILE '«lock_dir»\«owner»') -ErrorAction SilentlyContinue)
+if ($of.Count) { "held $($of -join ' ')" }
+"##;

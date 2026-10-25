@@ -1,5 +1,6 @@
 //! Development tasks for the Kluris 3 workspace (`cargo xtask <task>`).
 
+mod windows;
 mod yaml_emit;
 
 use std::process::ExitCode;
@@ -7,6 +8,9 @@ use std::process::ExitCode;
 const USAGE: &str = "usage: cargo xtask <task>
 
 Tasks:
+  windows [--machine zeewin|zeewin2] [--parity] [-- <cargo test args>]
+      Run cargo test (and with --parity the parity harness) on a household
+      Windows machine over ssh. `cargo xtask windows --help` says more.
   yaml-emit --profile md|yml|config
       Read one tagged-JSON mapping per stdin line and answer each with the
       YAML Kluris writes for it, as one JSON string per stdout line.
@@ -23,6 +27,7 @@ fn main() -> ExitCode {
             println!("{USAGE}");
             return ExitCode::SUCCESS;
         }
+        Some("windows") => return windows::main(&args[1..]),
         Some("yaml-emit") => yaml_emit::emit(&args[1..]),
         Some("yaml-load") => yaml_emit::load(&args[1..]),
         Some(task) => Err(format!("unknown task '{task}'")),

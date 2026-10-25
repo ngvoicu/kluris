@@ -9,3 +9,6 @@ publish = false
 kluris-core.workspace = true
 num-bigint.workspace = true
 serde_json.workspace = true
+base64.workspace = true
+signal-hook.workspace = true
+tempfile.workspace = true
