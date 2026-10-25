@@ -60,10 +60,67 @@ impl std::error::Error for YamlError {}
 /// Load a single YAML document like `yaml.safe_load`: an empty stream is
 /// `Null`; more than one document is an error.
 pub fn load(source: &str) -> Result<Value, YamlError> {
-    match compose(source)? {
-        None => Ok(Value::Null),
-        Some(root) => Constructor::default().document(&root),
+    // saphyr-parser reads `&a:` as the anchor `a:`; PyYAML ends the name at
+    // the `:` and goes on from there. Whitespace between tokens changes
+    // nothing for PyYAML, so the text is composed again with a space where
+    // PyYAML's name ends, until no name needs one. Error columns are given
+    // back in the original text.
+    let mut text = source.to_string();
+    let mut inserted: Vec<usize> = Vec::new();
+    let result = loop {
+        let mut names = AnchorNames::new(&text);
+        let composed = compose(&text, &mut names);
+        let Some(mut spaces) = names.split.take() else {
+            break composed.and_then(|root| match root {
+                None => Ok(Value::Null),
+                Some(root) => Constructor::default().document(&root),
+            });
+        };
+        if inserted.len() >= MAX_DEPTH * 8 {
+            break composed.map(|_| Value::Null);
+        }
+        spaces.sort_unstable_by(|a, b| b.cmp(a));
+        for split in spaces {
+            let byte = text
+                .char_indices()
+                .nth(split)
+                .map_or(text.len(), |(i, _)| i);
+            text.insert(byte, ' ');
+            for at in &mut inserted {
+                if *at >= split {
+                    *at += 1;
+                }
+            }
+            inserted.push(split);
+        }
+    };
+    result.map_err(|e| original_position(e, &text, &inserted))
+}
+
+/// An error position in `text` moved back to where it is in the text
+/// before the spaces at the character indexes `inserted` were added.
+fn original_position(mut error: YamlError, text: &str, inserted: &[usize]) -> YamlError {
+    if inserted.is_empty() {
+        return error;
     }
+    let (mut line, mut col) = (1, 0);
+    let mut shift = 0;
+    for (i, c) in text.chars().enumerate() {
+        if line == error.line && col + 1 >= error.column {
+            break;
+        }
+        if line == error.line && inserted.contains(&i) {
+            shift += 1;
+        }
+        if c == '\n' {
+            line += 1;
+            col = 0;
+        } else {
+            col += 1;
+        }
+    }
+    error.column -= shift.min(error.column - 1);
+    error
 }
 
 // --- composing ---------------------------------------------------------------
@@ -158,6 +215,8 @@ fn implicit(text: &str) -> NodeTag {
 /// A collection still being composed.
 struct Open {
     id: usize,
+    /// A flow collection (`[` or `{`).
+    flow: bool,
     tag: NodeTag,
     mark: Marker,
     anchor: usize,
@@ -167,17 +226,35 @@ struct Open {
 
 /// Compose the single document of `source` into a node graph (`None` for an
 /// empty stream).
-fn compose(source: &str) -> Result<Option<Rc<Node>>, YamlError> {
+///
+/// When an anchor or alias name runs past where PyYAML ends it, the text
+/// cannot be composed as it is: `anchor_names.split` is set to the character
+/// index where PyYAML's name ends and an error is returned.
+fn compose(source: &str, anchor_names: &mut AnchorNames) -> Result<Option<Rc<Node>>, YamlError> {
     let mut documents = 0;
     // saphyr-parser's marker indexes count characters, not bytes.
     let source_chars = source.chars().count();
-    let mut anchor_names = AnchorNames::new(source);
     let mut anchors: HashMap<usize, Rc<Node>> = HashMap::new();
     let mut stack: Vec<Open> = Vec::new();
     let mut root = None;
     let mut next_id = 0;
     for item in Parser::new_from_str(source) {
-        let (event, span) = item.map_err(|e| YamlError::at(*e.marker(), e.info().to_string()))?;
+        let in_flow = stack.last().is_some_and(|open| open.flow);
+        let (event, span) = item.map_err(|e| {
+            // An alias named past PyYAML's end of the name is unknown; an
+            // anchor named past it can stop saphyr-parser before the anchored
+            // node's event.
+            anchor_names.split = if e.info().contains("unknown anchor") {
+                pyyaml_spaces(&anchor_names.chars, e.marker().index(), in_flow)
+            } else {
+                // The error can come before the anchor (saphyr-parser stops at
+                // the line of the node); the scan stops at content anyway.
+                anchor_names
+                    .next_split_anchor(anchor_names.chars.len())
+                    .and_then(|at| pyyaml_spaces(&anchor_names.chars, at, in_flow))
+            };
+            YamlError::at(*e.marker(), e.info().to_string())
+        })?;
         let mark = span.start;
         // A block scalar's header, and the indentation of the block
         // collection around it (PyYAML's `Scanner.indent`): a mapping's
@@ -198,7 +275,7 @@ fn compose(source: &str) -> Result<Option<Rc<Node>>, YamlError> {
             }
             _ => None,
         };
-        anchor_names.event(&event, span)?;
+        anchor_names.event(&event, span, in_flow)?;
         let opens_map = matches!(event, Event::MappingStart(..));
         let (node, anchor) = match event {
             Event::DocumentStart(_) => {
@@ -249,8 +326,10 @@ fn compose(source: &str) -> Result<Option<Rc<Node>>, YamlError> {
                 let default = if map { NodeTag::Map } else { NodeTag::Seq };
                 let tag = resolve_tag(tag.as_deref(), Some(default), None);
                 next_id += 1;
+                let flow = matches!(anchor_names.chars.get(mark.index()), Some('[' | '{'));
                 stack.push(Open {
                     id: next_id,
+                    flow,
                     tag,
                     mark,
                     anchor,
@@ -826,6 +905,9 @@ struct AnchorNames {
     /// Where the text not yet covered by an event starts.
     gap: Marker,
     seen: HashMap<String, Marker>,
+    /// Set when PyYAML ends a name before saphyr-parser does (see
+    /// [`pyyaml_name_end`]).
+    split: Option<Vec<usize>>,
 }
 
 impl AnchorNames {
@@ -834,10 +916,11 @@ impl AnchorNames {
             chars: source.chars().collect(),
             gap: Marker::new(0, 1, 0),
             seen: HashMap::new(),
+            split: None,
         }
     }
 
-    fn event(&mut self, event: &Event, span: Span) -> Result<(), YamlError> {
+    fn event(&mut self, event: &Event, span: Span, in_flow: bool) -> Result<(), YamlError> {
         let anchor = match event {
             // An implicit document start spans the document's first token,
             // which can be the anchor itself.
@@ -847,9 +930,23 @@ impl AnchorNames {
             | Event::MappingStart(anchor, _) => *anchor,
             _ => 0,
         };
+        // Any anchor before this node that PyYAML ends earlier (saphyr-parser
+        // can fold more than one anchor's text into one node's properties).
+        // The scan stops at the node's content; an empty scalar's span can be
+        // the anchor token itself.
+        if let Some(at) = self.next_split_anchor(span.end.index())
+            && let Some(spaces) = pyyaml_spaces(&self.chars, at, in_flow)
+        {
+            self.split = Some(spaces);
+            return Err(YamlError::at(span.start, "an anchor name ends earlier"));
+        }
         if anchor != 0
             && let Some((name, at)) = self.find(span.start.index())
         {
+            if let Some(spaces) = pyyaml_spaces(&self.chars, at.index(), in_flow) {
+                self.split = Some(spaces);
+                return Err(YamlError::at(at, "the anchor name ends earlier"));
+            }
             check_anchor_name(&name, self.chars.get(at.index() + name.chars().count() + 1))
                 .map_err(|e| YamlError::at(at, e))?;
             if let Some(first) = self.seen.get(&name) {
@@ -919,6 +1016,42 @@ impl AnchorNames {
         dash
     }
 
+    /// The `&` or `*` of an anchor or alias that PyYAML ends earlier than
+    /// saphyr-parser, among the properties that follow the last event, before
+    /// the next node's content (and before `end`): only blanks, comments,
+    /// directives, tags, other anchors and indicators can come first.
+    fn next_split_anchor(&self, end: usize) -> Option<usize> {
+        let mut i = self.gap.index();
+        let at = |i: usize| self.chars.get(i).copied().filter(|_| i < end);
+        while let Some(c) = at(i) {
+            i += 1;
+            match c {
+                '&' | '*' if pyyaml_name_end(&self.chars, i - 1).is_some() => return Some(i - 1),
+                '&' | '*' => {
+                    while at(i).is_some_and(saphyr_anchor_char) {
+                        i += 1;
+                    }
+                }
+                ' ' | '\t' | '\n' | '\r' => {}
+                '#' | '%' => {
+                    while at(i).is_some_and(|c| c != '\n' && c != '\r') {
+                        i += 1;
+                    }
+                }
+                '!' => {
+                    while at(i).is_some_and(|c| !is_break_or_blank(c)) {
+                        i += 1;
+                    }
+                }
+                // An indicator, when a blank (or the end) follows.
+                '-' | '?' | ':' if at(i).is_none_or(is_break_or_blank) => {}
+                '[' | '{' | ',' => {}
+                _ => return None,
+            }
+        }
+        None
+    }
+
     /// The first token in the gap before `end` that starts with a character
     /// `wanted` accepts, skipping blanks, comments, directives, tags,
     /// anchors and indicators.
@@ -981,6 +1114,42 @@ fn saphyr_anchor_char(c: char) -> bool {
 
 /// PyYAML's `scan_anchor`: a name of `[0-9A-Za-z_-]`, followed by a blank, a
 /// line break, the end, or one of `?:,]}%@` and the backquote.
+/// Where PyYAML ends the name of the anchor or alias whose indicator (`&` or
+/// `*`) is at `indicator`, when saphyr-parser's name runs past it: PyYAML's
+/// name is `[0-9A-Za-z_-]+`, and one of `?:%@` and the backquote may follow
+/// at once (saphyr-parser already stops at `,`, `]` and `}`).
+fn pyyaml_name_end(chars: &[char], indicator: usize) -> Option<usize> {
+    if !matches!(chars.get(indicator), Some('&' | '*')) {
+        return None;
+    }
+    let start = indicator + 1;
+    let name = chars[start..]
+        .iter()
+        .take_while(|&&c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+        .count();
+    let end = start + name;
+    match chars.get(end) {
+        Some('?' | ':' | '%' | '@' | '`') if name > 0 => Some(end),
+        _ => None,
+    }
+}
+
+/// The spaces that make saphyr-parser end the name of the anchor or alias at
+/// `indicator` where PyYAML does: one at PyYAML's end of the name, and in a
+/// flow collection one after a `:` that follows it (PyYAML reads that `:` as
+/// a value indicator even when no blank follows).
+fn pyyaml_spaces(chars: &[char], indicator: usize, in_flow: bool) -> Option<Vec<usize>> {
+    let end = pyyaml_name_end(chars, indicator)?;
+    let mut spaces = vec![end];
+    if in_flow
+        && chars.get(end) == Some(&':')
+        && chars.get(end + 1).is_some_and(|&c| !is_break_or_blank(c))
+    {
+        spaces.push(end + 1);
+    }
+    Some(spaces)
+}
+
 fn check_anchor_name(name: &str, next: Option<&char>) -> Result<(), String> {
     let valid = !name.is_empty()
         && name

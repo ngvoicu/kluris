@@ -78,7 +78,13 @@ double = st.sampled_from(QUOTABLE).map(lambda w: '"' + w.replace('"', '\\"') + '
 # mostly a fresh name, sometimes the previous name again (an error), a few names
 # PyYAML refuses. An alias names an anchor already defined, or none.
 FRESH, REPEAT = "\x00A", "\x00R"
-anchors = st.sampled_from([FRESH] * 40 + [REPEAT, REPEAT, "&\u00e9", "&a.", "&a:"])
+# PyYAML ends a name at the first character outside [0-9A-Za-z_-]; one of
+# ?:,]}%@` may follow at once (`&a: x` anchors an empty key).
+FOLLOWERS = [":", ":", "?", ",", "]", "}", "%", "@", "`"]
+anchors = st.one_of(
+    st.sampled_from([FRESH] * 40 + [REPEAT, REPEAT, "&\u00e9", "&a.", "&a:"]),
+    st.sampled_from([FRESH] * 40 + [FRESH + f for f in FOLLOWERS]),
+)
 # Mostly tags inside the value model.
 TAGS = [
     "!!str", "!!int", "!!float", "!!bool", "!!null", "!!timestamp", "!", "!!map", "!!seq", "!!value",
@@ -111,14 +117,23 @@ def collection_props(own: str, others: list[str]):
 
 map_props = collection_props("!!map", ["!!str", "!!int", "!!null", "!!seq"])
 seq_props = collection_props("!!seq", ["!!str", "!!map"])
-alias = st.sampled_from([f"\x00L{i}" for i in range(4)] * 8 + ["*nope"])
+alias = st.sampled_from([f"\x00L{i}" for i in range(4)] * 8 + ["*nope", "\x00L0:", "\x00L1:", "\x00L0?"])
 flow_scalar = st.one_of(plain, single, double)
+# Keys glued to their `:` (PyYAML ends the name there): an alias to a string,
+# or an empty `!!str` scalar with an anchor; in a flow mapping the `:` may
+# have no blank after it.
+GLUED_KEYS = ["\x00L0", "\x00L1", "!!str \x00A"]
+flow_keys = st.one_of(
+    flow_scalar.map(lambda key: (key, ": ")),
+    flow_scalar.map(lambda key: (key, ": ")),
+    st.tuples(st.sampled_from(GLUED_KEYS), st.sampled_from([":", ": "])),
+)
 flow = st.recursive(
     flow_scalar,
     lambda inner: st.one_of(
         st.lists(st.tuples(props, inner).map("".join), max_size=3).map(lambda xs: "[" + ", ".join(xs) + "]"),
-        st.lists(st.tuples(flow_scalar, props, inner), max_size=3).map(
-            lambda kvs: "{" + ", ".join(f"{k}: {p}{v}" for k, p, v in kvs) + "}"
+        st.lists(st.tuples(flow_keys, props, inner), max_size=3).map(
+            lambda kvs: "{" + ", ".join(f"{k}{sep}{p}{v}" for (k, sep), p, v in kvs) + "}"
         ),
     ),
     max_leaves=4,
@@ -134,9 +149,12 @@ block = st.tuples(
 # mapping takes) and a few keys outside the value model.
 KEYS = ["a", "b", "c", "key", "é", "日本", "x y", "'1'", '"q"', "k\U0001F680", "=", "=", "'='", "! ="]
 BAD_KEYS = ["<<", "1", "yes", "~", "2026-01-02"]
-keys = st.tuples(
-    props, st.one_of(st.sampled_from(KEYS), st.sampled_from(KEYS), st.sampled_from(KEYS + BAD_KEYS))
-).map("".join)
+keys = st.one_of(
+    st.tuples(
+        props, st.one_of(st.sampled_from(KEYS), st.sampled_from(KEYS), st.sampled_from(KEYS + BAD_KEYS))
+    ).map("".join),
+    st.sampled_from(GLUED_KEYS),
+)
 
 
 def scalar_node():

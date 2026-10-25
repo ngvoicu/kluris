@@ -184,6 +184,23 @@ DOCUMENTS = BLOCKS + [
     "a: b &x\nc: &x 1", "a: &x |\n  &x\nb: 1", "a: b\n  &x c\nd: &x 1",
     "a: &x 1\n# &x\nb: *x", "- &a 1\n- &b [*a]\n- *b", "a: &x-y_9 1\nb: *x-y_9",
     "&x a: *x", "--- &x\na: 1", "a: &x\n  b: 1\nc: *x",
+    # PyYAML's anchor and alias names end at the first character outside
+    # [0-9A-Za-z_-]; one of ?:,]}%@` may follow at once (`&a: x` anchors an
+    # empty key), anything else is an error
+    "!!str &a: []", "- []\n- !!str &a: []", "&a: []", "&a: 1", "!!str &a: x", "- &a: 1", "&a:x",
+    "&a: &b: 1", "!!int &a: 1", "{&a: 1}", "{&a:1}", "[&a: 1]", "x: &a:\n  b: 1",
+    "!!str &a:\n", "&a:", "x: !!str &k: v", "&a?x", "&a? x", "&a%", "&a@", "&a`", "&a,", "[&a, 1]",
+    "[&a]", "{&a}", "&a :x", "&a : x", "a: &x 1\nb: *x: 2", "a: &x 1\n*x: 2",
+    "a: &x 1\nb: [*x:]", "a: &x 1\nb: {*x: 2}", "a: &x 1\nb: {*x:2}", "a: &x 1\nb: [*x, *x:]",
+    "a: &x 1\nb: [*x?]", "a: &x 1\nb: *x?", "!!str &a: !!str &b: x", "- !!str &a: a\n  !!str &b: b",
+    "!!str &a: x\n!!str &b: y", "!!str &a: x\n!!str &a: y", "!!str &a: &n x\nb: *a",
+    "!!str &a-b_9: x", "!!str &a: |\n  abc", "!!str &a: |\n  \u00e9", "  !!str &a: x\n  b: c",
+    "x:\n  !!str &a: |-\n    abc\n    \u00e9",
+    "a: &x k\nb: {*x: 2}", "a: &x k\nb: {*x:2}", "a: &x k\n*x: 2", "a: &x k\nb: [*x:]",
+    "a: &x k\nb: [*x?]", "a: &x k\nb:\n  *x: 2\n  c: 3", "a: &x k\n- *x:",
+    "&n0\n!!str &n1: []", "&n0\n!!str &n1: *n0", "&n0 !!str &n1: x", "- &n0 a\n- *n0:",
+    "&n0\n!!str &n1: *n0\n*n1:\n  - []", "a: &n0 k\nb: {*n0:1, *n0: 2}",
+    "!!map &n0\n!!str &n1: []", "!!map &n0\n# c &n9:\n!!str &n1: []", "- !!seq &n0\n  - !!str &n1: x",
     # anchor names PyYAML does not accept
     "a: &\u00e9 1", "a: &x\u00e9 1", "a: &x. 1", "a: &x: 1", "&x: 1",
 ]
