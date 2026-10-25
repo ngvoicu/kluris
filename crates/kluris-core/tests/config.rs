@@ -541,6 +541,219 @@ fn write_follows_a_symlinked_config_and_keeps_its_mode() {
     assert_eq!(dir_names(real.parent().unwrap()), ["config.yml"]);
 }
 
+// --- line endings (decision #3: a file keeps its endings, new files are LF)
+
+fn crlf(text: &str) -> String {
+    text.replace('\n', "\r\n")
+}
+
+#[test]
+fn global_config_rewrite_keeps_the_existing_line_endings() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("config.yml");
+    let want = fixture("global-three.yml");
+
+    // A new file is LF.
+    write_global_config(&path, &three_brains()).unwrap();
+    assert_eq!(fs::read(&path).unwrap(), want.as_bytes());
+
+    // An existing LF file stays LF.
+    fs::write(&path, "brains: {}\n").unwrap();
+    write_global_config(&path, &three_brains()).unwrap();
+    assert_eq!(fs::read(&path).unwrap(), want.as_bytes());
+
+    // An existing CRLF file stays CRLF, every line of it.
+    fs::write(&path, b"brains: {}\r\n").unwrap();
+    let cfg = read_global_config(&path).unwrap();
+    write_global_config(&path, &cfg).unwrap();
+    assert_eq!(fs::read(&path).unwrap(), b"brains: {}\r\n");
+    write_global_config(&path, &three_brains()).unwrap();
+    assert_eq!(fs::read(&path).unwrap(), crlf(&want).as_bytes());
+    // ... and reads back to the same model.
+    assert_eq!(read_global_config(&path).unwrap(), three_brains());
+    assert_eq!(dir_names(tmp.path()), ["config.yml"]);
+}
+
+#[test]
+fn brain_config_rewrite_keeps_the_existing_line_endings() {
+    let tmp = tempfile::tempdir().unwrap();
+    let file = tmp.path().join("kluris.yml");
+    let model = brain(
+        "delta",
+        "d",
+        &["claude", "devin", "antigravity", "bogus-agent"],
+        &["specmint-core"],
+    );
+    let want = fixture("brain-custom-agents.yml");
+
+    write_brain_config(tmp.path(), &model).unwrap();
+    assert_eq!(fs::read(&file).unwrap(), want.as_bytes());
+
+    fs::write(&file, "name: old\n").unwrap();
+    write_brain_config(tmp.path(), &model).unwrap();
+    assert_eq!(fs::read(&file).unwrap(), want.as_bytes());
+
+    fs::write(&file, crlf(&fixture("brain-custom-agents-input.yml"))).unwrap();
+    let cfg = read_brain_config(tmp.path()).unwrap();
+    let mut with_companion = cfg.clone();
+    with_companion.companions.push("specmint-core".into());
+    write_brain_config(tmp.path(), &with_companion).unwrap();
+    assert_eq!(fs::read(&file).unwrap(), crlf(&want).as_bytes());
+    assert_eq!(read_brain_config(tmp.path()).unwrap(), model);
+    assert_eq!(dir_names(tmp.path()), ["kluris.yml"]);
+}
+
+#[test]
+fn the_first_line_break_decides_the_endings() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("config.yml");
+    let want = fixture("global-three.yml");
+    fs::write(&path, b"brains:\r\n  a:\n    path: /x\n").unwrap();
+    write_global_config(&path, &three_brains()).unwrap();
+    assert_eq!(fs::read(&path).unwrap(), crlf(&want).as_bytes());
+    fs::write(&path, b"brains:\n  a:\r\n    path: /x\r\n").unwrap();
+    write_global_config(&path, &three_brains()).unwrap();
+    assert_eq!(fs::read(&path).unwrap(), want.as_bytes());
+    // No line break at all: LF.
+    fs::write(&path, b"brains: {}").unwrap();
+    write_global_config(&path, &three_brains()).unwrap();
+    assert_eq!(fs::read(&path).unwrap(), want.as_bytes());
+}
+
+// --- symlinks (v2's in-place write goes through the link, also a dangling one)
+
+#[cfg(unix)]
+fn assert_link(link: &Path, to: &Path) {
+    let meta = fs::symlink_metadata(link).unwrap();
+    assert!(
+        meta.file_type().is_symlink(),
+        "{} was replaced",
+        link.display()
+    );
+    assert_eq!(fs::read_link(link).unwrap(), to);
+}
+
+#[cfg(unix)]
+#[test]
+fn write_through_a_symlink_keeps_the_target_endings() {
+    use std::os::unix::fs::symlink;
+    let tmp = tempfile::tempdir().unwrap();
+    let real = tmp.path().join("real.yml");
+    fs::write(&real, b"brains: {}\r\n").unwrap();
+    let link = tmp.path().join("config.yml");
+    symlink("real.yml", &link).unwrap();
+    write_global_config(&link, &three_brains()).unwrap();
+    assert_link(&link, Path::new("real.yml"));
+    assert_eq!(
+        fs::read(&real).unwrap(),
+        crlf(&fixture("global-three.yml")).as_bytes()
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn write_through_a_dangling_relative_symlink_creates_its_target() {
+    use std::os::unix::fs::symlink;
+    let tmp = tempfile::tempdir().unwrap();
+    fs::create_dir(tmp.path().join("dotfiles")).unwrap();
+    let kluris_dir = tmp.path().join(".kluris");
+    fs::create_dir(&kluris_dir).unwrap();
+    let link = kluris_dir.join("config.yml");
+    let to = Path::new("../dotfiles/kluris-config.yml");
+    symlink(to, &link).unwrap();
+
+    write_global_config(&link, &three_brains()).unwrap();
+    assert_link(&link, to);
+    let real = tmp.path().join("dotfiles").join("kluris-config.yml");
+    assert_eq!(
+        fs::read_to_string(&real).unwrap(),
+        fixture("global-three.yml")
+    );
+    assert_eq!(dir_names(&kluris_dir), ["config.yml"]);
+    assert_eq!(dir_names(real.parent().unwrap()), ["kluris-config.yml"]);
+}
+
+#[cfg(unix)]
+#[test]
+fn write_through_a_dangling_absolute_symlink_creates_its_target() {
+    use std::os::unix::fs::symlink;
+    let tmp = tempfile::tempdir().unwrap();
+    let brain_dir = tmp.path().join("brain");
+    fs::create_dir(&brain_dir).unwrap();
+    let real = tmp.path().join("elsewhere.yml");
+    let link = brain_dir.join("kluris.yml");
+    symlink(&real, &link).unwrap();
+
+    write_brain_config(&brain_dir, &BrainConfig::new("x")).unwrap();
+    assert_link(&link, &real);
+    assert_eq!(
+        read_brain_config(&brain_dir).unwrap(),
+        BrainConfig::new("x")
+    );
+    assert_eq!(dir_names(&brain_dir), ["kluris.yml"]);
+}
+
+#[cfg(unix)]
+#[test]
+fn write_follows_a_chain_of_symlinks() {
+    use std::os::unix::fs::symlink;
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    fs::create_dir_all(root.join("a")).unwrap();
+    fs::create_dir_all(root.join("b")).unwrap();
+    // config.yml -> a/hop1 -> ../b/hop2 -> <root>/final.yml (absent)
+    let link = root.join("config.yml");
+    symlink("a/hop1", &link).unwrap();
+    symlink("../b/hop2", root.join("a").join("hop1")).unwrap();
+    symlink(root.join("final.yml"), root.join("b").join("hop2")).unwrap();
+
+    write_global_config(&link, &three_brains()).unwrap();
+    assert_link(&link, Path::new("a/hop1"));
+    assert_link(&root.join("a").join("hop1"), Path::new("../b/hop2"));
+    assert_link(&root.join("b").join("hop2"), &root.join("final.yml"));
+    assert_eq!(
+        fs::read_to_string(root.join("final.yml")).unwrap(),
+        fixture("global-three.yml")
+    );
+
+    // Again, now that the end of the chain exists.
+    write_global_config(&link, &GlobalConfig::default()).unwrap();
+    assert_link(&link, Path::new("a/hop1"));
+    assert_eq!(
+        fs::read_to_string(root.join("final.yml")).unwrap(),
+        "brains: {}\n"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_symlink_loop_is_an_error_and_keeps_the_links() {
+    use std::os::unix::fs::symlink;
+    let tmp = tempfile::tempdir().unwrap();
+    let a = tmp.path().join("a.yml");
+    let b = tmp.path().join("b.yml");
+    symlink("b.yml", &a).unwrap();
+    symlink("a.yml", &b).unwrap();
+    let err = write_global_config(&a, &three_brains()).unwrap_err();
+    assert_eq!(err.kind, ConfigErrorKind::Io);
+    assert_link(&a, Path::new("b.yml"));
+    assert_link(&b, Path::new("a.yml"));
+    assert_eq!(dir_names(tmp.path()), ["a.yml", "b.yml"]);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_dangling_symlink_into_a_missing_dir_is_an_error_and_keeps_the_link() {
+    use std::os::unix::fs::symlink;
+    let tmp = tempfile::tempdir().unwrap();
+    let link = tmp.path().join("config.yml");
+    symlink("no-such-dir/config.yml", &link).unwrap();
+    let err = write_global_config(&link, &three_brains()).unwrap_err();
+    assert_eq!(err.kind, ConfigErrorKind::Io);
+    assert_link(&link, Path::new("no-such-dir/config.yml"));
+    assert_eq!(dir_names(tmp.path()), ["config.yml"]);
+}
+
 #[test]
 fn register_keeps_position_and_unregister_keeps_order() {
     let tmp = tempfile::tempdir().unwrap();

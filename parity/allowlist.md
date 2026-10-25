@@ -50,3 +50,9 @@ One entry per difference, under its own heading:
 - Differs: on Windows v2 (Python text streams) ends each line of stdout and stderr with CRLF where v3 (Rust `println!`) writes LF. The harness decodes both streams of both binaries with every `\r\n` read as `\n` before comparing; a lone `\r` is kept. Files written into brains and configs are compared as bytes, without this.
 - Decision: Kluris 3 decision, chief's brief for T-56 (Phase 1, TEST-K3-09 / IMPL-K3-10), 2026-10-25
 - Tests: `parity/test_harness.py::test_run_turns_crlf_into_lf`; every parity test on Windows (`cargo xtask windows --parity`)
+
+### PAR-005: config files keep their line endings
+- Command: every command that rewrites `~/.kluris/config.yml` or a brain's `kluris.yml` (`create`, `register`, `remove`, `companion add`, `companion remove`, `doctor`)
+- Differs: v3 writes an existing config file with the line endings it had (CRLF when its first line break is CRLF, else LF) and a new one with LF on every OS. v2 writes in text mode: LF on macOS/Linux (an existing CRLF file becomes LF) and CRLF on Windows (a new file is CRLF). So on macOS/Linux a CRLF config stays CRLF in v3, and on Windows a config v3 creates is LF.
+- Decision: interview-01 #3 (keep each file's line endings; new files LF), SPEC decision log 2026-10-25 (Windows text mode) and 2026-10-26 (T-54 finding 1, fixed in T-59)
+- Tests: `crates/kluris-core/tests/config.rs::{global_config_rewrite_keeps_the_existing_line_endings, brain_config_rewrite_keeps_the_existing_line_endings, the_first_line_break_decides_the_endings, write_through_a_symlink_keeps_the_target_endings}`, `parity/test_config_roundtrip.py::test_v2_reads_a_config_rewritten_by_v3[crlf]`

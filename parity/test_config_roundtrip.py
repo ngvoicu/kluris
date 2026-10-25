@@ -4,15 +4,22 @@ the stale or hand-edited ones v2 tolerates) exactly as v2 does."""
 from __future__ import annotations
 
 import json
+import subprocess
+from pathlib import Path
 
 import pytest
 
-from harness import Sandbox, assert_json_equal, run_both, run_v2
+from harness import PARITY_DIR, Sandbox, assert_json_equal, run_both, run_v2
+
+WORKSPACE = PARITY_DIR.parent
 
 UNICODE_DESCRIPTION = (
     "Équipe données — connaissances partagées über alles, naïve café façade 日本語"
     " and a long tail to fold"
 )
+
+V2_DEFAULT_AGENTS = ["claude", "cursor", "windsurf", "copilot", "codex", "gemini", "hermes", "kilocode", "junie"]
+V3_DEFAULT_AGENTS = ["claude", "cursor", "devin", "copilot", "codex", "gemini", "hermes", "kilocode", "junie", "antigravity"]
 
 LEGACY_AGENTS = ["junie", "claude", "cursor", "windsurf", "copilot", "codex", "gemini", "kilocode"]
 
@@ -110,5 +117,65 @@ def test_v2_reads_v3_agent_names(sandbox: Sandbox, args: list[str]):
     assert json.loads(r.stdout)["ok"] is True
 
 
-def test_v2_reads_a_config_rewritten_by_v3():
-    pytest.skip("no v3 command writes config.yml or kluris.yml yet (create/register/companion/remove come later)")
+def _v3_rewrite(kind: str, path: Path) -> None:
+    """Read and write back a config through kluris-core (`cargo xtask
+    config-rewrite`): no v3 command writes a config yet."""
+    proc = subprocess.run(
+        ["cargo", "--quiet", "xtask", "config-rewrite", kind, str(path)],
+        cwd=WORKSPACE, capture_output=True, text=True,
+    )
+    assert proc.returncode == 0, proc.stderr
+
+
+def _commands_block(names: list[str]) -> bytes:
+    return ("  commands_for:\n" + "".join(f"  - {n}\n" for n in names)).encode()
+
+
+def _with_endings(data: bytes, crlf: bool) -> bytes:
+    return data.replace(b"\n", b"\r\n") if crlf else data
+
+
+@pytest.mark.parametrize("crlf", [False, True], ids=["lf", "crlf"])
+def test_v2_reads_a_config_rewritten_by_v3(sandbox: Sandbox, crlf: bool):
+    """v3 rewrites what v2 wrote byte for byte (PAR-003 aside), keeps the
+    file's line endings, and v2 reads the result."""
+    brains = sandbox.work / "brains"
+    brains.mkdir()
+    _oracle_ok(sandbox, ["create", "alpha", "--path", str(brains), "--no-git", "--json"])
+    _oracle_ok(sandbox, ["create", "beta", "--path", str(brains), "--no-git",
+                         "--description", UNICODE_DESCRIPTION, "--json"])
+    _oracle_ok(sandbox, ["companion", "add", "specmint-core", "--brain", "beta", "--json"])
+    custom = brains / "alpha" / "kluris.yml"
+    custom.write_text(
+        "name: alpha\ndescription: d\n" + _agents_yaml(["claude", "devin", "antigravity", "bogus-agent"])
+        + "companions: []\n",
+        encoding="utf-8",
+    )
+    _oracle_ok(sandbox, ["companion", "add", "specmint-tdd", "--brain", "alpha", "--json"])
+    files = {"config": sandbox.config, "custom": custom, "beta": brains / "beta" / "kluris.yml"}
+    if crlf:  # as v2 writes them on Windows
+        for f in files.values():
+            f.write_bytes(f.read_bytes().replace(b"\r\n", b"\n").replace(b"\n", b"\r\n"))
+    v2_bytes = {k: f.read_bytes() for k, f in files.items()}
+    assert all((b"\r\n" in b) == crlf for b in v2_bytes.values())
+    v2_list = run_v2(["list", "--json"], sandbox.env)
+    assert v2_list.code == 0, v2_list.stderr
+
+    _v3_rewrite("global", files["config"])
+    _v3_rewrite("brain", files["custom"].parent)
+    _v3_rewrite("brain", files["beta"].parent)
+
+    assert files["config"].read_bytes() == v2_bytes["config"]
+    assert files["custom"].read_bytes() == v2_bytes["custom"]
+    v2_default = _with_endings(_commands_block(V2_DEFAULT_AGENTS), crlf)
+    v3_default = _with_endings(_commands_block(V3_DEFAULT_AGENTS), crlf)
+    assert v2_default in v2_bytes["beta"]
+    assert files["beta"].read_bytes() == v2_bytes["beta"].replace(v2_default, v3_default)  # PAR-003
+
+    for args in (["list", "--json"], ["companion", "list", "--brain", "all", "--json"],
+                 ["doctor", "--no-refresh", "--json"]):
+        r = run_v2(args, sandbox.env)
+        assert r.code == 0, f"v2 {args} after the v3 rewrite: {r.stdout} {r.stderr}"
+        assert json.loads(r.stdout)["ok"] is True
+    after = run_v2(["list", "--json"], sandbox.env)
+    assert_json_equal(v2_list.stdout, after.stdout, sandbox.root)

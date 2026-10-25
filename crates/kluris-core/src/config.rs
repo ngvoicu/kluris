@@ -404,16 +404,58 @@ pub fn unregister_brain(path: &Path, name: &str) -> Result<(), ConfigError> {
 
 static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
-/// Replace `path` with `text` atomically: write a temp file in the same
-/// directory, then rename it over the target. A symlinked target is followed
-/// (the link stays, its target is replaced) and an existing file's
-/// permissions are kept, as v2's in-place `write_text` does.
-fn write_atomic(path: &Path, text: &str) -> io::Result<()> {
-    let target = match fs::canonicalize(path) {
-        Ok(real) => real,
-        Err(e) if e.kind() == io::ErrorKind::NotFound => path.to_path_buf(),
-        Err(e) => return Err(e),
+/// How many symlinks [`resolve_link_target`] follows (Linux's `MAXSYMLINKS`).
+const MAX_SYMLINKS: usize = 40;
+
+/// The file a write to `path` lands on, as an in-place write sees it: each
+/// symlink is followed (relative targets against the link's directory), also
+/// when the last target does not exist yet; a path that is not a link is
+/// itself.
+fn resolve_link_target(path: &Path) -> io::Result<PathBuf> {
+    let mut current = path.to_path_buf();
+    for _ in 0..MAX_SYMLINKS {
+        match fs::symlink_metadata(&current) {
+            Ok(meta) if meta.file_type().is_symlink() => {
+                let to = fs::read_link(&current)?;
+                current = match current.parent() {
+                    Some(dir) if to.is_relative() => dir.join(to),
+                    _ => to,
+                };
+            }
+            Ok(_) => return Ok(current),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(current),
+            Err(e) => return Err(e),
+        }
+    }
+    Err(io::Error::other(format!(
+        "too many levels of symbolic links: {}",
+        path.display()
+    )))
+}
+
+/// `text` (LF) with the line endings of the file it replaces: CRLF when that
+/// file's first line break is CRLF, else LF; a new file is LF (decision #3).
+fn with_endings_of(target: &Path, text: &str) -> String {
+    let existing = fs::read(target).unwrap_or_default();
+    let crlf = match existing.iter().position(|&b| b == b'\n') {
+        Some(i) => i > 0 && existing[i - 1] == b'\r',
+        None => false,
     };
+    if crlf {
+        text.replace('\n', "\r\n")
+    } else {
+        text.to_string()
+    }
+}
+
+/// Replace `path` with `text` atomically: write a temp file in the same
+/// directory, then rename it over the target. A symlink is followed, also a
+/// dangling one (the link stays, its target is written), and an existing
+/// file keeps its permissions and line endings, as v2's in-place
+/// `write_text` keeps the file.
+fn write_atomic(path: &Path, text: &str) -> io::Result<()> {
+    let target = resolve_link_target(path)?;
+    let text = with_endings_of(&target, text);
     let existing = fs::metadata(&target).ok().map(|m| m.permissions());
     let dir = target
         .parent()

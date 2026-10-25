@@ -1,5 +1,6 @@
 //! Development tasks for the Kluris 3 workspace (`cargo xtask <task>`).
 
+mod config_rewrite;
 mod float_repr;
 mod windows;
 mod yaml_emit;
@@ -9,6 +10,9 @@ use std::process::ExitCode;
 const USAGE: &str = "usage: cargo xtask <task>
 
 Tasks:
+  config-rewrite global <config.yml> | brain <brain dir>
+      Read a config with kluris-core and write it back (for the parity
+      harness: no kluris command writes a config yet).
   float-repr
       Read one f64 bit pattern (16 hex digits) per stdin line and answer each
       with Python's repr(x), a tab and json.dumps(x).
@@ -31,6 +35,7 @@ fn main() -> ExitCode {
             println!("{USAGE}");
             return ExitCode::SUCCESS;
         }
+        Some("config-rewrite") => config_rewrite::main(&args[1..]),
         Some("float-repr") => float_repr::main(&args[1..]),
         Some("windows") => return windows::main(&args[1..]),
         Some("yaml-emit") => yaml_emit::emit(&args[1..]),
