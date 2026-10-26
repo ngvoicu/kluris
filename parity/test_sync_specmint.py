@@ -68,6 +68,30 @@ def b64(tree: dict[str, bytes]) -> dict[str, str]:
     return {k: base64.b64encode(v).decode("ascii") for k, v in tree.items()}
 
 
+# Long files of many distinct lines, so some occur just around difflib's
+# popularity threshold (``len(b) // 100 + 1``), and edits inside them.
+long_lines = st.lists(st.integers(0, 90).map(lambda i: f"l{i}\n"), min_size=190, max_size=420)
+line_edits = st.lists(st.tuples(st.integers(0, 419), st.integers(0, 95).map(lambda i: f"l{i}\n")), max_size=6)
+
+
+@settings(max_examples=EXAMPLES, deadline=None, suppress_health_check=[HealthCheck.too_slow])
+@given(lines=long_lines, edits=line_edits, full=st.booleans())
+def test_report_of_an_edited_long_file_matches_v2(lines, edits, full, v2, v3):
+    new = list(lines)
+    for at, line in edits:
+        if at % 3 == 0:
+            new.insert(at % (len(new) + 1), line)
+        elif at % 3 == 1 and new:
+            del new[at % len(new)]
+        elif new:
+            new[at % len(new)] = line
+    old_tree = {"SKILL.md": "".join(lines).encode()}
+    new_tree = {"SKILL.md": "".join(new).encode()}
+    request = {"report": {"name": "specmint-core", "old": b64(old_tree), "new": b64(new_tree), "full_diff": full}}
+    expected, got = ask(v2, v3, request)
+    assert got == expected, f"v2 {expected!r}\nv3 {got!r}"
+
+
 @settings(max_examples=EXAMPLES, deadline=None, suppress_health_check=[HealthCheck.too_slow])
 @given(old=trees, new=trees, edits=st.lists(st.tuples(paths, content), max_size=2), full=st.booleans())
 def test_report_matches_v2(old, new, edits, full, v2, v3):
