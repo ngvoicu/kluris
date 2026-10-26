@@ -410,7 +410,8 @@ move Kluris. Both flags can be run again safely. On Linux it needs a
 systemd user instance (on WSL, `systemd=true` in `/etc/wsl.conf`); a
 service there starts with your session, unless `loginctl enable-linger`
 keeps it running without one. `kluris doctor` lists the installed services
-and whether they run, and `kluris self-uninstall` stops and removes them.
+and whether they run; `kluris remove` stops and removes the service of the
+brain it unregisters, and `kluris self-uninstall` all of them.
 
 ### How the agent starts a session
 
@@ -661,7 +662,7 @@ from disk or send it to a colleague.
 | `kluris companion list` | The companion playbooks, which are installed, and which brains use them (`--brain`) |
 | `kluris companion add <name>` | Turn a companion on for a brain (`--brain`) |
 | `kluris companion remove <name>` | Turn a companion off for a brain (`--brain`) |
-| `kluris remove <name>` | Unregister a brain; its files stay on disk |
+| `kluris remove <name>` | Unregister a brain and remove its sync service; its files stay on disk |
 | `kluris doctor` | Check git, PATH, the config and every brain, then refresh companions and agent skills (`--no-refresh`: checks only) |
 | `kluris self-update` | Update to the newest release, or `--version X` (`--check`: only look) |
 | `kluris self-uninstall` | Uninstall Kluris (`--purge`, `--yes`) |

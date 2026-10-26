@@ -1874,14 +1874,15 @@ fn installed_services_are_listed_with_whether_they_run() {
         Err(ServiceError::NoUserSystemd(_))
     ));
 
-    // Task Scheduler: the tasks in \Kluris\.
+    // Task Scheduler: the tasks in \Kluris\, their state as the
+    // ScheduledTask State enum's name (never the display language's word).
     let s = Sandbox::new();
     let env = s.env(Manager::TaskScheduler);
     let runner = FakeRunner::default();
     runner.answer(
-        "schtasks /Query /FO CSV /NH",
+        TASK_STATES,
         0,
-        "\"\\Microsoft\\Windows\\X\",\"N/A\",\"Ready\"\r\n\"\\Kluris\\sync-acme\",\"N/A\",\"Running\"\r\n\"\\Kluris\\sync-beta\",\"27/10/2026 08:00:00\",\"Ready\"\r\n\"\\Kluris\\other\",\"N/A\",\"Ready\"\r\n",
+        "sync-beta\tReady\r\nsync-acme\tRunning\r\nother\tRunning\r\nsync-Bad\tReady\r\nsync-gamma\tDisabled\r\n",
         "",
     );
     assert_eq!(
@@ -1899,8 +1900,160 @@ fn installed_services_are_listed_with_whether_they_run() {
                 definition: None,
                 state: ServiceState::Stopped("Ready".into()),
             },
+            Installed {
+                brain: "gamma".into(),
+                name: r"\Kluris\sync-gamma".into(),
+                definition: None,
+                state: ServiceState::Stopped("Disabled".into()),
+            },
         ]
     );
+    assert_eq!(runner.take(), [TASK_STATES]);
+}
+
+/// The query of the Task Scheduler states: PowerShell's ScheduledTask
+/// objects, whose `State` is an enum (`Ready`, `Running`, `Disabled`,
+/// `Queued`, `Unknown`), the same in every display language, where
+/// `schtasks /Query`'s status column is translated.
+const TASK_STATES: &str = "powershell.exe -NoProfile -NonInteractive -Command Get-ScheduledTask -TaskPath '\\Kluris\\' -ErrorAction SilentlyContinue | ForEach-Object { $_.TaskName + [char]9 + [string]$_.State }";
+
+#[test]
+fn task_states_do_not_depend_on_the_display_language() {
+    let s = Sandbox::new();
+    let env = s.env(Manager::TaskScheduler);
+    // No \Kluris\ folder: PowerShell prints nothing.
+    let runner = FakeRunner::default();
+    runner.answer(TASK_STATES, 0, "", "");
+    assert_eq!(service::installed(&env, &runner).unwrap(), []);
+    // A failing query is an error, never "nothing installed".
+    runner.answer(TASK_STATES, 1, "", "Get-ScheduledTask : Access denied\r\n");
+    let err = service::installed(&env, &runner).unwrap_err();
+    assert!(err.to_string().contains("Access denied"), "{err}");
+    // schtasks' translated words are never read.
+    assert!(
+        !runner.take().iter().any(|c| c.contains("/FO CSV")),
+        "schtasks /Query /FO CSV is locale-dependent"
+    );
+}
+
+// `kluris remove` and the brain's service.
+
+#[test]
+fn removing_a_brain_without_a_service_runs_nothing() {
+    let s = Sandbox::new();
+    for manager in [Manager::Launchd, Manager::Systemd] {
+        let env = s.env(manager);
+        let runner = FakeRunner::default();
+        assert_eq!(
+            service::remove_brain_service(&env, "acme", &runner),
+            Ok(None)
+        );
+        assert!(runner.take().is_empty(), "{manager:?}");
+    }
+    let env = s.env(Manager::TaskScheduler);
+    let runner = FakeRunner::default();
+    let query = r"schtasks /Query /TN \Kluris\sync-acme";
+    runner.answer(query, 1, "", "ERROR: ...\r\n");
+    assert_eq!(
+        service::remove_brain_service(&env, "acme", &runner),
+        Ok(None)
+    );
+    assert_eq!(runner.take(), [query]);
+    // A name no service can have.
+    let runner = FakeRunner::default();
+    assert_eq!(
+        service::remove_brain_service(&env, "Not A Name", &runner),
+        Ok(None)
+    );
+    assert!(runner.take().is_empty());
+}
+
+#[test]
+fn removing_a_brain_stops_and_removes_its_service() {
+    let s = Sandbox::new();
+    // launchd.
+    let env = s.env(Manager::Launchd);
+    let plist = env.definition("acme").unwrap();
+    fs::create_dir_all(plist.parent().unwrap()).unwrap();
+    fs::write(&plist, "<plist/>").unwrap();
+    let runner = FakeRunner::default();
+    runner.answer(
+        &format!("launchctl print gui/501/{LABEL}"),
+        0,
+        "\tstate = running\n",
+        "",
+    );
+    assert_eq!(
+        service::remove_brain_service(&env, "acme", &runner),
+        Ok(Some(LABEL.to_string()))
+    );
+    assert_eq!(
+        runner.take(),
+        [
+            format!("launchctl print gui/501/{LABEL}"),
+            format!("launchctl bootout gui/501/{LABEL}"),
+        ]
+    );
+    assert!(!plist.exists());
+    // systemd.
+    let env = s.env(Manager::Systemd);
+    let unit = env.definition("acme").unwrap();
+    fs::create_dir_all(unit.parent().unwrap()).unwrap();
+    fs::write(&unit, "[Unit]\n").unwrap();
+    let runner = FakeRunner::default();
+    assert_eq!(
+        service::remove_brain_service(&env, "acme", &runner),
+        Ok(Some("kluris-sync-acme.service".to_string()))
+    );
+    assert_eq!(
+        runner.take(),
+        [
+            "systemctl --user show-environment",
+            "systemctl --user disable --now kluris-sync-acme.service",
+            "systemctl --user daemon-reload",
+        ]
+    );
+    assert!(!unit.exists());
+    // Task Scheduler.
+    let env = s.env(Manager::TaskScheduler);
+    let runner = FakeRunner::default();
+    assert_eq!(
+        service::remove_brain_service(&env, "acme", &runner),
+        Ok(Some(r"\Kluris\sync-acme".to_string()))
+    );
+    assert_eq!(
+        runner.take(),
+        [
+            r"schtasks /Query /TN \Kluris\sync-acme",
+            r"schtasks /End /TN \Kluris\sync-acme",
+            r"schtasks /Delete /TN \Kluris\sync-acme /F",
+        ]
+    );
+}
+
+#[test]
+fn a_service_that_will_not_stop_is_an_error_and_keeps_its_definition() {
+    let s = Sandbox::new();
+    let env = s.env(Manager::Launchd);
+    let plist = env.definition("acme").unwrap();
+    fs::create_dir_all(plist.parent().unwrap()).unwrap();
+    fs::write(&plist, "<plist/>").unwrap();
+    let runner = FakeRunner::default();
+    runner.answer(
+        &format!("launchctl print gui/501/{LABEL}"),
+        0,
+        "\tstate = running\n",
+        "",
+    );
+    runner.answer(
+        &format!("launchctl bootout gui/501/{LABEL}"),
+        1,
+        "",
+        "Boot-out failed: 1: Operation not permitted\n",
+    );
+    let err = service::remove_brain_service(&env, "acme", &runner).unwrap_err();
+    assert!(err.to_string().contains("Operation not permitted"), "{err}");
+    assert!(plist.exists());
 }
 
 /// A fake `launchctl` (macOS) or `systemctl` (Linux) first on PATH: it
@@ -1919,11 +2072,11 @@ fn fake_tools(dir: &Path, stopped: bool) -> PathBuf {
     };
     // `print` finds a label only while its plist is in LaunchAgents.
     let launchctl = format!(
-        "#!/bin/sh\necho \"launchctl $*\" >> '{}'\ncase \"$1\" in print)\n  [ -f \"$HOME/Library/LaunchAgents/${{2##*/}}.plist\" ] || exit 113\n  printf '\\tstate = {launchctl_state}\\n';;\nesac\nexit 0\n",
+        "#!/bin/sh\necho \"launchctl $*\" >> '{}'\ncase \"$1\" in print)\n  [ -f \"$HOME/Library/LaunchAgents/${{2##*/}}.plist\" ] || exit 113\n  printf '\\tstate = {launchctl_state}\\n';;\nbootout) [ -z \"$FAKE_STOP_FAILS\" ] || {{ echo 'Boot-out failed: 1: Operation not permitted' >&2; exit 1; }};;\nesac\nexit 0\n",
         log.display()
     );
     let systemctl = format!(
-        "#!/bin/sh\necho \"systemctl $*\" >> '{}'\ncase \"$2\" in is-active) echo {systemctl_state}; exit {code};; esac\nexit 0\n",
+        "#!/bin/sh\necho \"systemctl $*\" >> '{}'\ncase \"$2\" in is-active) echo {systemctl_state}; exit {code};;\ndisable) [ -z \"$FAKE_STOP_FAILS\" ] || {{ echo 'Failed to disable unit: Access denied' >&2; exit 1; }};; esac\nexit 0\n",
         log.display()
     );
     for (name, text) in [("launchctl", launchctl), ("systemctl", systemctl)] {
@@ -1932,6 +2085,132 @@ fn fake_tools(dir: &Path, stopped: bool) -> PathBuf {
         fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
     }
     bin
+}
+
+/// `kluris remove acme` with acme's service installed, the fake
+/// `launchctl`/`systemctl` first on PATH; `stop_fails` makes its stop fail.
+#[cfg(unix)]
+fn remove_with_a_service(stop_fails: bool, json: bool) -> (World, PathBuf, i32, String, String) {
+    let w = World::new();
+    let definition = if cfg!(target_os = "macos") {
+        w.home()
+            .join("Library/LaunchAgents/dev.ngvoicu.kluris.sync.acme.plist")
+    } else {
+        w.home()
+            .join(".config/systemd/user/kluris-sync-acme.service")
+    };
+    fs::create_dir_all(definition.parent().unwrap()).unwrap();
+    fs::write(&definition, "x").unwrap();
+    let bin = fake_tools(w.home(), false);
+    let path = format!("{}:{}", bin.display(), std::env::var("PATH").unwrap());
+    let mut args = vec!["remove", "acme"];
+    if json {
+        args.push("--json");
+    }
+    let mut cmd = w.command(&args);
+    cmd.env("PATH", path);
+    if stop_fails {
+        cmd.env("FAKE_STOP_FAILS", "1");
+    }
+    let out = cmd.output().unwrap();
+    let (out_s, err_s) = (
+        String::from_utf8(out.stdout).unwrap(),
+        String::from_utf8(out.stderr).unwrap(),
+    );
+    (w, definition, out.status.code().unwrap(), out_s, err_s)
+}
+
+#[cfg(unix)]
+fn service_name() -> &'static str {
+    if cfg!(target_os = "macos") {
+        LABEL
+    } else {
+        "kluris-sync-acme.service"
+    }
+}
+
+#[cfg(unix)]
+fn registered(w: &World) -> bool {
+    fs::read_to_string(w.home().join(".kluris").join("config.yml"))
+        .unwrap()
+        .contains("acme:")
+}
+
+#[cfg(unix)]
+#[test]
+fn remove_stops_and_removes_the_brains_sync_service() {
+    let (w, definition, code, out, err) = remove_with_a_service(false, true);
+    assert_eq!(code, 0, "{out}{err}");
+    let doc: Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(
+        doc,
+        serde_json::json!({"ok": true, "name": "acme", "service": service_name()})
+    );
+    assert!(!definition.exists());
+    assert!(!registered(&w));
+    let calls = fs::read_to_string(w.home().join("tool-calls")).unwrap();
+    assert!(
+        calls.contains("bootout") || calls.contains("disable --now"),
+        "{calls}"
+    );
+    // One world at a time: this one holds the lock.
+    drop(w);
+
+    let (_, _, code, out, err) = remove_with_a_service(false, false);
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(
+        out.contains(&format!(
+            "Stopped and removed the sync service {}",
+            service_name()
+        )),
+        "{out}"
+    );
+    assert!(
+        out.contains("Unregistered: acme (files preserved)"),
+        "{out}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn remove_unregisters_even_when_the_service_will_not_stop() {
+    let (w, definition, code, out, err) = remove_with_a_service(true, true);
+    assert_eq!(code, 0, "{out}{err}");
+    let doc: Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(doc["ok"], true);
+    assert_eq!(doc["name"], "acme");
+    assert_eq!(doc.get("service"), None);
+    let failed = doc["service_failed"].as_str().unwrap();
+    assert!(failed.contains(service_name()), "{failed}");
+    assert!(
+        failed.contains("kluris sync --uninstall-service --brain acme"),
+        "{failed}"
+    );
+    assert!(definition.exists());
+    assert!(!registered(&w));
+    // One world at a time: this one holds the lock.
+    drop(w);
+
+    let (_, _, code, out, err) = remove_with_a_service(true, false);
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(
+        out.contains("Unregistered: acme (files preserved)"),
+        "{out}"
+    );
+    assert!(err.contains("could not stop the sync service"), "{err}");
+    assert!(
+        err.contains("kluris sync --uninstall-service --brain acme"),
+        "{err}"
+    );
+}
+
+#[test]
+fn remove_without_a_service_keeps_v2s_json() {
+    let w = World::new();
+    let (code, out, err) = w.run(&["remove", "acme", "--json"]);
+    assert_eq!(code, 0, "{out}{err}");
+    let doc: Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(doc, serde_json::json!({"ok": true, "name": "acme"}));
 }
 
 #[cfg(unix)]

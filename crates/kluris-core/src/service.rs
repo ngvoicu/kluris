@@ -881,27 +881,6 @@ fn definitions(
     Ok(found)
 }
 
-/// The fields of one `schtasks /FO CSV` row.
-fn csv_fields(row: &str) -> Vec<String> {
-    let mut fields = Vec::new();
-    let mut field = String::new();
-    let mut quoted = false;
-    let mut chars = row.chars().peekable();
-    while let Some(c) = chars.next() {
-        match (c, quoted) {
-            ('"', true) if chars.peek() == Some(&'"') => {
-                field.push('"');
-                chars.next();
-            }
-            ('"', _) => quoted = !quoted,
-            (',', false) => fields.push(std::mem::take(&mut field)),
-            (c, _) => field.push(c),
-        }
-    }
-    fields.push(field);
-    fields
-}
-
 /// Every installed Kluris sync service with whether it runs. Only reads.
 /// A systemd unit with no user instance to stop it is an error.
 pub fn installed(env: &ServiceEnv, runner: &dyn Runner) -> Result<Vec<Installed>, ServiceError> {
@@ -941,24 +920,24 @@ pub fn installed(env: &ServiceEnv, runner: &dyn Runner) -> Result<Vec<Installed>
             Ok(list)
         }
         Manager::TaskScheduler => {
-            let args = ["/Query", "/FO", "CSV", "/NH"];
-            let ran = must(runner, "schtasks", &args)?;
+            let ran = must(runner, "powershell.exe", &task_states_args())?;
             let mut list = Vec::new();
-            for row in ran.stdout.lines() {
-                let fields = csv_fields(row.trim());
-                let Some(name) = fields.first() else { continue };
-                let Some(brain) = brain_of(name, &format!("{TASK_FOLDER}sync-"), "") else {
+            for line in ran.stdout.lines() {
+                let Some((task, state)) = line.trim().split_once('\t') else {
                     continue;
                 };
-                let status = fields.get(2).map(|s| s.trim()).unwrap_or_default();
-                let state = if status == "Running" {
+                let Some(brain) = brain_of(task, "sync-", "") else {
+                    continue;
+                };
+                let state = state.trim();
+                let state = if state == "Running" {
                     ServiceState::Running
                 } else {
-                    ServiceState::Stopped(status.to_string())
+                    ServiceState::Stopped(state.to_string())
                 };
                 list.push(Installed {
                     brain: brain.to_string(),
-                    name: name.clone(),
+                    name: format!("{TASK_FOLDER}{task}"),
                     definition: None,
                     state,
                 });
@@ -968,6 +947,44 @@ pub fn installed(env: &ServiceEnv, runner: &dyn Runner) -> Result<Vec<Installed>
             Ok(list)
         }
     }
+}
+
+/// The tasks in `\Kluris\` and their state, one `<name>\t<state>` line each:
+/// PowerShell's ScheduledTask `State` is an enum (`Ready`, `Running`,
+/// `Disabled`, `Queued`, `Unknown`) whose name is the same in every display
+/// language, where `schtasks /Query`'s status column is translated. No
+/// `\Kluris\` folder prints nothing.
+const TASK_STATES_SCRIPT: &str = "Get-ScheduledTask -TaskPath '\\Kluris\\' -ErrorAction SilentlyContinue | ForEach-Object { $_.TaskName + [char]9 + [string]$_.State }";
+
+fn task_states_args() -> [&'static str; 4] {
+    [
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        TASK_STATES_SCRIPT,
+    ]
+}
+
+/// For `kluris remove`: stop and remove the brain's service when it has one
+/// ([`uninstall`]); its name, or `None` when there is none (with launchd and
+/// systemd, no definition file means no command is run).
+pub fn remove_brain_service(
+    env: &ServiceEnv,
+    brain: &str,
+    runner: &dyn Runner,
+) -> Result<Option<String>, ServiceError> {
+    if check_name(brain).is_err() {
+        return Ok(None);
+    }
+    if let Some(definition) = env.definition(brain) {
+        match fs::symlink_metadata(&definition) {
+            Ok(_) => {}
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(e) => return Err(io_error(&definition, &e)),
+        }
+    }
+    let done = uninstall(env, brain, runner)?;
+    Ok(done.removed.then_some(done.name))
 }
 
 /// The installed services, for `kluris self-uninstall`
@@ -996,15 +1013,6 @@ impl crate::dist::SyncServices for Services<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn csv_rows_split_on_commas_outside_quotes() {
-        assert_eq!(
-            csv_fields(r#""\Kluris\sync-a","27/10/2026, 08:00","Ready""#),
-            [r"\Kluris\sync-a", "27/10/2026, 08:00", "Ready"]
-        );
-        assert_eq!(csv_fields(r#""a ""b""",c"#), [r#"a "b""#, "c"]);
-    }
 
     #[test]
     fn only_kluris_shaped_names_are_brains() {
