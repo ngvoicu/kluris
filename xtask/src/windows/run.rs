@@ -46,7 +46,7 @@ fn go(options: &Options, ctx: &mut Ctx) -> Result<i32, String> {
         }
     }
 
-    let id = script::run_id();
+    let id = ctx.id.clone();
     let spec = Spec {
         id: &id,
         channel: &ctx.channel,

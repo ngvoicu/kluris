@@ -89,6 +89,11 @@ jobs:
           "$dist" plan --output-format=json > "$RUNNER_TEMP/plan.json"
           python3 -I scripts/release/check_dist_plan.py "$RUNNER_TEMP/plan.json"
           "$dist" generate --check
+      # release-notes.yml's body rewrite, on the fixture and on this plan
+      - name: release notes lead with the site's install commands
+        run: |
+          python3 -I -m unittest discover -s scripts/release -p 'test_*.py'
+          python3 -I scripts/release/release_notes.py "$RUNNER_TEMP/plan.json" > /dev/null
 
   installer-smoke:
     name: installer smoke (${{ matrix.os }})

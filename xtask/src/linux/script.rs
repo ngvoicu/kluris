@@ -490,7 +490,7 @@ step() {
   fi
   last=$code
   if [ "$code" -ne 0 ] && [ "$failed" -eq 0 ]; then failed=$code; fi
-  printf '«step_mark»%s exit %s %ss\n' "$name" "$code" "$((SECONDS - started))"
+  printf '«step_mark»%s exit %s %ss %s\n' "$name" "$code" "$((SECONDS - started))" "$id"
 }
 step toolchain «toolchain_minutes» "$rustup" toolchain install «toolchain»
 if [ "$failed" -ne 0 ]; then exit_run "$failed"; fi
@@ -523,7 +523,7 @@ if [ ! -x "$uv" ]; then
   if [ ! -x "$uv" ]; then code=1; fi
   last=$code
   if [ "$code" -ne 0 ] && [ "$failed" -eq 0 ]; then failed=$code; fi
-  printf '== step uv exit %s %ss\n' "$code" "$((SECONDS - started))"
+  printf '== step uv exit %s %ss %s\n' "$code" "$((SECONDS - started))" "$id"
 fi
 "#;
 

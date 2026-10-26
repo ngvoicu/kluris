@@ -63,6 +63,7 @@ cargo xtask windows --machine zeewin2 -- -p kluris-core   # extra cargo test arg
 cargo xtask windows --parity                      # zeewin2 if free and allowed, else zeewin
 cargo xtask windows --parity --parity-files parity/test_smoke.py   # only that parity file
 cargo xtask windows --machine zeewin --installer-smoke --wrapper ../sites/kluris-site/install.ps1
+cargo xtask windows --machine zeewin --installer-smoke --published 3.0.0-rc.1   # a GitHub release, live wrapper
 cargo xtask windows --clippy                      # cargo clippy --workspace --all-targets -- -D warnings, no tests
 ```
 
@@ -81,9 +82,12 @@ cargo xtask windows --clippy                      # cargo clippy --workspace --a
   never waits, takes or breaks it.
 - **zeewin2 is refused (75)** while poker-lab's `~/.compile-lock/owner` exists
   on `zeelin` (a zeelin that does not answer is an Ubuntu that is not running,
-  and the check passes) and while C: has under 50 GiB free. That lock is only
-  looked at: never taken, broken or waited on. With no `--machine`, a refused
-  or busy zeewin2 sends the run to zeewin.
+  and the check passes), while a Kluris Linux run holds zeelin's one-run lock
+  `~/.kluris-ci/.linux-run.lock` (the same laptop; asked with `flock -n` as
+  `cargo xtask linux` asks it, the holder named from `.linux-run.id`), and
+  while C: has under 50 GiB free. Those locks are only looked at: never held,
+  broken or waited on. With no `--machine`, a refused or busy zeewin2 sends
+  the run to zeewin.
 - **Nothing on the machine changes.** No Windows settings, Defender, firewall,
   registry or PATH (user or machine) changes, no logins, no system-wide
   installs. Everything Kluris adds lives in `%USERPROFILE%\.kluris-ci\`:
@@ -114,7 +118,10 @@ cargo xtask windows --clippy                      # cargo clippy --workspace --a
   Ctrl-C ends the run there too (130).
 - **The answer.** The output streams back; the status is the machine's last
   line `== exit N` (ssh to PowerShell answers 1 for every failure), then a
-  summary line with each step's status and time.
+  summary line with each step's status and time. Each step's end line is
+  `== step NAME exit CODE SECONDSs <run id>`, and the summary counts only the
+  lines that end with this run's id, so step lines inside a step's output (a
+  failing test printing what it captured) never reach it.
 - **Parity on Windows.** v2.28.11 runs there as the oracle (the hash-pinned
   `parity/oracle.lock` has the `win_amd64` wheels) against the release
   `kluris.exe` (`KLURIS_V3_BIN`). The harness reads CRLF in stdout/stderr as
@@ -135,6 +142,7 @@ cargo xtask linux --parity                        # cargo test --workspace --no-
 cargo xtask linux -- -p kluris-core               # extra cargo test args after --
 cargo xtask linux --parity --parity-files parity/test_smoke.py   # only that parity file
 cargo xtask linux --installer-smoke --wrapper ../sites/kluris-site/install.sh
+cargo xtask linux --installer-smoke --published 3.0.0-rc.1   # a GitHub release, live wrapper
 cargo xtask linux --clippy                        # clippy -D warnings on every target, no tests
 ```
 
@@ -183,7 +191,8 @@ cargo xtask linux --clippy                        # clippy -D warnings on every 
   next run, under the lock.
 - **The answer.** As on Windows: the output streams back, the status is the
   run's last line `== exit N`, then a summary line `linux: zeelin run <id>
-  tree <commit>: <step> <status> (<time>), ...; exit N`.
+  tree <commit>: <step> <status> (<time>), ...; exit N`, from the step lines
+  that end with the run's id.
 - **Parity on Linux.** v2.28.11 runs there as the oracle (the hash-pinned
   universal `parity/oracle.lock`) against the release `kluris`
   (`KLURIS_V3_BIN`); `--parity-files` as for Windows.
@@ -209,6 +218,12 @@ package, hence the package `kluris`.
   `kluris-<target>/` folder; a Windows `.zip` is flat, `kluris.exe` at its
   root. `--version` is the package's version (clap's `version`), so a
   release prints its own.
+- **What `self-update` picks:** a candidate is a release that is not a
+  prerelease and carries this target's exact archive (`kluris-<target>.tar.gz`
+  / `.zip`), so v2 releases and a release built without this platform never
+  are; `latest` is the newest candidate when it is newer than the running
+  version, else the current version (`update_available` false). A prerelease
+  installs only when named with `--version`.
 - **Archives** hold `kluris`, `LICENSE`, `README.md`,
   `THIRD_PARTY_NOTICES.md` (ported code) and `THIRD_PARTY_LICENSES.md` (the
   crates built into `kluris`, from cargo-about). Auto-includes are off: dist
@@ -229,6 +244,22 @@ package, hence the package `kluris`.
   only its own entry and cannot bring those back.
 - **release.yml is generated:** change `dist-workspace.toml`, then
   `dist generate`; `dist plan` fails while it is stale.
+- **LF checkouts everywhere** (`.gitattributes` `* text=auto eol=lf`, ahead of
+  the `-text` rules for byte-exact fixtures, templates and MRI assets).
+  GitHub's Windows runners check out with `core.autocrlf=true`; without the
+  rule the tree CI and release.yml read on Windows had CRLF: `Cargo.toml`'s
+  version line went unseen by `build-versions.ps1`, and the Windows release
+  would embed CRLF Specmint companions (`vendored/`, `include_dir!`) where
+  every other target and v2 ship LF. The rule gives every checkout the
+  committed bytes, the same tree the zeewin/zeelin runs' `git archive` sends.
+- **A release job that never got a runner is re-run, never re-tagged.**
+  GitHub's capacity for some labels (macOS arm64 above all) can leave a
+  build queued until it is cancelled ("The job was not acquired by Runner
+  of type hosted even after multiple attempts"). `gh run rerun <id> -R
+  ngvoicu/kluris --failed` runs it and the jobs after it again in the same
+  run, the way v2's failed publish jobs are re-run; v3.0.0-rc.1 shipped that
+  way (run 40366122460, attempt 2). Deleting and re-pushing a tag is for a
+  broken release only.
 - **Its tag trigger is dist's own** (`'**[0-9]+.[0-9]+.[0-9]+*'`, decided
   2026-10-26), not `v3.*`: dist cannot generate `v3.*` (`tag-namespace =
   "v3"` makes a glob that misses `v3.0.0`), and a hand edit would turn off
@@ -251,6 +282,16 @@ package, hence the package `kluris`.
   [--wrapper <site install.sh>] target/distrib` (`.ps1` on Windows) installs
   it from a local server in a sandbox HOME, and checks the rc lines, a fresh
   login shell, `kluris --version` and `kluris doctor --json`.
+- **A published release, for real** (`cargo xtask windows|linux
+  --installer-smoke --published <version>`, which builds nothing; on the Mac
+  `sh scripts/release/published-smoke.sh <version>`):
+  `scripts/release/published-smoke.sh` (`.ps1` on Windows) installs that
+  GitHub release through the live site wrapper (`KLURIS_VERSION=<version>`)
+  in a sandbox HOME or profile, checks `kluris --version`, `kluris doctor
+  --json` and `kluris self-update --check --json` (no update), then
+  `kluris self-uninstall --yes`: the installer's files go and the sandbox's
+  own rc files come back byte for byte. On Windows the user PATH is saved,
+  always written back and compared byte for byte, as for the smoke.
 - **The installed life cycle** (`cargo xtask windows|linux --installer-smoke`
   runs it after the installer smoke): `scripts/release/build-versions.sh
   target/releases 3.0.0 3.0.1` (`.ps1`: `-Versions 3.0.0,3.0.1`, one word)

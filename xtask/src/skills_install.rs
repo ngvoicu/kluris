@@ -1,6 +1,7 @@
 //! `skills-install` and `posix-path`: kluris-core's skill install and its
-//! POSIX path rule, for `parity/test_skill_install.py` (no v3 command
-//! installs skills yet).
+//! POSIX path rule, for `parity/test_skill_install.py`, which migrates a HOME
+//! v2 wrote with the install alone (create, register, remove, companion
+//! add/remove and doctor call the same install).
 
 use std::io::{self, BufRead, Write};
 use std::path::{Path, PathBuf};

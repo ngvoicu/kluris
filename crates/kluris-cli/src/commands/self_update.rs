@@ -3,8 +3,11 @@
 //!
 //! 1. The install receipt says where the installer put kluris; any other
 //!    copy (a cargo build, a copy elsewhere) is refused before the network.
-//! 2. The GitHub release listing gives the newest version (`--check` stops
-//!    here); `--version` names one instead.
+//! 2. The GitHub release listing gives the newest candidate: a release that
+//!    is not a prerelease and carries this target's exact archive (so never
+//!    a v2 release). It is `latest` only when newer than this binary, else
+//!    `latest` is the current version (`--check` stops here); `--version`
+//!    names a release instead.
 //! 3. The archive is the asset named exactly `kluris-<target>.tar.gz` /
 //!    `.zip` for the target this binary was built for (`KLURIS_TARGET`), the
 //!    binary at `kluris-<target>/kluris` in a tar.gz and `kluris.exe` at the
@@ -71,18 +74,19 @@ pub fn run(check: bool, version: Option<&str>, as_json: bool) -> Result<(), CliE
     remove_swap_leftovers(&receipt.install_prefix);
     let api = Api::from_env()?;
 
-    // `--version` names the release; otherwise the listing's newest decides.
+    // `--version` names the release; otherwise the listing's newest
+    // candidate decides, and only when it is newer than this binary.
     let wanted = match version {
         Some(v) if !check => v.trim_start_matches('v').to_string(),
         _ => {
-            let latest = newest_release(&api)?;
-            let available = latest.as_deref().is_some_and(|l| {
-                self_update::version::bump_is_greater(CURRENT, l).unwrap_or(false)
+            let newer = newest_candidate(&api)?.filter(|candidate| {
+                self_update::version::bump_is_greater(CURRENT, candidate).unwrap_or(false)
             });
-            match latest {
-                Some(latest) if available && !check => latest,
-                latest => {
-                    let latest = latest.unwrap_or_else(|| CURRENT.to_string());
+            match newer {
+                Some(latest) if !check => latest,
+                newer => {
+                    let available = newer.is_some();
+                    let latest = newer.unwrap_or_else(|| CURRENT.to_string());
                     if check {
                         print_check(&latest, available, as_json);
                     } else {
@@ -173,11 +177,13 @@ fn is_http_loopback(url: &str) -> bool {
     })
 }
 
-/// The newest version in the release listing, every page of it, leaving out
-/// prereleases (`3.1.0-rc.1`: those install only when named with
-/// `--version`); `None` when there is none. GitHub hides drafts from anyone
+/// The newest candidate in the release listing, every page of it; `None`
+/// when there is none. A candidate is a release that is not a prerelease
+/// (`3.1.0-rc.1`: those install only when named with `--version`) and that
+/// carries this target's exact archive, which leaves out v2's releases and
+/// any release built without this platform. GitHub hides drafts from anyone
 /// without push access, and `self_update`'s release carries no draft flag.
-fn newest_release(api: &Api) -> Result<Option<String>, CliError> {
+fn newest_candidate(api: &Api) -> Result<Option<String>, CliError> {
     let mut builder = github::ReleaseList::configure();
     builder.repo_owner(REPO_OWNER).repo_name(REPO_NAME);
     if let Some(base) = &api.base {
@@ -193,10 +199,11 @@ fn newest_release(api: &Api) -> Result<Option<String>, CliError> {
         .build()
         .and_then(|list| list.fetch())
         .map_err(|e| update_error(&e, None))?;
+    let want = archive_name(TARGET);
     let mut newest: Option<String> = None;
     for release in releases.into_vec() {
         let v = release.version();
-        if is_prerelease(v) {
+        if is_prerelease(v) || !release.assets().iter().any(|a| a.name() == want) {
             continue;
         }
         let newer = match &newest {

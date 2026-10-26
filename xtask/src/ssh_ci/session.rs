@@ -32,6 +32,9 @@ pub struct Ctx<'a> {
     pub err: &'a mut dyn Write,
     /// Whether this side was asked to stop.
     pub stop: &'a dyn Fn() -> bool,
+    /// The run's id ([`crate::ssh_ci::plan::run_id`]): its folder, tarball
+    /// and lock records there, and the word its step lines end with.
+    pub id: String,
     /// The tree's toolchain channel.
     pub channel: String,
     /// Writes the tarball (with the run script in it) and answers the commit.
@@ -111,7 +114,7 @@ pub fn go(ctx: &mut Ctx, remote: Remote, tarball: &Path, run: Run) -> Result<i32
     args.push(remote.host.to_owned());
     args.push(run.bootstrap);
     let call = Call::new("ssh", args, run.bound);
-    let mut said = Said::default();
+    let mut said = Said::of_run(run.id);
     let out = &mut *ctx.out;
     let err = &mut *ctx.err;
     let ended = ctx.runner.stream(

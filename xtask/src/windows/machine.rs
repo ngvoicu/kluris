@@ -7,8 +7,11 @@
 //!   and poker-lab's compute box. A run is refused (75) while poker-lab's
 //!   `~/.compile-lock/owner` exists on the laptop's Ubuntu (`ssh zeelin`; one
 //!   that does not answer is an Ubuntu that is not running, and the check
-//!   passes), and while C: has under [`FLOOR_GIB`] free. The lock is only looked
-//!   at: never taken, broken or waited on.
+//!   passes), while a Kluris Linux run holds zeelin's one-run lock
+//!   (`~/.kluris-ci/.linux-run.lock`, asked with `flock -n` as `cargo xtask
+//!   linux` asks it; the holder from `.linux-run.id` beside it), and while C:
+//!   has under [`FLOOR_GIB`] free. The locks are only looked at: never held,
+//!   broken or waited on.
 //!
 //! With no `--machine` a run goes to zeewin2 while it is allowed and no run of
 //! Kluris or ConsensFlow holds it, else to zeewin.
@@ -18,6 +21,8 @@ use std::time::Duration;
 use super::options::Name;
 use super::remote::{Call, Captured, Runner};
 use super::script;
+use crate::linux::script::{LOCK as LINUX_LOCK, OWNER as LINUX_OWNER};
+use crate::ssh_ci::plan::CI_DIR;
 
 /// The least C: of zeewin2 must have free for a run, in GiB.
 pub const FLOOR_GIB: u64 = 50;
@@ -90,11 +95,19 @@ fn look(machine: &Machine, runner: &mut dyn Runner) -> Result<(Ready, Option<Str
         return Ok((Ready::Go(Vec::new()), None));
     };
     let mut notes = Vec::new();
-    match poker_lab(shared, runner) {
+    match linux_locks(shared, runner) {
         Lock::Held => {
             let why = format!(
                 "{} is busy: poker-lab's job holds it (~/{} on {}), and no run goes while it does",
                 machine.name, shared.lock, shared.linux
+            );
+            return Ok((Ready::Refused(why), None));
+        }
+        Lock::Kluris(holder) => {
+            let why = format!(
+                "{} is busy: {holder} holds {}, the same laptop (~/{CI_DIR}/{LINUX_LOCK}), \
+                 and no run goes while it does",
+                machine.name, shared.linux
             );
             return Ok((Ready::Refused(why), None));
         }
@@ -116,12 +129,39 @@ fn look(machine: &Machine, runner: &mut dyn Runner) -> Result<(Ready, Option<Str
 }
 
 enum Lock {
+    /// poker-lab's lock.
     Held,
+    /// Kluris's Linux one-run lock, and who holds it.
+    Kluris(String),
     Free,
     NoAnswer(String),
 }
 
-fn poker_lab(shared: &Shared, runner: &mut dyn Runner) -> Lock {
+/// The ssh command that asks zeelin for poker-lab's lock, then Kluris's
+/// Linux lock (a `flock -n` that holds it for no time), and says `held`,
+/// `kluris <id> <process>` or `free`.
+fn locks_command(shared: &Shared) -> String {
+    let lock = format!("~/{CI_DIR}/{LINUX_LOCK}");
+    let owner = format!("~/{CI_DIR}/{LINUX_OWNER}");
+    format!(
+        "if [ -e ~/{poker} ]; then echo held; \
+         elif [ -e {lock} ] && ! flock -n {lock} true; \
+         then echo \"kluris $(sed -n 1p {owner} 2>/dev/null) $(sed -n 2p {owner} 2>/dev/null)\"; \
+         else echo free; fi",
+        poker = shared.lock
+    )
+}
+
+/// `kluris <id> <process>` as the Linux task's refusals name its holder.
+fn kluris_holder(record: &str) -> String {
+    let mut words = record.split_whitespace();
+    match (words.next(), words.next()) {
+        (Some(id), Some(process)) => format!("a Kluris run ({id}, process {process})"),
+        _ => "a run that left no record".to_owned(),
+    }
+}
+
+fn linux_locks(shared: &Shared, runner: &mut dyn Runner) -> Lock {
     let args = [
         "-o".to_owned(),
         format!("ConnectTimeout={ZEELIN_CONNECT_S}"),
@@ -132,10 +172,7 @@ fn poker_lab(shared: &Shared, runner: &mut dyn Runner) -> Lock {
         "-o".to_owned(),
         "ServerAliveCountMax=1".to_owned(),
         shared.linux.to_owned(),
-        format!(
-            "if [ -e ~/{} ]; then echo held; else echo free; fi",
-            shared.lock
-        ),
+        locks_command(shared),
     ];
     match runner.capture(&Call::new("ssh", args.to_vec(), ZEELIN_BOUND)) {
         Ok(Captured {
@@ -145,7 +182,12 @@ fn poker_lab(shared: &Shared, runner: &mut dyn Runner) -> Lock {
         }) => match stdout.trim() {
             "held" => Lock::Held,
             "free" => Lock::Free,
-            said => Lock::NoAnswer(format!("it said {said:?}")),
+            said => match said.strip_prefix("kluris") {
+                Some(record) if record.is_empty() || record.starts_with(' ') => {
+                    Lock::Kluris(kluris_holder(record))
+                }
+                _ => Lock::NoAnswer(format!("it said {said:?}")),
+            },
         },
         Ok(Captured {
             timed_out: true, ..

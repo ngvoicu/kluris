@@ -583,15 +583,34 @@ fn a_release_without_sha256_sum_is_refused() {
 
 #[test]
 fn a_release_without_this_targets_archive_is_refused() {
+    // Named with --version: the listing's candidates never include it.
     let f = Fixture::new();
     let new = f.new_binary("3.99.0", 0, "");
     let mut release = f.release("v3.99.0", &new);
     let want = archive_name(TARGET);
     release.assets.retain(|a| a.name != want);
     f.serve(&[release]);
-    let out = f.run(&["self-update"]);
+    let out = f.run(&["self-update", "--version", "3.99.0"]);
     assert_eq!(out.status.code(), Some(1));
     assert!(stderr(&out).contains(&want), "{}", stderr(&out));
+    f.assert_untouched();
+}
+
+#[test]
+fn the_only_release_without_this_targets_archive_means_up_to_date() {
+    let f = Fixture::new();
+    let new = f.new_binary("3.99.0", 0, "");
+    let mut release = f.release("v3.99.0", &new);
+    let want = archive_name(TARGET);
+    release.assets.retain(|a| a.name != want);
+    f.serve(&[release]);
+    let out = f.run(&["self-update", "--json"]);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    assert!(
+        stdout(&out).contains("\"updated\": false"),
+        "{}",
+        stdout(&out)
+    );
     f.assert_untouched();
 }
 
@@ -878,6 +897,94 @@ fn a_v2_release_published_after_v3_never_wins() {
         stdout(&out)
     );
     assert_installed(&f, &["self-update"], &v3, "3.0.0");
+}
+
+/// A v2 release as GitHub lists them: Python wheels, no Kluris 3 archive.
+fn v2_release(tag: &str) -> Release {
+    let version = tag.trim_start_matches('v');
+    Release {
+        tag: tag.into(),
+        assets: vec![
+            Asset {
+                name: format!("kluris-{version}-py3-none-any.whl"),
+                bytes: b"a wheel".to_vec(),
+                digest: None,
+            },
+            Asset {
+                name: format!("kluris-{version}.tar.gz"),
+                bytes: b"an sdist".to_vec(),
+                digest: None,
+            },
+        ],
+    }
+}
+
+#[test]
+fn only_v2_releases_listed_means_up_to_date_and_latest_is_current() {
+    // An rc user while only v2 releases are published: none carries this
+    // target's archive, so none is a candidate.
+    let f = Fixture::new();
+    f.serve(&[v2_release("v2.28.11"), v2_release("v2.28.10")]);
+    let out = f.run(&["self-update", "--check", "--json"]);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    assert_eq!(
+        stdout(&out),
+        format!(
+            "{{\"ok\": true, \"current\": \"{CURRENT}\", \"latest\": \"{CURRENT}\", \"update_available\": false}}\n"
+        )
+    );
+    let out = f.run(&["self-update", "--json"]);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    assert_eq!(
+        stdout(&out),
+        format!(
+            "{{\"ok\": true, \"current\": \"{CURRENT}\", \"latest\": \"{CURRENT}\", \"updated\": false}}\n"
+        )
+    );
+    f.assert_untouched();
+}
+
+#[test]
+fn an_older_candidate_than_current_is_not_latest() {
+    // The only candidate is older than this binary: latest is current.
+    let f = Fixture::new();
+    let old = marked_binary(&f, "2.99.0", "old");
+    f.serve(&[f.release("v2.99.0", &old)]);
+    let out = f.run(&["self-update", "--check", "--json"]);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    assert_eq!(
+        stdout(&out),
+        format!(
+            "{{\"ok\": true, \"current\": \"{CURRENT}\", \"latest\": \"{CURRENT}\", \"update_available\": false}}\n"
+        )
+    );
+    f.assert_untouched();
+}
+
+#[test]
+fn a_newer_release_without_this_targets_archive_is_skipped() {
+    // v3.99.1 shipped without this platform: v3.99.0, which has it, wins.
+    let f = Fixture::new();
+    let newer = marked_binary(&f, "3.99.1", "newer");
+    let older = marked_binary(&f, "3.99.0", "older");
+    let want = archive_name(TARGET);
+    let mut missing = f.release("v3.99.1", &newer);
+    missing.assets.retain(|a| a.name != want);
+    f.serve(&[missing, f.release("v3.99.0", &older)]);
+    let out = f.run(&["self-update", "--check", "--json"]);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    assert_eq!(
+        stdout(&out),
+        format!(
+            "{{\"ok\": true, \"current\": \"{CURRENT}\", \"latest\": \"3.99.0\", \"update_available\": true}}\n"
+        )
+    );
+    assert_installed(&f, &["self-update"], &older, "3.99.0");
+    assert!(
+        !f.requests()
+            .contains(&format!("GET {RELEASES}/tags/v3.99.1")),
+        "the release without this target's archive is never fetched"
+    );
 }
 
 #[test]

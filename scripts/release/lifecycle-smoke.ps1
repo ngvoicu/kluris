@@ -162,7 +162,8 @@ try {
     $server = Start-Process -FilePath $Python -ArgumentList @('-I', "`"$serve`"", "`"$served`"", "`"$portFile`"", "`"$log`"") `
         -WorkingDirectory $work -NoNewWindow -PassThru
     for ($i = 0; -not (Test-Path -LiteralPath $portFile); $i++) {
-        if ($i -ge 100 -or $server.HasExited) { throw 'the local server did not start' }
+        if ($server.HasExited) { throw 'the local server exited' }
+        if ($i -ge 600) { throw 'the local server did not start in 60 s' }
         Start-Sleep -Milliseconds 100
     }
     $script:api = "http://127.0.0.1:$(([IO.File]::ReadAllText($portFile)).Trim())"

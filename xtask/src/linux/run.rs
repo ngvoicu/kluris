@@ -40,7 +40,7 @@ fn go(options: &Options, ctx: &mut Ctx) -> Result<i32, String> {
         return Ok(REFUSED);
     }
 
-    let id = plan::run_id();
+    let id = ctx.id.clone();
     let spec = Spec {
         channel: &ctx.channel,
         jobs: JOBS,

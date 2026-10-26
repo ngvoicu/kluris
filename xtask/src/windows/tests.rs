@@ -373,6 +373,32 @@ mod machines {
     }
 
     #[test]
+    fn zeewin2_is_refused_while_a_kluris_linux_run_holds_zeelin() {
+        // zeelin is the same laptop's Ubuntu: a Kluris Linux run there and a
+        // run on zeewin2 would share its CPU, memory and disk.
+        for (answer, holder) in [
+            (
+                "kluris kluris-0000abcd-12345678 4242\n",
+                "a Kluris run (kluris-0000abcd-12345678, process 4242)",
+            ),
+            ("kluris\n", "a run that left no record"),
+        ] {
+            let mut fake = Fake::new(vec![said(0, answer)]);
+            let Ready::Refused(why) = machine::ready(&zeewin2(), &mut fake).unwrap() else {
+                panic!("not refused for {answer:?}")
+            };
+            assert!(
+                why.contains("zeewin2 is busy")
+                    && why.contains("~/.kluris-ci/.linux-run.lock")
+                    && why.contains("zeelin")
+                    && why.contains(holder),
+                "{why}"
+            );
+            assert_eq!(fake.calls.len(), 1, "nothing is asked of Windows then");
+        }
+    }
+
+    #[test]
     fn the_poker_lab_check_is_bounded_and_only_looks() {
         let mut fake = Fake::new(vec![said(0, "free\n"), said(0, "free 600\n")]);
         machine::ready(&zeewin2(), &mut fake).unwrap();
@@ -392,8 +418,23 @@ mod machines {
         let asked = zeelin.args.last().unwrap();
         assert_eq!(
             asked,
-            "if [ -e ~/.compile-lock/owner ]; then echo held; else echo free; fi"
+            "if [ -e ~/.compile-lock/owner ]; then echo held; \
+             elif [ -e ~/.kluris-ci/.linux-run.lock ] && ! flock -n ~/.kluris-ci/.linux-run.lock true; \
+             then echo \"kluris $(sed -n 1p ~/.kluris-ci/.linux-run.id 2>/dev/null) $(sed -n 2p ~/.kluris-ci/.linux-run.id 2>/dev/null)\"; \
+             else echo free; fi"
         );
+        #[cfg(unix)]
+        {
+            let out = std::process::Command::new("bash")
+                .args(["-n", "-c", asked])
+                .output()
+                .unwrap();
+            assert!(
+                out.status.success(),
+                "{}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        }
         let state = &fake.calls[1];
         assert!(state.bound <= Duration::from_secs(60), "{:?}", state.bound);
         assert!(state.args.contains(&"zeewin2".to_owned()));
@@ -479,6 +520,10 @@ mod machines {
     fn the_default_is_zeewin_when_zeewin2_is_not() {
         for (answers, says) in [
             (vec![said(0, "held\n")], "poker-lab"),
+            (
+                vec![said(0, "kluris kluris-0000abcd-12345678 4242\n")],
+                "a Kluris run (kluris-0000abcd-12345678, process 4242)",
+            ),
             (vec![said(0, "free\n"), said(0, "free 10\n")], "50 GiB"),
             (
                 vec![
@@ -927,6 +972,17 @@ mod scripts {
     }
 
     #[test]
+    fn each_step_end_line_carries_the_run_id() {
+        let text = script::run_script(&spec(true, &[]));
+        for line in [
+            "Write-Output \"== step $name exit $code $([int]((Get-Date) - $started).TotalSeconds)s kluris-0000abcd-12345678\"",
+            "Write-Output \"== step uv exit $code $([int]((Get-Date) - $started).TotalSeconds)s kluris-0000abcd-12345678\"",
+        ] {
+            assert!(text.contains(line), "no {line:?} in\n{text}");
+        }
+    }
+
+    #[test]
     fn the_commands_of_a_run() {
         let extra = words("-p kluris-core --test list -- --nocapture \"two words\"");
         let text = script::run_script(&spec(true, &extra));
@@ -1148,6 +1204,7 @@ mod runs {
                 out: &mut out,
                 err: &mut err,
                 stop: &|| false,
+                id: "kluris-0000abcd-12345678".into(),
                 channel: "1.99.0".into(),
                 pack: &mut pack,
                 root,
@@ -1179,10 +1236,34 @@ mod runs {
 
     const PASSED: &str = "== tree 5f54983aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\r\n\
         == step toolchain: rustup toolchain install\r\n\
-        == step toolchain exit 0 3s\r\n\
+        == step toolchain exit 0 3s kluris-0000abcd-12345678\r\n\
         test result: ok. 12 passed\n\
-        == step cargo-test exit 0 412s\r\n\
+        == step cargo-test exit 0 412s kluris-0000abcd-12345678\r\n\
         \r\n== exit 0\r\n";
+
+    #[test]
+    fn step_lines_of_inner_output_do_not_reach_the_summary() {
+        let out = "== tree 5f54983aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\r\n\
+            == step toolchain exit 0 3s kluris-0000abcd-12345678\r\n\
+            ---- windows::tests::machines stdout ----\n\
+            == step toolchain exit 0 1s\r\n\
+            == step lifecycle exit 1 9s\n\
+            == step cargo-test exit 101 2s kluris-ffffffff-00000000\r\n\
+            == step cargo-test exit 0 412s kluris-0000abcd-12345678\r\n\
+            \r\n== exit 0\r\n";
+        let ran = ran(
+            on(Name::Zeewin, false),
+            vec![
+                said(0, ""),
+                Answer::Stream(vec![(Stream::Out, out)], Ok(Streamed::Exited(Some(1)))),
+            ],
+        );
+        assert_eq!(ran.code, 0, "{}", ran.err);
+        assert_eq!(
+            ran.err.lines().last().unwrap(),
+            "windows: zeewin run kluris-0000abcd-12345678 tree 5f54983aaaaa: toolchain 0 (3s), cargo-test 0 (412s); exit 0"
+        );
+    }
 
     #[test]
     fn a_run_on_zeewin_sends_the_tree_and_streams_the_answer() {
@@ -1236,11 +1317,11 @@ mod runs {
     #[test]
     fn an_installer_smoke_run_sends_the_smoke_and_waits_its_bound() {
         let passed = "== tree 5f54983aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\r\n\
-            == step toolchain exit 0 3s\r\n\
-            == step python exit 0 9s\r\n\
-            == step release-dist exit 0 300s\r\n\
+            == step toolchain exit 0 3s kluris-0000abcd-12345678\r\n\
+            == step python exit 0 9s kluris-0000abcd-12345678\r\n\
+            == step release-dist exit 0 300s kluris-0000abcd-12345678\r\n\
             installer-smoke: user PATH restored: 120 bytes, REG_EXPAND_SZ, byte for byte identical to the saved value\r\n\
-            == step installer-smoke exit 0 40s\r\n\
+            == step installer-smoke exit 0 40s kluris-0000abcd-12345678\r\n\
             \r\n== exit 0\r\n";
         let mut fake = Fake::new(vec![
             said(0, ""),
@@ -1266,6 +1347,7 @@ mod runs {
                 out: &mut out,
                 err: &mut err,
                 stop: &|| false,
+                id: "kluris-0000abcd-12345678".into(),
                 channel: "1.99.0".into(),
                 pack: &mut pack,
                 root: dir.path(),

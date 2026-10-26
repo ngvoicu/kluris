@@ -489,6 +489,17 @@ mod scripts {
     }
 
     #[test]
+    fn each_step_end_line_carries_the_run_id() {
+        let text = script::run_script(&spec(true, &[], &[]));
+        for line in [
+            "printf '== step %s exit %s %ss %s\\n' \"$name\" \"$code\" \"$((SECONDS - started))\" \"$id\"",
+            "printf '== step uv exit %s %ss %s\\n' \"$code\" \"$((SECONDS - started))\" \"$id\"",
+        ] {
+            assert!(text.contains(line), "no {line:?} in\n{text}");
+        }
+    }
+
+    #[test]
     fn old_runs_and_tarballs_are_swept_after_a_day() {
         let text = script::run_script(&spec(false, &[], &[]));
         assert!(text.contains("-mmin +1440"));
@@ -892,6 +903,15 @@ mod scripts_run {
         ] {
             assert!(ran.out.contains(line), "{line:?} in\n{}", ran.out);
         }
+        let ends: Vec<&str> = ran
+            .out
+            .lines()
+            .filter(|line| line.starts_with("== step ") && line.contains(" exit "))
+            .collect();
+        assert_eq!(ends.len(), 4, "{}", ran.out);
+        for line in ends {
+            assert!(line.ends_with(&format!("s {ID}")), "{line}");
+        }
         let kluris_ci = home.path(".kluris-ci");
         assert!(
             ran.out.contains(&format!(
@@ -1013,6 +1033,7 @@ mod runs {
                 out: &mut out,
                 err: &mut err,
                 stop: &|| false,
+                id: "kluris-0000abcd-12345678".into(),
                 channel: "1.99.0".into(),
                 pack: &mut pack,
                 root,
@@ -1047,11 +1068,11 @@ mod runs {
     #[test]
     fn an_installer_smoke_run_sends_the_smoke_and_waits_its_bound() {
         let passed = "== tree 5f54983aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n\
-            == step toolchain exit 0 3s\n\
-            == step python exit 0 2s\n\
-            == step release-dist exit 0 200s\n\
+            == step toolchain exit 0 3s kluris-0000abcd-12345678\n\
+            == step python exit 0 2s kluris-0000abcd-12345678\n\
+            == step release-dist exit 0 200s kluris-0000abcd-12345678\n\
             installer-smoke: ok (Linux x86_64, kluris 3.0.0-dev, through the site wrapper)\n\
-            == step installer-smoke exit 0 30s\n\
+            == step installer-smoke exit 0 30s kluris-0000abcd-12345678\n\
             \n== exit 0\n";
         let options = Options {
             installer_smoke: true,
@@ -1105,9 +1126,9 @@ mod runs {
 
     const PASSED: &str = "== tree 5f54983aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n\
         == step toolchain: rustup toolchain install\n\
-        == step toolchain exit 0 3s\n\
+        == step toolchain exit 0 3s kluris-0000abcd-12345678\n\
         test result: ok. 12 passed\n\
-        == step cargo-test exit 0 212s\n\
+        == step cargo-test exit 0 212s kluris-0000abcd-12345678\n\
         \n== exit 0\n";
 
     fn id_of(fake: &Fake) -> String {
@@ -1116,6 +1137,34 @@ mod runs {
             .trim_start_matches("zeelin:.kluris-ci/incoming/")
             .trim_end_matches(".tgz")
             .to_owned()
+    }
+
+    #[test]
+    fn step_lines_of_inner_output_do_not_reach_the_summary() {
+        // A failing test prints the output it captured, a run script's step
+        // lines among them: only the lines that end with this run's id count.
+        let out = "== tree 5f54983aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n\
+            == step toolchain exit 0 3s kluris-0000abcd-12345678\n\
+            ---- linux::tests::scripts_run::a_run stdout ----\n\
+            == step toolchain exit 0 1s\n\
+            == step lifecycle exit 1 9s\n\
+            == step cargo-test exit 101 2s kluris-ffffffff-00000000\n\
+            == step cargo-test exit 0 212s kluris-0000abcd-12345678 extra\n\
+            == step cargo-test exit 0 212s kluris-0000abcd-12345678\n\
+            \n== exit 0\n";
+        let ran = ran(
+            plain(false),
+            vec![
+                free(),
+                said(0, ""),
+                Answer::Stream(vec![(Stream::Out, out)], Ok(Streamed::Exited(Some(0)))),
+            ],
+        );
+        assert_eq!(ran.code, 0, "{}", ran.err);
+        assert_eq!(
+            ran.err.lines().last().unwrap(),
+            "linux: zeelin run kluris-0000abcd-12345678 tree 5f54983aaaaa: toolchain 0 (3s), cargo-test 0 (212s); exit 0"
+        );
     }
 
     #[test]

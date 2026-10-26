@@ -30,7 +30,7 @@ from pathlib import Path
 
 import pytest
 
-from harness import IS_WINDOWS, V3_BIN, Sandbox, run_v2, run_v3
+from harness import V3_BIN, Sandbox, run_v2, run_v3
 from runs import same_words
 from test_skill_install import BRAINS, V2_ONLY, V3_WRITES, _tree, _v2_home, _v2_to_v3
 
@@ -218,15 +218,19 @@ def test_entries_that_only_look_like_kluris_are_kept(sandbox: Sandbox):
     assert kept[(home / ".cursor/skills").as_posix()] == ["kluris-acme"]
 
 
-@pytest.mark.skipif(IS_WINDOWS, reason="a folder symlink needs a privilege on Windows")
 def test_a_v2_folder_linked_to_the_universal_one(sandbox: Sandbox):
     """T-103 `aliased-skill-dir`: `~/.codex/skills -> ../.agents/skills`.
     v2 writes its copies through the link; v3 skips the link as an alias of
-    the folder it just wrote, so the skills stay on both sides."""
+    the folder it just wrote, so the skills stay on both sides. Windows runs
+    it where a folder symlink can be made (an administrator, or Developer
+    Mode)."""
     _v2_home(sandbox)
     codex = sandbox.home / ".codex/skills"
     shutil.rmtree(codex)
-    os.symlink("../.agents/skills", codex)
+    try:
+        os.symlink(os.path.join("..", ".agents", "skills"), codex, target_is_directory=True)
+    except OSError as exc:
+        pytest.skip(f"cannot create symlinks on this machine: {exc}")
     sandbox.freeze()
 
     v2, (home2, _) = _run(sandbox, "v2", ["doctor", "--json"])

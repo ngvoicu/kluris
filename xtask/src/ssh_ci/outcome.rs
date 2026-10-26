@@ -14,7 +14,7 @@ pub const TIMED_OUT: i32 = 124;
 pub const EXIT_MARK: &str = "== exit ";
 /// The commit the machine unpacked: `== tree <commit>`.
 pub const TREE_MARK: &str = "== tree ";
-/// Each step's start and end: `== step NAME exit CODE SECONDSs`.
+/// Each step's start and end: `== step NAME exit CODE SECONDSs RUN-ID`.
 pub const STEP_MARK: &str = "== step ";
 
 /// The status a line says the run ended with: `== exit N`, nothing else.
@@ -72,9 +72,14 @@ pub fn answer(ssh: Option<i32>, said: Option<i32>, tree_said: bool) -> (i32, Opt
 }
 
 /// What the machine's output said, read as it goes by: the last line, the
-/// tree, and each step's end (`== step NAME exit CODE SECONDSs`).
+/// tree, and each step's end (`== step NAME exit CODE SECONDSs RUN-ID`).
+/// A step line counts only when it ends with this run's id: the output of
+/// a step (a failing test printing what it captured, a run script's lines
+/// among it) can hold step lines of other runs, which never know this one's.
 #[derive(Default)]
 pub struct Said {
+    /// The run's id, the last word of its own step lines.
+    id: String,
     partial: Vec<u8>,
     pub last_line: Option<String>,
     pub tree: Option<String>,
@@ -82,6 +87,14 @@ pub struct Said {
 }
 
 impl Said {
+    /// What run `id` says.
+    pub fn of_run(id: &str) -> Self {
+        Self {
+            id: id.to_owned(),
+            ..Self::default()
+        }
+    }
+
     pub fn push(&mut self, bytes: &[u8]) {
         for &byte in bytes {
             if byte == b'\n' {
@@ -110,7 +123,9 @@ impl Said {
             self.tree = Some(tree.trim().to_owned());
         }
         if let Some(rest) = line.strip_prefix(STEP_MARK)
-            && let [name, "exit", code, seconds] = rest.split_whitespace().collect::<Vec<_>>()[..]
+            && let [name, "exit", code, seconds, id] =
+                rest.split_whitespace().collect::<Vec<_>>()[..]
+            && id == self.id
         {
             self.steps
                 .push((name.to_owned(), code.to_owned(), seconds.to_owned()));
