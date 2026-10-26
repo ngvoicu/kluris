@@ -62,12 +62,28 @@ fn escapes(path: &Path, resolved_root: Option<&Path>) -> bool {
     }
 }
 
+/// What the walker sees under a root.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Tree {
+    pub files: Vec<WalkedFile>,
+    /// The directories it descends into, the root excluded, by their
+    /// `/`-separated relative paths, sorted by bytes (dream writes a `map.md`
+    /// into each).
+    pub dirs: Vec<String>,
+}
+
 /// Every file under `root`, pruned and sorted as the module docs say. A root
 /// that is not a readable directory, and any directory that cannot be read,
 /// contribute nothing.
 pub fn walk(root: &Path) -> Vec<WalkedFile> {
+    walk_tree(root).files
+}
+
+/// The files and the directories of the walk ([`walk`]).
+pub fn walk_tree(root: &Path) -> Tree {
     let resolved_root = sandbox::resolve(root).ok();
     let mut files = Vec::new();
+    let mut dirs = Vec::new();
     let mut pending = vec![(root.to_path_buf(), String::new())];
     while let Some((dir, rel_dir)) = pending.pop() {
         let Ok(entries) = fs::read_dir(&dir) else {
@@ -87,6 +103,7 @@ pub fn walk(root: &Path) -> Vec<WalkedFile> {
             };
             if file_type.is_dir() {
                 if !is_pruned_dir(&name) {
+                    dirs.push(rel.clone());
                     pending.push((path, rel));
                 }
             } else if file_type.is_symlink() {
@@ -110,5 +127,6 @@ pub fn walk(root: &Path) -> Vec<WalkedFile> {
         }
     }
     files.sort_by(|a, b| a.rel.as_bytes().cmp(b.rel.as_bytes()));
-    files
+    dirs.sort();
+    Tree { files, dirs }
 }

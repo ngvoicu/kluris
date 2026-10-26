@@ -1,13 +1,14 @@
-//! `BrainStore`: how every command reads a brain. Only the read side exists so
-//! far; write methods come with the commands that write.
+//! `BrainStore`: how every command reads a brain, and the one way it is
+//! written: a [`ChangeSet`] given to [`BrainStore::apply`].
 
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use super::change::{Applied, ChangeSet, FailedWrite};
 use super::glossary::{GlossaryEntry, parse_glossary_entries};
 use super::neuron_index::{Neuron, neuron_files};
 use super::sandbox::{self, SandboxError};
-use super::walk::{WalkedFile, is_pruned_dir, walk};
+use super::walk::{WalkedFile, is_pruned_dir, walk, walk_tree};
 use crate::frontmatter::{self, Frontmatter, FrontmatterError};
 
 /// Why a file could not be read.
@@ -31,7 +32,16 @@ impl std::fmt::Display for ReadError {
 
 impl std::error::Error for ReadError {}
 
-/// The read side of a brain.
+/// A directory's child, as `Path.iterdir()` lists it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DirEntry {
+    pub name: String,
+    /// `Path.is_file()` / `Path.is_dir()`: symlinks followed.
+    pub is_file: bool,
+    pub is_dir: bool,
+}
+
+/// How a brain is read and written.
 pub trait BrainStore {
     /// The brain root, as the store was opened with it.
     fn root(&self) -> &Path;
@@ -102,6 +112,52 @@ pub trait BrainStore {
     /// A structure file's text; `None` when it cannot be read or is not
     /// UTF-8.
     fn structure_text(&self, rel: &str) -> Option<String>;
+    /// The directories the walker descends into, the root excluded,
+    /// `/`-separated and sorted by bytes.
+    fn dirs(&self) -> &[String];
+    /// The children of a directory (`""` is the root) in the order of v2's
+    /// `sorted(path.iterdir())`: by code point, and on Windows by
+    /// `str.lower()`. Nothing when it cannot be read.
+    fn entries(&self, rel_dir: &str) -> Vec<DirEntry>;
+    /// `Path.exists()` of a brain-relative path (links followed).
+    fn exists(&self, rel: &str) -> bool;
+    /// A file's bytes; `None` when it cannot be read.
+    fn bytes(&self, rel: &str) -> Option<Vec<u8>>;
+    /// The brain-relative path a write to `rel` lands on: `rel`, or for a
+    /// symlink the path its target resolves to; `None` when that is outside
+    /// the brain or loops.
+    fn real_rel(&self, rel: &str) -> Option<String>;
+    /// A markdown file a brain links to, wherever it is, read as v2's
+    /// `read_frontmatter` reads it (no path sandbox: the link checks read
+    /// what the links point at).
+    fn read_markdown_at(&self, path: &Path) -> Result<Frontmatter, FrontmatterError> {
+        frontmatter::read(path)
+    }
+    /// Write every file of `changes`, then walk the brain again. A write that
+    /// fails is reported and the others still happen.
+    fn apply(&mut self, changes: &ChangeSet) -> Applied;
+}
+
+/// Names sorted as Python's `sorted(Path)` sorts siblings.
+fn py_sorted(mut names: Vec<String>) -> Vec<String> {
+    if cfg!(windows) {
+        names.sort_by_cached_key(|name| (name.to_lowercase(), name.clone()));
+    } else {
+        names.sort();
+    }
+    names
+}
+
+/// A `/`-separated path that stays inside the root it is joined to: no
+/// empty, `.` or `..` part, no `\\` (and no `:` on Windows).
+fn is_plain_rel(rel: &str) -> bool {
+    rel.split('/').all(|part| {
+        !part.is_empty()
+            && part != "."
+            && part != ".."
+            && !part.contains('\\')
+            && !(cfg!(windows) && part.contains(':'))
+    })
 }
 
 /// A brain in a local directory (a git checkout or not), walked once when
@@ -110,17 +166,19 @@ pub trait BrainStore {
 pub struct LocalGitStore {
     root: PathBuf,
     files: Vec<WalkedFile>,
+    dirs: Vec<String>,
     neurons: Vec<Neuron>,
 }
 
 impl LocalGitStore {
     pub fn open(root: impl AsRef<Path>) -> LocalGitStore {
         let root = root.as_ref().to_path_buf();
-        let files = walk(&root);
-        let neurons = neuron_files(&files);
+        let tree = walk_tree(&root);
+        let neurons = neuron_files(&tree.files);
         LocalGitStore {
             root,
-            files,
+            files: tree.files,
+            dirs: tree.dirs,
             neurons,
         }
     }
@@ -174,18 +232,14 @@ impl BrainStore for LocalGitStore {
         let Ok(entries) = fs::read_dir(&self.root) else {
             return Vec::new();
         };
-        let mut names: Vec<String> = entries
-            .flatten()
-            .filter(|entry| fs::metadata(entry.path()).is_ok_and(|m| m.is_dir()))
-            .map(|entry| entry.file_name().to_string_lossy().into_owned())
-            .filter(|name| !is_pruned_dir(name))
-            .collect();
-        if cfg!(windows) {
-            names.sort_by_cached_key(|name| (name.to_lowercase(), name.clone()));
-        } else {
-            names.sort();
-        }
-        names
+        py_sorted(
+            entries
+                .flatten()
+                .filter(|entry| fs::metadata(entry.path()).is_ok_and(|m| m.is_dir()))
+                .map(|entry| entry.file_name().to_string_lossy().into_owned())
+                .filter(|name| !is_pruned_dir(name))
+                .collect(),
+        )
     }
 
     fn lobe_neurons(&self, lobe: &str) -> Vec<Neuron> {
@@ -199,6 +253,90 @@ impl BrainStore for LocalGitStore {
 
     fn structure_text(&self, rel: &str) -> Option<String> {
         fs::read_to_string(self.join(rel)).ok()
+    }
+
+    fn dirs(&self) -> &[String] {
+        &self.dirs
+    }
+
+    fn entries(&self, rel_dir: &str) -> Vec<DirEntry> {
+        let Ok(read) = fs::read_dir(self.join(rel_dir)) else {
+            return Vec::new();
+        };
+        let mut found: Vec<(String, PathBuf)> = read
+            .flatten()
+            .map(|entry| {
+                (
+                    entry.file_name().to_string_lossy().into_owned(),
+                    entry.path(),
+                )
+            })
+            .collect();
+        let order = py_sorted(found.iter().map(|(name, _)| name.clone()).collect());
+        order
+            .into_iter()
+            .filter_map(|name| {
+                let at = found.iter().position(|(n, _)| *n == name)?;
+                let (name, path) = found.swap_remove(at);
+                let meta = fs::metadata(&path).ok();
+                Some(DirEntry {
+                    name,
+                    is_file: meta.as_ref().is_some_and(|m| m.is_file()),
+                    is_dir: meta.as_ref().is_some_and(|m| m.is_dir()),
+                })
+            })
+            .collect()
+    }
+
+    fn exists(&self, rel: &str) -> bool {
+        self.join(rel).exists()
+    }
+
+    fn bytes(&self, rel: &str) -> Option<Vec<u8>> {
+        fs::read(self.join(rel)).ok()
+    }
+
+    fn real_rel(&self, rel: &str) -> Option<String> {
+        let path = self.join(rel);
+        if !fs::symlink_metadata(&path).is_ok_and(|m| m.file_type().is_symlink()) {
+            return Some(rel.to_string());
+        }
+        let target = sandbox::resolve(&path).ok()?;
+        let root = sandbox::resolve(&self.root).ok()?;
+        let inside = target.strip_prefix(&root).ok()?;
+        let parts: Vec<String> = inside
+            .components()
+            .map(|c| c.as_os_str().to_string_lossy().into_owned())
+            .collect();
+        (!parts.is_empty()).then(|| parts.join("/"))
+    }
+
+    fn apply(&mut self, changes: &ChangeSet) -> Applied {
+        let mut applied = Applied::default();
+        for write in &changes.writes {
+            let failed = |error: String| FailedWrite {
+                rel: write.rel.clone(),
+                error,
+            };
+            if changes.base.is_some() {
+                applied.failed.push(failed(
+                    "a local store applies changes to the working tree only".into(),
+                ));
+                continue;
+            }
+            if !is_plain_rel(&write.rel) {
+                applied
+                    .failed
+                    .push(failed("not a path inside the brain".into()));
+                continue;
+            }
+            match fs::write(self.join(&write.rel), &write.contents) {
+                Ok(()) => applied.written.push(write.rel.clone()),
+                Err(e) => applied.failed.push(failed(e.to_string())),
+            }
+        }
+        *self = LocalGitStore::open(&self.root);
+        applied
     }
 }
 

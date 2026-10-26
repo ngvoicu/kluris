@@ -2,14 +2,16 @@
 //! `parity/test_brain_model.py` (its v2 side is
 //! `parity/tools/brain_model_oracle.py`, same shape).
 
-use std::path::Path;
+use std::path::{MAIN_SEPARATOR_STR, Path};
 
 use kluris_core::brain::deprecation::{DeprecationIssue, detect_deprecation_issues};
 use kluris_core::brain::store::{BrainStore, LocalGitStore};
 use serde_json::{Value, json};
 
-fn native(path: &Path) -> String {
-    path.to_string_lossy().into_owned()
+/// The report's `/`-joined path in v2's `str(Path)` form, which
+/// `brain_model_oracle.py` prints (the commands print `/`, PAR-030).
+fn native(path: &str) -> String {
+    path.replace('/', MAIN_SEPARATOR_STR)
 }
 
 fn issue(issue: &DeprecationIssue) -> Value {

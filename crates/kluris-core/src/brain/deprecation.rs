@@ -16,8 +16,9 @@
 //! Statuses are keyed by resolved path, so a symlink and its target are one
 //! neuron, while each walked path still reports its own issues. `file` and
 //! `source` are the walked relative paths, the `active_links_to_deprecated`
-//! target is the resolved target's relative path, all in native form (v2's
-//! `str(Path)`); `replaced_by` targets are kept as written.
+//! target is the resolved target's relative path, all `/`-joined on every OS
+//! (interview-01 #7; v2's `str(Path)` is native, PAR-030); `replaced_by`
+//! targets are kept as written.
 //!
 //! A markdown neuron whose frontmatter cannot be read is skipped and reported
 //! in [`DeprecationReport::skipped`]; v2 raises instead (PAR-007).
@@ -33,10 +34,10 @@ use crate::yaml::{Map, Value, date_iso, datetime_iso};
 /// One deprecation-frontmatter inconsistency, with v2's fields.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DeprecationIssue {
-    ActiveLinksToDeprecated { source: PathBuf, target: PathBuf },
-    DeprecatedWithoutReplacement { file: PathBuf },
-    ReplacedByMissing { file: PathBuf, target: String },
-    ReplacedByNotActive { file: PathBuf, target: String },
+    ActiveLinksToDeprecated { source: String, target: String },
+    DeprecatedWithoutReplacement { file: String },
+    ReplacedByMissing { file: String, target: String },
+    ReplacedByNotActive { file: String, target: String },
 }
 
 impl DeprecationIssue {
@@ -106,9 +107,12 @@ fn replacement(meta: &Map) -> Replacement {
     }
 }
 
-/// A brain-relative `/`-separated path in native form.
-fn native(rel: &str) -> PathBuf {
-    rel.split('/').collect()
+/// A relative path `/`-joined.
+fn slashed(rel: &Path) -> String {
+    rel.components()
+        .map(|c| c.as_os_str().to_string_lossy())
+        .collect::<Vec<_>>()
+        .join("/")
 }
 
 fn parent(path: &Path) -> &Path {
@@ -155,7 +159,7 @@ pub fn detect_deprecation_issues(store: &impl BrainStore) -> DeprecationReport {
         if status(meta) != Status::Deprecated {
             continue;
         }
-        let file = native(&neuron.rel);
+        let file = neuron.rel.clone();
         let target_text = match replacement(meta) {
             Replacement::None => {
                 report
@@ -207,8 +211,8 @@ pub fn detect_deprecation_issues(store: &impl BrainStore) -> DeprecationReport {
                 report
                     .issues
                     .push(DeprecationIssue::ActiveLinksToDeprecated {
-                        source: native(&neuron.rel),
-                        target: rel.to_path_buf(),
+                        source: neuron.rel.clone(),
+                        target: slashed(rel),
                     });
             }
         }

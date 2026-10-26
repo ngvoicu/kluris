@@ -95,6 +95,23 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    #[command(
+        args_override_self = true,
+        about = "Brain maintenance — regenerate maps, update dates, auto-fix safe issues, validate remaining links."
+    )]
+    Dream {
+        /// Specific brain
+        #[arg(long = "brain", value_name = "BRAIN", allow_hyphen_values = true)]
+        brain: Option<String>,
+        /// JSON output
+        #[arg(long)]
+        json: bool,
+        #[arg(
+            long = "broken-only",
+            help = "In --json mode, return only broken-synapse entries for the agent to repair."
+        )]
+        broken_only: bool,
+    },
     #[command(about = "Show help for kluris commands.")]
     Help {
         command: Option<String>,
@@ -333,6 +350,11 @@ fn run(cli: Cli) -> Result<(), CliError> {
             json,
         }),
         Command::Status { brain, json } => commands::status::run(brain.as_deref(), json),
+        Command::Dream {
+            brain,
+            json,
+            broken_only,
+        } => commands::dream::run(brain.as_deref(), json, broken_only),
         Command::Help { command, json } => commands::help::run(command.as_deref(), json),
     }
 }

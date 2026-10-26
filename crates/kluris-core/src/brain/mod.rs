@@ -2,6 +2,7 @@
 //! path sandbox, glossary parsing, deprecation diagnostics and the
 //! [`store::BrainStore`] read interface.
 
+pub mod change;
 pub mod deprecation;
 pub mod glossary;
 pub mod neuron_index;

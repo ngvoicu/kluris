@@ -68,10 +68,6 @@ fn recent(path: &str, updated: &str, kind: NeuronKind) -> RecentNeuron {
     }
 }
 
-fn native(rel: &str) -> PathBuf {
-    rel.split('/').collect()
-}
-
 #[test]
 fn wakeup_fixture_payload_matches_v2() {
     let b = brain("wakeup");
@@ -134,15 +130,15 @@ fn wakeup_fixture_payload_matches_v2() {
         w.deprecation,
         [
             DeprecationIssue::ReplacedByNotActive {
-                file: native("beta/old.md"),
+                file: "beta/old.md".into(),
                 target: "older.md".into()
             },
             DeprecationIssue::DeprecatedWithoutReplacement {
-                file: native("beta/older.md")
+                file: "beta/older.md".into()
             },
             DeprecationIssue::ActiveLinksToDeprecated {
-                source: native("beta/b7.md"),
-                target: native("beta/old.md")
+                source: "beta/b7.md".into(),
+                target: "beta/old.md".into()
             },
         ]
     );

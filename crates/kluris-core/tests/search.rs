@@ -951,6 +951,27 @@ impl kluris_core::brain::store::BrainStore for MemStore {
     fn structure_text(&self, rel: &str) -> Option<String> {
         self.texts.get(rel).cloned()
     }
+    fn dirs(&self) -> &[String] {
+        &[]
+    }
+    fn entries(&self, _rel_dir: &str) -> Vec<kluris_core::brain::store::DirEntry> {
+        Vec::new()
+    }
+    fn exists(&self, rel: &str) -> bool {
+        self.texts.contains_key(rel)
+    }
+    fn bytes(&self, rel: &str) -> Option<Vec<u8>> {
+        self.texts.get(rel).map(|t| t.as_bytes().to_vec())
+    }
+    fn real_rel(&self, rel: &str) -> Option<String> {
+        Some(rel.to_string())
+    }
+    fn apply(
+        &mut self,
+        _changes: &kluris_core::brain::change::ChangeSet,
+    ) -> kluris_core::brain::change::Applied {
+        unreachable!("search never writes")
+    }
 }
 
 #[test]

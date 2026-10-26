@@ -98,7 +98,7 @@ fn is_delimiter(line: &str) -> bool {
 }
 
 /// The line ending of the first line break: CRLF, or LF otherwise.
-fn line_ending(text: &str) -> LineEnding {
+pub fn line_ending(text: &str) -> LineEnding {
     match text.find('\n') {
         Some(i) if i > 0 && text.as_bytes()[i - 1] == b'\r' => LineEnding::Crlf,
         _ => LineEnding::Lf,
@@ -108,7 +108,7 @@ fn line_ending(text: &str) -> LineEnding {
 /// The YAML text as v2's text-mode read hands it to PyYAML: only `\r\n`
 /// and `\r` become `\n` here; `\u{85}`, `\u{2028}` and `\u{2029}` stay, and
 /// the YAML reader breaks lines at them as PyYAML's does.
-fn universal_newlines(text: &str) -> String {
+pub(crate) fn universal_newlines(text: &str) -> String {
     text.replace("\r\n", "\n").replace('\r', "\n")
 }
 
@@ -289,23 +289,30 @@ pub fn read_yaml_neuron(path: &Path) -> Result<Frontmatter, FrontmatterError> {
 /// removed) as the body; a file that cannot be read gives no metadata and an
 /// empty body.
 pub fn read_yaml_neuron_lenient(path: &Path) -> Frontmatter {
-    let empty = |body: &str| Frontmatter {
+    match fs::read(path) {
+        Ok(bytes) => parse_yaml_neuron_lenient(&String::from_utf8_lossy(&bytes)),
+        Err(_) => no_metadata(""),
+    }
+}
+
+fn no_metadata(body: &str) -> Frontmatter {
+    Frontmatter {
         meta: Map::new(),
         body: body.to_string(),
         line_ending: line_ending(body),
         had_bom: false,
         body_line: 0,
-    };
-    let Ok(bytes) = fs::read(path) else {
-        return empty("");
-    };
-    let text = String::from_utf8_lossy(&bytes);
-    let content = text.strip_prefix('\u{feff}').unwrap_or(&text);
-    match parse_yaml_neuron(&text) {
+    }
+}
+
+/// [`read_yaml_neuron_lenient`] on text already read.
+pub fn parse_yaml_neuron_lenient(text: &str) -> Frontmatter {
+    let content = text.strip_prefix('\u{feff}').unwrap_or(text);
+    match parse_yaml_neuron(text) {
         Ok(fm) => fm,
         Err(_) => Frontmatter {
             had_bom: text.starts_with('\u{feff}'),
-            ..empty(content)
+            ..no_metadata(content)
         },
     }
 }
@@ -322,7 +329,7 @@ pub fn read_frontmatter(path: &Path) -> Result<Frontmatter, FrontmatterError> {
     }
 }
 
-fn has_yaml_suffix(path: &Path) -> bool {
+pub(crate) fn has_yaml_suffix(path: &Path) -> bool {
     path.extension()
         .and_then(|e| e.to_str())
         .is_some_and(|e| e.eq_ignore_ascii_case("yml") || e.eq_ignore_ascii_case("yaml"))
@@ -347,7 +354,13 @@ pub fn has_yaml_opt_in_block(path: &Path) -> bool {
     if read.is_err() {
         return false;
     }
-    let text = String::from_utf8_lossy(&head);
+    has_yaml_opt_in_head(&head)
+}
+
+/// The opt-in gate on a file's bytes (only the first 4096 count).
+pub fn has_yaml_opt_in_head(bytes: &[u8]) -> bool {
+    let head = &bytes[..bytes.len().min(4096)];
+    let text = String::from_utf8_lossy(head);
     let text = text.strip_prefix('\u{feff}').unwrap_or(&text);
     let mut lines = py_splitlines(text)
         .into_iter()
@@ -415,6 +428,17 @@ pub fn write_markdown(meta: &Map, body: &str, line_ending: LineEnding) -> String
 /// output with every line prefixed `# ` (`#` when empty) between `#---` lines,
 /// LF, then the body byte for byte.
 pub fn write_yaml_neuron(meta: &Map, body: &str) -> String {
+    write_yaml_neuron_with(meta, body, LineEnding::Lf)
+}
+
+/// [`write_yaml_neuron`] with the `#---` block's lines ending in
+/// `line_ending` (Kluris 3 keeps a CRLF file's endings; v2 always writes the
+/// block LF). The body is still kept byte for byte.
+pub fn write_yaml_neuron_with(meta: &Map, body: &str, line_ending: LineEnding) -> String {
+    let eol = match line_ending {
+        LineEnding::Lf => "\n",
+        LineEnding::Crlf => "\r\n",
+    };
     let dumped = yaml::emit(meta, Profile::Yml);
     let lines: Vec<String> = py_splitlines(dumped.trim_end_matches('\n'))
         .into_iter()
@@ -423,5 +447,5 @@ pub fn write_yaml_neuron(meta: &Map, body: &str) -> String {
             line => format!("# {line}"),
         })
         .collect();
-    format!("#---\n{}\n#---\n{body}", lines.join("\n"))
+    format!("#---{eol}{}{eol}#---{eol}{body}", lines.join(eol))
 }

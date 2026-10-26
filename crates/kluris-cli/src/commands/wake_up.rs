@@ -41,11 +41,12 @@ fn count(n: usize) -> Json {
     Json::Int(i64::try_from(n).unwrap_or(i64::MAX))
 }
 
-fn path(p: &Path) -> Json {
-    Json::Str(p.to_string_lossy().into_owned())
+fn path(p: &str) -> Json {
+    Json::Str(p.to_string())
 }
 
-fn issue(issue: &DeprecationIssue) -> Json {
+/// v2's deprecation entry (`kind` first), also in `dream --json`.
+pub(crate) fn issue(issue: &DeprecationIssue) -> Json {
     let kind = ("kind".to_string(), str(issue.kind()));
     Json::Object(match issue {
         DeprecationIssue::ActiveLinksToDeprecated { source, target } => vec![

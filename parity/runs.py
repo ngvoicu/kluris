@@ -160,6 +160,30 @@ def issue_key(issue: dict) -> str:
     return json.dumps(issue, sort_keys=True, ensure_ascii=False)
 
 
+def path_keys(entry: dict) -> tuple[str, ...]:
+    """The keys of a deprecation or broken-synapse entry that hold a
+    brain-relative path; a ``replaced_by`` or link ``target`` is as written."""
+    if entry.get("kind") == "active_links_to_deprecated":
+        return ("source", "target")
+    return ("file",)
+
+
+def slash_paths(v2_entries: list[dict], v3_entries: list[dict]) -> None:
+    """PAR-030: Kluris 3 writes the brain-relative paths of wake-up's
+    ``deprecation[]`` and dream's ``deprecation[]`` and broken synapses
+    ``/``-joined on every OS; v2 writes them native. v3's must hold no
+    backslash; on Windows v2's are turned into the ``/`` form (in place)
+    before comparing."""
+    for entry in v3_entries:
+        for key in path_keys(entry):
+            assert "\\" not in entry[key], f"v3 path with a backslash: {entry}"
+    if not IS_WINDOWS:
+        return
+    for entry in v2_entries:
+        for key in path_keys(entry):
+            entry[key] = entry[key].replace("\\", "/")
+
+
 def parse_exact(raw: str, root: Path, side: str) -> dict:
     """The parsed JSON stdout, after checking it is exactly Python's
     ``json.dumps`` of its parse plus a newline."""
@@ -182,6 +206,7 @@ def assert_wake_up_equal(
     assert v2.code == 0, f"v2 failed: {v2.stdout} {v2.stderr}"
     assert v3.code == v2.code, f"v3 exit {v3.code}: {v3.stdout} {v3.stderr}"
     j2, j3 = parse_exact(v2.stdout, root, "v2"), parse_exact(v3.stdout, root, "v3")
+    slash_paths(j2["deprecation"], j3["deprecation"])
     if skipped:
         assert j2["parse_errors"] == 0
         assert j3["parse_errors"] == len(skipped), j3["parse_errors"]
@@ -220,6 +245,6 @@ def same_words(v2_text: str, v3_text: str, root: Path) -> None:
 
 
 __all__ = [
-    "IS_WINDOWS", "PtyResult", "assert_wake_up_equal", "clear_runs", "issue_key", "parse_exact",
+    "IS_WINDOWS", "PtyResult", "assert_wake_up_equal", "clear_runs", "issue_key", "parse_exact", "slash_paths",
     "run_pair", "run_pty", "same_words", "transcript", "write_config",
 ]

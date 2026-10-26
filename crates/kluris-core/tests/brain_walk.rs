@@ -132,25 +132,27 @@ fn expect_neurons(list: &[(&str, NeuronKind)]) -> Vec<(String, NeuronKind)> {
 
 fn links(source: &str, target: &str) -> DeprecationIssue {
     DeprecationIssue::ActiveLinksToDeprecated {
-        source: native(source),
-        target: native(target),
+        source: source.to_string(),
+        target: target.to_string(),
     }
 }
 
 fn without(file: &str) -> DeprecationIssue {
-    DeprecationIssue::DeprecatedWithoutReplacement { file: native(file) }
+    DeprecationIssue::DeprecatedWithoutReplacement {
+        file: file.to_string(),
+    }
 }
 
 fn missing(file: &str, target: &str) -> DeprecationIssue {
     DeprecationIssue::ReplacedByMissing {
-        file: native(file),
+        file: file.to_string(),
         target: target.to_string(),
     }
 }
 
 fn not_active(file: &str, target: &str) -> DeprecationIssue {
     DeprecationIssue::ReplacedByNotActive {
-        file: native(file),
+        file: file.to_string(),
         target: target.to_string(),
     }
 }
