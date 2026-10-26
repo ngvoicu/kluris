@@ -25,7 +25,7 @@ fn str(text: &str) -> Json {
 }
 
 /// The local date (Python's `date.today()`, which follows `TZ`).
-fn today() -> Result<Date, CliError> {
+pub(crate) fn today() -> Result<Date, CliError> {
     let date = jiff::Zoned::now().date();
     let (Ok(year), Ok(month), Ok(day)) = (
         u32::try_from(date.year()),
@@ -45,7 +45,7 @@ fn add(sum: &mut Fixes, f: &Fixes) {
     sum.total += f.total;
 }
 
-fn fixes_json(f: &Fixes) -> Json {
+pub(crate) fn fixes_json(f: &Fixes) -> Json {
     Json::Object(vec![
         ("dates_updated".into(), count(f.dates_updated)),
         ("parents_inferred".into(), count(f.parents_inferred)),

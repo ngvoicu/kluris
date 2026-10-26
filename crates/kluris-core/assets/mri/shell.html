@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{brain_name}} Brain MRI</title>
+<style>
+{{css}}
+</style>
+</head>
+<body>
+<div class="app">
+  <header class="mri-header">
+    <div class="header-left">
+      <h1 class="brain-title">{{brain_name}}</h1>
+      <div class="stats">
+        <span><span class="num" id="stat-lobes">{{lobe_count}}</span> lobes</span>
+        <span class="dot">·</span>
+        <span><span class="num" id="stat-neurons">{{neuron_count}}</span> neurons</span>
+        <span class="dot">·</span>
+        <span><span class="num" id="stat-synapses">{{edge_count}}</span> synapses</span>
+      </div>
+    </div>
+
+    <nav class="breadcrumb" id="breadcrumb" aria-label="Brain navigation">
+      <span class="crumb active" data-level="brain">{{brain_name}}</span>
+    </nav>
+
+    <div class="header-right" aria-hidden="true"></div>
+  </header>
+
+  <div class="body">
+    <aside class="panel panel-left" id="panel-left">
+      <div class="panel-header">
+        <h3>Files</h3>
+        <button type="button" class="panel-collapse-btn" id="collapse-left" title="Collapse left panel" aria-label="Collapse left panel">&lsaquo;</button>
+      </div>
+      <div class="panel-body">
+        <nav class="panel-tree" id="panel-tree" aria-label="Brain files"></nav>
+      </div>
+    </aside>
+
+    <main class="stage" id="stage">
+      <div class="stage-hud">
+        <div class="hud-pill" id="hud-action">Click a folder to drill in · scroll to zoom · drag to pan</div>
+        <div class="hud-nav" aria-label="Brain navigation">
+          <button class="icon-button hud-button" id="btn-back" type="button" title="Back" aria-label="Back" disabled>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>
+          </button>
+          <button class="icon-button hud-button" id="btn-forward" type="button" title="Forward" aria-label="Forward" disabled>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18l6-6-6-6"/></svg>
+          </button>
+          <div class="hud-pill" id="hud-keys">Press <kbd>/</kbd> to search · <kbd>Esc</kbd> to close</div>
+        </div>
+      </div>
+      <canvas id="mri-canvas"></canvas>
+    </main>
+
+    <aside class="panel panel-right" id="panel-right">
+      <div class="panel-header">
+        <h3>Find</h3>
+        <button type="button" class="panel-collapse-btn" id="collapse-right" title="Collapse right panel" aria-label="Collapse right panel">&rsaquo;</button>
+      </div>
+      <label class="search">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
+        <input id="search-input" type="search" placeholder="Search neurons, path, lobe, tag, or yaml" autocomplete="off">
+        <kbd>/</kbd>
+      </label>
+
+      <div class="panel-body">
+        <div class="panel-section-header" style="padding-top:18px">
+          <h3>Recent</h3>
+        </div>
+        <div class="recent-list" id="recent-list"></div>
+
+        <div class="panel-section-header" style="padding-top:18px">
+          <h3>Results</h3>
+        </div>
+        <div id="result-count" class="result-count"></div>
+        <div class="results" id="search-results"></div>
+      </div>
+    </aside>
+  </div>
+
+  <button type="button" class="panel-expand-btn panel-expand-left" id="expand-left" title="Show left panel" aria-label="Show left panel">&rsaquo;</button>
+  <button type="button" class="panel-expand-btn panel-expand-right" id="expand-right" title="Show right panel" aria-label="Show right panel">&lsaquo;</button>
+</div>
+
+<div id="content-modal" class="modal-overlay" style="display:none">
+  <div class="modal-box">
+    <div class="modal-header">
+      <div class="modal-header-title">
+        <button type="button" class="modal-icon-btn" id="modal-back" title="Back">&larr;</button>
+        <button type="button" class="modal-icon-btn" id="modal-forward" title="Forward">&rarr;</button>
+        <span class="kicker" id="modal-kicker">NEURON</span>
+        <div class="modal-title" id="modal-title"></div>
+      </div>
+      <button type="button" class="modal-close" id="modal-close">&times;</button>
+    </div>
+    <nav class="modal-tree" id="modal-tree" aria-label="Brain files"></nav>
+    <div class="modal-main">
+      <div class="modal-stats" id="modal-stats"></div>
+      <div class="modal-nav" id="modal-nav"></div>
+      <div class="modal-content" id="modal-content"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+const graph = {{graph_json}};
+const BRAIN_NAME = {{brain_name_json}};
+{{js}}
+</script>
+</body>
+</html>

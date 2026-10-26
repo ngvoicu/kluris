@@ -121,6 +121,21 @@ enum Command {
         )]
         broken_only: bool,
     },
+    #[command(
+        args_override_self = true,
+        about = "Generate interactive brain visualization."
+    )]
+    Mri {
+        /// Specific brain
+        #[arg(long = "brain", value_name = "BRAIN", allow_hyphen_values = true)]
+        brain: Option<String>,
+        /// Output HTML file path
+        #[arg(long = "output", value_name = "OUTPUT", allow_hyphen_values = true)]
+        output: Option<String>,
+        /// JSON output
+        #[arg(long)]
+        json: bool,
+    },
     #[command(about = "Show help for kluris commands.")]
     Help {
         command: Option<String>,
@@ -495,6 +510,11 @@ fn run(cli: Cli) -> Result<(), CliError> {
             json,
             broken_only,
         } => commands::dream::run(brain.as_deref(), json, broken_only),
+        Command::Mri {
+            brain,
+            output,
+            json,
+        } => commands::mri::run(brain.as_deref(), output.as_deref(), json),
         Command::Help { command, json } => commands::help::run(command.as_deref(), json),
     }
 }

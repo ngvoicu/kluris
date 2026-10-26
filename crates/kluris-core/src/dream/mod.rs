@@ -117,18 +117,84 @@ impl DreamReport {
     }
 }
 
-/// Run dream on a brain: compute every write, apply them as one change set,
-/// and validate the result.
-pub fn dream<S: BrainStore>(store: &mut S, git: &impl Git, options: &DreamOptions) -> DreamReport {
+/// v2's `_sync_brain_state` alone, the preflight `kluris mri` runs: dream's
+/// writes without its validators. `orphan_references_added` compares the
+/// orphans before the maps with the orphans after the writes, as v2 does.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SyncReport {
+    pub fixes: Fixes,
+    /// Every directory a map was generated for, in v2's order, `/`-joined.
+    pub maps_regenerated: Vec<String>,
+    /// The files written, by path.
+    pub written: Vec<String>,
+    pub skipped: Vec<SkippedFile>,
+}
+
+/// Run the writes of dream on a brain (v2's `_sync_brain_state`), as one
+/// change set, without validating the result.
+pub fn sync_brain_state<S: BrainStore>(
+    store: &mut S,
+    git: &impl Git,
+    options: &DreamOptions,
+) -> SyncReport {
+    let mut skipped = BTreeMap::new();
+    let sync = sync(store, git, options, &mut skipped);
+    let orphans_after = linker::orphans(&*store, &mut skipped).len();
+    SyncReport {
+        fixes: sync.fixes(orphans_after),
+        maps_regenerated: sync.order,
+        written: sync.written,
+        skipped: skipped_files(skipped),
+    }
+}
+
+/// Steps 1-6, applied.
+struct Sync {
+    dates_updated: usize,
+    parents_inferred: usize,
+    reverse_synapses_added: usize,
+    orphans_before: usize,
+    order: Vec<String>,
+    written: Vec<String>,
+}
+
+impl Sync {
+    fn fixes(&self, orphans_after: usize) -> Fixes {
+        let orphan_references_added = self.orphans_before.saturating_sub(orphans_after);
+        Fixes {
+            dates_updated: self.dates_updated,
+            parents_inferred: self.parents_inferred,
+            reverse_synapses_added: self.reverse_synapses_added,
+            orphan_references_added,
+            total: self.dates_updated
+                + self.parents_inferred
+                + self.reverse_synapses_added
+                + orphan_references_added,
+        }
+    }
+}
+
+fn skipped_files(skipped: BTreeMap<String, String>) -> Vec<SkippedFile> {
+    skipped
+        .into_iter()
+        .map(|(rel, reason)| SkippedFile { rel, reason })
+        .collect()
+}
+
+fn sync<S: BrainStore>(
+    store: &mut S,
+    git: &impl Git,
+    options: &DreamOptions,
+    skipped: &mut BTreeMap<String, String>,
+) -> Sync {
     let dates = git
         .repo(store.root())
         .map(|repo| git.file_dates(&repo))
         .unwrap_or_default();
     let neurons = store.neurons().to_vec();
-    let mut skipped = BTreeMap::new();
     // v2 counts these after steps 1-3, which change neither the maps nor the
     // set of neurons, so the brain as read gives the same count.
-    let orphans_before = linker::orphans(&*store, &mut skipped).len();
+    let orphans_before = linker::orphans(&*store, skipped).len();
 
     let order = maps::map_order(store.dirs());
     let mut ws = workspace::Workspace::new(&*store);
@@ -145,6 +211,21 @@ pub fn dream<S: BrainStore>(store: &mut S, git: &impl Git, options: &DreamOption
     for failed in applied.failed {
         skipped.entry(failed.rel).or_insert(failed.error);
     }
+    Sync {
+        dates_updated,
+        parents_inferred,
+        reverse_synapses_added,
+        orphans_before,
+        order,
+        written: applied.written,
+    }
+}
+
+/// Run dream on a brain: compute every write, apply them as one change set,
+/// and validate the result.
+pub fn dream<S: BrainStore>(store: &mut S, git: &impl Git, options: &DreamOptions) -> DreamReport {
+    let mut skipped = BTreeMap::new();
+    let sync = sync(store, git, options, &mut skipped);
 
     let validation = linker::validate(&*store, &mut skipped);
     let deprecation = detect_deprecation_issues(&*store);
@@ -153,27 +234,16 @@ pub fn dream<S: BrainStore>(store: &mut S, git: &impl Git, options: &DreamOption
             .entry(neuron.rel)
             .or_insert(neuron.error.to_string());
     }
-    let orphan_references_added = orphans_before.saturating_sub(validation.orphans.len());
-    let total = dates_updated + parents_inferred + reverse_synapses_added + orphan_references_added;
     DreamReport {
-        fixes: Fixes {
-            dates_updated,
-            parents_inferred,
-            reverse_synapses_added,
-            orphan_references_added,
-            total,
-        },
-        maps_regenerated: order,
+        fixes: sync.fixes(validation.orphans.len()),
+        maps_regenerated: sync.order,
         lobes: store.lobe_names(),
         broken: validation.broken,
         one_way: validation.one_way,
         orphans: validation.orphans,
         frontmatter_issues: validation.frontmatter,
         deprecation: deprecation.issues,
-        written: applied.written,
-        skipped: skipped
-            .into_iter()
-            .map(|(rel, reason)| SkippedFile { rel, reason })
-            .collect(),
+        written: sync.written,
+        skipped: skipped_files(skipped),
     }
 }
