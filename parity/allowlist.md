@@ -160,6 +160,12 @@ One entry per difference, under its own heading:
 - Decision: chief's brief for T-77 ("a local override `search: {language: en|ro}` in the brain's `kluris.yml` ... check the config module keeps that key on rewrite"), research-05 question 2, 2026-10-26
 - Tests: `crates/kluris-core/tests/config.rs::the_search_language_key_is_read_and_kept_on_rewrite`, `parity/test_search.py::test_language_override_keeps_the_invariant`
 
+### PAR-022: a `NUL` stdin on Windows is not a terminal
+- Command: every command that resolves brains (`wake-up`, `search`, `status`; later `dream`, `mri`, `companion add/remove`) with two or more brains, no `--brain`, no `--json`, `KLURIS_NO_PROMPT` not `1`, and stdin the null device (`< NUL`, `subprocess.DEVNULL`) on Windows
+- Differs: v3 asks whether stdin is a console (Rust's `IsTerminal`, `GetConsoleMode`), which `NUL` is not, so it prints the non-interactive error `Multiple brains registered. Pass --brain NAME[ or 'all']. Available: ...` on stderr. v2's `sys.stdin.isatty()` is true for any character device, `NUL` included: it prints the picker menu and `Choice: ` on stdout, reads end of input and prints `Aborted!`. Both exit 1. On macOS and Linux `/dev/null` is no terminal for either, and both print the error.
+- Decision: NUL is not a person typing (SPEC decision log 2026-10-26, after T-76; chief's brief for T-80)
+- Tests: `crates/kluris-cli/tests/resolver.rs::a_null_stdin_is_not_a_terminal` (every OS), `parity/test_resolver.py::test_null_stdin` (the difference on Windows, equality elsewhere)
+
 ### PAR-023: a failing `git log` is an error, not a traceback
 - Command: `kluris status` (with and without `--json`)
 - Differs: when `git log` fails in a brain that has commits (a corrupt repo: HEAD's commit object missing, `fatal: bad object HEAD`), v3 stops with ``Error: `git log -10 --format=%H%x00%s%x00%aI%x00` failed (exit 128): fatal: bad object HEAD`` on stderr (the JSON envelope under `--json`), exit 1. v2 ends in a `CalledProcessError` traceback, exit 1, no JSON. A repo without commits is not a failure (PAR-015).

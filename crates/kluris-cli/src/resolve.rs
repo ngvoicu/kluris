@@ -11,7 +11,6 @@ use kluris_core::config::{global_config_path, read_global_config};
 use kluris_core::resolve::{Request, Resolution, ResolveError, ResolvedBrain, resolve};
 
 use crate::error::CliError;
-use crate::output::json::{self, Json};
 
 /// The global config path, as every command finds it.
 pub fn config_path() -> Result<PathBuf, CliError> {
@@ -79,23 +78,4 @@ impl Drop for AbortOnInterrupt {
             signal_hook::low_level::unregister(id);
         }
     }
-}
-
-/// `kluris __resolve`: the resolved names, `{"ok": true, "brains": [...]}`
-/// with `--json`, else one per line.
-pub fn print_resolved(brain: Option<&str>, allow_all: bool, as_json: bool) -> Result<(), CliError> {
-    let brains = resolve_brains(brain, allow_all, as_json)?;
-    let text = if as_json {
-        json::to_line(&Json::Object(vec![
-            ("ok".into(), Json::Bool(true)),
-            (
-                "brains".into(),
-                Json::Array(brains.iter().map(|b| Json::Str(b.name.clone())).collect()),
-            ),
-        ]))
-    } else {
-        brains.iter().map(|b| format!("{}\n", b.name)).collect()
-    };
-    let _ = io::stdout().write_all(text.as_bytes());
-    Ok(())
 }

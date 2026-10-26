@@ -1,12 +1,13 @@
 """Resolver parity: every case of v2's ``_resolve_brains`` / ``_check_brain_paths``
 / ``_pick_brain_interactively`` (research-03 §1.0) against the v2.28.11 oracle.
 
-Single-brain commands go through ``wake-up`` on both sides. Kluris 3 has no
-fan-out command yet (dream, status, mri, companion), so the ``allow_all``
-cases run v2's ``status`` against v3's hidden test-only ``kluris __resolve
---allow-all``, which exists only when ``KLURIS_TEST_HOOKS=1`` and prints the
-resolved brains (``{"ok": true, "brains": [names]}`` with ``--json``): errors
-are compared whole, a success by the brain names v2's ``status --json`` lists.
+Single-brain commands go through ``wake-up`` and the ``allow_all`` ones through
+``status`` (a fan-out command), the same command on both sides: errors are
+compared whole, a success by its whole ``--json`` output (and the brain names
+it lists) or its text.
+
+Stdin is a pipe unless a test says otherwise; ``test_null_stdin`` gives both
+the null device, which v2 reads as a terminal on Windows (PAR-022).
 
 The picker needs a terminal on stdin: those tests drive both binaries through
 a pseudo-terminal (stdout and stderr stay pipes) and are skipped on Windows,
@@ -16,10 +17,11 @@ which has no ``pty``.
 from __future__ import annotations
 
 import json
+import re
 
 import pytest
 
-from harness import IS_WINDOWS, Sandbox, normalize
+from harness import IS_WINDOWS, Sandbox, assert_json_equal, normalize
 from runs import run_pair, run_pty, same_words, transcript, write_config
 
 ALL_NOT_SUPPORTED = "--brain all is only supported on dream, status, mri, and companion commands."
@@ -51,8 +53,8 @@ def brains(sb: Sandbox, spec: list[tuple[str, str]]) -> dict[str, str]:
 
 
 def fan(*args: str) -> tuple[list[str], list[str]]:
-    """An ``allow_all`` command: v2 ``status``, v3 ``__resolve --allow-all``."""
-    return ["status", *args], ["__resolve", "--allow-all", *args]
+    """An ``allow_all`` command: ``status`` on both sides."""
+    return ["status", *args], ["status", *args]
 
 
 def single(*args: str) -> tuple[list[str], list[str]]:
@@ -80,16 +82,25 @@ def assert_same_error(sb: Sandbox, pair, message: str | None = None, **kw) -> No
 
 
 def resolved_names(sb: Sandbox, pair, **kw) -> list[str]:
-    """Both succeed; the brains v2's ``status --json`` reports must be the
-    ones v3's ``__resolve --json`` prints."""
+    """Both succeed with the same ``status --json``; the brain names it lists."""
     v2_args, v3_args = pair
     r = run_pair(sb, v2_args, v3_args, **kw)
     v2, v3 = r["v2"], r["v3"]
     assert v2.code == 0, f"v2: {v2.stdout} {v2.stderr}"
     assert v3.code == 0, f"v3: {v3.stdout} {v3.stderr}"
-    names = [b["name"] for b in json.loads(v2.stdout)["brains"]]
-    assert json.loads(v3.stdout) == {"ok": True, "brains": names}
-    return names
+    assert_json_equal(v2.stdout, v3.stdout, sb.root)
+    return [b["name"] for b in json.loads(v2.stdout)["brains"]]
+
+
+def after_picker(stdout: str) -> str:
+    """What a command printed after the picker's last prompt."""
+    return stdout[len(transcript(stdout)):]
+
+
+def status_names(text: str) -> list[str]:
+    """The brain names ``status`` text prints, in order (each brain block
+    opens with a blank line, then the name)."""
+    return re.findall(r"^(\S.*)\n  Lobes: ", text, re.M)
 
 
 def missing_message(rows: list[tuple[str, str]]) -> str:
@@ -266,6 +277,29 @@ def test_unicode_names_and_paths(sandbox):
     assert "\\u00e9" in r["v2"].stdout
 
 
+@pytest.mark.parametrize("kind", ["single", "fan"])
+def test_null_stdin(sandbox, kind):
+    """Stdin is the null device (``/dev/null``, ``NUL`` on Windows), prompting
+    allowed. Python's ``isatty()`` is true for ``NUL``, so v2 on Windows shows
+    the picker and aborts at the end of input; v3 asks whether stdin is a
+    console and prints the non-interactive error. Both exit 1 (PAR-022).
+    Elsewhere both print the error."""
+    paths = brains(sandbox, [("a", "dir"), ("b", "dir")])
+    make = single if kind == "single" else fan
+    hint = "" if kind == "single" else " or 'all'"
+    message = f"Multiple brains registered. Pass --brain NAME{hint}. Available: a, b"
+    r = run_pair(sandbox, *make(), env={"KLURIS_NO_PROMPT": None}, stdin=None)
+    v2, v3 = r["v2"], r["v3"]
+    assert v2.code == v3.code == 1, (v2.code, v3.code, v2.stderr, v3.stderr)
+    assert (v3.stdout, v3.stderr) == ("", f"Error: {message}\n")
+    if IS_WINDOWS:
+        expected = menu(paths, set(), allow_all=kind == "fan") + "Choice: "
+        assert normalize(v2.stdout, sandbox.root).startswith(normalize(expected, sandbox.root)), v2.stdout
+        assert v2.stderr == "Aborted!\n"
+    else:
+        assert (v2.stdout, v2.stderr) == (v3.stdout, v3.stderr)
+
+
 # --- the picker (a terminal on stdin) ---------------------------------------------
 
 pty_only = pytest.mark.skipif(IS_WINDOWS, reason="the picker needs a pseudo-terminal; Windows has no pty")
@@ -319,8 +353,8 @@ def test_picker_reprompts_on_invalid_input(sandbox):
     )
     assert normalize(transcript(v2.stdout), sandbox.root) == normalize(script, sandbox.root)
     assert normalize(transcript(v3.stdout), sandbox.root) == normalize(transcript(v2.stdout), sandbox.root)
-    assert v3.stdout[len(transcript(v3.stdout)):] == "a\n"
-    assert "\na\n" in v2.stdout[len(transcript(v2.stdout)) - 1:]
+    same_words(after_picker(v2.stdout), after_picker(v3.stdout), sandbox.root)
+    assert status_names(after_picker(v3.stdout)) == status_names(after_picker(v2.stdout)) == ["a"]
 
 
 @pty_only
@@ -329,7 +363,8 @@ def test_picker_all_is_every_brain(sandbox):
     v2, v3 = pty_both(sandbox, fan("--brain", ""), lines=["+3"])
     assert v2.code == v3.code == 0, (v2.stderr, v3.stderr)
     assert transcript(v3.stdout) == transcript(v2.stdout) == menu(paths, set(), True) + "Choice: "
-    assert v3.stdout[len(transcript(v3.stdout)):] == "a\nb\n"
+    same_words(after_picker(v2.stdout), after_picker(v3.stdout), sandbox.root)
+    assert status_names(after_picker(v3.stdout)) == status_names(after_picker(v2.stdout)) == ["a", "b"]
 
 
 @pty_only

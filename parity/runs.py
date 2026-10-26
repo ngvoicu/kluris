@@ -1,6 +1,6 @@
 """Helpers for the parity tests that need more than ``harness.run_both``: a
 config written by hand, per-run environment changes, an explicit stdin (a
-pipe, or a pseudo-terminal for the brain picker), and the wake-up payload
+pipe, the null device, or a pseudo-terminal for the brain picker), and the wake-up payload
 comparison."""
 
 from __future__ import annotations
@@ -18,11 +18,6 @@ from pathlib import Path
 
 from harness import IS_WINDOWS, Result, Sandbox, _decode, normalize, oracle_kluris, run_v3
 
-# The hidden test-only `kluris __resolve` exists only with this set to "1"; v2
-# ignores it.
-TEST_HOOKS = {"KLURIS_TEST_HOOKS": "1"}
-
-
 def write_config(sb: Sandbox, brains: list[tuple[str, str, str]]) -> None:
     """Write ``config.yml`` with ``(name, path, description)`` brains, in
     order. JSON strings are YAML double-quoted scalars."""
@@ -39,7 +34,6 @@ def write_config(sb: Sandbox, brains: list[tuple[str, str, str]]) -> None:
 
 def _env(sb: Sandbox, changes: dict[str, str | None]) -> dict[str, str]:
     env = dict(sb.env)
-    env.update(TEST_HOOKS)
     for key, value in changes.items():
         if value is None:
             env.pop(key, None)
@@ -65,10 +59,11 @@ def run_pair(
     v3_args: list[str],
     *,
     env: dict[str, str | None] | None = None,
-    stdin: bytes = b"",
+    stdin: bytes | None = b"",
 ) -> dict[str, Result]:
     """Run each binary on its own copy of the frozen state, with stdin a pipe
-    holding ``stdin`` (never a terminal) and ``env`` applied (``None``
+    holding ``stdin`` (never a terminal), or the null device when ``stdin`` is
+    ``None`` (``NUL`` on Windows), and ``env`` applied (``None``
     removes a variable)."""
     results: dict[str, Result] = {}
     for side, args in (("v2", v2_args), ("v3", v3_args)):
@@ -76,7 +71,8 @@ def run_pair(
         try:
             proc = subprocess.run(
                 [*_exe(side), *args], env=_env(sb, env or {}), cwd=str(sb.work),
-                input=stdin, capture_output=True, timeout=120,
+                input=stdin, stdin=subprocess.DEVNULL if stdin is None else None,
+                capture_output=True, timeout=120,
             )
             what = f"{side} {' '.join(args)}"
             results[side] = Result(
@@ -225,6 +221,6 @@ def same_words(v2_text: str, v3_text: str, root: Path) -> None:
 
 
 __all__ = [
-    "IS_WINDOWS", "PtyResult", "TEST_HOOKS", "assert_wake_up_equal", "clear_runs", "issue_key", "parse_exact",
+    "IS_WINDOWS", "PtyResult", "assert_wake_up_equal", "clear_runs", "issue_key", "parse_exact",
     "run_pair", "run_pty", "same_words", "transcript", "write_config",
 ]
