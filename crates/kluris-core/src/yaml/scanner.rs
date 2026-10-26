@@ -8,6 +8,7 @@ use std::collections::VecDeque;
 
 use super::parse::{YamlError, marked, py_repr};
 use super::reader::{Mark, Reader};
+use super::resolve::{MAX_STR_DIGITS, too_many_digits};
 
 /// `'\0 \t\r\n\x85  '`: the end, a blank or a line break.
 fn is_blankz(c: char) -> bool {
@@ -765,6 +766,14 @@ impl Scanner {
         let mut length = 0;
         while self.peek(length).is_ascii_digit() {
             length += 1;
+        }
+        // `int(self.prefix(length))`: Python 3.11 refuses more than 4,300
+        // decimal digits.
+        if length > MAX_STR_DIGITS {
+            return Err(YamlError::new(
+                format!("ValueError: {}", too_many_digits(length)),
+                self.mark(),
+            ));
         }
         let digits = self.prefix(length);
         self.forward(length);

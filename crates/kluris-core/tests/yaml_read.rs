@@ -41,6 +41,43 @@ fn err() -> Expected {
     None
 }
 
+/// An int too long to write out: its sign, number of decimal digits, and
+/// first and last ten digits.
+fn big(sign: &str, digits: usize, first: &str, last: &str) -> Expected {
+    let _ = (sign, digits, first, last);
+    Some(Value::Str(format!("big:{sign}:{digits}:{first}:{last}")))
+}
+
+/// A string too long to write out: its length in characters.
+fn long_str(chars: usize) -> Expected {
+    Some(Value::Str(format!("long:{chars}")))
+}
+
+/// What `big()` and `long_str()` compare against.
+fn describe_long(value: &Value) -> Value {
+    match value {
+        Value::Int(i) => {
+            let text = i.to_string();
+            let (sign, digits) = text
+                .strip_prefix('-')
+                .map_or(("", text.as_str()), |d| ("-", d));
+            if digits.len() > 60 {
+                return Value::Str(format!(
+                    "big:{sign}:{}:{}:{}",
+                    digits.len(),
+                    &digits[..10],
+                    &digits[digits.len() - 10..]
+                ));
+            }
+            value.clone()
+        }
+        Value::Str(s) if s.chars().count() > 60 => {
+            Value::Str(format!("long:{}", s.chars().count()))
+        }
+        _ => value.clone(),
+    }
+}
+
 fn sq(items: Vec<Expected>) -> Expected {
     items
         .into_iter()
@@ -410,6 +447,248 @@ fn tagged() -> Vec<(&'static str, Expected)> {
         (r#"!!int "๓๒""#, int("32")),
         (r#"!!int "၀""#, int("0")),
         (r#"! "٣""#, s(r#"٣"#)),
+        (r#"!!int "\x091""#, int("1")),
+        (r#"!!int "1\x09""#, int("1")),
+        (r#"!!float "\x091.5""#, flt("1.5")),
+        (r#"!!float "1.5\x09""#, flt("1.5")),
+        (r#"!!int "1\x09:30""#, int("90")),
+        (r#"!!int "1:\x0930""#, int("90")),
+        (r#"!!float "1:30.5\x09""#, flt("90.5")),
+        (r#"!!float "\x091:30.5""#, flt("90.5")),
+        (r#"!!int "\x090x1F""#, err()),
+        (r#"!!int "0b1\x09""#, int("1")),
+        (r#"!!int "0755\x09""#, int("493")),
+        (r#"!!int "\x0b1""#, int("1")),
+        (r#"!!int "1\x0b""#, int("1")),
+        (r#"!!float "\x0b1.5""#, flt("1.5")),
+        (r#"!!float "1.5\x0b""#, flt("1.5")),
+        (r#"!!int "1\x0b:30""#, int("90")),
+        (r#"!!int "1:\x0b30""#, int("90")),
+        (r#"!!float "1:30.5\x0b""#, flt("90.5")),
+        (r#"!!float "\x0b1:30.5""#, flt("90.5")),
+        (r#"!!int "\x0b0x1F""#, err()),
+        (r#"!!int "0b1\x0b""#, int("1")),
+        (r#"!!int "0755\x0b""#, int("493")),
+        (r#"!!int "\x0c1""#, int("1")),
+        (r#"!!int "1\x0c""#, int("1")),
+        (r#"!!float "\x0c1.5""#, flt("1.5")),
+        (r#"!!float "1.5\x0c""#, flt("1.5")),
+        (r#"!!int "1\x0c:30""#, int("90")),
+        (r#"!!int "1:\x0c30""#, int("90")),
+        (r#"!!float "1:30.5\x0c""#, flt("90.5")),
+        (r#"!!float "\x0c1:30.5""#, flt("90.5")),
+        (r#"!!int "\x0c0x1F""#, err()),
+        (r#"!!int "0b1\x0c""#, int("1")),
+        (r#"!!int "0755\x0c""#, int("493")),
+        (r#"!!int "\x0d1""#, int("1")),
+        (r#"!!int "1\x0d""#, int("1")),
+        (r#"!!float "\x0d1.5""#, flt("1.5")),
+        (r#"!!float "1.5\x0d""#, flt("1.5")),
+        (r#"!!int "1\x0d:30""#, int("90")),
+        (r#"!!int "1:\x0d30""#, int("90")),
+        (r#"!!float "1:30.5\x0d""#, flt("90.5")),
+        (r#"!!float "\x0d1:30.5""#, flt("90.5")),
+        (r#"!!int "\x0d0x1F""#, err()),
+        (r#"!!int "0b1\x0d""#, int("1")),
+        (r#"!!int "0755\x0d""#, int("493")),
+        (r#"!!int "\x1c1""#, err()),
+        (r#"!!int "1\x1c""#, err()),
+        (r#"!!float "\x1c1.5""#, err()),
+        (r#"!!float "1.5\x1c""#, err()),
+        (r#"!!int "1\x1c:30""#, err()),
+        (r#"!!int "1:\x1c30""#, err()),
+        (r#"!!float "1:30.5\x1c""#, err()),
+        (r#"!!float "\x1c1:30.5""#, err()),
+        (r#"!!int "\x1c0x1F""#, err()),
+        (r#"!!int "0b1\x1c""#, err()),
+        (r#"!!int "0755\x1c""#, err()),
+        (r#"!!int "\x1d1""#, err()),
+        (r#"!!int "1\x1d""#, err()),
+        (r#"!!float "\x1d1.5""#, err()),
+        (r#"!!float "1.5\x1d""#, err()),
+        (r#"!!int "1\x1d:30""#, err()),
+        (r#"!!int "1:\x1d30""#, err()),
+        (r#"!!float "1:30.5\x1d""#, err()),
+        (r#"!!float "\x1d1:30.5""#, err()),
+        (r#"!!int "\x1d0x1F""#, err()),
+        (r#"!!int "0b1\x1d""#, err()),
+        (r#"!!int "0755\x1d""#, err()),
+        (r#"!!int "\x1e1""#, err()),
+        (r#"!!int "1\x1e""#, err()),
+        (r#"!!float "\x1e1.5""#, err()),
+        (r#"!!float "1.5\x1e""#, err()),
+        (r#"!!int "1\x1e:30""#, err()),
+        (r#"!!int "1:\x1e30""#, err()),
+        (r#"!!float "1:30.5\x1e""#, err()),
+        (r#"!!float "\x1e1:30.5""#, err()),
+        (r#"!!int "\x1e0x1F""#, err()),
+        (r#"!!int "0b1\x1e""#, err()),
+        (r#"!!int "0755\x1e""#, err()),
+        (r#"!!int "\x1f1""#, err()),
+        (r#"!!int "1\x1f""#, err()),
+        (r#"!!float "\x1f1.5""#, err()),
+        (r#"!!float "1.5\x1f""#, err()),
+        (r#"!!int "1\x1f:30""#, err()),
+        (r#"!!int "1:\x1f30""#, err()),
+        (r#"!!float "1:30.5\x1f""#, err()),
+        (r#"!!float "\x1f1:30.5""#, err()),
+        (r#"!!int "\x1f0x1F""#, err()),
+        (r#"!!int "0b1\x1f""#, err()),
+        (r#"!!int "0755\x1f""#, err()),
+        (r#"!!int "\x201""#, int("1")),
+        (r#"!!int "1\x20""#, int("1")),
+        (r#"!!float "\x201.5""#, flt("1.5")),
+        (r#"!!float "1.5\x20""#, flt("1.5")),
+        (r#"!!int "1\x20:30""#, int("90")),
+        (r#"!!int "1:\x2030""#, int("90")),
+        (r#"!!float "1:30.5\x20""#, flt("90.5")),
+        (r#"!!float "\x201:30.5""#, flt("90.5")),
+        (r#"!!int "\x200x1F""#, err()),
+        (r#"!!int "0b1\x20""#, int("1")),
+        (r#"!!int "0755\x20""#, int("493")),
+        (r#"!!int "\x851""#, int("1")),
+        (r#"!!int "1\x85""#, int("1")),
+        (r#"!!float "\x851.5""#, flt("1.5")),
+        (r#"!!float "1.5\x85""#, flt("1.5")),
+        (r#"!!int "1\x85:30""#, int("90")),
+        (r#"!!int "1:\x8530""#, int("90")),
+        (r#"!!float "1:30.5\x85""#, flt("90.5")),
+        (r#"!!float "\x851:30.5""#, flt("90.5")),
+        (r#"!!int "\x850x1F""#, err()),
+        (r#"!!int "0b1\x85""#, int("1")),
+        (r#"!!int "0755\x85""#, int("493")),
+        (r#"!!int "\xa01""#, int("1")),
+        (r#"!!int "1\xa0""#, int("1")),
+        (r#"!!float "\xa01.5""#, flt("1.5")),
+        (r#"!!float "1.5\xa0""#, flt("1.5")),
+        (r#"!!int "1\xa0:30""#, int("90")),
+        (r#"!!int "1:\xa030""#, int("90")),
+        (r#"!!float "1:30.5\xa0""#, flt("90.5")),
+        (r#"!!float "\xa01:30.5""#, flt("90.5")),
+        (r#"!!int "\xa00x1F""#, err()),
+        (r#"!!int "0b1\xa0""#, int("1")),
+        (r#"!!int "0755\xa0""#, int("493")),
+        (r#"!!int "\u16801""#, int("1")),
+        (r#"!!int "1\u1680""#, int("1")),
+        (r#"!!float "\u16801.5""#, flt("1.5")),
+        (r#"!!float "1.5\u1680""#, flt("1.5")),
+        (r#"!!int "1\u1680:30""#, int("90")),
+        (r#"!!int "1:\u168030""#, int("90")),
+        (r#"!!float "1:30.5\u1680""#, flt("90.5")),
+        (r#"!!float "\u16801:30.5""#, flt("90.5")),
+        (r#"!!int "\u16800x1F""#, err()),
+        (r#"!!int "0b1\u1680""#, int("1")),
+        (r#"!!int "0755\u1680""#, int("493")),
+        (r#"!!int "\u180e1""#, err()),
+        (r#"!!int "1\u180e""#, err()),
+        (r#"!!float "\u180e1.5""#, err()),
+        (r#"!!float "1.5\u180e""#, err()),
+        (r#"!!int "1\u180e:30""#, err()),
+        (r#"!!int "1:\u180e30""#, err()),
+        (r#"!!float "1:30.5\u180e""#, err()),
+        (r#"!!float "\u180e1:30.5""#, err()),
+        (r#"!!int "\u180e0x1F""#, err()),
+        (r#"!!int "0b1\u180e""#, err()),
+        (r#"!!int "0755\u180e""#, err()),
+        (r#"!!int "\u20001""#, int("1")),
+        (r#"!!int "1\u2000""#, int("1")),
+        (r#"!!float "\u20001.5""#, flt("1.5")),
+        (r#"!!float "1.5\u2000""#, flt("1.5")),
+        (r#"!!int "1\u2000:30""#, int("90")),
+        (r#"!!int "1:\u200030""#, int("90")),
+        (r#"!!float "1:30.5\u2000""#, flt("90.5")),
+        (r#"!!float "\u20001:30.5""#, flt("90.5")),
+        (r#"!!int "\u20000x1F""#, err()),
+        (r#"!!int "0b1\u2000""#, int("1")),
+        (r#"!!int "0755\u2000""#, int("493")),
+        (r#"!!int "\u200a1""#, int("1")),
+        (r#"!!int "1\u200a""#, int("1")),
+        (r#"!!float "\u200a1.5""#, flt("1.5")),
+        (r#"!!float "1.5\u200a""#, flt("1.5")),
+        (r#"!!int "1\u200a:30""#, int("90")),
+        (r#"!!int "1:\u200a30""#, int("90")),
+        (r#"!!float "1:30.5\u200a""#, flt("90.5")),
+        (r#"!!float "\u200a1:30.5""#, flt("90.5")),
+        (r#"!!int "\u200a0x1F""#, err()),
+        (r#"!!int "0b1\u200a""#, int("1")),
+        (r#"!!int "0755\u200a""#, int("493")),
+        (r#"!!int "\u200b1""#, err()),
+        (r#"!!int "1\u200b""#, err()),
+        (r#"!!float "\u200b1.5""#, err()),
+        (r#"!!float "1.5\u200b""#, err()),
+        (r#"!!int "1\u200b:30""#, err()),
+        (r#"!!int "1:\u200b30""#, err()),
+        (r#"!!float "1:30.5\u200b""#, err()),
+        (r#"!!float "\u200b1:30.5""#, err()),
+        (r#"!!int "\u200b0x1F""#, err()),
+        (r#"!!int "0b1\u200b""#, err()),
+        (r#"!!int "0755\u200b""#, err()),
+        (r#"!!int "\u20281""#, int("1")),
+        (r#"!!int "1\u2028""#, int("1")),
+        (r#"!!float "\u20281.5""#, flt("1.5")),
+        (r#"!!float "1.5\u2028""#, flt("1.5")),
+        (r#"!!int "1\u2028:30""#, int("90")),
+        (r#"!!int "1:\u202830""#, int("90")),
+        (r#"!!float "1:30.5\u2028""#, flt("90.5")),
+        (r#"!!float "\u20281:30.5""#, flt("90.5")),
+        (r#"!!int "\u20280x1F""#, err()),
+        (r#"!!int "0b1\u2028""#, int("1")),
+        (r#"!!int "0755\u2028""#, int("493")),
+        (r#"!!int "\u20291""#, int("1")),
+        (r#"!!int "1\u2029""#, int("1")),
+        (r#"!!float "\u20291.5""#, flt("1.5")),
+        (r#"!!float "1.5\u2029""#, flt("1.5")),
+        (r#"!!int "1\u2029:30""#, int("90")),
+        (r#"!!int "1:\u202930""#, int("90")),
+        (r#"!!float "1:30.5\u2029""#, flt("90.5")),
+        (r#"!!float "\u20291:30.5""#, flt("90.5")),
+        (r#"!!int "\u20290x1F""#, err()),
+        (r#"!!int "0b1\u2029""#, int("1")),
+        (r#"!!int "0755\u2029""#, int("493")),
+        (r#"!!int "\u202f1""#, int("1")),
+        (r#"!!int "1\u202f""#, int("1")),
+        (r#"!!float "\u202f1.5""#, flt("1.5")),
+        (r#"!!float "1.5\u202f""#, flt("1.5")),
+        (r#"!!int "1\u202f:30""#, int("90")),
+        (r#"!!int "1:\u202f30""#, int("90")),
+        (r#"!!float "1:30.5\u202f""#, flt("90.5")),
+        (r#"!!float "\u202f1:30.5""#, flt("90.5")),
+        (r#"!!int "\u202f0x1F""#, err()),
+        (r#"!!int "0b1\u202f""#, int("1")),
+        (r#"!!int "0755\u202f""#, int("493")),
+        (r#"!!int "\u205f1""#, int("1")),
+        (r#"!!int "1\u205f""#, int("1")),
+        (r#"!!float "\u205f1.5""#, flt("1.5")),
+        (r#"!!float "1.5\u205f""#, flt("1.5")),
+        (r#"!!int "1\u205f:30""#, int("90")),
+        (r#"!!int "1:\u205f30""#, int("90")),
+        (r#"!!float "1:30.5\u205f""#, flt("90.5")),
+        (r#"!!float "\u205f1:30.5""#, flt("90.5")),
+        (r#"!!int "\u205f0x1F""#, err()),
+        (r#"!!int "0b1\u205f""#, int("1")),
+        (r#"!!int "0755\u205f""#, int("493")),
+        (r#"!!int "\u30001""#, int("1")),
+        (r#"!!int "1\u3000""#, int("1")),
+        (r#"!!float "\u30001.5""#, flt("1.5")),
+        (r#"!!float "1.5\u3000""#, flt("1.5")),
+        (r#"!!int "1\u3000:30""#, int("90")),
+        (r#"!!int "1:\u300030""#, int("90")),
+        (r#"!!float "1:30.5\u3000""#, flt("90.5")),
+        (r#"!!float "\u30001:30.5""#, flt("90.5")),
+        (r#"!!int "\u30000x1F""#, err()),
+        (r#"!!int "0b1\u3000""#, int("1")),
+        (r#"!!int "0755\u3000""#, int("493")),
+        (r#"!!int "\ufeff1""#, err()),
+        (r#"!!int "1\ufeff""#, err()),
+        (r#"!!float "\ufeff1.5""#, err()),
+        (r#"!!float "1.5\ufeff""#, err()),
+        (r#"!!int "1\ufeff:30""#, err()),
+        (r#"!!int "1:\ufeff30""#, err()),
+        (r#"!!float "1:30.5\ufeff""#, err()),
+        (r#"!!float "\ufeff1:30.5""#, err()),
+        (r#"!!int "\ufeff0x1F""#, err()),
+        (r#"!!int "0b1\ufeff""#, err()),
+        (r#"!!int "0755\ufeff""#, err()),
     ]
 }
 
@@ -2728,6 +3007,107 @@ fn documents() -> Vec<(&'static str, Expected)> {
     ]
 }
 
+/// Texts that repeat a digit thousands of times, read by PyYAML 6.0.3 under
+/// Python 3.11 (at most 4,300 decimal digits per int conversion); generated
+/// by `parity/tools/yaml_expectations.py --long`.
+/// `((prefix, digit, count, suffix), expected)`.
+type LongRow = ((&'static str, &'static str, usize, &'static str), Expected);
+
+fn long_rows() -> Vec<LongRow> {
+    vec![
+        (
+            (r#"v: "#, r#"1"#, 4300, r#""#),
+            big("", 4300, "1111111111", "1111111111"),
+        ),
+        ((r#"v: "#, r#"0"#, 4300, r#""#), int("0")),
+        (
+            (r#"v: -"#, r#"1"#, 4300, r#""#),
+            big("-", 4300, "1111111111", "1111111111"),
+        ),
+        ((r#"v: 1_"#, r#"1"#, 4300, r#""#), err()),
+        (
+            (r#"v: 0"#, r#"7"#, 4300, r#""#),
+            big("", 3884, "1936172579", "9259493375"),
+        ),
+        (
+            (r#"v: 0b"#, r#"1"#, 4300, r#""#),
+            big("", 1295, "2685229162", "7227237375"),
+        ),
+        (
+            (r#"v: 0x"#, r#"f"#, 4300, r#""#),
+            big("", 5178, "5199067075", "9851621375"),
+        ),
+        (
+            (r#"v: "#, r#"1"#, 4300, r#":30"#),
+            big("", 4301, "6666666666", "6666666690"),
+        ),
+        ((r#"v: !!int "1:"#, r#"0"#, 4300, r#"""#), int("60")),
+        (
+            (r#"v: !!int ""#, r#"1"#, 4300, r#":30""#),
+            big("", 4301, "6666666666", "6666666690"),
+        ),
+        (
+            (r#"v: !!int ""#, r#"١"#, 4300, r#"""#),
+            big("", 4300, "1111111111", "1111111111"),
+        ),
+        (
+            (r#"v: !!int " "#, r#"1"#, 4300, r#" ""#),
+            big("", 4300, "1111111111", "1111111111"),
+        ),
+        (
+            (r#"v: !!int "0x"#, r#"1"#, 4300, r#"""#),
+            big("", 5177, "3466044716", "3323441425"),
+        ),
+        ((r#"v: !!float "#, r#"1"#, 4300, r#""#), flt("inf")),
+        ((r#"v: "#, r#"1"#, 4300, r#".5"#), flt("inf")),
+        ((r#"v: "#, r#"1"#, 4300, r#":30.5"#), flt("inf")),
+        ((r#"v: !!str "#, r#"1"#, 4300, r#""#), long_str(4300)),
+        ((r#"v: '"#, r#"1"#, 4300, r#"'"#), long_str(4300)),
+        ((r#"%YAML 1."#, r#"1"#, 4300, "\u{a}--- a"), s(r#"a"#)),
+        ((r#"%YAML "#, r#"1"#, 4300, ".1\u{a}--- a"), err()),
+        (
+            (r#"v: 2026-01-02 10:00:00."#, r#"1"#, 4300, r#""#),
+            dt(2026, 1, 2, 10, 0, 0, 111111, None),
+        ),
+        ((r#"v: "#, r#"1"#, 4301, r#""#), err()),
+        ((r#"v: "#, r#"0"#, 4301, r#""#), int("0")),
+        ((r#"v: -"#, r#"1"#, 4301, r#""#), err()),
+        ((r#"v: 1_"#, r#"1"#, 4301, r#""#), err()),
+        (
+            (r#"v: 0"#, r#"7"#, 4301, r#""#),
+            big("", 3885, "1548938063", "4075947007"),
+        ),
+        (
+            (r#"v: 0b"#, r#"1"#, 4301, r#""#),
+            big("", 1295, "5370458324", "4454474751"),
+        ),
+        (
+            (r#"v: 0x"#, r#"f"#, 4301, r#""#),
+            big("", 5179, "8318507320", "7625942015"),
+        ),
+        ((r#"v: "#, r#"1"#, 4301, r#":30"#), err()),
+        ((r#"v: !!int "1:"#, r#"0"#, 4301, r#"""#), err()),
+        ((r#"v: !!int ""#, r#"1"#, 4301, r#":30""#), err()),
+        ((r#"v: !!int ""#, r#"١"#, 4301, r#"""#), err()),
+        ((r#"v: !!int " "#, r#"1"#, 4301, r#" ""#), err()),
+        (
+            (r#"v: !!int "0x"#, r#"1"#, 4301, r#"""#),
+            big("", 5178, "5545671546", "3175062801"),
+        ),
+        ((r#"v: !!float "#, r#"1"#, 4301, r#""#), flt("inf")),
+        ((r#"v: "#, r#"1"#, 4301, r#".5"#), flt("inf")),
+        ((r#"v: "#, r#"1"#, 4301, r#":30.5"#), flt("inf")),
+        ((r#"v: !!str "#, r#"1"#, 4301, r#""#), long_str(4301)),
+        ((r#"v: '"#, r#"1"#, 4301, r#"'"#), long_str(4301)),
+        ((r#"%YAML 1."#, r#"1"#, 4301, "\u{a}--- a"), err()),
+        ((r#"%YAML "#, r#"1"#, 4301, ".1\u{a}--- a"), err()),
+        (
+            (r#"v: 2026-01-02 10:00:00."#, r#"1"#, 4301, r#""#),
+            dt(2026, 1, 2, 10, 0, 0, 111111, None),
+        ),
+    ]
+}
+
 fn map(entries: Vec<(&str, Value)>) -> Value {
     Value::Map(
         entries
@@ -2781,6 +3161,32 @@ fn check(
         "{} of {} rows differ from PyYAML:\n{}",
         failures.len(),
         total,
+        failures.join("\n")
+    );
+}
+
+#[test]
+fn decimal_digit_limit_like_python() {
+    let mut failures = Vec::new();
+    for ((prefix, digit, count, suffix), expected) in long_rows() {
+        let text = format!("{prefix}{}{suffix}", digit.repeat(count));
+        let got = load(&text).map(|doc| match doc.as_map().and_then(|m| m.get("v")) {
+            Some(v) => describe_long(v),
+            None => describe_long(&doc),
+        });
+        let ok = match (&got, &expected) {
+            (Ok(value), Some(want)) => value == want,
+            (Err(_), None) => true,
+            _ => false,
+        };
+        if !ok {
+            failures.push(format!("  {prefix:?} + {digit:?} x {count} + {suffix:?}\n    want {expected:?}\n    got  {got:?}"));
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "{} rows differ from PyYAML:\n{}",
+        failures.len(),
         failures.join("\n")
     );
 }

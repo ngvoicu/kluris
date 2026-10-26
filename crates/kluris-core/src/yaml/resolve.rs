@@ -188,10 +188,29 @@ const DIGIT_ZEROS: [u32; 66] = [
     0x1D7EC, 0x1D7F6, 0x1E140, 0x1E2F0, 0x1E950, 0x1FBF0,
 ];
 
+/// The whitespace CPython's `int()` and `float()` skip around a number once
+/// it is ASCII: C's `isspace` (` \t\n\v\f\r`). Not U+001C..U+001F, which
+/// `str.strip()` strips but both refuse.
+fn is_number_space(c: char) -> bool {
+    matches!(c, ' ' | '\t' | '\n' | '\u{b}' | '\u{c}' | '\r')
+}
+
+/// Python 3.11's `sys.int_info.default_max_str_digits`: `int()` refuses a
+/// decimal string with more digits (powers of two, such as binary, octal and
+/// hexadecimal, are not limited).
+pub(super) const MAX_STR_DIGITS: usize = 4300;
+
+/// Python's ValueError for a decimal string over [`MAX_STR_DIGITS`].
+pub(super) fn too_many_digits(digits: usize) -> String {
+    format!(
+        "Exceeds the limit ({MAX_STR_DIGITS} digits) for integer string conversion: value has {digits} digits; use sys.set_int_max_str_digits() to increase the limit"
+    )
+}
+
 /// What Python's `int()` and `float()` parse: every Unicode decimal digit as
-/// its ASCII digit and Unicode whitespace as a space
-/// (`_PyUnicode_TransformDecimalAndSpaceToASCII`). `None` when another
-/// non-ASCII character is left, which neither accepts.
+/// its ASCII digit and non-ASCII Unicode whitespace as a space
+/// (`_PyUnicode_TransformDecimalAndSpaceToASCII`; ASCII stays as it is).
+/// `None` when another non-ASCII character is left, which neither accepts.
 fn py_ascii_number(text: &str) -> Option<String> {
     text.chars()
         .map(|c| {
@@ -211,11 +230,12 @@ fn py_ascii_number(text: &str) -> Option<String> {
 
 /// Python's `int(text, radix)` for the radixes PyYAML uses: surrounding
 /// whitespace, one sign and (radix 2, 8, 16) the matching `0b`/`0o`/`0x`
-/// prefix are accepted, and any Unicode decimal digit.
+/// prefix are accepted, and any Unicode decimal digit; a decimal string has at
+/// most [`MAX_STR_DIGITS`] digits.
 fn py_int(text: &str, radix: u32, original: &str) -> Result<BigInt, String> {
     let invalid = || format!("invalid integer '{original}'");
     let ascii = py_ascii_number(text).ok_or_else(invalid)?;
-    let (negative, digits) = sign(ascii.trim_matches(is_py_space));
+    let (negative, digits) = sign(ascii.trim_matches(is_number_space));
     let prefix = match radix {
         2 => Some("0b"),
         8 => Some("0o"),
@@ -234,6 +254,9 @@ fn py_int(text: &str, radix: u32, original: &str) -> Result<BigInt, String> {
     };
     if digits.is_empty() || !digits.chars().all(|c| c.is_digit(radix)) {
         return Err(invalid());
+    }
+    if radix == 10 && digits.len() > MAX_STR_DIGITS {
+        return Err(too_many_digits(digits.len()));
     }
     let magnitude = BigInt::parse_bytes(digits.as_bytes(), radix).ok_or_else(invalid)?;
     Ok(if negative { -magnitude } else { magnitude })
@@ -273,7 +296,7 @@ fn py_float(text: &str, original: &str) -> Result<f64, String> {
     // For ASCII text Rust's `f64` grammar is Python's `float()` grammar.
     py_ascii_number(text)
         .ok_or_else(invalid)?
-        .trim_matches(is_py_space)
+        .trim_matches(is_number_space)
         .parse::<f64>()
         .map_err(|_| invalid())
 }

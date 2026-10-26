@@ -53,10 +53,15 @@ def outcome(text: str, loader: type) -> dict[str, object]:
         value = yaml.load(text, Loader=loader)
     except Exception as exc:  # noqa: BLE001 -- any failure is the answer
         return {"error": f"{type(exc).__name__}: {exc}"}
+    # Writing out an int PyYAML built must not fail on Python's 4,300-digit
+    # str() limit (loading above ran with the default limit).
+    sys.set_int_max_str_digits(0)
     try:
         encoded = encode(value)
     except (TypeError, RecursionError) as exc:
         return {"error": f"outside the value model: {exc}"}
+    finally:
+        sys.set_int_max_str_digits(sys.int_info.default_max_str_digits)
     if has_surrogate(value):
         return {"error": "outside the value model: a lone surrogate"}
     return {"value": encoded}

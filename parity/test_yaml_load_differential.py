@@ -7,8 +7,9 @@ anchors, tags and block-scalar indicators), plain, quoted and block scalars
 (every chomping indicator, indentation indicators, with and without a final
 line break), YAML 1.1 look-alikes, `=`, anchors (repeated and with names
 PyYAML refuses), aliases, core and unsupported tags, comments, non-ASCII text,
-CRLF, and characters PyYAML's reader treats specially (U+0085, U+2028 and
-U+2029 break lines; tabs, controls, BOMs). Each text goes to
+CRLF, characters PyYAML's reader treats specially (U+0085, U+2028 and
+U+2029 break lines; tabs, controls, BOMs), and numbers with the whitespace
+Python's int() and float() skip or refuse, or around their 4,300-digit limit. Each text goes to
 ``cargo xtask yaml-load`` (the Rust reader) and to ``tools/yaml_load_oracle.py``
 in the oracle venv.
 
@@ -28,6 +29,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import sys
 
 import pytest
 from hypothesis import HealthCheck, given, settings
@@ -266,7 +268,30 @@ special = st.builds(
     st.integers(0, 10_000),
     st.sampled_from(SPECIAL_CHARS),
 )
+# Numbers Python's int() and float() convert: whitespace they skip (ASCII
+# \t\n\v\f\r and space, Unicode spaces) or keep (U+001C..U+001F, which
+# str.strip() would strip), written as double-quoted escapes.
+NUMERIC_SPACES = ["", "", "\\t", "\\x0b", "\\x0c", "\\r", " ", "\\x1c", "\\x1d", "\\x1e", "\\x1f", "\\x85",
+                  "\\xa0", "\\u2000", "\\u200b", "\\u2028", "\\u3000", "\\ufeff", "\\u180e"]
+NUMERIC_BODIES = ["1", "-1", "1.5", ".5", "1:30", "1:30.5", "0x1F", "0b1", "0755", "1_0", "\\u0661", "1e3", "nan"]
+spaced_numbers = st.builds(
+    lambda tag, before, body, after, inner: f'v: {tag}"{before}{body.replace(":", inner + ":", 1)}{after}"',
+    st.sampled_from(["!!int ", "!!float ", "!!int ", "!!float ", "! ", ""]),
+    st.sampled_from(NUMERIC_SPACES),
+    st.sampled_from(NUMERIC_BODIES),
+    st.sampled_from(NUMERIC_SPACES),
+    st.sampled_from(NUMERIC_SPACES),
+)
+# Decimal strings around Python 3.11's limit of 4,300 digits per int().
+long_numbers = st.builds(
+    lambda prefix, count, suffix: prefix + "1" * count + suffix,
+    st.sampled_from(["v: ", "v: -", "v: !!int ", "v: !!float ", "v: 1_", "v: 0x", "v: 0", "v: !!int 1:", "%YAML 1."]),
+    st.integers(4295, 4305),
+    st.sampled_from(["", ":30", ".5", "\n--- a"]),
+)
 texts = st.one_of(
+    spaced_numbers,
+    long_numbers,
     st.builds(document, nodes, st.booleans(), st.booleans(), st.just(False)),
     st.builds(document, nodes, st.booleans(), st.booleans(), st.just(True)),
     glued_texts,
@@ -292,7 +317,13 @@ def libyaml_disagreements(request):
 def agree(a: dict, b: dict) -> bool:
     if "error" in a or "error" in b:
         return "error" in a and "error" in b
-    return same(decode(a["value"]), decode(b["value"]))
+    # Reading back an int over 4,300 digits must not hit Python's str() limit:
+    # this process only compares, PyYAML loaded in the oracle.
+    sys.set_int_max_str_digits(0)
+    try:
+        return same(decode(a["value"]), decode(b["value"]))
+    finally:
+        sys.set_int_max_str_digits(sys.int_info.default_max_str_digits)
 
 
 # The drawn trees are deep; Hypothesis warns that their repr is large.
@@ -316,6 +347,7 @@ def test_yaml_reader_matches_pyyaml_on_raw_text(text, loaders, libyaml_disagreem
                 out.write(json.dumps({"text": text, **oracle}) + "\n")
     want = oracle["safe"]
     if not agree(want, got):
+        sys.set_int_max_str_digits(0)
         reads = f"reads {want['value']!r}" if "value" in want else f"fails ({want['error']})"
         rust = f"reads {got['value']!r}" if "value" in got else f"fails ({got['error']})"
         pytest.fail(f"text {text!r}:\nSafeLoader {reads}, Rust {rust}")

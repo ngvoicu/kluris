@@ -12,7 +12,10 @@ comment.
 
 Run it with the oracle venv (PyYAML 6.0.3):
 
-    parity/.oracle/venv/bin/python -I parity/tools/yaml_expectations.py [--tagged | --documents]
+    parity/.oracle/venv/bin/python -I parity/tools/yaml_expectations.py [--tagged | --documents | --long]
+
+With ``--long`` the texts repeat a digit thousands of times (``long_rows()``):
+each row is ``((prefix, digit, count, suffix), expected)``.
 """
 
 from __future__ import annotations
@@ -66,6 +69,20 @@ CASES = [
 # SafeLoader (content that does not fit the tag raises); the non-specific `!`
 # resolves the content like a plain scalar, even when it is quoted; every other
 # tag is outside the value model.
+# Whitespace around numbers: Python's int() and float() skip ASCII \t\n\v\f\r
+# and space and the non-ASCII Unicode spaces, but not U+001C..U+001F (which
+# str.strip() does strip); in a sexagesimal number each part is converted.
+NUMERIC_SPACES = ["\\x09", "\\x0b", "\\x0c", "\\x0d", "\\x1c", "\\x1d", "\\x1e", "\\x1f", "\\x20", "\\x85", "\\xa0", "\\u1680", "\\u180e", "\\u2000", "\\u200a", "\\u200b", "\\u2028", "\\u2029", "\\u202f", "\\u205f", "\\u3000", "\\ufeff"]
+NUMERIC_SPACE_CASES = [
+    case
+    for space in NUMERIC_SPACES
+    for case in (
+        f'!!int "{space}1"', f'!!int "1{space}"', f'!!float "{space}1.5"', f'!!float "1.5{space}"',
+        f'!!int "1{space}:30"', f'!!int "1:{space}30"', f'!!float "1:30.5{space}"', f'!!float "{space}1:30.5"',
+        f'!!int "{space}0x1F"', f'!!int "0b1{space}"', f'!!int "0755{space}"',
+    )
+]
+
 TAGGED = [
     # !!str
     "!!str 12", "!!str yes", "!!str ~", "!!str", "!!str 2026-01-02", '!!str "x"',
@@ -114,7 +131,7 @@ TAGGED = [
     '!!int " \u0663 "', '!!int "\u2003\u0663\u3000"', '!!float "\u3000\u0663.5\u2003"',
     '!!float "\u00b2"', '!!int "\u00b2"', '!!int "\u216b"', '!!int "\uff41"', '!!int "0x\uff41"',
     '!!float "\u0663\u066b\u0665"', '!!int "\u0e53\u0e52"', '!!int "\u1040"', '! "\u0663"',
-]
+] + NUMERIC_SPACE_CASES
 
 # Whole documents (``--documents``).
 CHOMPING = ["|", "|-", "|+", ">", ">-", ">+"]
@@ -230,6 +247,23 @@ DOCUMENTS = BLOCKS + [
 ]
 
 
+# Python 3.11 converts at most 4,300 decimal digits (sys.int_info.
+# default_max_str_digits); leading zeros count, a sign and whitespace do not;
+# octal, binary and hexadecimal are not limited, nor are floats.
+LONG = [
+    (prefix, digit, count, suffix)
+    for count in (4300, 4301)
+    for prefix, digit, suffix in (
+        ("v: ", "1", ""), ("v: ", "0", ""), ("v: -", "1", ""), ("v: 1_", "1", ""), ("v: 0", "7", ""),
+        ("v: 0b", "1", ""), ("v: 0x", "f", ""), ("v: ", "1", ":30"), ('v: !!int "1:', "0", '"'),
+        ('v: !!int "', "1", ':30"'), ('v: !!int "', "\u0661", '"'), ('v: !!int " ', "1", ' "'),
+        ('v: !!int "0x', "1", '"'), ("v: !!float ", "1", ""), ("v: ", "1", ".5"), ("v: ", "1", ":30.5"),
+        ("v: !!str ", "1", ""), ("v: '", "1", "'"), ("%YAML 1.", "1", "\n--- a"),
+        ("%YAML ", "1", ".1\n--- a"), ("v: 2026-01-02 10:00:00.", "1", ""),
+    )
+]
+
+
 class OutsideModel(Exception):
     """A value PyYAML builds that the v3 value model does not hold."""
 
@@ -251,6 +285,10 @@ def rust_value(value: object) -> str:
     if isinstance(value, bool):
         return f"b({str(value).lower()})"
     if isinstance(value, int):
+        digits = unlimited(lambda: str(abs(value)))
+        if len(digits) > 60:
+            sign = "-" if value < 0 else ""
+            return f'big("{sign}", {len(digits)}, "{digits[:10]}", "{digits[-10:]}")'
         return f'int("{value}")'
     if isinstance(value, float):
         return f'flt("{value!r}")'
@@ -278,6 +316,17 @@ def rust_value(value: object) -> str:
 DISAGREE: list[str] = []
 
 
+def unlimited(describe):
+    """``describe()`` with Python's int/str digit limit lifted: describing a
+    result PyYAML built must not fail where PyYAML did not. Loading always
+    runs with the default limit."""
+    sys.set_int_max_str_digits(0)
+    try:
+        return describe()
+    finally:
+        sys.set_int_max_str_digits(sys.int_info.default_max_str_digits)
+
+
 def load_both(text: str) -> object:
     """``text`` loaded by ``SafeLoader``; a different libyaml reading is noted."""
     results = []
@@ -286,7 +335,7 @@ def load_both(text: str) -> object:
             results.append(("value", yaml.load(text, Loader=loader)))
         except Exception:  # noqa: BLE001 -- any PyYAML failure is an error value
             results.append(("error", None))
-    if repr(results[0]) != repr(results[1]):
+    if unlimited(lambda: repr(results[0]) != repr(results[1])):
         DISAGREE.append("error" if results[1][0] == "error" else repr(results[1][1]))
     kind, value = results[0]
     if kind == "error":
@@ -295,6 +344,22 @@ def load_both(text: str) -> object:
 
 
 def main() -> int:
+    if "--long" in sys.argv[1:]:
+        for prefix, digit, count, suffix in LONG:
+            text = prefix + digit * count + suffix
+            try:
+                value = load_both(text)
+            except ValueError:
+                expected = "err()"
+            else:
+                value = value["v"] if isinstance(value, dict) and "v" in value else value
+                if isinstance(value, str) and len(value) > 60:
+                    expected = f"long_str({len(value)})"
+                else:
+                    expected = rust_value(value)
+            parts = f"({rust_str(prefix)}, {rust_str(digit)}, {count}, {rust_str(suffix)})"
+            print(f"    ({parts}, {expected}),")
+        return 0
     documents = "--documents" in sys.argv[1:]
     cases = DOCUMENTS if documents else TAGGED if "--tagged" in sys.argv[1:] else CASES
     for case in cases:

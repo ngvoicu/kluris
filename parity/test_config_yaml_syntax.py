@@ -36,8 +36,13 @@ def test_list_reads_flow_config_like_v2(sandbox: Sandbox, config: str):
         "brains: {}\nextra: [&a?x]\n",
         "brains: {}\nextra: {!!str &a: |}\n",
         "brains: {}\nextra: \"a\x07\"\n",
+        # Python's int() refuses U+001C..U+001F around a number, and decimal
+        # strings over 4,300 digits.
+        'brains: {}\nextra: !!int "\\x1c1"\n',
+        'brains: {}\nextra: !!float "1\\x1f"\n',
+        "brains: {}\nextra: " + "1" * 4301 + "\n",
     ],
-    ids=["anchor-before-question-mark", "block-scalar-in-flow", "non-printable"],
+    ids=["anchor-before-question-mark", "block-scalar-in-flow", "non-printable", "int-x1c", "float-x1f", "4301-digits"],
 )
 @pytest.mark.parametrize("args", [["list"], ["list", "--json"]], ids=["text", "json"])
 def test_list_fails_on_invalid_config_like_v2(sandbox: Sandbox, config: str, args: list[str]):
