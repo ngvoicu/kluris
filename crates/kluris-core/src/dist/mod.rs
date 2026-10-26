@@ -17,6 +17,7 @@
 //!
 //! Every name derives from [`APP_NAME`], dist's app name.
 
+mod preflight;
 mod receipt;
 pub mod swap;
 mod uninstall;
@@ -25,7 +26,8 @@ use std::path::{Path, PathBuf};
 
 pub use receipt::{Receipt, ReceiptError};
 pub use uninstall::{
-    UninstallError, UninstallReport, UninstallRequest, UserPath, remove_path_entry, uninstall,
+    Blocker, Planned, UninstallError, UninstallReport, UninstallRequest, UserPath, preflight,
+    remove_path_entry, uninstall, uninstall_with,
 };
 
 /// dist's app name: the receipt, env-script and archive names follow it.

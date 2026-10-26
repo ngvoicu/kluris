@@ -12,8 +12,10 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
+pub use super::preflight::{Blocker, Planned, preflight};
 use super::{DistEnv, Receipt, ReceiptError};
 use crate::agents::install::{DestinationReport, remove_generated_skills};
+use crate::fileops::{FileOps, RealFs};
 
 /// The per-user PATH on Windows (`HKCU\Environment\Path`).
 pub trait UserPath {
@@ -48,6 +50,11 @@ pub struct UninstallReport {
     pub edited: Vec<PathBuf>,
     /// Files the installer's names point at that are not what it wrote, kept.
     pub kept: Vec<PathBuf>,
+    /// What the pre-flight found in the way: nothing was changed.
+    pub blocked: Vec<Blocker>,
+    /// What is left to remove by hand after a failure once the binary was
+    /// gone, one instruction each.
+    pub left: Vec<String>,
     /// User PATH entries removed (Windows), as they were written.
     pub path_entries: Vec<String>,
     /// The skill folders a purge cleared something from (or failed in).
@@ -122,6 +129,16 @@ pub fn uninstall(
     req: &UninstallRequest,
     user_path: Option<&mut dyn UserPath>,
     remove_binary: &mut dyn FnMut(&Path) -> io::Result<()>,
+) -> Result<UninstallReport, UninstallError> {
+    uninstall_with(req, user_path, remove_binary, &RealFs)
+}
+
+/// [`uninstall`], removing and rewriting through `ops`.
+pub fn uninstall_with(
+    req: &UninstallRequest,
+    user_path: Option<&mut dyn UserPath>,
+    remove_binary: &mut dyn FnMut(&Path) -> io::Result<()>,
+    _ops: &dyn FileOps,
 ) -> Result<UninstallReport, UninstallError> {
     req.receipt.check_kluris(req.env.windows).map_err(|why| {
         UninstallError::NotKluris(ReceiptError::NotKluris(req.receipt_path.to_path_buf(), why))

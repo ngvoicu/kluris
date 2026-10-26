@@ -904,7 +904,9 @@ fn cli_uninstall_json() {
             "path_entries",
             "skills",
             "purged",
-            "failed"
+            "failed",
+            "blocked",
+            "left"
         ]
     );
     h.assert_installer_files_gone();
@@ -1282,4 +1284,303 @@ fn a_fish_conf_d_that_cannot_be_cleaned_keeps_the_env_scripts() {
     assert!(report.ok(), "{:?}", report.failed);
     h.assert_installer_files_gone();
     h.assert_rc_files_restored();
+}
+
+// The pre-flight (T-118; SPEC decision of 2026-10-26): the whole removal
+// plan is checked before the first change. A file that cannot be read or
+// checked (anything but NotFound), a folder an entry must leave that is not
+// writable and searchable, an immutable flag (macOS) or a read-only
+// attribute (Windows) stops the uninstall with nothing changed and each
+// blocker named with its fix; the rerun, once it is cleared, finishes.
+
+/// Every file under `root`, with its bytes or link target.
+fn tree(root: &Path) -> Vec<(PathBuf, Vec<u8>)> {
+    let mut files = Vec::new();
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        for entry in fs::read_dir(&dir).unwrap() {
+            let path = entry.unwrap().path();
+            let meta = fs::symlink_metadata(&path).unwrap();
+            if meta.file_type().is_symlink() {
+                files.push((
+                    path.clone(),
+                    fs::read_link(&path)
+                        .unwrap()
+                        .into_os_string()
+                        .into_encoded_bytes(),
+                ));
+            } else if meta.is_dir() {
+                files.push((path.clone(), b"<dir>".to_vec()));
+                stack.push(path);
+            } else {
+                files.push((path.clone(), fs::read(&path).unwrap()));
+            }
+        }
+    }
+    files.sort();
+    files
+}
+
+#[cfg(unix)]
+fn chmod(path: &Path, mode: u32) {
+    use std::os::unix::fs::PermissionsExt;
+    fs::set_permissions(path, fs::Permissions::from_mode(mode)).unwrap();
+}
+
+/// Run the uninstall with `obstacle` in place (`undo` clears it), assert it
+/// was blocked before any change, then rerun.
+fn assert_blocked_then_finishes(
+    h: &Home,
+    purge: bool,
+    obstacle: impl FnOnce(),
+    undo: impl FnOnce(),
+    blocked_path: &Path,
+) {
+    let before = tree(&h.root);
+    obstacle();
+    let receipt = h.receipt();
+    let report = uninstall(&request(h, &receipt, purge), None, &mut remove_file).unwrap();
+    undo();
+    assert!(!report.ok(), "the uninstall should have been blocked");
+    assert!(
+        report
+            .blocked
+            .iter()
+            .any(|b| b.path == blocked_path || b.path.starts_with(blocked_path)),
+        "no blocker names {}: {:?}",
+        blocked_path.display(),
+        report.blocked
+    );
+    assert!(
+        report.blocked.iter().all(|b| !b.fix.is_empty()),
+        "{:?}",
+        report.blocked
+    );
+    assert!(
+        report.removed.is_empty() && report.edited.is_empty(),
+        "{report:?}"
+    );
+    assert_eq!(
+        tree(&h.root),
+        before,
+        "the blocked uninstall changed something"
+    );
+
+    let receipt = h.receipt();
+    let report = uninstall(&request(h, &receipt, purge), None, &mut remove_file).unwrap();
+    assert!(
+        report.ok(),
+        "the rerun: {:?} {:?}",
+        report.failed,
+        report.blocked
+    );
+    assert!(!h.prefix.join(exe_name()).exists());
+    assert!(!h.receipt.exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn an_unsearchable_fish_conf_d_blocks_before_any_change() {
+    let h = Home::installed();
+    let conf_d = h.home.join(".config/fish/conf.d");
+    assert_blocked_then_finishes(
+        &h,
+        false,
+        || chmod(&conf_d, 0o400),
+        || chmod(&conf_d, 0o700),
+        &conf_d,
+    );
+    h.assert_installer_files_gone();
+}
+
+#[cfg(unix)]
+#[test]
+fn an_unsearchable_profile_target_blocks_before_any_change() {
+    let h = Home::installed();
+    let dotfiles = h.root.join("dotfiles");
+    fs::create_dir_all(&dotfiles).unwrap();
+    let profile = h.home.join(".profile");
+    fs::rename(&profile, dotfiles.join("profile")).unwrap();
+    std::os::unix::fs::symlink(dotfiles.join("profile"), &profile).unwrap();
+    assert_blocked_then_finishes(
+        &h,
+        false,
+        || chmod(&dotfiles, 0o400),
+        || chmod(&dotfiles, 0o700),
+        &profile,
+    );
+    h.assert_rc_files_restored();
+}
+
+#[cfg(unix)]
+#[test]
+fn a_read_only_dot_kluris_blocks_a_purge_before_any_change() {
+    let h = Home::installed();
+    let kluris = h.home.join(".kluris");
+    assert_blocked_then_finishes(
+        &h,
+        true,
+        || chmod(&kluris, 0o500),
+        || chmod(&kluris, 0o700),
+        &kluris,
+    );
+    assert!(!kluris.exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn a_protected_folder_in_the_bin_folder_blocks_a_purge_before_any_change() {
+    let h = Home::installed();
+    let protected = h.prefix.join("protected");
+    fs::create_dir_all(&protected).unwrap();
+    fs::write(protected.join("notes.txt"), "remaining data\n").unwrap();
+    assert_blocked_then_finishes(
+        &h,
+        true,
+        || chmod(&protected, 0o500),
+        || chmod(&protected, 0o700),
+        &protected,
+    );
+    assert!(!h.home.join(".kluris").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn a_read_only_home_blocks_a_purge_before_any_change() {
+    let h = Home::installed();
+    without_modify_path(&h);
+    let home = h.home.clone();
+    assert_blocked_then_finishes(
+        &h,
+        true,
+        || chmod(&home, 0o500),
+        || chmod(&home, 0o700),
+        &home,
+    );
+    assert!(!h.home.join(".kluris").exists());
+}
+
+#[cfg(target_os = "macos")]
+fn uchg(path: &Path, on: bool) {
+    let status = std::process::Command::new("chflags")
+        .arg(if on { "uchg" } else { "nouchg" })
+        .arg(path)
+        .status()
+        .unwrap();
+    assert!(status.success());
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn an_immutable_receipt_blocks_before_any_change() {
+    let h = Home::installed();
+    let receipt = h.receipt.clone();
+    assert_blocked_then_finishes(
+        &h,
+        false,
+        || uchg(&receipt, true),
+        || uchg(&receipt, false),
+        &receipt,
+    );
+    h.assert_installer_files_gone();
+}
+
+/// A failure after the binary is gone (a race the pre-flight could not
+/// see), injected through FileOps: exit 1, and the report says exactly what
+/// is left to remove by hand; no shell file still sources a removed script
+/// and the PATH entry is gone.
+#[test]
+fn a_failure_after_the_binary_is_gone_says_what_is_left() {
+    use kluris_core::dist::uninstall_with;
+    use kluris_core::fileops::FileOps;
+    struct ReceiptStuck<'a>(&'a Path);
+    impl FileOps for ReceiptStuck<'_> {
+        fn remove_file(&self, path: &Path) -> io::Result<()> {
+            if path == self.0 {
+                return Err(io::Error::other("injected: the receipt is held"));
+            }
+            fs::remove_file(path)
+        }
+    }
+    let h = Home::installed();
+    let entry = h.prefix.display().to_string();
+    let mut fake = FakeUserPath {
+        value: Some(format!("{entry};C:\\Other")),
+        ..FakeUserPath::default()
+    };
+    let receipt = h.receipt();
+    let ops = ReceiptStuck(&h.receipt);
+    let report = uninstall_with(
+        &request(&h, &receipt, false),
+        Some(&mut fake),
+        &mut remove_file,
+        &ops,
+    )
+    .unwrap();
+    assert!(!report.ok());
+    assert!(!h.prefix.join(exe_name()).exists(), "the binary went first");
+    assert!(h.receipt.exists());
+    assert_eq!(
+        fake.value.as_deref(),
+        Some("C:\\Other"),
+        "the PATH entry is gone"
+    );
+    h.assert_rc_files_restored();
+    assert!(!h.home.join(".config/fish/conf.d/kluris.env.fish").exists());
+    assert_eq!(
+        report.left,
+        vec![format!("remove the file {}", h.receipt.display())],
+        "{:?}",
+        report.left
+    );
+}
+
+#[cfg(windows)]
+#[test]
+fn a_read_only_receipt_blocks_before_any_change() {
+    let h = Home::installed();
+    let receipt = h.receipt.clone();
+    let set = |on: bool| {
+        let mut perms = fs::metadata(&receipt).unwrap().permissions();
+        perms.set_readonly(on);
+        fs::set_permissions(&receipt, perms).unwrap();
+    };
+    assert_blocked_then_finishes(&h, false, || set(true), || set(false), &h.receipt);
+    h.assert_installer_files_gone();
+}
+
+/// The command prints the blockers, changes nothing and exits 1; the JSON
+/// lists them as `blocked: [{path, problem, fix}]`.
+#[cfg(unix)]
+#[test]
+fn cli_a_blocked_uninstall_lists_the_blockers_and_changes_nothing() {
+    let h = Home::installed();
+    let conf_d = h.home.join(".config/fish/conf.d");
+    let before = tree(&h.root);
+    chmod(&conf_d, 0o400);
+    let out = h.kluris(&["self-uninstall", "--json"]);
+    let text = h.kluris(&["self-uninstall"]);
+    chmod(&conf_d, 0o700);
+    assert_eq!(tree(&h.root), before);
+    assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["ok"], false);
+    assert_eq!(v["removed"], serde_json::json!([]));
+    let blocked = v["blocked"].as_array().unwrap();
+    assert!(!blocked.is_empty(), "{v}");
+    for b in blocked {
+        let keys: Vec<&String> = b.as_object().unwrap().keys().collect();
+        assert_eq!(keys, ["path", "problem", "fix"], "{b}");
+    }
+    assert!(
+        blocked
+            .iter()
+            .any(|b| b["path"].as_str().unwrap().starts_with(&slashed(&conf_d))),
+        "{v}"
+    );
+    assert_eq!(text.status.code(), Some(1));
+    let text = stdout(&text);
+    assert!(text.contains("Nothing was changed"), "{text}");
+    assert!(text.contains("conf.d"), "{text}");
+    assert!(!text.contains("uninstalled"), "{text}");
 }
