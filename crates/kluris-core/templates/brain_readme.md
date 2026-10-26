@@ -15,8 +15,19 @@ subject matter experts. Curated by humans, read by every agent on the team.
 
 ### For a new team member
 
+Install Kluris, then open a new terminal (the installer adds it to your PATH):
+
 ```bash
-pipx install kluris
+curl -fsSL https://kluris.ngvoicu.dev/install.sh | sh   # macOS and Linux
+```
+
+```powershell
+irm https://kluris.ngvoicu.dev/install.ps1 | iex        # Windows (PowerShell)
+```
+
+Then clone this brain and register it:
+
+```bash
 git clone <this-repo-url> ~/path/to/brain  # if the brain lives at a git remote
 kluris register ~/path/to/brain            # register the on-disk brain
 ```
@@ -55,8 +66,8 @@ Structure conventions stay stable even as the actual lobes change:
 ## How to use kluris-{name}
 
 `kluris-{name}` is an AI coding-agent skill for Claude Code, Codex, Cursor,
-Windsurf, Gemini CLI, Hermes Agent, Kilo Code, Junie, and other tools that
-support skills. Most agents invoke it as `/kluris-{name}`; Hermes can load it
+Devin, Gemini CLI, Hermes Agent, Kilo Code, Junie, OpenCode, and other
+tools that support skills. Most agents invoke it as `/kluris-{name}`; Hermes can load it
 with `/skill kluris-{name}` inside a session or `hermes -s kluris-{name}` at
 startup. Use it inside your coding agent -- not in a regular terminal. The
 agent detects your intent and acts accordingly. Search and guided documentation
@@ -223,8 +234,8 @@ every CLI invocation -- kluris auto-resolves the single brain.
 
 ## Companions
 
-This brain can opt into embedded specmint playbooks. Companions are copied from
-the installed Kluris package into `~/.kluris/companions/<name>/` and the
+This brain can opt into embedded specmint playbooks. Companions ship embedded
+in Kluris; turning one on copies it into `~/.kluris/companions/<name>/` and the
 generated `/kluris-{name}` skill points to them for spec-worthy work.
 
 ```bash
