@@ -1058,6 +1058,63 @@ fn ctrl_break_exits_0() {
     }
 }
 
+/// The Windows service's watch (`--log-file`) runs under `conhost.exe
+/// --headless`, which `schtasks /End` ends without ending its child: the
+/// watch ends itself once the process that started it is gone.
+#[cfg(windows)]
+#[test]
+fn a_service_watch_ends_when_its_parent_does() {
+    use std::process::Stdio;
+    let w = World::new();
+    let log = w.home().join("logs").join("watch.log");
+    let mut cmd = StdCommand::new("cmd");
+    w.hermetic(&mut cmd);
+    cmd.arg("/C")
+        .arg(assert_cmd::cargo::cargo_bin!("kluris"))
+        .args([
+            "sync",
+            "--watch",
+            "--brain",
+            "acme",
+            "--interval",
+            "5",
+            "--log-file",
+        ])
+        .arg(&log)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    let mut parent = cmd.spawn().unwrap();
+    let until = Instant::now() + Duration::from_secs(30);
+    while !fs::read_to_string(&log).is_ok_and(|t| t.contains("acme: up to date")) {
+        assert!(
+            Instant::now() < until,
+            "the watch never logged its first sync"
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    parent.kill().unwrap();
+    let _ = parent.wait();
+    let needle = log.display().to_string();
+    let until = Instant::now() + Duration::from_secs(10);
+    while watch_running_with(&needle) {
+        if Instant::now() >= until {
+            end_round_trip_processes();
+            let _ = StdCommand::new("powershell")
+                .args([
+                    "-NoProfile",
+                    "-Command",
+                    &format!(
+                        "Get-CimInstance Win32_Process | Where-Object {{ $_.ProcessId -ne $PID -and $_.CommandLine -like '*{needle}*' }} | ForEach-Object {{ Stop-Process -Id $_.ProcessId -Force }}"
+                    ),
+                ])
+                .status();
+            panic!("the watch outlived its parent by 10 s");
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
+}
+
 // ---------------------------------------------------------------------------
 // The services, through a fake that records each command.
 // ---------------------------------------------------------------------------
@@ -2072,8 +2129,14 @@ fn real_service_round_trip() {
     // The log goes before anything is asserted.
     if let Some(log) = &log {
         let _ = fs::remove_file(log);
-        if let Some(dir) = log.parent() {
-            let _ = fs::remove_dir(dir);
+        // The log folders, once empty: `kluris` (macOS), `kluris\logs`
+        // (Windows).
+        let mut dir = log.parent();
+        while let Some(d) = dir.filter(|d| d.ends_with("kluris") || d.ends_with("logs")) {
+            if fs::remove_dir(d).is_err() {
+                break;
+            }
+            dir = d.parent();
         }
     }
     assert!(running, "the service never ran; log: {log_text}");
@@ -2136,7 +2199,12 @@ fn end_round_trip_leftovers() {
 
 /// Whether a `kluris sync --watch --brain <name>` process is running.
 fn watch_process_running(name: &str) -> bool {
-    let needle = format!("--brain {name}");
+    watch_running_with(&format!("--brain {name}"))
+}
+
+/// Whether a `kluris sync --watch` process with `needle` in its command
+/// line is running.
+fn watch_running_with(needle: &str) -> bool {
     let out = if cfg!(windows) {
         StdCommand::new("powershell")
             .args([
@@ -2151,6 +2219,7 @@ fn watch_process_running(name: &str) -> bool {
     let text = out
         .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
         .unwrap_or_default();
-    text.lines()
-        .any(|line| line.contains("--watch") && line.contains(&needle))
+    text.lines().any(|line| {
+        line.contains("--watch") && line.contains(needle) && !line.contains("Get-CimInstance")
+    })
 }
