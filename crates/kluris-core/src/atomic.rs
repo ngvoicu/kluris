@@ -8,7 +8,11 @@
 //!   target gets the new bytes (rc files and neurons symlinked into a
 //!   dotfile repo);
 //! - an existing target keeps its permissions; one that cannot be opened
-//!   for writing (read-only) is refused, as an in-place write is;
+//!   for writing (read-only) is refused, as an in-place write is. On Unix
+//!   the temp file is created `0600` and only gets the target's permissions
+//!   once its bytes are synced, so a crash never leaves a private file's
+//!   contents readable by others. On Windows the temp file inherits the
+//!   folder's ACL: an explicit ACL on the original is not carried over;
 //! - the temp file is `.<name>.kluris-tmp-<pid>-<n>`, a dot file with no
 //!   `.md`/`.yml`/`.yaml` suffix, so no walker reads it as a neuron;
 //! - on Windows a sharing violation (an editor, an indexer or antivirus
@@ -48,6 +52,10 @@ pub(crate) trait AtomicFs {
     fn write(&self, file: &mut File, bytes: &[u8]) -> io::Result<()> {
         file.write_all(bytes)?;
         file.sync_all()
+    }
+    /// Give the synced temp file the target's permissions.
+    fn set_permissions(&self, path: &Path, perms: fs::Permissions) -> io::Result<()> {
+        fs::set_permissions(path, perms)
     }
     fn rename(&self, from: &Path, to: &Path) -> io::Result<()> {
         fs::rename(from, to)
@@ -143,7 +151,17 @@ pub(crate) fn write_atomic_with(
             TEMP_COUNTER.fetch_add(1, Ordering::Relaxed)
         ));
         let tmp = dir.join(name);
-        match OpenOptions::new().write(true).create_new(true).open(&tmp) {
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true);
+        // Private before the first byte: the old file's contents may be
+        // private, and a crash leaves the temp file behind. A new file
+        // keeps the default mode, which is what it ends up with anyway.
+        #[cfg(unix)]
+        if existing.is_some() {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        match options.open(&tmp) {
             Ok(file) => break (tmp, file),
             Err(e) if e.kind() == io::ErrorKind::AlreadyExists => continue,
             Err(e) => return Err(e),
@@ -153,7 +171,7 @@ pub(crate) fn write_atomic_with(
         fs_ops.write(&mut file, bytes)?;
         drop(file);
         if let Some(perms) = existing {
-            fs::set_permissions(&tmp, perms)?;
+            fs_ops.set_permissions(&tmp, perms)?;
         }
         retrying(fs_ops, || fs_ops.rename(&tmp, &target))
     })();
@@ -382,6 +400,45 @@ mod tests {
         symlink("a", d.path().join("b")).unwrap();
         assert!(write_atomic(&d.path().join("a"), b"x").is_err());
         assert_eq!(names(d.path()), ["a", "b"]);
+    }
+
+    /// Stops the write where a crash could: after the bytes are synced,
+    /// before the target's permissions are set; records the temp file's
+    /// mode at that moment.
+    #[cfg(unix)]
+    #[derive(Default)]
+    struct CrashBeforePermissions {
+        mode: Cell<Option<u32>>,
+    }
+    #[cfg(unix)]
+    impl AtomicFs for CrashBeforePermissions {
+        fn set_permissions(&self, path: &Path, _: fs::Permissions) -> io::Result<()> {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = fs::metadata(path)?.permissions().mode() & 0o7777;
+            self.mode.set(Some(mode));
+            Err(io::Error::other("interrupted"))
+        }
+    }
+
+    /// A private file's new bytes are never readable by others, not even in
+    /// the temp file a crash leaves behind (review T-106).
+    #[cfg(unix)]
+    #[test]
+    fn the_temp_file_is_private_until_it_has_the_targets_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+        let d = dir();
+        let path = d.path().join("private.md");
+        fs::write(&path, "old secret").unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+        let crash = CrashBeforePermissions::default();
+        assert!(write_atomic_with(&path, b"new secret", &crash).is_err());
+        let mode = crash
+            .mode
+            .get()
+            .expect("the write reached the permissions step");
+        assert_eq!(mode & 0o077, 0, "temp file mode {mode:o}");
+        assert_eq!(fs::read(&path).unwrap(), b"old secret");
+        assert_eq!(names(d.path()), ["private.md"]);
     }
 
     #[cfg(unix)]
