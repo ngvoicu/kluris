@@ -3071,3 +3071,29 @@ fn block_scalar_at_end_of_input_without_a_line_break() {
     }
     assert_eq!(load("- |\n  abc"), Ok(Value::Seq(vec![str_("abc")])));
 }
+
+#[test]
+fn valid_nesting_close_to_the_limit_loads() {
+    // PyYAML composes these (it fails at about 493 levels); the whole
+    // pipeline must hold them without running out of stack.
+    let depth = 480;
+    let mut want = Value::Seq(vec![]);
+    for _ in 1..depth {
+        want = Value::Seq(vec![want]);
+    }
+    assert_eq!(load(&("[".repeat(depth) + &"]".repeat(depth))), Ok(want));
+    let mut want = str_("x");
+    for _ in 0..depth {
+        want = map(vec![("a", want)]);
+    }
+    let text = "{a: ".repeat(depth) + "x" + &"}".repeat(depth);
+    assert_eq!(load(&text), Ok(want));
+    let block: String = (0..depth)
+        .map(|i| format!("{}a:\n", "  ".repeat(i)))
+        .collect::<String>()
+        + &"  ".repeat(depth)
+        + "x\n";
+    assert!(matches!(load(&block), Ok(Value::Map(_))));
+    // One level past the limit is an error, as PyYAML's RecursionError.
+    assert!(load(&("[".repeat(491) + &"]".repeat(491))).is_err());
+}

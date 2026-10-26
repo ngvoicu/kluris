@@ -56,3 +56,12 @@ One entry per difference, under its own heading:
 - Differs: v3 writes an existing config file with the line endings it had (CRLF when its first line break is CRLF, else LF) and a new one with LF on every OS. v2 writes in text mode: LF on macOS/Linux (an existing CRLF file becomes LF) and CRLF on Windows (a new file is CRLF). So on macOS/Linux a CRLF config stays CRLF in v3, and on Windows a config v3 creates is LF.
 - Decision: interview-01 #3 (keep each file's line endings; new files LF), SPEC decision log 2026-10-25 (Windows text mode) and 2026-10-26 (T-54 finding 1, fixed in T-59)
 - Tests: `crates/kluris-core/tests/config.rs::{global_config_rewrite_keeps_the_existing_line_endings, brain_config_rewrite_keeps_the_existing_line_endings, the_first_line_break_decides_the_endings, write_through_a_symlink_keeps_the_target_endings}`, `parity/test_config_roundtrip.py::test_v2_reads_a_config_rewritten_by_v3[crlf]`
+
+### PAR-006: frontmatter YAML read the way PyYAML's pure-Python SafeLoader reads it
+- Command: every command that reads markdown neuron frontmatter (`dream`, `search`, `wake-up`, `mri`, `status`); YAML neurons and config files read the same way in both versions
+- Differs: v3 reads every YAML text with a port of PyYAML 6.0.3's pure-Python `SafeLoader`. v2 read markdown frontmatter with libyaml's `CSafeLoader` (python-frontmatter picks it when libyaml is installed), which reads some unusual texts otherwise. Measured over 20,000 generated texts (67 differ):
+  - libyaml reads a value where `SafeLoader` (and v3) fail: tabs in places the pure scanner refuses (`a: b\tc` is an error in v3, `{'a': 'b\tc'}` in v2), `a?b` inside a flow collection (`[a?b]`), a BOM after the start of the stream, and an empty `!`-tagged node before `:` (`! &a: []`, a `''` key in v2, a null key and so an error in v3).
+  - libyaml fails where `SafeLoader` (and v3) read a value: glued flow forms such as `v: {a:[]}`, `{a:,b}`, `{?x:[?x]}`, a lone `?` entry, and `"\ud800"` escapes.
+  None of the 2,345 markdown files of the seven local brains is in these classes (v3 reads all of them as v2 does).
+- Decision: one YAML reading rule for v3, the pure-Python `SafeLoader` (chief's decision on T-67, 2026-10-26, replacing saphyr-parser with a port of PyYAML's front end)
+- Tests: `parity/test_yaml_load_differential.py` (counts the texts where `CSafeLoader` reads otherwise), the `// CSafeLoader:` notes on the rows of `crates/kluris-core/tests/yaml_read.rs::documents`
