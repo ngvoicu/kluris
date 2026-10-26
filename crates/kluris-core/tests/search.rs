@@ -1052,6 +1052,17 @@ fn symlinked_brain(related: &str) -> Option<Brain> {
     Some(b)
 }
 
+/// Where `./alias/../b.md` leads. On POSIX the link is followed before
+/// `..`, so `alias/..` is `k/real`. On Windows `..` is applied to the path
+/// first (Win32 path parsing, and Python's `ntpath.realpath`, which
+/// `sandbox::resolve` follows), so it is `k`, which is also the file Windows
+/// opens for that path.
+const ALIAS_PARENT_B: &str = if cfg!(windows) {
+    "k/b.md"
+} else {
+    "k/real/b.md"
+};
+
 fn related_of(b: &Brain, file: &str) -> Vec<String> {
     let hits = b.search("quokka");
     hits.into_iter()
@@ -1065,10 +1076,9 @@ fn related_links_follow_directory_symlinks() {
     let Some(b) = symlinked_brain("[./alias/c.md, ./alias/../b.md]") else {
         return;
     };
-    // `alias/..` is `k/real`, not `k`: the link is resolved, then `..`.
     assert_eq!(
         related_of(&b, "k/a.md"),
-        ["k/real/deep/c.md", "k/real/b.md"]
+        ["k/real/deep/c.md", ALIAS_PARENT_B]
     );
 }
 
@@ -1095,7 +1105,7 @@ fn the_local_store_resolves_links_on_disk() {
     );
     assert_eq!(
         store.resolve_link("k/a.md", "./alias/../b.md").as_deref(),
-        Some("k/real/b.md")
+        Some(ALIAS_PARENT_B)
     );
     assert_eq!(
         store.resolve_link("k/a.md", "b.md").as_deref(),
