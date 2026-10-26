@@ -28,8 +28,8 @@ pub use crate::ssh_ci::outcome::exit_said;
 pub use crate::ssh_ci::outcome::{EXIT_MARK, STEP_MARK, TREE_MARK};
 use crate::ssh_ci::plan::{
     self, CARGO_TEST, CLIPPY, INSTALLER_SMOKE, LIFECYCLE, LIFECYCLE_NEW, LIFECYCLE_OLD, PARITY,
-    PYTHON, RELEASE_BUILD, RELEASE_DIST, RELEASE_VERSIONS, SMOKE_PYTHON, TOOLCHAIN, WRAPPER_DIR,
-    fill,
+    PUBLISHED_SMOKE, PYTHON, RELEASE_BUILD, RELEASE_DIST, RELEASE_VERSIONS, SMOKE_PYTHON,
+    TOOLCHAIN, WRAPPER_DIR, fill,
 };
 pub use crate::ssh_ci::plan::{CI_DIR, TREE_FILE, UV_VERSION, run_id, tarball_name};
 
@@ -80,12 +80,17 @@ pub struct Spec<'a> {
     pub wrapper: bool,
     /// Clippy on every target instead of the tests.
     pub clippy: bool,
+    /// With the installer smoke: the published release it installs through
+    /// the live site wrapper; nothing of this tree is built.
+    pub published: Option<&'a str>,
 }
 
 #[cfg(test)]
 pub fn steps(spec: &Spec) -> Vec<plan::Step> {
     if spec.clippy {
         plan::clippy_steps()
+    } else if spec.published.is_some() {
+        plan::published_steps(false)
     } else if spec.installer_smoke {
         plan::smoke_steps()
     } else {
@@ -97,6 +102,8 @@ pub fn steps(spec: &Spec) -> Vec<plan::Step> {
 pub fn bound(spec: &Spec) -> Duration {
     if spec.clippy {
         plan::clippy_bound()
+    } else if spec.published.is_some() {
+        plan::published_bound(false)
     } else if spec.installer_smoke {
         plan::smoke_bound()
     } else {
@@ -205,6 +212,15 @@ pub fn run_script(spec: &Spec) -> String {
             quoted(&command_line(&plan::clippy_args()))
         );
         (line, String::new())
+    } else if let Some(version) = spec.published {
+        let smoke = fill(
+            PUBLISHED_TEMPLATE,
+            &[
+                ("smoke_minutes", &PUBLISHED_SMOKE.minutes.to_string()),
+                ("version", version),
+            ],
+        );
+        (String::new(), smoke)
     } else if spec.installer_smoke {
         let wrapper = if spec.wrapper {
             format!(" -Wrapper {WRAPPER_DIR}\\install.ps1")
@@ -485,6 +501,21 @@ const SMOKE_TEMPLATE: &str = r##"if (Test-Path -LiteralPath $uv -PathType Leaf) 
     Write-Output '== the life-cycle smoke left the user PATH it saved: writing it back'
     Invoke-Step 'user-path' 2 $powershell "-NoProfile -ExecutionPolicy Bypass -File scripts\release\user-path.ps1 -Restore `"$record`""
   }
+}
+"##;
+
+/// The published-release smoke: scripts\release\published-smoke.ps1, which
+/// installs the release from GitHub through the live site wrapper into a
+/// sandbox profile; nothing of the tree is built. It saves the user PATH in
+/// `$record` first and writes it back; a record still there after the step
+/// (ended past its bound) is written back here, and by the stop. The version
+/// is checked by the words before it gets here (digits, letters, `.`, `-`).
+const PUBLISHED_TEMPLATE: &str = r##"$powershell = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+$record = Join-Path $run 'user-path.saved'
+Invoke-Step 'published-smoke' «smoke_minutes» $powershell "-NoProfile -ExecutionPolicy Bypass -File scripts\release\published-smoke.ps1 -Version «version» -Record `"$record`""
+if (Test-Path -LiteralPath $record) {
+  Write-Output '== the published smoke left the user PATH it saved: writing it back'
+  Invoke-Step 'user-path' 2 $powershell "-NoProfile -ExecutionPolicy Bypass -File scripts\release\user-path.ps1 -Restore `"$record`""
 }
 "##;
 

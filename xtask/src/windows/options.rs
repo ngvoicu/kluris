@@ -1,6 +1,7 @@
 //! The words of `cargo xtask windows` ([`crate::ssh_ci::words`]): `--machine
 //! zeewin|zeewin2`, `--parity`, `--parity-files`, `--installer-smoke`,
-//! `--wrapper`, `--help`, and after `--` the extra arguments of `cargo test`.
+//! `--wrapper`, `--published`, `--help`, and after `--` the extra arguments
+//! of `cargo test`.
 
 use crate::ssh_ci::words;
 pub use crate::ssh_ci::words::checked_parity_files;
@@ -8,6 +9,7 @@ pub use crate::ssh_ci::words::checked_parity_files;
 pub const USAGE: &str =
     "usage: cargo xtask windows [--machine zeewin|zeewin2] [--parity [--parity-files parity/test.py[,...]]] [-- <cargo test args>]
        cargo xtask windows [--machine zeewin|zeewin2] --installer-smoke [--wrapper <site install.ps1>]
+       cargo xtask windows [--machine zeewin|zeewin2] --installer-smoke --published <version>
        cargo xtask windows [--machine zeewin|zeewin2] --clippy
 
 Runs `cargo test --workspace` (and with --parity the parity harness against a
@@ -25,7 +27,14 @@ warnings`, ci.yml's gate, on Windows.
 runs scripts\\release\\installer-smoke.ps1 against it (with --wrapper, through
 the site's install.ps1 too). That smoke changes the user PATH while it runs,
 having saved it first, and writes the saved bytes back (the run does again if
-the step was ended), then compares them byte for byte.";
+the step was ended), then compares them byte for byte.
+
+--installer-smoke --published <version> builds nothing: it runs
+scripts\\release\\published-smoke.ps1, which installs that published GitHub
+release through the live https://kluris.ngvoicu.dev/install.ps1
+(KLURIS_VERSION=<version>) into a sandbox profile, checks --version, doctor
+--json and self-update --check --json, then self-uninstall --yes; the user
+PATH is saved, written back and compared the same way.";
 
 /// The machines `--machine` names.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -49,6 +58,9 @@ pub struct Options {
     pub wrapper: Option<String>,
     /// Clippy on every target (`-D warnings`) instead of the tests.
     pub clippy: bool,
+    /// With the installer smoke: the published release to install from
+    /// GitHub through the live site wrapper, instead of this tree's build.
+    pub published: Option<String>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -74,6 +86,7 @@ pub fn parse(args: &[String]) -> Result<Parsed, String> {
         installer_smoke: words.installer_smoke,
         wrapper: words.wrapper,
         clippy: words.clippy,
+        published: words.published,
     }))
 }
 

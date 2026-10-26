@@ -26,8 +26,8 @@ use std::time::Duration;
 
 use crate::ssh_ci::plan::{
     self, CARGO_TEST, CI_DIR, CLIPPY, INSTALLER_SMOKE, LIFECYCLE, LIFECYCLE_NEW, LIFECYCLE_OLD,
-    PARITY, PYTHON, RELEASE_BUILD, RELEASE_DIST, RELEASE_VERSIONS, SMOKE_PYTHON, TOOLCHAIN,
-    TREE_FILE, UV_VERSION, WRAPPER_DIR, fill, tarball_name,
+    PARITY, PUBLISHED_SMOKE, PYTHON, RELEASE_BUILD, RELEASE_DIST, RELEASE_VERSIONS, SMOKE_PYTHON,
+    TOOLCHAIN, TREE_FILE, UV_VERSION, WRAPPER_DIR, fill, tarball_name,
 };
 
 /// The ssh host: the laptop's Ubuntu under WSL2.
@@ -99,12 +99,17 @@ pub struct Spec<'a> {
     pub wrapper: bool,
     /// Clippy on every target instead of the tests.
     pub clippy: bool,
+    /// With the installer smoke: the published release it installs through
+    /// the live site wrapper; nothing of this tree is built.
+    pub published: Option<&'a str>,
 }
 
 #[cfg(test)]
 pub fn steps(spec: &Spec) -> Vec<plan::Step> {
     if spec.clippy {
         plan::clippy_steps()
+    } else if spec.published.is_some() {
+        plan::published_steps(true)
     } else if spec.installer_smoke {
         plan::smoke_steps()
     } else {
@@ -116,6 +121,8 @@ pub fn steps(spec: &Spec) -> Vec<plan::Step> {
 pub fn bound(spec: &Spec) -> Duration {
     if spec.clippy {
         plan::clippy_bound()
+    } else if spec.published.is_some() {
+        plan::published_bound(true)
     } else if spec.installer_smoke {
         plan::smoke_bound()
     } else {
@@ -246,6 +253,17 @@ pub fn run_script(spec: &Spec) -> String {
             quote_all(&plan::clippy_args())
         );
         (line, String::new())
+    } else if let Some(version) = spec.published {
+        let smoke = fill(
+            PUBLISHED_TEMPLATE,
+            &[
+                ("python", SMOKE_PYTHON),
+                ("python_minutes", &PYTHON.minutes.to_string()),
+                ("smoke_minutes", &PUBLISHED_SMOKE.minutes.to_string()),
+                ("version", &quote(version)),
+            ],
+        );
+        (String::new(), uv + &smoke)
     } else if spec.installer_smoke {
         let wrapper = if spec.wrapper {
             format!(
@@ -548,6 +566,25 @@ const SMOKE_TEMPLATE: &str = r#"if [ -x "$uv" ]; then
   if [ -n "$python" ]; then step release-versions «versions_minutes» bash 'scripts/release/build-versions.sh' 'target/releases' '«old»' '«new»'; fi
   if [ -n "$python" ] && [ "$last" -eq 0 ]; then
     step lifecycle «lifecycle_minutes» env KLURIS_SMOKE_PYTHON="$python" sh 'scripts/release/lifecycle-smoke.sh' 'target/releases' '«old»' '«new»'
+  fi
+fi
+"#;
+
+/// The published-release smoke: uv's Python for the script's JSON checks,
+/// then scripts/release/published-smoke.sh, which installs the release from
+/// GitHub through the live site wrapper in a HOME of its own. Nothing of the
+/// tree is built.
+const PUBLISHED_TEMPLATE: &str = r#"if [ -x "$uv" ]; then
+  export UV_CACHE_DIR="$cache/uv"
+  export UV_PYTHON_INSTALL_DIR="$tools/python"
+  export UV_PYTHON_BIN_DIR="$tools/python-bin"
+  export UV_PYTHON_PREFERENCE=only-managed
+  export PATH="$uvdir:$PATH"
+  step python «python_minutes» "$uv" 'python' 'install' '«python»'
+  python=""
+  if [ "$last" -eq 0 ]; then python=$("$uv" python find «python») || python=""; fi
+  if [ -n "$python" ]; then
+    step published-smoke «smoke_minutes» env KLURIS_SMOKE_PYTHON="$python" sh 'scripts/release/published-smoke.sh' «version»
   fi
 fi
 "#;

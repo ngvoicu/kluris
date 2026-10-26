@@ -49,6 +49,7 @@ fn spec<'a>(parity: bool, cargo_args: &'a [String]) -> Spec<'a> {
         installer_smoke: false,
         wrapper: false,
         clippy: false,
+        published: None,
     }
 }
 
@@ -57,6 +58,15 @@ fn smoke_spec(wrapper: bool) -> Spec<'static> {
     Spec {
         installer_smoke: true,
         wrapper,
+        ..spec(false, &[])
+    }
+}
+
+/// A published-release smoke run: the live site wrapper installing `version`.
+fn published_spec(version: &'static str) -> Spec<'static> {
+    Spec {
+        installer_smoke: true,
+        published: Some(version),
         ..spec(false, &[])
     }
 }
@@ -85,6 +95,7 @@ mod words_of_the_command {
                 installer_smoke: false,
                 wrapper: None,
                 clippy: false,
+                published: None,
             }
         );
     }
@@ -115,6 +126,51 @@ mod words_of_the_command {
             ),
             ("--installer-smoke=yes", "--installer-smoke takes no value"),
             ("--installer-smoke --wrapper a.ps1 --wrapper b.ps1", "once"),
+        ] {
+            let refused = options::parse(&words(line)).expect_err(line);
+            assert!(refused.contains(says), "{line:?}: {refused}");
+        }
+    }
+
+    #[test]
+    fn the_published_smoke_names_a_release_and_takes_no_wrapper_file() {
+        let options = run_of("--machine zeewin --installer-smoke --published 3.0.0-rc.1");
+        assert_eq!(options.machine, Some(Name::Zeewin));
+        assert!(options.installer_smoke && !options.parity, "{options:?}");
+        assert_eq!(options.published.as_deref(), Some("3.0.0-rc.1"));
+        assert_eq!(options.wrapper, None);
+        assert_eq!(
+            run_of("--published=v3.0.0 --installer-smoke")
+                .published
+                .as_deref(),
+            Some("3.0.0"),
+            "the = spelling, a leading v dropped, in any order"
+        );
+        assert_eq!(run_of("--installer-smoke").published, None);
+        for (line, says) in [
+            (
+                "--published 3.0.0",
+                "--published goes with --installer-smoke",
+            ),
+            (
+                "--installer-smoke --published 3.0.0 --wrapper x.ps1",
+                "the live site's install",
+            ),
+            (
+                "--installer-smoke --published --machine zeewin",
+                "--published takes",
+            ),
+            ("--installer-smoke --published 3.0", "a release number"),
+            (
+                "--installer-smoke --published 3.0.0\\..\\x",
+                "a release number",
+            ),
+            ("--installer-smoke --published 3.0.0`x", "a release number"),
+            ("--installer-smoke --published 3.0.0-", "a release number"),
+            (
+                "--installer-smoke --published 3.0.0 --published 3.0.1",
+                "--published is given once",
+            ),
         ] {
             let refused = options::parse(&words(line)).expect_err(line);
             assert!(refused.contains(says), "{line:?}: {refused}");
@@ -486,6 +542,10 @@ mod scripts {
                 "run --installer-smoke",
                 script::run_script(&smoke_spec(true)),
             ),
+            (
+                "run --installer-smoke --published",
+                script::run_script(&published_spec("3.0.0-rc.1")),
+            ),
             ("stop", script::stop_script("kluris-0000abcd-12345678")),
             (
                 "cleanup",
@@ -746,6 +806,52 @@ mod scripts {
             text[..versions].ends_with("if ($python) { "),
             "the life cycle does not wait on the installer smoke's result: {text}"
         );
+    }
+
+    #[test]
+    fn a_published_smoke_installs_the_release_through_the_live_wrapper_and_builds_nothing() {
+        let spec = published_spec("3.0.0-rc.1");
+        let steps: Vec<_> = script::steps(&spec).iter().map(|s| s.name).collect();
+        assert_eq!(steps, ["toolchain", "published-smoke"]);
+        let text = script::run_script(&spec);
+        for step in script::steps(&spec) {
+            assert!(
+                text.contains(&format!("Invoke-Step '{}' {} ", step.name, step.minutes)),
+                "{step:?} is not run with its bound:\n{text}"
+            );
+        }
+        for line in [
+            "$record = Join-Path $run 'user-path.saved'",
+            "Invoke-Step 'published-smoke' 20 $powershell \"-NoProfile -ExecutionPolicy Bypass -File scripts\\release\\published-smoke.ps1 -Version 3.0.0-rc.1 -Record `\"$record`\"\"",
+        ] {
+            assert!(text.contains(line), "no {line:?} in\n{text}");
+        }
+        for absent in [
+            "build-local",
+            "build-versions",
+            "installer-smoke.ps1",
+            "lifecycle",
+            "python install",
+            "Invoke-Step 'cargo-test'",
+            "pytest",
+        ] {
+            assert!(
+                !text.contains(absent),
+                "a published smoke builds and tests nothing ({absent}):\n{text}"
+            );
+        }
+        // Past its bound the smoke is killed and its `finally` never runs:
+        // the run writes the user PATH it saved back.
+        let smoke = text.find("Invoke-Step 'published-smoke'").unwrap();
+        let restore = text
+            .find("scripts\\release\\user-path.ps1 -Restore")
+            .expect("the run restores the saved user PATH");
+        assert!(restore > smoke, "{text}");
+        assert!(
+            text[smoke..].contains("if (Test-Path -LiteralPath $record)"),
+            "{text}"
+        );
+        assert!(script::bound(&spec) < script::bound(&smoke_spec(false)));
     }
 
     fn clippy_spec() -> Spec<'static> {
@@ -1067,6 +1173,7 @@ mod runs {
             installer_smoke: false,
             wrapper: None,
             clippy: false,
+            published: None,
         }
     }
 
@@ -1249,6 +1356,7 @@ mod runs {
                 installer_smoke: false,
                 wrapper: None,
                 clippy: false,
+                published: None,
             },
             vec![],
         );
@@ -1281,6 +1389,7 @@ mod runs {
                 installer_smoke: false,
                 wrapper: None,
                 clippy: false,
+                published: None,
             },
             vec![
                 said(0, ""),
@@ -1307,6 +1416,7 @@ mod runs {
                 installer_smoke: false,
                 wrapper: None,
                 clippy: false,
+                published: None,
             },
             vec![
                 said(0, "held\n"),

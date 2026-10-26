@@ -1,6 +1,7 @@
 //! The words `cargo xtask windows` and `cargo xtask linux` share: `--parity`,
 //! `--parity-files parity/TEST.PY[,...]` (repeatable, needs `--parity`),
-//! `--installer-smoke` and its `--wrapper FILE`, `--help`, after `--` the
+//! `--installer-smoke` and its `--wrapper FILE` or `--published VERSION`,
+//! `--help`, after `--` the
 //! extra arguments of `cargo test` taken as they are, and for a task with more
 //! than one machine `--machine NAME` (or `--machine=NAME`).
 
@@ -25,6 +26,9 @@ pub struct Words {
     pub wrapper: Option<String>,
     /// `cargo clippy --workspace --all-targets -- -D warnings` instead of the tests.
     pub clippy: bool,
+    /// The release `--published` names, installed from GitHub through the
+    /// live site wrapper instead of a build of this tree.
+    pub published: Option<String>,
 }
 
 /// `args` as [`Words`], or none for `--help`. `machines` are the values
@@ -67,6 +71,20 @@ pub fn parse(args: &[String], machines: &[&str]) -> Result<Option<Words>, String
                     }
                 };
                 words.wrapper = Some(value.to_owned());
+            }
+            "--published" => {
+                if words.published.is_some() {
+                    return Err("--published is given once".into());
+                }
+                let value = match inline {
+                    Some(value) => value,
+                    None => {
+                        let next = args.get(at).filter(|next| !next.starts_with('-'));
+                        at += 1;
+                        next.ok_or("--published takes a release: --published 3.0.0-rc.1")?
+                    }
+                };
+                words.published = Some(release_number(value)?);
             }
             "--parity-files" => {
                 let value = match inline {
@@ -123,6 +141,15 @@ pub fn parse(args: &[String], machines: &[&str]) -> Result<Option<Words>, String
     if words.wrapper.is_some() && !words.installer_smoke {
         return Err("--wrapper goes with --installer-smoke".into());
     }
+    if words.published.is_some() && !words.installer_smoke {
+        return Err("--published goes with --installer-smoke".into());
+    }
+    if words.published.is_some() && words.wrapper.is_some() {
+        return Err(
+            "--published installs through the live site's install script: not with --wrapper"
+                .into(),
+        );
+    }
     if words.installer_smoke && words.parity {
         return Err(
             "--installer-smoke runs the installers, not the tests: not with --parity".into(),
@@ -138,6 +165,36 @@ pub fn parse(args: &[String], machines: &[&str]) -> Result<Option<Words>, String
         return Err("--installer-smoke runs no cargo test: nothing goes after --".into());
     }
     Ok(Some(words))
+}
+
+/// `given` as a release number, `3.0.0` or `3.0.0-rc.1` (a leading `v`
+/// dropped): three dot-separated numbers, then optionally `-` and a
+/// prerelease of letters, digits, dots and hyphens. Anything else is refused
+/// before it reaches a script.
+fn release_number(given: &str) -> Result<String, String> {
+    let version = given.strip_prefix('v').unwrap_or(given);
+    let (core, pre) = match version.split_once('-') {
+        Some((core, pre)) => (core, Some(pre)),
+        None => (version, None),
+    };
+    let numbers: Vec<&str> = core.split('.').collect();
+    let core_ok = numbers.len() == 3
+        && numbers
+            .iter()
+            .all(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()));
+    let pre_ok = pre.is_none_or(|pre| {
+        !pre.is_empty()
+            && pre
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-')
+    });
+    if core_ok && pre_ok {
+        Ok(version.to_owned())
+    } else {
+        Err(format!(
+            "--published takes a release number such as 3.0.0 or 3.0.0-rc.1, not {given:?}"
+        ))
+    }
 }
 
 /// The site wrapper `--wrapper` names, as it goes in the tarball: its path

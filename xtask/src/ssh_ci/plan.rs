@@ -72,6 +72,12 @@ pub const LIFECYCLE: Step = Step {
     name: "lifecycle",
     minutes: 20,
 };
+/// scripts/release/published-smoke: a published GitHub release installed
+/// through the live site wrapper, checked, and uninstalled.
+pub const PUBLISHED_SMOKE: Step = Step {
+    name: "published-smoke",
+    minutes: 20,
+};
 /// The two releases the life cycle installs and updates between: any two
 /// versions, the second the higher; only the version differs between them.
 pub const LIFECYCLE_OLD: &str = "3.0.0";
@@ -98,6 +104,21 @@ pub fn smoke_steps() -> Vec<Step> {
         RELEASE_VERSIONS,
         LIFECYCLE,
     ]
+}
+
+/// The steps of a published-release smoke, which builds nothing: with
+/// `python`, uv's Python first, for the script's JSON checks.
+pub fn published_steps(python: bool) -> Vec<Step> {
+    if python {
+        vec![TOOLCHAIN, PYTHON, PUBLISHED_SMOKE]
+    } else {
+        vec![TOOLCHAIN, PUBLISHED_SMOKE]
+    }
+}
+
+/// How long a published-release smoke may take.
+pub fn published_bound(python: bool) -> Duration {
+    bound_of(&published_steps(python))
 }
 
 /// The steps of a clippy run, which runs no tests.

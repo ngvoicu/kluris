@@ -51,6 +51,7 @@ fn go(options: &Options, ctx: &mut Ctx) -> Result<i32, String> {
         installer_smoke: options.installer_smoke,
         wrapper: options.wrapper.is_some(),
         clippy: options.clippy,
+        published: options.published.as_deref(),
     };
     let scratch = tempfile::tempdir().map_err(|e| format!("no folder for the tarball: {e}"))?;
     let name = plan::tarball_name(&id);

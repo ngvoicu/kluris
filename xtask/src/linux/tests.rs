@@ -30,6 +30,7 @@ fn spec<'a>(parity: bool, parity_files: &'a [String], cargo_args: &'a [String]) 
         installer_smoke: false,
         wrapper: false,
         clippy: false,
+        published: None,
     }
 }
 
@@ -38,6 +39,15 @@ fn smoke_spec(wrapper: bool) -> Spec<'static> {
     Spec {
         installer_smoke: true,
         wrapper,
+        ..spec(false, &[], &[])
+    }
+}
+
+/// A published-release smoke run: the live site wrapper installing `version`.
+fn published_spec(version: &'static str) -> Spec<'static> {
+    Spec {
+        installer_smoke: true,
+        published: Some(version),
         ..spec(false, &[], &[])
     }
 }
@@ -65,6 +75,7 @@ mod words_of_the_command {
                 installer_smoke: false,
                 wrapper: None,
                 clippy: false,
+                published: None,
             }
         );
     }
@@ -80,6 +91,47 @@ mod words_of_the_command {
             ("--installer-smoke --parity", "not with --parity"),
             ("--installer-smoke -- -p kluris-core", "runs no cargo test"),
             ("--installer-smoke --wrapper", "--wrapper takes"),
+        ] {
+            let refused = options::parse(&words(line)).expect_err(line);
+            assert!(refused.contains(says), "{line:?}: {refused}");
+        }
+    }
+
+    #[test]
+    fn the_published_smoke_names_a_release_and_takes_no_wrapper_file() {
+        let options = run_of("--installer-smoke --published 3.0.0-rc.1");
+        assert!(options.installer_smoke && !options.parity, "{options:?}");
+        assert_eq!(options.published.as_deref(), Some("3.0.0-rc.1"));
+        assert_eq!(options.wrapper, None);
+        assert_eq!(
+            run_of("--published=v3.0.0 --installer-smoke")
+                .published
+                .as_deref(),
+            Some("3.0.0"),
+            "the = spelling, a leading v dropped, in any order"
+        );
+        assert_eq!(run_of("--installer-smoke").published, None);
+        for (line, says) in [
+            (
+                "--published 3.0.0",
+                "--published goes with --installer-smoke",
+            ),
+            (
+                "--installer-smoke --published 3.0.0 --wrapper x.sh",
+                "the live site's install",
+            ),
+            ("--installer-smoke --published", "--published takes"),
+            ("--installer-smoke --published 3.0", "a release number"),
+            (
+                "--installer-smoke --published 3.0.0/../x",
+                "a release number",
+            ),
+            ("--installer-smoke --published 3.0.0;x", "a release number"),
+            ("--installer-smoke --published 3.0.0-", "a release number"),
+            (
+                "--installer-smoke --published 3.0.0 --published 3.0.1",
+                "--published is given once",
+            ),
         ] {
             let refused = options::parse(&words(line)).expect_err(line);
             assert!(refused.contains(says), "{line:?}: {refused}");
@@ -170,6 +222,10 @@ mod scripts {
             (
                 "run --installer-smoke",
                 script::run_script(&smoke_spec(true)),
+            ),
+            (
+                "run --installer-smoke --published",
+                script::run_script(&published_spec("3.0.0-rc.1")),
             ),
             ("stop", script::stop_script(ID)),
             ("cleanup", script::cleanup_script(ID)),
@@ -374,6 +430,41 @@ mod scripts {
             with.contains("'scripts/release/installer-smoke.sh' '--wrapper' '.kluris-site/install.sh' 'target/distrib'"),
             "{with}"
         );
+    }
+
+    #[test]
+    fn a_published_smoke_installs_the_release_through_the_live_wrapper_and_builds_nothing() {
+        let spec = published_spec("3.0.0-rc.1");
+        let steps: Vec<_> = script::steps(&spec).iter().map(|step| step.name).collect();
+        assert_eq!(steps, ["toolchain", "python", "published-smoke"]);
+        let text = script::run_script(&spec);
+        for step in script::steps(&spec) {
+            assert!(
+                text.contains(&format!("step {} {} ", step.name, step.minutes)),
+                "{} is not run with its bound:\n{text}",
+                step.name
+            );
+        }
+        for line in [
+            "step python 10 \"$uv\" 'python' 'install' '3.11'",
+            "step published-smoke 20 env KLURIS_SMOKE_PYTHON=\"$python\" sh 'scripts/release/published-smoke.sh' '3.0.0-rc.1'",
+        ] {
+            assert!(text.contains(line), "no {line:?} in\n{text}");
+        }
+        for absent in [
+            "build-local",
+            "build-versions",
+            "installer-smoke.sh",
+            "lifecycle",
+            "step cargo-test",
+            "pytest",
+        ] {
+            assert!(
+                !text.contains(absent),
+                "a published smoke builds and tests nothing ({absent}):\n{text}"
+            );
+        }
+        assert!(script::bound(&spec) < script::bound(&smoke_spec(false)));
     }
 
     #[test]
@@ -949,6 +1040,7 @@ mod runs {
             installer_smoke: false,
             wrapper: None,
             clippy: false,
+            published: None,
         }
     }
 
@@ -1165,6 +1257,7 @@ mod runs {
             installer_smoke: false,
             wrapper: None,
             clippy: false,
+            published: None,
         };
         let ran = ran_in(dir.path(), options, vec![]);
         assert_eq!(ran.code, 1);
@@ -1178,6 +1271,7 @@ mod runs {
             installer_smoke: false,
             wrapper: None,
             clippy: false,
+            published: None,
         };
         let ran = ran_in(
             dir.path(),

@@ -1,5 +1,5 @@
 //! The words of `cargo xtask linux` ([`crate::ssh_ci::words`]): `--parity`,
-//! `--parity-files`, `--installer-smoke`, `--wrapper`, `--help`, and after
+//! `--parity-files`, `--installer-smoke`, `--wrapper`, `--published`, `--help`, and after
 //! `--` the extra arguments of `cargo test`. There is one machine, so no
 //! `--machine`.
 
@@ -7,6 +7,7 @@ use crate::ssh_ci::words;
 
 pub const USAGE: &str = "usage: cargo xtask linux [--parity [--parity-files parity/test.py[,...]]] [-- <cargo test args>]
        cargo xtask linux --installer-smoke [--wrapper <site install.sh>]
+       cargo xtask linux --installer-smoke --published <version>
        cargo xtask linux --clippy
 
 Runs `cargo test --workspace` (and with --parity the parity harness against a
@@ -22,7 +23,13 @@ warnings`, ci.yml's gate, on zeelin.
 
 --installer-smoke runs no tests: it builds this tree's release with dist and
 runs scripts/release/installer-smoke.sh against it in a HOME of its own (with
---wrapper, through the site's install.sh too).";
+--wrapper, through the site's install.sh too).
+
+--installer-smoke --published <version> builds nothing: it runs
+scripts/release/published-smoke.sh, which installs that published GitHub
+release through the live https://kluris.ngvoicu.dev/install.sh
+(KLURIS_VERSION=<version>) in a HOME of its own, checks --version, doctor
+--json and self-update --check --json, then self-uninstall --yes.";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Options {
@@ -37,6 +44,9 @@ pub struct Options {
     pub wrapper: Option<String>,
     /// Clippy on every target (`-D warnings`) instead of the tests.
     pub clippy: bool,
+    /// With the installer smoke: the published release to install from
+    /// GitHub through the live site wrapper, instead of this tree's build.
+    pub published: Option<String>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -56,6 +66,7 @@ pub fn parse(args: &[String]) -> Result<Parsed, String> {
         installer_smoke: words.installer_smoke,
         wrapper: words.wrapper,
         clippy: words.clippy,
+        published: words.published,
     }))
 }
 
