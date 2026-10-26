@@ -46,6 +46,17 @@ fn spec<'a>(parity: bool, cargo_args: &'a [String]) -> Spec<'a> {
         parity,
         parity_files: &[],
         cargo_args,
+        installer_smoke: false,
+        wrapper: false,
+    }
+}
+
+/// An installer smoke run, with or without the site wrapper sent.
+fn smoke_spec(wrapper: bool) -> Spec<'static> {
+    Spec {
+        installer_smoke: true,
+        wrapper,
+        ..spec(false, &[])
     }
 }
 
@@ -70,8 +81,60 @@ mod words_of_the_command {
                 parity: false,
                 parity_files: vec![],
                 cargo_args: vec![],
+                installer_smoke: false,
+                wrapper: None,
             }
         );
+    }
+
+    #[test]
+    fn the_installer_smoke_and_its_wrapper() {
+        let options = run_of("--installer-smoke");
+        assert!(options.installer_smoke && !options.parity, "{options:?}");
+        assert_eq!(options.wrapper, None);
+        let options = run_of("--machine zeewin --installer-smoke --wrapper ../site/install.ps1");
+        assert_eq!(options.machine, Some(Name::Zeewin));
+        assert_eq!(options.wrapper.as_deref(), Some("../site/install.ps1"));
+        assert_eq!(
+            run_of("--wrapper=x.ps1 --installer-smoke").wrapper.as_deref(),
+            Some("x.ps1"),
+            "the = spelling, in any order"
+        );
+        for (line, says) in [
+            ("--wrapper x.ps1", "--wrapper goes with --installer-smoke"),
+            ("--installer-smoke --parity", "not with --parity"),
+            ("--installer-smoke -- -p kluris-core", "runs no cargo test"),
+            ("--installer-smoke --wrapper", "--wrapper takes"),
+            ("--installer-smoke --wrapper --machine zeewin", "--wrapper takes"),
+            ("--installer-smoke=yes", "--installer-smoke takes no value"),
+            ("--installer-smoke --wrapper a.ps1 --wrapper b.ps1", "once"),
+        ] {
+            let refused = options::parse(&words(line)).expect_err(line);
+            assert!(refused.contains(says), "{line:?}: {refused}");
+        }
+    }
+
+    #[test]
+    fn the_wrapper_is_a_ps1_file_read_whole() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("install.ps1");
+        fs::write(&file, "# the site's wrapper\r\n").unwrap();
+        let given = file.to_string_lossy().into_owned();
+        assert_eq!(
+            options::wrapper_file(&given),
+            Ok((
+                ".kluris-site/install.ps1".to_owned(),
+                "# the site's wrapper\r\n".to_owned()
+            ))
+        );
+        fs::write(dir.path().join("install.sh"), "x").unwrap();
+        for (path, says) in [
+            (dir.path().join("install.sh"), "a .ps1 file"),
+            (dir.path().join("missing.ps1"), "could not read"),
+        ] {
+            let refused = options::wrapper_file(&path.to_string_lossy()).expect_err("refused");
+            assert!(refused.contains(says) && refused.contains("--wrapper"), "{refused}");
+        }
     }
 
     #[test]
@@ -393,6 +456,7 @@ mod scripts {
             ("bootstrap", script::bootstrap("kluris-0000abcd-12345678")),
             ("run", script::run_script(&spec(false, &[]))),
             ("run --parity", script::run_script(&spec(true, &extra))),
+            ("run --installer-smoke", script::run_script(&smoke_spec(true))),
             ("stop", script::stop_script("kluris-0000abcd-12345678")),
             (
                 "cleanup",
@@ -550,6 +614,83 @@ mod scripts {
             names(true),
             ["toolchain", "cargo-test", "release-build", "parity"]
         );
+        let smoke: Vec<_> = script::steps(&smoke_spec(false))
+            .iter()
+            .map(|step| step.name)
+            .collect();
+        assert_eq!(
+            smoke,
+            ["toolchain", "python", "release-dist", "installer-smoke"]
+        );
+    }
+
+    #[test]
+    fn an_installer_smoke_is_bounded_too() {
+        let spec = smoke_spec(true);
+        let text = script::run_script(&spec);
+        for step in script::steps(&spec) {
+            assert!(step.minutes > 0 && step.minutes <= 120, "{step:?}");
+            assert!(
+                text.contains(&format!("Invoke-Step '{}' {} ", step.name, step.minutes)),
+                "{step:?} is not run with its bound:\n{text}"
+            );
+        }
+        let all: u32 = script::steps(&spec).iter().map(|s| s.minutes).sum();
+        assert!(script::bound(&spec) > Duration::from_secs(u64::from(all) * 60));
+        assert!(script::bound(&spec) < script::bound(&spec_with_parity()));
+    }
+
+    fn spec_with_parity() -> Spec<'static> {
+        spec(true, &[])
+    }
+
+    #[test]
+    fn an_installer_smoke_builds_the_release_and_runs_the_smoke_script() {
+        let text = script::run_script(&smoke_spec(false));
+        for line in [
+            "$env:KLURIS_TOOLS_DIR = $tools",
+            "$env:UV_PYTHON_INSTALL_DIR = Join-Path $tools 'python'",
+            "$env:UV_PYTHON_PREFERENCE = 'only-managed'",
+            "Invoke-Step 'python' 10 $uv 'python install 3.11'",
+            "Invoke-Step 'release-dist' 60 $powershell '-NoProfile -ExecutionPolicy Bypass -File scripts\\release\\build-local.ps1'",
+            "Invoke-Step 'installer-smoke' 20 $powershell \"-NoProfile -ExecutionPolicy Bypass -File scripts\\release\\installer-smoke.ps1 -Release target\\distrib -Python `\"$python`\" -Record `\"$record`\"\"",
+            "$record = Join-Path $run 'user-path.saved'",
+        ] {
+            assert!(text.contains(line), "no {line:?} in\n{text}");
+        }
+        assert!(!text.contains("-Wrapper"), "{text}");
+        assert!(
+            !text.contains("Invoke-Step 'cargo-test'") && !text.contains("pytest"),
+            "an installer smoke runs no tests: {text}"
+        );
+        // Whatever the smoke step's end (past its bound it is killed, its
+        // `finally` never runs), the user PATH it saved is written back.
+        let smoke = text.find("Invoke-Step 'installer-smoke'").unwrap();
+        let restore = text
+            .find("scripts\\release\\user-path.ps1 -Restore")
+            .expect("the run restores the saved user PATH");
+        assert!(restore > smoke, "{text}");
+        assert!(text[smoke..].contains("if (Test-Path -LiteralPath $record)"), "{text}");
+
+        let with = script::run_script(&smoke_spec(true));
+        assert!(
+            with.contains("-Wrapper .kluris-site\\install.ps1"),
+            "{with}"
+        );
+    }
+
+    #[test]
+    fn the_stop_restores_the_user_path_an_ended_smoke_left() {
+        let text = script::stop_script("kluris-0000abcd-12345678");
+        assert!(
+            text.contains("runs\\kluris-0000abcd-12345678\\user-path.saved"),
+            "{text}"
+        );
+        assert!(
+            text.contains("scripts\\release\\user-path.ps1") && text.contains("-Restore"),
+            "{text}"
+        );
+        assert!(text.trim_end().ends_with("exit 0"));
     }
 
     #[test]
@@ -819,6 +960,8 @@ mod runs {
             parity,
             parity_files: vec![],
             cargo_args: vec![],
+            installer_smoke: false,
+            wrapper: None,
         }
     }
 
@@ -879,6 +1022,60 @@ mod runs {
     }
 
     #[test]
+    fn an_installer_smoke_run_sends_the_smoke_and_waits_its_bound() {
+        let passed = "== tree 5f54983aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\r\n\
+            == step toolchain exit 0 3s\r\n\
+            == step python exit 0 9s\r\n\
+            == step release-dist exit 0 300s\r\n\
+            installer-smoke: user PATH restored: 120 bytes, REG_EXPAND_SZ, byte for byte identical to the saved value\r\n\
+            == step installer-smoke exit 0 40s\r\n\
+            \r\n== exit 0\r\n";
+        let mut fake = Fake::new(vec![
+            said(0, ""),
+            Answer::Stream(vec![(Stream::Out, passed)], Ok(Streamed::Exited(Some(1)))),
+        ]);
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let mut run_script = String::new();
+        let dir = tempfile::tempdir().unwrap();
+        let options = Options {
+            installer_smoke: true,
+            wrapper: Some("site/install.ps1".into()),
+            ..on(Name::Zeewin, false)
+        };
+        let code = {
+            let mut pack = |tarball: &Path, script: &str| -> Result<String, String> {
+                run_script = script.to_owned();
+                fs::write(tarball, b"tarball").map_err(|e| e.to_string())?;
+                Ok("5f54983aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into())
+            };
+            let mut ctx = Ctx {
+                runner: &mut fake,
+                out: &mut out,
+                err: &mut err,
+                stop: &|| false,
+                channel: "1.99.0".into(),
+                pack: &mut pack,
+                root: dir.path(),
+            };
+            run::windows(&options, &mut ctx)
+        };
+        let err = String::from_utf8(err).unwrap();
+        assert_eq!(code, 0, "{err}");
+        assert!(run_script.contains("installer-smoke.ps1 -Release"), "{run_script}");
+        assert!(run_script.contains("-Wrapper .kluris-site\\install.ps1"), "{run_script}");
+        assert!(!run_script.contains("Invoke-Step 'cargo-test'"), "{run_script}");
+        let ssh = &fake.calls[1];
+        assert!(ssh.bound >= script::bound(&smoke_spec(true)), "{:?}", ssh.bound);
+        assert!(ssh.bound < script::bound(&spec(true, &[])), "{:?}", ssh.bound);
+        let summary = err.lines().last().unwrap();
+        assert!(
+            summary.contains("release-dist 0 (300s), installer-smoke 0 (40s)"),
+            "{summary}"
+        );
+    }
+
+    #[test]
     fn a_held_lock_is_75_with_the_holder_named() {
         let ran = ran(
             on(Name::Zeewin, true),
@@ -927,6 +1124,8 @@ mod runs {
                 parity: true,
                 parity_files: words("parity/not_there.py"),
                 cargo_args: vec![],
+                installer_smoke: false,
+                wrapper: None,
             },
             vec![],
         );
@@ -956,6 +1155,8 @@ mod runs {
                 parity: true,
                 parity_files: words("parity/test_smoke.py"),
                 cargo_args: vec![],
+                installer_smoke: false,
+                wrapper: None,
             },
             vec![
                 said(0, ""),
@@ -979,6 +1180,8 @@ mod runs {
                 parity: false,
                 parity_files: vec![],
                 cargo_args: vec![],
+                installer_smoke: false,
+                wrapper: None,
             },
             vec![
                 said(0, "held\n"),
@@ -1225,6 +1428,27 @@ mod tarball {
             Some("the run script\n")
         );
         assert_eq!(member(&tarball, ".kluris-tree"), Some(format!("{head}\n")));
+    }
+
+    #[test]
+    fn files_beside_the_tree_go_in_the_tarball() {
+        let dir = repo();
+        let tarball = dir.path().join("out.tgz");
+        let extra = [(
+            ".kluris-site/install.ps1".to_owned(),
+            "# wrapper: x\r\n".to_owned(),
+        )];
+        super::super::pack::pack_with_files(dir.path(), &tarball, "the run script\n", &extra)
+            .unwrap();
+        assert_eq!(
+            member(&tarball, ".kluris-site/install.ps1").as_deref(),
+            Some("# wrapper: x\r\n")
+        );
+        assert_eq!(
+            member(&tarball, ".kluris-run.ps1").as_deref(),
+            Some("the run script\n")
+        );
+        assert_eq!(member(&tarball, "kept.txt").as_deref(), Some("committed\n"));
     }
 
     #[test]

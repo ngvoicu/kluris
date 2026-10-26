@@ -27,6 +27,17 @@ fn spec<'a>(parity: bool, parity_files: &'a [String], cargo_args: &'a [String]) 
         parity,
         parity_files,
         cargo_args,
+        installer_smoke: false,
+        wrapper: false,
+    }
+}
+
+/// An installer smoke run, with or without the site wrapper sent.
+fn smoke_spec(wrapper: bool) -> Spec<'static> {
+    Spec {
+        installer_smoke: true,
+        wrapper,
+        ..spec(false, &[], &[])
     }
 }
 
@@ -50,8 +61,44 @@ mod words_of_the_command {
                 parity: false,
                 parity_files: vec![],
                 cargo_args: vec![],
+                installer_smoke: false,
+                wrapper: None,
             }
         );
+    }
+
+    #[test]
+    fn the_installer_smoke_and_its_wrapper() {
+        let options = run_of("--installer-smoke --wrapper ../site/install.sh");
+        assert!(options.installer_smoke && !options.parity, "{options:?}");
+        assert_eq!(options.wrapper.as_deref(), Some("../site/install.sh"));
+        assert_eq!(run_of("--installer-smoke").wrapper, None);
+        for (line, says) in [
+            ("--wrapper x.sh", "--wrapper goes with --installer-smoke"),
+            ("--installer-smoke --parity", "not with --parity"),
+            ("--installer-smoke -- -p kluris-core", "runs no cargo test"),
+            ("--installer-smoke --wrapper", "--wrapper takes"),
+        ] {
+            let refused = options::parse(&words(line)).expect_err(line);
+            assert!(refused.contains(says), "{line:?}: {refused}");
+        }
+    }
+
+    #[test]
+    fn the_wrapper_is_a_sh_file_read_whole() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("install.sh");
+        fs::write(&file, "#!/bin/sh\nmain\n").unwrap();
+        assert_eq!(
+            options::wrapper_file(&file.to_string_lossy()),
+            Ok((
+                ".kluris-site/install.sh".to_owned(),
+                "#!/bin/sh\nmain\n".to_owned()
+            ))
+        );
+        let refused = options::wrapper_file(&dir.path().join("install.ps1").to_string_lossy())
+            .expect_err("a .ps1 is Windows'");
+        assert!(refused.contains("a .sh file"), "{refused}");
     }
 
     #[test]
@@ -104,6 +151,7 @@ mod scripts {
                 "run --parity",
                 script::run_script(&spec(true, &files, &extra)),
             ),
+            ("run --installer-smoke", script::run_script(&smoke_spec(true))),
             ("stop", script::stop_script(ID)),
             ("cleanup", script::cleanup_script(ID)),
         ]
@@ -238,6 +286,44 @@ mod scripts {
             "2e2b37e9811e17675a9e70bed5e1a58fc8c0388be63d751d72cc735188c149ff"
         );
         assert!(text.contains("\"${HOME:?}/.cargo/bin/rustup\""));
+    }
+
+    #[test]
+    fn an_installer_smoke_builds_the_release_and_runs_the_smoke_script() {
+        let spec = smoke_spec(false);
+        let steps: Vec<_> = script::steps(&spec).iter().map(|step| step.name).collect();
+        assert_eq!(
+            steps,
+            ["toolchain", "python", "release-dist", "installer-smoke"]
+        );
+        let text = script::run_script(&spec);
+        for step in script::steps(&spec) {
+            assert!(
+                text.contains(&format!("step {} {} ", step.name, step.minutes)),
+                "{} is not run with its bound:\n{text}",
+                step.name
+            );
+        }
+        assert!(script::bound(&spec) < script::bound(&super::spec(true, &[], &[])));
+        for line in [
+            "export KLURIS_TOOLS_DIR=\"$tools\"",
+            "export UV_PYTHON_INSTALL_DIR=\"$tools/python\"",
+            "step python 10 \"$uv\" 'python' 'install' '3.11'",
+            "python=$(\"$uv\" python find 3.11)",
+            "step release-dist 60 bash 'scripts/release/build-local.sh'",
+            "step installer-smoke 20 env KLURIS_SMOKE_PYTHON=\"$python\" sh 'scripts/release/installer-smoke.sh' 'target/distrib'",
+        ] {
+            assert!(text.contains(line), "no {line:?} in\n{text}");
+        }
+        assert!(
+            !text.contains("step cargo-test") && !text.contains("pytest"),
+            "an installer smoke runs no tests: {text}"
+        );
+        let with = script::run_script(&smoke_spec(true));
+        assert!(
+            with.contains("'scripts/release/installer-smoke.sh' '--wrapper' '.kluris-site/install.sh' 'target/distrib'"),
+            "{with}"
+        );
     }
 
     #[test]
@@ -810,7 +896,44 @@ mod runs {
             parity,
             parity_files: vec![],
             cargo_args: vec![],
+            installer_smoke: false,
+            wrapper: None,
         }
+    }
+
+    #[test]
+    fn an_installer_smoke_run_sends_the_smoke_and_waits_its_bound() {
+        let passed = "== tree 5f54983aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n\
+            == step toolchain exit 0 3s\n\
+            == step python exit 0 2s\n\
+            == step release-dist exit 0 200s\n\
+            installer-smoke: ok (Linux x86_64, kluris 3.0.0-dev, through the site wrapper)\n\
+            == step installer-smoke exit 0 30s\n\
+            \n== exit 0\n";
+        let options = Options {
+            installer_smoke: true,
+            wrapper: Some("site/install.sh".into()),
+            ..plain(false)
+        };
+        let ran = ran(
+            options,
+            vec![
+                free(),
+                said(0, ""),
+                Answer::Stream(vec![(Stream::Out, passed)], Ok(Streamed::Exited(Some(0)))),
+            ],
+        );
+        assert_eq!(ran.code, 0, "{}", ran.err);
+        let script = &ran.scripts[0];
+        assert!(script.contains("'--wrapper' '.kluris-site/install.sh'"), "{script}");
+        assert!(!script.contains("step cargo-test"), "{script}");
+        let ssh = ran.fake.calls.last().unwrap();
+        assert!(ssh.bound >= script::bound(&smoke_spec(true)), "{:?}", ssh.bound);
+        assert!(
+            ran.err.lines().last().unwrap().contains("release-dist 0 (200s), installer-smoke 0 (30s)"),
+            "{}",
+            ran.err
+        );
     }
 
     fn free() -> Answer {
@@ -977,6 +1100,8 @@ mod runs {
             parity: true,
             parity_files: words("parity/missing.py"),
             cargo_args: vec![],
+            installer_smoke: false,
+            wrapper: None,
         };
         let ran = ran_in(dir.path(), options, vec![]);
         assert_eq!(ran.code, 1);
@@ -987,6 +1112,8 @@ mod runs {
             parity: true,
             parity_files: words("parity/test_smoke.py"),
             cargo_args: words("-p kluris-core"),
+            installer_smoke: false,
+            wrapper: None,
         };
         let ran = ran_in(
             dir.path(),
