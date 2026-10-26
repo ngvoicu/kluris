@@ -1,3 +1,6 @@
+//! Ported from PyYAML 6.0.3 `composer.py`, `nodes.py` and `resolver.py`; see
+//! LICENSE-PyYAML.
+//!
 //! Port of PyYAML 6.0.3's `composer.py` (with `nodes.py` and the tag
 //! resolution of `resolver.py`): events become a graph of nodes, anchors
 //! shared, aliases resolved, tags resolved.

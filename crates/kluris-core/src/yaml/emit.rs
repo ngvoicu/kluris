@@ -1,3 +1,7 @@
+//! Ported from PyYAML 6.0.3 `representer.py`, `serializer.py` and
+//! `emitter.py`, and from libyaml 0.2.5 `emitter.c`; see LICENSE-PyYAML and
+//! LICENSE-libyaml.
+//!
 //! YAML writing that reproduces PyYAML 6.0.3 byte for byte, the way v2 writes
 //! frontmatter, YAML neurons and configs (block style, width 80, indent 2).
 //!

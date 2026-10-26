@@ -1,3 +1,6 @@
+//! Ported from PyYAML 6.0.3 `constructor.py` (`SafeConstructor`); see
+//! LICENSE-PyYAML.
+//!
 //! YAML text read the way PyYAML's `SafeLoader` reads it: the ported
 //! reader, scanner, parser and composer build the node graph, and the graph
 //! is constructed into a [`Value`] in the order

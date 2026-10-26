@@ -1,3 +1,5 @@
+//! Ported from PyYAML 6.0.3 `scanner.py` and `tokens.py`; see LICENSE-PyYAML.
+//!
 //! Port of PyYAML 6.0.3's `scanner.py` (and the tokens of `tokens.py`): the
 //! text becomes tokens exactly where PyYAML's scanner puts their boundaries.
 //! The functions follow the Python ones in order and by name.

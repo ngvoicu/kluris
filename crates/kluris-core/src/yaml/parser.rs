@@ -1,3 +1,5 @@
+//! Ported from PyYAML 6.0.3 `parser.py` and `events.py`; see LICENSE-PyYAML.
+//!
 //! Port of PyYAML 6.0.3's `parser.py` (and the events of `events.py`): the
 //! state machine that turns tokens into events. Each `State` is one of the
 //! Python `parse_*` methods; `states` is its stack of them.

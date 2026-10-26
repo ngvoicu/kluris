@@ -1,3 +1,6 @@
+//! Ported from PyYAML 6.0.3 `resolver.py` and `constructor.py`; see
+//! LICENSE-PyYAML.
+//!
 //! PyYAML 6.0.3's implicit resolvers (`resolver.py`) and scalar constructors
 //! (`constructor.py`, `SafeConstructor`).
 //!

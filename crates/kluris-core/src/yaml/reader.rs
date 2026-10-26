@@ -1,3 +1,5 @@
+//! Ported from PyYAML 6.0.3 `reader.py`; see LICENSE-PyYAML.
+//!
 //! Port of PyYAML 6.0.3's `reader.py` for `str` input: the characters of the
 //! text plus a final `'\0'`, the printable-character check, and the position
 //! (`index`, `line`, `column`) as PyYAML counts it.
