@@ -30,15 +30,22 @@
 #    modify_path false, and self-uninstall removes the binary and the
 #    receipt and leaves both of the user's files byte-identical.
 # 7. An rc file the uninstall cannot rewrite (~/.profile a link into a
-#    read-only dotfiles folder, T-111 finding 5): self-uninstall fails and
-#    keeps the binary, the receipt and the env scripts; once the folder is
-#    writable again a rerun finishes, the profile byte-identical to before.
+#    read-only dotfiles folder, T-111 finding 5): self-uninstall exits 1
+#    and keeps the binary, the receipt and the env scripts; once the folder
+#    is writable again a rerun finishes, the profile byte-identical to
+#    before.
 # 8. `self-uninstall --purge` with a read-only folder in
-#    ~/.kluris/companions (T-114): it fails and keeps the binary and the
+#    ~/.kluris/companions (T-114): it exits 1 and keeps the binary and the
 #    receipt; once the folder is writable a rerun purges and finishes.
-# 9. A read-only ~/.config/fish/conf.d (T-114): the uninstall fails, keeping
+# 9. A read-only ~/.config/fish/conf.d (T-114): it exits 1, keeping
 #    conf.d/kluris.env.fish and the env.fish it sources, the binary and the
 #    receipt; a rerun finishes.
+# 10. An unsearchable ~/.config/fish/conf.d (T-118): the same.
+# 11. macOS: the receipt with the immutable flag (`chflags uchg`, T-118):
+#    the same.
+# 7 to 11 are stopped by the pre-flight (T-119): every file under the
+# sandbox HOME is byte-identical after the blocked run, and its JSON lists
+# the blockers.
 #
 # The local server and the JSON checks run on KLURIS_SMOKE_PYTHON (default
 # python3). Exits 0 when every check passes, 1 at the first failure.
@@ -281,7 +288,26 @@ cmp -s "$sandbox/.profile" "$work/user-profile" || fail "self-uninstall changed 
     || fail "self-uninstall left the binary or the receipt of a KLURIS_NO_MODIFY_PATH=1 install"
 step "KLURIS_NO_MODIFY_PATH=1: modify_path false; the uninstall removed the binary and the receipt, the user's env.sh and .profile byte-identical"
 
+# The uninstall the pre-flight blocked ($1, the case; its inventory before
+# the obstacle in $work/$1-before, its JSON in $work/$1-1.json): every file
+# is as it was, and the JSON lists the blockers, which this prints.
+assert_blocked() {
+    inventory > "$work/$1-after"
+    if ! cmp -s "$work/$1-before" "$work/$1-after"; then
+        diff "$work/$1-before" "$work/$1-after" >&2 || true
+        fail "$1: the blocked uninstall changed something"
+    fi
+    "$python" -I - "$work/$1-1.json" <<'PY' || { cat "$work/$1-1.json" >&2; fail "$1: the JSON does not list the blockers"; }
+import json, sys
+with open(sys.argv[1], encoding="utf-8") as handle:
+    v = json.loads(handle.read().splitlines()[-1])
+assert v["ok"] is False and v["removed"] == [] and v["edited"] == [] and v["blocked"], v
+print("; ".join(f'{b["path"]}: {b["problem"]}' for b in v["blocked"])[:300])
+PY
+}
+
 # 7. An rc file the uninstall cannot rewrite, then a rerun.
+case=failed-rc
 sandbox="$work/home-failed-rc"
 mkdir -p "$sandbox"
 printf 'export EDITOR=vi\n' > "$sandbox/.profile"
@@ -292,6 +318,7 @@ in_sandbox KLURIS_DOWNLOAD_URL="$api/ngvoicu/kluris/releases/download/v$old" \
 mkdir -p "$sandbox/dotfiles"
 mv "$sandbox/.profile" "$sandbox/dotfiles/profile"
 ln -s "$sandbox/dotfiles/profile" "$sandbox/.profile"
+inventory > "$work/$case-before"
 chmod 500 "$sandbox/dotfiles"
 if in_sandbox "$sandbox/.kluris/bin/kluris" self-uninstall --yes --json > "$work/failed-rc-1.json" 2>&1; then
     chmod 700 "$sandbox/dotfiles"
@@ -302,7 +329,8 @@ chmod 700 "$sandbox/dotfiles"
 for kept in .kluris/bin/kluris .config/kluris/kluris-receipt.json .config/kluris/env.sh .config/kluris/env.fish; do
     [ -e "$sandbox/$kept" ] || { cat "$work/failed-rc-1.json"; fail "a failed rc edit removed ~/$kept, which a retry needs"; }
 done
-step "an rc file that cannot be rewritten: self-uninstall exit 1, the binary, receipt and env scripts kept: $(tail -n 1 "$work/failed-rc-1.json" | sed 's/.*"failed": //' | cut -c1-160)"
+blockers=$(assert_blocked "$case")
+step "an rc file that cannot be rewritten: self-uninstall exit 1, nothing changed: $blockers"
 in_sandbox "$sandbox/.kluris/bin/kluris" self-uninstall --yes --json > "$work/failed-rc-2.json" 2>&1 \
     || { cat "$work/failed-rc-2.json"; fail "the rerun of self-uninstall failed"; }
 for gone in .kluris/bin/kluris .config/kluris/kluris-receipt.json .config/kluris/env.sh .config/kluris/env.fish .config/fish/conf.d/kluris.env.fish; do
@@ -333,6 +361,7 @@ sandbox="$work/home-$case"
 fresh_install "$case"
 mkdir -p "$sandbox/.kluris/companions/protected"
 printf 'remaining data\n' > "$sandbox/.kluris/companions/protected/notes.txt"
+inventory > "$work/$case-before"
 chmod 500 "$sandbox/.kluris/companions/protected"
 if in_sandbox "$sandbox/.kluris/bin/kluris" self-uninstall --purge --yes --json > "$work/$case-1.json" 2>&1; then
     chmod 700 "$sandbox/.kluris/companions/protected"
@@ -341,7 +370,8 @@ if in_sandbox "$sandbox/.kluris/bin/kluris" self-uninstall --purge --yes --json 
 fi
 chmod 700 "$sandbox/.kluris/companions/protected"
 assert_retry_possible
-step "a purge that cannot clear ~/.kluris: exit 1, the binary and receipt kept: $(tail -n 1 "$work/$case-1.json" | sed 's/.*"failed": //' | cut -c1-140)"
+blockers=$(assert_blocked "$case")
+step "a purge that cannot clear ~/.kluris: exit 1, nothing changed: $blockers"
 in_sandbox "$sandbox/.kluris/bin/kluris" self-uninstall --purge --yes --json > "$work/$case-2.json" 2>&1 \
     || { cat "$work/$case-2.json"; fail "the rerun of the purge failed"; }
 for gone in .kluris .config/kluris/kluris-receipt.json .config/kluris/env.sh .config/fish/conf.d/kluris.env.fish; do
@@ -353,6 +383,7 @@ step "the purge rerun finished: ~/.kluris and the installer's files gone"
 case=failed-fish
 sandbox="$work/home-$case"
 fresh_install "$case"
+inventory > "$work/$case-before"
 chmod 500 "$sandbox/.config/fish/conf.d"
 if in_sandbox "$sandbox/.kluris/bin/kluris" self-uninstall --yes --json > "$work/$case-1.json" 2>&1; then
     chmod 700 "$sandbox/.config/fish/conf.d"
@@ -361,7 +392,8 @@ if in_sandbox "$sandbox/.kluris/bin/kluris" self-uninstall --yes --json > "$work
 fi
 chmod 700 "$sandbox/.config/fish/conf.d"
 assert_retry_possible .config/fish/conf.d/kluris.env.fish .config/kluris/env.fish
-step "a fish conf.d that cannot be cleaned: exit 1, conf.d/kluris.env.fish, the env.fish it sources, the binary and receipt kept"
+blockers=$(assert_blocked "$case")
+step "a fish conf.d that cannot be cleaned: exit 1, nothing changed: $blockers"
 in_sandbox "$sandbox/.kluris/bin/kluris" self-uninstall --yes --json > "$work/$case-2.json" 2>&1 \
     || { cat "$work/$case-2.json"; fail "the rerun after the fish failure failed"; }
 for gone in .kluris/bin/kluris .config/kluris/kluris-receipt.json .config/kluris/env.sh .config/kluris/env.fish .config/fish/conf.d/kluris.env.fish; do
@@ -369,4 +401,45 @@ for gone in .kluris/bin/kluris .config/kluris/kluris-receipt.json .config/kluris
 done
 step "the rerun after the fish failure finished"
 
-step "ok ($(uname -s) $(uname -m), v$old -> v$new -> uninstalled; no-modify-path, failed-rc, failed-purge and failed-fish)"
+# A blocked uninstall ($case, the obstacle made by the function `obstacle`
+# and cleared by `clear_obstacle`), then a rerun that finishes.
+blocked_then_rerun() {
+    fresh_install "$case"
+    inventory > "$work/$case-before"
+    obstacle
+    if in_sandbox "$sandbox/.kluris/bin/kluris" self-uninstall --yes --json > "$work/$case-1.json" 2>&1; then
+        clear_obstacle
+        cat "$work/$case-1.json"
+        fail "$case: self-uninstall succeeded through its obstacle"
+    fi
+    clear_obstacle
+    assert_retry_possible
+    blockers=$(assert_blocked "$case")
+    step "$case: exit 1, nothing changed: $blockers"
+    in_sandbox "$sandbox/.kluris/bin/kluris" self-uninstall --yes --json > "$work/$case-2.json" 2>&1 \
+        || { cat "$work/$case-2.json"; fail "$case: the rerun failed"; }
+    for gone in .kluris/bin/kluris .config/kluris/kluris-receipt.json .config/kluris/env.sh .config/kluris/env.fish .config/fish/conf.d/kluris.env.fish; do
+        [ ! -e "$sandbox/$gone" ] || fail "$case: the rerun left ~/$gone"
+    done
+    step "$case: the rerun finished"
+}
+
+# 10. An unsearchable fish conf.d.
+case=unsearchable-fish
+sandbox="$work/home-$case"
+obstacle() { chmod 400 "$sandbox/.config/fish/conf.d"; }
+clear_obstacle() { chmod 700 "$sandbox/.config/fish/conf.d"; }
+blocked_then_rerun
+cases="no-modify-path, failed-rc, failed-purge, failed-fish, unsearchable-fish"
+
+# 11. An immutable receipt (macOS).
+if [ "$(uname -s)" = Darwin ]; then
+    case=immutable-receipt
+    sandbox="$work/home-$case"
+    obstacle() { chflags uchg "$sandbox/.config/kluris/kluris-receipt.json"; }
+    clear_obstacle() { chflags nouchg "$sandbox/.config/kluris/kluris-receipt.json"; }
+    blocked_then_rerun
+    cases="$cases, immutable-receipt"
+fi
+
+step "ok ($(uname -s) $(uname -m), v$old -> v$new -> uninstalled; $cases)"

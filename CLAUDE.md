@@ -264,8 +264,11 @@ package, hence the package `kluris`.
   and `self-uninstall --yes --json` (exactly the installer's files and PATH
   entry go; every other file, the seeded rc files included, is
   byte-identical); then a KLURIS_NO_MODIFY_PATH=1 install over the user's
-  own env.sh and profile line (Windows: the user PATH), and on Unix an rc
-  file the uninstall cannot rewrite, failed safely and then rerun. ci.yml's
+  own env.sh and profile line (Windows: the user PATH), and on Unix the
+  uninstalls the pre-flight must block (an rc file it cannot rewrite, a
+  read-only folder in a purged ~/.kluris, a read-only or unsearchable
+  fish conf.d, on macOS an immutable receipt): exit 1, every file under
+  the sandbox HOME byte-identical, then a rerun that finishes. ci.yml's
   installer-smoke job runs it on the three OSes (`check_workflows.sh` fails
   if that goes).
 - **A receipt authorises nothing unless it is Kluris's** (T-111):
@@ -277,6 +280,19 @@ package, hence the package `kluris`.
   else is "The receipt at <path> is not a Kluris install receipt; nothing
   was changed (<why>)", exit 1. The one file removed or replaced is
   `<install_prefix>/kluris(.exe)`.
+- **`self-uninstall` checks everything before the first change** (T-119,
+  `dist/preflight.rs`): the whole plan (rc edits, the fish file, env
+  scripts, under `--purge` every generated skill and ~/.kluris, the
+  binary, the receipt, their emptied folders) is built from reads alone,
+  where only NotFound means "not there"; `preflight()` then checks it
+  without changing anything: rc files readable and writable and their
+  real folder (a link's target's) writable, every folder an entry leaves
+  writable and searchable, every folder of a removed tree readable,
+  writable and searchable (`faccessat` with `AT_EACCESS`, no probe
+  writes), no `uchg`/`schg`/append flag on macOS, no read-only attribute on
+  a Windows file. Anything in the way: exit 1, nothing changed, each
+  blocker in `blocked` (`{path, problem, fix}` in the JSON). Not checked:
+  Windows ACLs and Linux `chattr` flags.
 - **`self-uninstall`'s order keeps what a retry needs**: with `modify_path`
   false (KLURIS_NO_MODIFY_PATH=1) no rc file, env script, fish file or PATH
   entry is touched. Otherwise: the rc lines first (a failure stops
@@ -285,7 +301,11 @@ package, hence the package `kluris`.
   receipt last. env.sh/env.fish go only when they are byte for byte what
   dist writes (`write_env_script_sh`/`_fish` around `$HOME/.kluris/bin`);
   one the user changed is kept, with the lines sourcing it, and listed in
-  `kept`. A rerun finishes a partial uninstall.
+  `kept`. A failure the pre-flight could not see stops before the binary
+  and a rerun finishes; once the binary is gone (by then no shell file
+  sources a removed script and the PATH entry is gone) the rest still
+  goes, exit 1, and `left` says what to remove by hand ("remove the file
+  <receipt>", "remove the empty folder ~/.kluris/bin").
 - **Checksums.** dist's shell installer verifies the archive with
   `sha256sum` only and silently skips it without one (macOS 14 and older;
   Apple added `sha256sum` in macOS 15). The site's `install.sh` then puts

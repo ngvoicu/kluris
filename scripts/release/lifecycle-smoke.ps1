@@ -35,6 +35,10 @@
 #    modify_path false, the installer leaves the user PATH alone, and
 #    self-uninstall removes kluris.exe and the receipt and leaves the user
 #    PATH exactly as it was (its text and its type).
+# 7. A read-only receipt (the read-only attribute, T-119): the pre-flight
+#    blocks the uninstall, exit 1, with every file under the sandbox and the
+#    user PATH as they were; once the attribute is cleared a rerun removes
+#    kluris.exe, the receipt and the user PATH entry.
 #
 # Exits 0 when every check passes and the PATH comparison holds, 1 otherwise.
 param(
@@ -287,6 +291,42 @@ try {
     $userAfter2 = Read-Environment ([Microsoft.Win32.Registry]::CurrentUser) 'Environment'
     if ($userAfter2.Text -cne $userStart.Text -or $userAfter2.Kind -ne $userStart.Kind) { throw 'self-uninstall changed the user PATH of a KLURIS_NO_MODIFY_PATH=1 install' }
     Step "KLURIS_NO_MODIFY_PATH=1: modify_path false; the user PATH untouched by the install and the uninstall ($($userStart.Kind)); kluris.exe and the receipt removed"
+
+    # 7. A read-only receipt: blocked with nothing changed, then a rerun.
+    $sandbox = Join-Path $work 'home-read-only-receipt'
+    $localAppData = Join-Path $sandbox 'AppData\Local'
+    $null = New-Item -ItemType Directory -Force -Path $sandbox, $localAppData
+    $sandboxEnv['HOME'] = $sandbox; $sandboxEnv['USERPROFILE'] = $sandbox; $sandboxEnv['LOCALAPPDATA'] = $localAppData
+    $install = Invoke-Installer "irm '$download/kluris-installer.ps1' | iex" @{ KLURIS_DOWNLOAD_URL = $download }
+    if ($install.Code -ne 0) { throw "the install for the read-only receipt case exited with $($install.Code): $($install.Out) $($install.Err)" }
+    $exe3 = Join-Path $sandbox '.kluris\bin\kluris.exe'
+    $bin3 = Join-Path $sandbox '.kluris\bin'
+    $receipt3 = Join-Path $localAppData 'kluris\kluris-receipt.json'
+    $userInstalled3 = Read-Environment ([Microsoft.Win32.Registry]::CurrentUser) 'Environment'
+    if (@($userInstalled3.Text -split ';') -notcontains $bin3) { throw "the install for the read-only receipt case did not add $bin3 to the user PATH" }
+    $before3 = Inventory
+    Set-ItemProperty -LiteralPath $receipt3 -Name IsReadOnly -Value $true
+    try {
+        $blocked3 = Invoke-Child $exe3 'self-uninstall --yes --json' $sandboxEnv.Clone() $work
+    } finally {
+        Set-ItemProperty -LiteralPath $receipt3 -Name IsReadOnly -Value $false
+    }
+    if ($blocked3.Code -ne 1) { throw "self-uninstall with a read-only receipt exited $($blocked3.Code), not 1: $($blocked3.Out) $($blocked3.Err)" }
+    $json3 = Last-Json $blocked3 'self-uninstall with a read-only receipt'
+    if ($json3.ok -or @($json3.removed).Count -ne 0 -or @($json3.blocked).Count -eq 0) { throw "self-uninstall with a read-only receipt was not blocked: $($blocked3.Out)" }
+    $after3 = Inventory
+    $changed3 = @($before3.Keys + $after3.Keys | Sort-Object -Unique | Where-Object { $before3[$_] -ne $after3[$_] })
+    if ($changed3.Count -ne 0) { throw "the blocked self-uninstall changed $($changed3 -join ', ')" }
+    $userBlocked3 = Read-Environment ([Microsoft.Win32.Registry]::CurrentUser) 'Environment'
+    if ($userBlocked3.Text -cne $userInstalled3.Text -or $userBlocked3.Kind -ne $userInstalled3.Kind) { throw 'the blocked self-uninstall changed the user PATH' }
+    Step "a read-only receipt: exit 1, nothing changed (every file and the user PATH): $((@($json3.blocked) | ForEach-Object { "$($_.path): $($_.problem); fix: $($_.fix)" }) -join ' | ')"
+    $rerun3 = Invoke-Child $exe3 'self-uninstall --yes --json' $sandboxEnv.Clone() $work
+    if ($rerun3.Code -ne 0) { throw "the rerun after clearing the read-only attribute exited $($rerun3.Code): $($rerun3.Out) $($rerun3.Err)" }
+    $null = Wait-Until { -not (Test-Path -LiteralPath $exe3) }
+    if ((Test-Path -LiteralPath $exe3) -or (Test-Path -LiteralPath $receipt3)) { throw 'the rerun left kluris.exe or the receipt' }
+    $userAfter3 = Read-Environment ([Microsoft.Win32.Registry]::CurrentUser) 'Environment'
+    if (@($userAfter3.Text -split ';') -contains $bin3) { throw "the rerun left $bin3 in the user PATH" }
+    Step 'the rerun finished: kluris.exe, the receipt and the user PATH entry gone'
 } catch {
     $failure = $_
 } finally {
@@ -305,5 +345,5 @@ if (-not $restored) {
     Write-Output 'lifecycle-smoke: FAIL: the user PATH was not written back identically'
     exit 1
 }
-Step "ok (Windows $env:PROCESSOR_ARCHITECTURE, v$Old -> v$New -> uninstalled; no-modify-path)"
+Step "ok (Windows $env:PROCESSOR_ARCHITECTURE, v$Old -> v$New -> uninstalled; no-modify-path, read-only-receipt)"
 exit 0
