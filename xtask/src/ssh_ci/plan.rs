@@ -72,6 +72,21 @@ pub fn tarball_name(id: &str) -> String {
     format!("{id}.tgz")
 }
 
+/// The `uv` arguments of the parity step: pytest on the whole suite, or on
+/// the files `--parity-files` named (already checked).
+pub fn pytest_args(parity_files: &[String]) -> Vec<String> {
+    let mut args: Vec<String> = ["run", "--project", "parity", "--locked", "pytest"]
+        .map(str::to_owned)
+        .to_vec();
+    if parity_files.is_empty() {
+        args.push("parity".to_owned());
+    } else {
+        args.extend(parity_files.iter().cloned());
+    }
+    args.push("-q".to_owned());
+    args
+}
+
 /// `template` with each `«name»` replaced by its part, in one pass, so that a
 /// part holding a mark is only text.
 pub fn fill(template: &str, parts: &[(&str, &str)]) -> String {

@@ -3,9 +3,7 @@
 //! fake ssh. Nothing here reaches the network; the pack tests run git on a
 //! repository made for the case.
 
-use std::collections::VecDeque;
 use std::fs;
-use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
@@ -15,9 +13,10 @@ use base64::engine::general_purpose::STANDARD;
 
 use super::machine::{self, FLOOR_GIB, Machine, Ready};
 use super::options::{self, Name, Options, Parsed};
-use super::remote::{Call, Captured, Runner, Stream, Streamed};
+use super::remote::{Stream, Streamed};
 use super::run::{self, Ctx};
 use super::script::{self, Spec};
+use crate::ssh_ci::fake::{Answer, Fake, said, timed_out};
 
 fn words(line: &str) -> Vec<String> {
     line.split_whitespace().map(str::to_owned).collect()
@@ -180,88 +179,6 @@ mod words_of_the_command {
             assert!(refused.contains("--parity-files"), "{file}: {refused}");
         }
     }
-}
-
-// --- the fake ssh -------------------------------------------------------------
-
-/// What the fake answers a call with, in the order the calls come.
-enum Answer {
-    Capture(Result<Captured, String>),
-    Stream(Vec<(Stream, &'static str)>, Result<Streamed, String>),
-}
-
-#[derive(Default)]
-struct Fake {
-    answers: VecDeque<Answer>,
-    calls: Vec<Call>,
-}
-
-impl Fake {
-    fn new(answers: Vec<Answer>) -> Self {
-        Self {
-            answers: answers.into(),
-            calls: Vec::new(),
-        }
-    }
-
-    fn next(&mut self, call: &Call) -> Answer {
-        self.calls.push(call.clone());
-        self.answers
-            .pop_front()
-            .unwrap_or_else(|| panic!("no answer left for {call:?}"))
-    }
-
-    /// The programs called, each with its last word (the host's command, or scp's target).
-    fn called(&self) -> Vec<String> {
-        self.calls
-            .iter()
-            .map(|call| format!("{} {}", call.program, call.args.join(" ")))
-            .collect()
-    }
-}
-
-impl Runner for Fake {
-    fn capture(&mut self, call: &Call) -> Result<Captured, String> {
-        match self.next(call) {
-            Answer::Capture(answer) => answer,
-            Answer::Stream(..) => panic!("{call:?} was captured, the fake had a stream for it"),
-        }
-    }
-
-    fn stream(
-        &mut self,
-        call: &Call,
-        sink: &mut dyn FnMut(Stream, &[u8]) -> io::Result<()>,
-        _stop: &dyn Fn() -> bool,
-    ) -> Result<Streamed, String> {
-        match self.next(call) {
-            Answer::Stream(chunks, ended) => {
-                for (stream, text) in chunks {
-                    sink(stream, text.as_bytes()).map_err(|e| e.to_string())?;
-                }
-                ended
-            }
-            Answer::Capture(_) => panic!("{call:?} was streamed, the fake had a capture for it"),
-        }
-    }
-}
-
-fn said(code: i32, stdout: &str) -> Answer {
-    Answer::Capture(Ok(Captured {
-        code: Some(code),
-        stdout: stdout.into(),
-        stderr: String::new(),
-        timed_out: false,
-    }))
-}
-
-fn timed_out() -> Answer {
-    Answer::Capture(Ok(Captured {
-        code: None,
-        stdout: String::new(),
-        stderr: String::new(),
-        timed_out: true,
-    }))
 }
 
 // --- the machines -------------------------------------------------------------

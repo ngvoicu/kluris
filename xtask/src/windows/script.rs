@@ -167,19 +167,7 @@ pub fn run_script(spec: &Spec) -> String {
         spec.channel
     );
     let parity = if spec.parity {
-        let mut pytest = vec![
-            "run".to_owned(),
-            "--project".to_owned(),
-            "parity".to_owned(),
-            "--locked".to_owned(),
-            "pytest".to_owned(),
-        ];
-        if spec.parity_files.is_empty() {
-            pytest.push("parity".to_owned());
-        } else {
-            pytest.extend(spec.parity_files.iter().cloned());
-        }
-        pytest.push("-q".to_owned());
+        let pytest = plan::pytest_args(spec.parity_files);
         fill(
             PARITY_TEMPLATE,
             &[
