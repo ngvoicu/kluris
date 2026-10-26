@@ -1,6 +1,8 @@
 //! `kluris mri [--brain NAME|all] [--output FILE] [--json]` (v2
-//! `cli.py:1556-1604`): the dream preflight, then the brain's page.
+//! `cli.py:1556-1604`): the dream preflight, then the brain's page. The
+//! files the preflight skipped are reported as dream reports them (PAR-065).
 
+use std::io::{self, Write};
 use std::path::Path;
 
 use kluris_core::brain::store::LocalGitStore;
@@ -31,6 +33,8 @@ pub fn run(brain: Option<&str>, output: Option<&str>, as_json: bool) -> Result<(
     if output.is_some() && brains.len() > 1 {
         return Err(CliError::new(OUTPUT_WITH_FAN_OUT));
     }
+    // Under `--brain all` a skipped line names its brain, as in dream.
+    let name_brains = brains.len() > 1 || brain == Some("all");
     let git = SystemGit::new();
     let today = today()?;
     let mut results = Vec::new();
@@ -68,14 +72,42 @@ pub fn run(brain: Option<&str>, output: Option<&str>, as_json: bool) -> Result<(
                 ));
             }
             human::print(&text);
+            let who = if name_brains {
+                format!("{}: ", brain.name)
+            } else {
+                String::new()
+            };
+            let lines: String = sync
+                .skipped
+                .iter()
+                .map(|s| format!("Skipped {who}{}: {}\n", s.rel, s.reason))
+                .collect();
+            let _ = io::stderr().write_all(lines.as_bytes());
         }
-        results.push(Json::Object(vec![
+        let mut fields = vec![
             ("name".into(), Json::Str(brain.name.clone())),
             ("output_path".into(), Json::Str(out)),
             ("preflight_fixes".into(), fixes_json(&sync.fixes)),
             ("nodes".into(), count(stats.nodes)),
             ("edges".into(), count(stats.edges)),
-        ]));
+        ];
+        // After v2's keys, only when the preflight skipped a file (PAR-065),
+        // with dream's `{brain, file, error}` items.
+        if !sync.skipped.is_empty() {
+            let skipped = sync
+                .skipped
+                .iter()
+                .map(|s| {
+                    Json::Object(vec![
+                        ("brain".into(), Json::Str(brain.name.clone())),
+                        ("file".into(), Json::Str(s.rel.clone())),
+                        ("error".into(), Json::Str(s.reason.clone())),
+                    ])
+                })
+                .collect();
+            fields.push(("skipped".into(), Json::Array(skipped)));
+        }
+        results.push(Json::Object(fields));
     }
     if as_json {
         human::print(&json::to_line(&Json::Object(vec![

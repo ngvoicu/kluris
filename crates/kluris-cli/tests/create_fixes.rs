@@ -475,3 +475,47 @@ fn a_target_that_is_a_file_is_an_error() {
     );
     assert_eq!(env.listing(), before);
 }
+
+// --- a target that cannot be listed (review T-103 finding 1) ------------------------
+
+/// v2 stops with a `PermissionError` traceback when it cannot list an
+/// existing target; v3 refuses cleanly and writes nothing (a listing error
+/// is never read as "empty").
+#[cfg(unix)]
+#[test]
+fn a_target_that_cannot_be_listed_is_refused_and_left_alone() {
+    use std::os::unix::fs::PermissionsExt;
+    let env = Env::new();
+    let demo = env.work.join("demo");
+    fs::create_dir(&demo).unwrap();
+    fs::write(demo.join("README.md"), "my own readme\n").unwrap();
+    fs::set_permissions(&demo, fs::Permissions::from_mode(0o300)).unwrap();
+    if fs::read_dir(&demo).is_ok() {
+        fs::set_permissions(&demo, fs::Permissions::from_mode(0o755)).unwrap();
+        return; // running as root: every directory can be listed
+    }
+    let (code, doc) = env.json(&["create", "demo", "--type", "blank", "--no-git", "--json"]);
+    fs::set_permissions(&demo, fs::Permissions::from_mode(0o755)).unwrap();
+    assert_eq!(code, 1, "{doc}");
+    assert_eq!(doc["ok"], Value::Bool(false), "{doc}");
+    let error = doc["error"].as_str().unwrap();
+    assert!(
+        error.starts_with(&format!("{} cannot be listed: ", demo.display())),
+        "{error}"
+    );
+    assert!(
+        error.ends_with("Choose a different name or use --path to specify a location."),
+        "{error}"
+    );
+    let mut names: Vec<String> = fs::read_dir(&demo)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    names.sort();
+    assert_eq!(names, ["README.md"]);
+    assert_eq!(
+        fs::read_to_string(demo.join("README.md")).unwrap(),
+        "my own readme\n"
+    );
+    assert_eq!(env.config_text(), "");
+}

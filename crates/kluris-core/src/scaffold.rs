@@ -333,7 +333,8 @@ impl std::error::Error for ScaffoldError {}
 
 /// Write a new brain at `root` (created with its parents when missing; an
 /// existing empty directory is used): the lobe directories, then as one
-/// change set each lobe's `map.md`, `kluris.yml` (`config`), `brain.md`,
+/// change set of new files (a file already there is an error and is left
+/// alone) each lobe's `map.md`, `kluris.yml` (`config`), `brain.md`,
 /// `glossary.md`, `README.md` and `.gitignore`, in v2's order.
 pub fn scaffold_brain(
     root: &Path,
@@ -356,16 +357,12 @@ pub fn scaffold_brain(
     let today = date_iso(&today);
     let mut writes: Vec<FileWrite> = lobes
         .iter()
-        .map(|(lobe, desc)| FileWrite {
-            rel: format!("{lobe}/map.md"),
-            contents: lobe_map(lobe, desc, &today).into_bytes(),
+        .map(|(lobe, desc)| {
+            FileWrite::create_new(format!("{lobe}/map.md"), lobe_map(lobe, desc, &today))
         })
         .collect();
     let mut file = |rel: &str, text: String| {
-        writes.push(FileWrite {
-            rel: rel.to_string(),
-            contents: text.into_bytes(),
-        });
+        writes.push(FileWrite::create_new(rel, text));
     };
     file("kluris.yml", brain_config_to_yaml(config));
     file(
@@ -460,6 +457,24 @@ pub fn fallback_name(dir_name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The scaffold only creates files: one already in the target is an
+    /// error and keeps its bytes (review T-103 finding 1).
+    #[test]
+    fn the_scaffold_never_overwrites_a_file() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let root = dir.path().join("demo");
+        fs::create_dir(&root).unwrap();
+        fs::write(root.join("README.md"), "my own readme\n").unwrap();
+        let config = BrainConfig::new("demo");
+        let today = Date::new(2026, 10, 26).unwrap();
+        let err = scaffold_brain(&root, &config, &[], today).unwrap_err();
+        assert_eq!(err.path, root.join("README.md"));
+        assert_eq!(
+            fs::read_to_string(root.join("README.md")).unwrap(),
+            "my own readme\n"
+        );
+    }
 
     #[test]
     fn v2_rule() {

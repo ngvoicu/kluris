@@ -289,7 +289,7 @@ fn edit_rc(path: &Path, lines: &[Vec<u8>], remove_if_empty: bool, report: &mut U
         remove_file(path, report);
         return;
     }
-    match fs::write(path, new_text) {
+    match crate::atomic::write_atomic(path, &new_text) {
         Ok(()) => report.edited.push(path.to_path_buf()),
         Err(e) => report
             .failed
@@ -346,6 +346,37 @@ mod tests {
 
     fn lines(list: &[&str]) -> Vec<Vec<u8>> {
         list.iter().map(|l| l.as_bytes().to_vec()).collect()
+    }
+
+    /// An rc file is rewritten atomically (a new file renamed over it, so a
+    /// failed write cannot truncate it), and a symlinked rc file stays a
+    /// link to the file that gets the edit.
+    #[cfg(unix)]
+    #[test]
+    fn edit_rc_replaces_the_file_and_keeps_a_symlink() {
+        use std::os::unix::fs::{MetadataExt, symlink};
+        let dir = tempfile::TempDir::new().unwrap();
+        let real = dir.path().join("dotfiles-zshrc");
+        fs::write(
+            &real,
+            "alias ll='ls -l'\n\n. \"$HOME/.config/kluris/env.sh\"\n",
+        )
+        .unwrap();
+        let rc = dir.path().join(".zshrc");
+        symlink(&real, &rc).unwrap();
+        let inode = fs::metadata(&real).unwrap().ino();
+        let mut report = UninstallReport::default();
+        edit_rc(
+            &rc,
+            &lines(&[". \"$HOME/.config/kluris/env.sh\""]),
+            false,
+            &mut report,
+        );
+        assert_eq!(report.failed, Vec::<String>::new());
+        assert_eq!(report.edited, std::slice::from_ref(&rc));
+        assert!(fs::symlink_metadata(&rc).unwrap().file_type().is_symlink());
+        assert_eq!(fs::read_to_string(&real).unwrap(), "alias ll='ls -l'\n");
+        assert_ne!(fs::metadata(&real).unwrap().ino(), inode);
     }
 
     #[test]

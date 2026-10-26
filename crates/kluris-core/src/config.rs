@@ -13,11 +13,11 @@
 use std::collections::BTreeSet;
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::{fmt, fs, io};
 
 use indexmap::IndexMap;
 
+use crate::atomic;
 use crate::companions;
 use crate::yaml::{self, Map, Profile, Value};
 
@@ -432,37 +432,6 @@ pub fn unregister_brain(path: &Path, name: &str) -> Result<(), ConfigError> {
     write_global_config(path, &config)
 }
 
-static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
-
-/// How many symlinks [`resolve_link_target`] follows (Linux's `MAXSYMLINKS`).
-const MAX_SYMLINKS: usize = 40;
-
-/// The file a write to `path` lands on, as an in-place write sees it: each
-/// symlink is followed (relative targets against the link's directory), also
-/// when the last target does not exist yet; a path that is not a link is
-/// itself.
-fn resolve_link_target(path: &Path) -> io::Result<PathBuf> {
-    let mut current = path.to_path_buf();
-    for _ in 0..MAX_SYMLINKS {
-        match fs::symlink_metadata(&current) {
-            Ok(meta) if meta.file_type().is_symlink() => {
-                let to = fs::read_link(&current)?;
-                current = match current.parent() {
-                    Some(dir) if to.is_relative() => dir.join(to),
-                    _ => to,
-                };
-            }
-            Ok(_) => return Ok(current),
-            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(current),
-            Err(e) => return Err(e),
-        }
-    }
-    Err(io::Error::other(format!(
-        "too many levels of symbolic links: {}",
-        path.display()
-    )))
-}
-
 /// `text` (LF) with the line endings of the file it replaces: CRLF when that
 /// file's first line break is CRLF, else LF; a new file is LF (decision #3).
 fn with_endings_of(target: &Path, text: &str) -> String {
@@ -478,53 +447,13 @@ fn with_endings_of(target: &Path, text: &str) -> String {
     }
 }
 
-/// Replace `path` with `text` atomically: write a temp file in the same
-/// directory, then rename it over the target. A symlink is followed, also a
-/// dangling one (the link stays, its target is written), and an existing
-/// file keeps its permissions and line endings, as v2's in-place
+/// Replace `path` with `text` through [`atomic::write_atomic`] (a symlink
+/// is followed and kept, permissions are kept, the old file is left as it was
+/// on failure), keeping the old file's line endings as v2's in-place
 /// `write_text` keeps the file.
 fn write_atomic(path: &Path, text: &str) -> io::Result<()> {
-    let target = resolve_link_target(path)?;
-    let text = with_endings_of(&target, text);
-    let existing = fs::metadata(&target).ok().map(|m| m.permissions());
-    let dir = target
-        .parent()
-        .filter(|p| !p.as_os_str().is_empty())
-        .unwrap_or(Path::new("."));
-    let file_name = target.file_name().unwrap_or(OsStr::new("config"));
-
-    let (tmp, mut file) = loop {
-        let mut name = OsStr::new(".").to_os_string();
-        name.push(file_name);
-        name.push(format!(
-            ".{}.{}.tmp",
-            std::process::id(),
-            TEMP_COUNTER.fetch_add(1, Ordering::Relaxed)
-        ));
-        let tmp = dir.join(name);
-        match fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&tmp)
-        {
-            Ok(file) => break (tmp, file),
-            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => continue,
-            Err(e) => return Err(e),
-        }
-    };
-    let result = (|| {
-        io::Write::write_all(&mut file, text.as_bytes())?;
-        file.sync_all()?;
-        drop(file);
-        if let Some(perms) = existing {
-            fs::set_permissions(&tmp, perms)?;
-        }
-        fs::rename(&tmp, &target)
-    })();
-    if result.is_err() {
-        let _ = fs::remove_file(&tmp);
-    }
-    result
+    let target = atomic::resolve_link_target(path)?;
+    atomic::write_atomic(path, with_endings_of(&target, text).as_bytes())
 }
 
 #[cfg(test)]

@@ -270,7 +270,18 @@ fn target_path(
                 brain_path.display()
             )));
         }
-        let not_empty = fs::read_dir(&brain_path).is_ok_and(|mut d| d.next().is_some());
+        // A directory that cannot be listed is not taken for an empty one
+        // (v2 stops there with a `PermissionError`).
+        let not_empty = match fs::read_dir(&brain_path) {
+            Ok(mut entries) => entries.next().is_some(),
+            Err(e) => {
+                return Err(CreateError::Refused(format!(
+                    "{} cannot be listed: {e}. \
+                     Choose a different name or use --path to specify a location.",
+                    brain_path.display()
+                )));
+            }
+        };
         if not_empty {
             if brain_path.join("kluris.yml").exists() {
                 return Err(CreateError::Refused(format!(

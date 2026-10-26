@@ -466,3 +466,133 @@ fn an_unwritable_neuron_is_skipped_and_its_fix_not_counted() {
     // Only the fix that was written is counted, as v2's date pass counts.
     assert_eq!(doc["fixes"]["parents_inferred"], 1);
 }
+
+// --- write safety (review T-103) ---------------------------------------------------
+
+/// A failed write never truncates the original: under a 1,024-byte file-size
+/// limit dream cannot write the neuron's new version, reports it, and the
+/// file keeps all of its bytes (finding 2).
+#[cfg(unix)]
+#[test]
+fn a_write_cut_short_leaves_the_original_whole() {
+    let body = "Lorem ipsum dolor sit amet.\n".repeat(800);
+    let large =
+        format!("---\ncreated: '2026-01-01'\nupdated: '2026-01-01'\n---\n\n# Large\n\n{body}");
+    let home = Home::new().brain("demo", &[("notes/large.md", large.as_bytes())]);
+    let before = home.bytes("demo", "notes/large.md");
+    assert!(before.len() > 20_000);
+    let bin = assert_cmd::cargo::cargo_bin!("kluris");
+    // `ulimit -f` counts 512-byte blocks; SIGXFSZ ignored, so the write
+    // fails with EFBIG instead of killing the process.
+    let out = std::process::Command::new("/bin/sh")
+        .arg("-c")
+        .arg("trap '' XFSZ; ulimit -f 2; exec \"$KLURIS_BIN\" dream --json")
+        .env("KLURIS_BIN", bin)
+        .env("HOME", home.dir.path())
+        .env(
+            "KLURIS_CONFIG",
+            home.dir.path().join(".kluris").join("config.yml"),
+        )
+        .env("KLURIS_NO_PROMPT", "1")
+        .env("NO_COLOR", "1")
+        .env("GIT_CEILING_DIRECTORIES", home.dir.path())
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    assert_eq!(out.status.code(), Some(1), "{stdout}");
+    assert_eq!(home.bytes("demo", "notes/large.md"), before);
+    let doc: Value = serde_json::from_str(&stdout).unwrap();
+    let skipped = doc["skipped"].as_array().unwrap();
+    assert!(
+        skipped.iter().any(|s| s["file"] == "notes/large.md"
+            && s["error"]
+                .as_str()
+                .unwrap()
+                .starts_with("cannot write the file: ")),
+        "{doc}"
+    );
+    assert_eq!(doc["fixes"]["parents_inferred"], 0, "{doc}");
+    // No temp file is left beside it.
+    let names: Vec<String> = fs::read_dir(home.path("demo", "notes"))
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    assert!(names.iter().all(|n| !n.contains("kluris-tmp")), "{names:?}");
+}
+
+/// `mri` reports what its dream preflight skipped (finding 10): a
+/// `skipped` list per brain in the JSON, only when something was skipped,
+/// and dream's `Skipped` lines on stderr.
+#[test]
+fn mri_reports_the_files_its_preflight_skipped() {
+    let home = Home::new().brain(
+        "demo",
+        &[
+            ("notes/bad.md", b"---\ntitle: Foo: bar\n---\n\n# Bad\n"),
+            ("notes/good.md", neuron("", "# Good\n").as_bytes()),
+        ],
+    );
+    let before = home.bytes("demo", "notes/bad.md");
+    let (code, doc) = home.json(&["mri", "--json"]);
+    assert_eq!(code, 0, "{doc}");
+    assert_eq!(home.bytes("demo", "notes/bad.md"), before);
+    let brain = &doc["brains"][0];
+    assert_eq!(
+        keys(brain),
+        [
+            "name",
+            "output_path",
+            "preflight_fixes",
+            "nodes",
+            "edges",
+            "skipped"
+        ]
+    );
+    let skipped = brain["skipped"].as_array().unwrap();
+    assert_eq!(skipped.len(), 1, "{doc}");
+    assert_eq!(keys(&skipped[0]), ["brain", "file", "error"]);
+    assert_eq!(skipped[0]["brain"], "demo");
+    assert_eq!(skipped[0]["file"], "notes/bad.md");
+    assert!(
+        skipped[0]["error"]
+            .as_str()
+            .unwrap()
+            .starts_with("invalid frontmatter: "),
+        "{doc}"
+    );
+
+    let (code, stdout, stderr) = home.run(&["mri"]);
+    assert_eq!(code, 0, "{stdout}");
+    assert!(stdout.starts_with("MRI complete"), "{stdout}");
+    let lines: Vec<&str> = stderr.lines().collect();
+    assert_eq!(lines.len(), 1, "{stderr}");
+    assert!(
+        lines[0].starts_with("Skipped notes/bad.md: invalid frontmatter: "),
+        "{stderr}"
+    );
+}
+
+#[test]
+fn mri_keeps_v2s_shape_when_nothing_was_skipped() {
+    let home = Home::new()
+        .brain(
+            "demo",
+            &[("notes/good.md", neuron("", "# Good\n").as_bytes())],
+        )
+        .brain("calm", &[("notes/bad.md", b"---\n1: x\n---\n\n# Key\n")]);
+    let (code, doc) = home.json(&["mri", "--json", "--brain", "all"]);
+    assert_eq!(code, 0, "{doc}");
+    let brains = doc["brains"].as_array().unwrap();
+    let by_name = |name: &str| brains.iter().find(|b| b["name"] == name).unwrap();
+    assert_eq!(
+        keys(by_name("demo")),
+        ["name", "output_path", "preflight_fixes", "nodes", "edges"]
+    );
+    assert_eq!(by_name("calm")["skipped"][0]["brain"], "calm");
+    let (_, _, stderr) = home.run(&["mri", "--brain", "all"]);
+    assert_eq!(stderr.lines().count(), 1, "{stderr}");
+    assert!(
+        stderr.starts_with("Skipped calm: notes/bad.md: "),
+        "{stderr}"
+    );
+}

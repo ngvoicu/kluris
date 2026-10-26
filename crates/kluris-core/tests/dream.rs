@@ -716,3 +716,165 @@ fn every_write_is_listed_once_and_a_neuron_that_does_not_parse_is_skipped() {
         .collect();
     assert_eq!(changed, ["brain.md", "lobe/good.md", "lobe/map.md"]);
 }
+
+// --- write safety (review T-103) ---------------------------------------------------
+
+/// A YAML neuron with a pending date refresh and the byte `FF` in its body.
+const NOT_UTF8_YAML: &[u8] =
+    b"#---\n# parent: ./map.md\n# title: Spec\n# updated: '2026-01-01'\n#---\nopenapi: 3.0.0\ninfo: invalid-\xff-byte\n";
+
+const PENDING_DATES: [(&str, &str, &str); 1] = [(
+    "notes/spec.yml",
+    "2026-02-03T09:30:00+00:00",
+    "2026-01-01T00:00:00+00:00",
+)];
+
+#[test]
+fn a_yaml_neuron_that_is_not_utf8_is_skipped_and_left_byte_identical() {
+    let b = Brain::new(&[("glossary.md", GLOSSARY)]);
+    b.write("notes/spec.yml", NOT_UTF8_YAML);
+    let report = b.dream(&FakeGit::with(&PENDING_DATES));
+    assert_eq!(fs::read(b.path("notes/spec.yml")).unwrap(), NOT_UTF8_YAML);
+    assert!(
+        report
+            .skipped
+            .iter()
+            .any(|s| s.rel == "notes/spec.yml" && s.reason == "the file is not valid UTF-8"),
+        "{:?}",
+        report.skipped
+    );
+    assert!(!report.written.contains(&"notes/spec.yml".to_string()));
+    assert_eq!(report.fixes.dates_updated, 0);
+    assert!(!report.healthy());
+}
+
+/// A `map.md` whose frontmatter does not parse, with text a person wrote.
+const MALFORMED_MAP: &str = "---\nrelated: [\n---\n\n# Notes\n\nKeep this.\n";
+
+#[test]
+fn an_unparseable_map_is_kept_and_reported() {
+    let b = Brain::new(&[
+        ("glossary.md", GLOSSARY),
+        ("notes/map.md", MALFORMED_MAP),
+        ("notes/a.md", &neuron("A", "")),
+    ]);
+    let report = b.dream(&FakeGit::none());
+    assert_eq!(b.text("notes/map.md"), MALFORMED_MAP);
+    assert!(
+        report.skipped.iter().any(|s| s.rel == "notes/map.md"),
+        "{:?}",
+        report.skipped
+    );
+    assert!(!report.written.contains(&"notes/map.md".to_string()));
+}
+
+#[test]
+fn an_unparseable_brain_md_is_kept_and_reported() {
+    let bad = "---\nupdated: [\n---\n\n# demo\n\nMy own words.\n";
+    let b = Brain::new(&[
+        ("glossary.md", GLOSSARY),
+        ("brain.md", bad),
+        ("notes/a.md", &neuron("A", "")),
+    ]);
+    let report = b.dream(&FakeGit::none());
+    assert_eq!(b.text("brain.md"), bad);
+    assert!(
+        report.skipped.iter().any(|s| s.rel == "brain.md"),
+        "{:?}",
+        report.skipped
+    );
+    assert!(!report.written.contains(&"brain.md".to_string()));
+}
+
+/// The invariant behind T-103 findings 3 and 4: over every scenario, a path
+/// dream lists in `skipped` keeps its bytes (through a symlink too) and is
+/// not among the written files.
+#[test]
+fn a_skipped_path_is_never_written() {
+    let bad_md = "---\ntitle: Foo: bar\n---\n\n# Bad\n";
+    let not_utf8_md: &[u8] = b"---\ncreated: '2026-01-01'\n---\n\n# Caf\xe9\n";
+    let bad_block = "#---\n# title: Foo: bar\n#---\nk: 1\n";
+    let scenarios: Vec<Vec<(&str, &[u8])>> = vec![
+        vec![("notes/bad.md", bad_md.as_bytes())],
+        vec![("notes/bad.md", not_utf8_md)],
+        vec![("notes/bad.yml", bad_block.as_bytes())],
+        vec![("notes/spec.yml", NOT_UTF8_YAML)],
+        vec![("notes/map.md", MALFORMED_MAP.as_bytes())],
+        vec![("brain.md", b"---\nupdated: [\n---\n\n# demo\n")],
+        vec![("notes/map.md", b"---\nupdated: '2026-01-01'\n---\n\n# Caf\xe9\n")],
+        vec![
+            ("notes/bad.md", bad_md.as_bytes()),
+            (
+                "notes/links.md",
+                b"---\ncreated: '2026-01-01'\nparent: ./map.md\nrelated:\n- ./bad.md\nupdated: '2026-01-01'\n---\n\n# Links\n",
+            ),
+        ],
+        vec![
+            ("notes/map.md", MALFORMED_MAP.as_bytes()),
+            ("notes/deep/map.md", MALFORMED_MAP.as_bytes()),
+            ("notes/deep/x.md", b"# no frontmatter\n"),
+        ],
+    ];
+    let git = FakeGit::with(&[
+        (
+            "notes/bad.md",
+            "2026-02-03T09:30:00+00:00",
+            "2026-01-01T00:00:00+00:00",
+        ),
+        (
+            "notes/spec.yml",
+            "2026-02-03T09:30:00+00:00",
+            "2026-01-01T00:00:00+00:00",
+        ),
+        (
+            "notes/good.md",
+            "2026-02-03T09:30:00+00:00",
+            "2026-01-01T00:00:00+00:00",
+        ),
+    ]);
+    for (i, files) in scenarios.iter().enumerate() {
+        for linked in [false, true] {
+            let b = Brain::new(&[
+                ("glossary.md", GLOSSARY),
+                (
+                    "notes/good.md",
+                    "---\nupdated: '2020-01-01'\n---\n\n# Good\n",
+                ),
+            ]);
+            for (rel, bytes) in files {
+                b.write(rel, bytes);
+            }
+            #[cfg(unix)]
+            if linked {
+                // The same bad file reached through a symlink as well.
+                for (rel, _) in files {
+                    if !rel.ends_with("map.md") && *rel != "brain.md" {
+                        let name = rel.rsplit('/').next().unwrap();
+                        std::os::unix::fs::symlink(name, b.path(&format!("{rel}.alias.md")))
+                            .unwrap();
+                    }
+                }
+            }
+            if linked && cfg!(not(unix)) {
+                continue;
+            }
+            let before = b.snapshot();
+            let report = b.dream(&git);
+            let after = b.snapshot();
+            assert!(!report.skipped.is_empty(), "scenario {i}: nothing skipped");
+            for skipped in &report.skipped {
+                assert_eq!(
+                    before.get(&skipped.rel),
+                    after.get(&skipped.rel),
+                    "scenario {i} (linked {linked}): {} was skipped but changed",
+                    skipped.rel
+                );
+                assert!(
+                    !report.written.contains(&skipped.rel),
+                    "scenario {i}: {} is both skipped and written",
+                    skipped.rel
+                );
+            }
+        }
+    }
+}

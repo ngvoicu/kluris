@@ -37,19 +37,27 @@ fn is_yaml(rel: &str) -> bool {
     has_yaml_suffix(Path::new(rel))
 }
 
+pub(crate) const NOT_UTF8: &str = "the file is not valid UTF-8";
+
+fn utf8(bytes: &[u8]) -> Result<&str, String> {
+    std::str::from_utf8(bytes).map_err(|_| NOT_UTF8.to_string())
+}
+
 /// Parse a file's bytes the way [`Read`] says, by the suffix of the path it
 /// was reached by.
 pub(crate) fn parse(rel: &str, bytes: &[u8], how: Read) -> Result<Frontmatter, String> {
     if is_yaml(rel) {
-        let text = String::from_utf8_lossy(bytes);
         return match how {
-            Read::Lenient => Ok(frontmatter::parse_yaml_neuron_lenient(&text)),
-            Read::Strict => frontmatter::parse_yaml_neuron(&text)
+            Read::Lenient => Ok(frontmatter::parse_yaml_neuron_lenient(
+                &String::from_utf8_lossy(bytes),
+            )),
+            // A file dream may rewrite must be UTF-8: a lossy read would
+            // write U+FFFD over the bytes it could not decode.
+            Read::Strict => frontmatter::parse_yaml_neuron(utf8(bytes)?)
                 .map_err(|e| format!("invalid frontmatter: {e}")),
         };
     }
-    let text = std::str::from_utf8(bytes).map_err(|_| "the file is not valid UTF-8".to_string())?;
-    frontmatter::parse(text).map_err(|e| format!("invalid frontmatter: {e}"))
+    frontmatter::parse(utf8(bytes)?).map_err(|e| format!("invalid frontmatter: {e}"))
 }
 
 /// The metadata as v2's dream path writes it back: every top-level date and
@@ -152,18 +160,25 @@ impl<'a, S: BrainStore> Workspace<'a, S> {
     }
 
     /// The pending writes whose bytes differ from the files on disk, in path
-    /// order.
-    pub(crate) fn into_change_set(self) -> (ChangeSet, BTreeMap<String, String>) {
+    /// order. A file on disk that is not UTF-8 is never rewritten: it is
+    /// skipped instead.
+    pub(crate) fn into_change_set(mut self) -> (ChangeSet, BTreeMap<String, String>) {
         let store = self.store;
-        let writes = self
-            .pending
-            .into_iter()
-            .filter(|(rel, text)| store.bytes(rel).as_deref() != Some(text.as_bytes()))
-            .map(|(rel, text)| FileWrite {
-                rel,
-                contents: text.into_bytes(),
-            })
-            .collect();
+        let mut writes = Vec::new();
+        for (rel, text) in std::mem::take(&mut self.pending) {
+            let old = store.bytes(&rel);
+            if old.as_deref() == Some(text.as_bytes()) {
+                continue;
+            }
+            if old
+                .as_deref()
+                .is_some_and(|b| std::str::from_utf8(b).is_err())
+            {
+                self.skip(&rel, NOT_UTF8.into());
+                continue;
+            }
+            writes.push(FileWrite::replace(rel, text.into_bytes()));
+        }
         (
             ChangeSet {
                 writes,

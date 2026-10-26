@@ -154,7 +154,15 @@ fn write_if_changed<S: BrainStore>(
     today: Date,
 ) {
     let old = if ws.exists(rel) {
-        ws.read(rel, Read::Lenient).ok()
+        // A structure file that does not read holds what a person wrote
+        // there: it is kept as it is and reported, never regenerated.
+        match ws.read(rel, Read::Lenient) {
+            Ok(fm) => Some(fm),
+            Err(error) => {
+                ws.skip(rel, error);
+                return;
+            }
+        }
     } else {
         None
     };
@@ -163,20 +171,8 @@ fn write_if_changed<S: BrainStore>(
     {
         return;
     }
-    // A file that exists but does not read keeps its line endings too.
-    let endings = match &old {
-        Some(fm) => Some(fm.clone()),
-        None if ws.exists(rel) => ws.text(rel).map(|text| crate::frontmatter::Frontmatter {
-            meta: Map::new(),
-            body: String::new(),
-            line_ending: crate::frontmatter::line_ending(&text),
-            had_bom: text.starts_with('\u{feff}'),
-            body_line: 0,
-        }),
-        None => None,
-    };
     meta.insert("updated".into(), Value::Str(date_iso(&today)));
-    ws.write(rel, endings.as_ref(), &meta, content);
+    ws.write(rel, old.as_ref(), &meta, content);
 }
 
 /// `generate_map_md` for one directory.

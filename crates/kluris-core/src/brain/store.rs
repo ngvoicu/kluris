@@ -4,11 +4,12 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use super::change::{Applied, ChangeSet, FailedWrite};
+use super::change::{Applied, ChangeSet, FailedWrite, FileWrite, WriteMode};
 use super::glossary::{GlossaryEntry, parse_glossary_entries};
 use super::neuron_index::{Neuron, neuron_files};
 use super::sandbox::{self, SandboxError};
 use super::walk::{WalkedFile, is_pruned_dir, walk, walk_tree};
+use crate::atomic;
 use crate::frontmatter::{self, Frontmatter, FrontmatterError};
 
 /// Why a file could not be read.
@@ -134,7 +135,8 @@ pub trait BrainStore {
         frontmatter::read(path)
     }
     /// Write every file of `changes`, then walk the brain again. A write that
-    /// fails is reported and the others still happen.
+    /// fails is reported, leaves the file as it was, and the others still
+    /// happen.
     fn apply(&mut self, changes: &ChangeSet) -> Applied;
 }
 
@@ -330,7 +332,7 @@ impl BrainStore for LocalGitStore {
                     .push(failed("not a path inside the brain".into()));
                 continue;
             }
-            match fs::write(self.join(&write.rel), &write.contents) {
+            match write_file(&self.join(&write.rel), write) {
                 Ok(()) => applied.written.push(write.rel.clone()),
                 Err(e) => applied
                     .failed
@@ -339,6 +341,27 @@ impl BrainStore for LocalGitStore {
         }
         *self = LocalGitStore::open(&self.root);
         applied
+    }
+}
+
+/// Write one file of a change set: a replacement is atomic (the old file
+/// stays byte-identical on any failure), a new file is only ever created.
+fn write_file(path: &Path, write: &FileWrite) -> std::io::Result<()> {
+    match write.mode {
+        WriteMode::Replace => atomic::write_atomic(path, &write.contents),
+        WriteMode::CreateNew => {
+            let mut file = fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(path)?;
+            let written = std::io::Write::write_all(&mut file, &write.contents)
+                .and_then(|()| file.sync_all());
+            if written.is_err() {
+                drop(file);
+                let _ = fs::remove_file(path);
+            }
+            written
+        }
     }
 }
 

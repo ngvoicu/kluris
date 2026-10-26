@@ -29,6 +29,7 @@ mod workspace;
 
 use std::collections::{BTreeMap, HashSet};
 
+use crate::brain::change::{Applied, ChangeSet};
 use crate::brain::deprecation::{DeprecationIssue, detect_deprecation_issues};
 use crate::brain::store::{BrainStore, ReadError};
 use crate::git::Git;
@@ -213,10 +214,15 @@ fn sync<S: BrainStore>(
     for (rel, reason) in ws_skipped {
         skipped.entry(rel).or_insert(reason);
     }
-    let applied = store.apply(&changes);
+    let (applied, held) = apply_unless_skipped(store, changes, skipped);
     // A fix counts only when its file was written (v2's date pass counts
     // after the write).
-    let failed: HashSet<&str> = applied.failed.iter().map(|f| f.rel.as_str()).collect();
+    let failed: HashSet<&str> = applied
+        .failed
+        .iter()
+        .map(|f| f.rel.as_str())
+        .chain(held.iter().map(String::as_str))
+        .collect();
     let landed = |rels: &[String]| {
         rels.iter()
             .filter(|rel| {
@@ -244,6 +250,34 @@ fn sync<S: BrainStore>(
     }
 }
 
+/// Apply `changes` without any write to a path in `skipped`: a file reported
+/// as skipped is never written, whichever step skipped it and by whichever
+/// path (a symlink and its target are one file). Returns what was applied
+/// and the paths held back.
+fn apply_unless_skipped<S: BrainStore>(
+    store: &mut S,
+    mut changes: ChangeSet,
+    skipped: &BTreeMap<String, String>,
+) -> (Applied, Vec<String>) {
+    let blocked: HashSet<String> = skipped
+        .keys()
+        .flat_map(|rel| [Some(rel.clone()), store.real_rel(rel)])
+        .flatten()
+        .collect();
+    let mut held = Vec::new();
+    changes.writes.retain(|write| {
+        let keep = !blocked.contains(&write.rel)
+            && !store
+                .real_rel(&write.rel)
+                .is_some_and(|real| blocked.contains(&real));
+        if !keep {
+            held.push(write.rel.clone());
+        }
+        keep
+    });
+    (store.apply(&changes), held)
+}
+
 /// v2's `_run_dream_on_brain`, what `create` runs on a new brain: every
 /// directory's `map.md`, twice, then `brain.md` (steps 5 and 6 alone, no
 /// dates or link fixes), as one change set. Returns the files it could not
@@ -254,7 +288,8 @@ pub fn regenerate_maps<S: BrainStore>(store: &mut S, options: &DreamOptions) -> 
     maps::generate_maps(&mut ws, &order, options.today);
     maps::generate_brain_md(&mut ws, options.name, options.description, options.today);
     let (changes, mut skipped) = ws.into_change_set();
-    for failed in store.apply(&changes).failed {
+    let (applied, _) = apply_unless_skipped(store, changes, &skipped);
+    for failed in applied.failed {
         skipped.entry(failed.rel).or_insert(failed.error);
     }
     skipped_files(skipped)

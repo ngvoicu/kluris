@@ -2,6 +2,7 @@
 //! Nothing here prints; the `kluris` binary formats the results.
 
 pub mod agents;
+pub mod atomic;
 pub mod brain;
 pub mod companions;
 pub mod config;
