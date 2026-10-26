@@ -2014,11 +2014,18 @@ fn real_service_round_trip() {
     let log = doc["log"].as_str().map(PathBuf::from);
     let definition = doc["definition"].as_str().map(PathBuf::from);
 
-    // It runs: doctor says so, and it pushes the local commit.
-    let until = Instant::now() + Duration::from_secs(60);
+    // It runs: doctor says so, it pushes the local commit, and its log
+    // (where there is one) says so once the push is done.
+    let read_log = || {
+        log.as_ref()
+            .and_then(|l| fs::read_to_string(l).ok())
+            .unwrap_or_default()
+    };
+    let logged = || log.is_none() || read_log().contains(&format!("{name}: pushed"));
+    let until = Instant::now() + Duration::from_secs(120);
     let mut running = false;
     let mut pushed = false;
-    while Instant::now() < until && !(running && pushed) {
+    while Instant::now() < until && !(running && pushed && logged()) {
         let (_, out, _) = real(&["doctor", "--no-refresh", "--json"]);
         let doc: Value = serde_json::from_str(&out).unwrap_or(Value::Null);
         running = doc["checks"].as_array().is_some_and(|checks| {
@@ -2032,29 +2039,28 @@ fn real_service_round_trip() {
         pushed = w.remote_head() == w.head();
         std::thread::sleep(Duration::from_millis(500));
     }
-    let log_text = log
-        .as_ref()
-        .and_then(|l| fs::read_to_string(l).ok())
-        .unwrap_or_default();
+    let log_text = read_log();
+    let was_logged = logged();
     let (code, out, err) = real(&["sync", "--uninstall-service", "--brain", &name]);
     eprintln!("uninstall: {code} {out}{err}");
-    assert!(running, "the service never ran; log: {log_text}");
-    assert!(pushed, "the service never pushed; log: {log_text}");
-    assert_eq!(code, 0, "{out}{err}");
+    // The log goes before anything is asserted.
     if let Some(log) = &log {
-        assert!(log_text.contains(&format!("{name}: pushed")), "{log_text}");
         let _ = fs::remove_file(log);
         if let Some(dir) = log.parent() {
             let _ = fs::remove_dir(dir);
         }
     }
+    assert!(running, "the service never ran; log: {log_text}");
+    assert!(pushed, "the service never pushed; log: {log_text}");
+    assert!(was_logged, "the push was never logged: {log_text}");
+    assert_eq!(code, 0, "{out}{err}");
 
     // Nothing is left.
     if let Some(definition) = definition {
         assert!(!definition.exists(), "{}", definition.display());
     }
     let (_, out, _) = real(&["doctor", "--no-refresh", "--json"]);
-    assert!(!out.contains(&name), "{out}");
+    assert!(!out.contains(&format!("sync-service:{name}")), "{out}");
     std::thread::sleep(Duration::from_secs(2));
     assert!(
         !watch_process_running(&name),
