@@ -48,6 +48,7 @@ fn spec<'a>(parity: bool, cargo_args: &'a [String]) -> Spec<'a> {
         cargo_args,
         installer_smoke: false,
         wrapper: false,
+        clippy: false,
     }
 }
 
@@ -83,6 +84,7 @@ mod words_of_the_command {
                 cargo_args: vec![],
                 installer_smoke: false,
                 wrapper: None,
+            clippy: false,
             }
         );
     }
@@ -113,6 +115,22 @@ mod words_of_the_command {
             ),
             ("--installer-smoke=yes", "--installer-smoke takes no value"),
             ("--installer-smoke --wrapper a.ps1 --wrapper b.ps1", "once"),
+        ] {
+            let refused = options::parse(&words(line)).expect_err(line);
+            assert!(refused.contains(says), "{line:?}: {refused}");
+        }
+    }
+
+    #[test]
+    fn the_clippy_run() {
+        let options = run_of("--machine zeewin --clippy");
+        assert!(options.clippy && !options.parity && !options.installer_smoke);
+        assert!(!run_of("").clippy);
+        for (line, says) in [
+            ("--clippy --parity", "--clippy"),
+            ("--clippy --installer-smoke", "--clippy"),
+            ("--clippy -- -p kluris-core", "--clippy"),
+            ("--clippy=yes", "--clippy takes no value"),
         ] {
             let refused = options::parse(&words(line)).expect_err(line);
             assert!(refused.contains(says), "{line:?}: {refused}");
@@ -730,6 +748,38 @@ mod scripts {
         );
     }
 
+    fn clippy_spec() -> Spec<'static> {
+        Spec {
+            clippy: true,
+            ..spec(false, &[])
+        }
+    }
+
+    #[test]
+    fn a_clippy_run_lints_every_target_and_runs_no_tests() {
+        let spec = clippy_spec();
+        let steps: Vec<_> = script::steps(&spec).iter().map(|s| s.name).collect();
+        assert_eq!(steps, ["toolchain", "clippy"]);
+        let text = script::run_script(&spec);
+        assert!(
+            text.contains(
+                "Invoke-Step 'clippy' 60 $cargo 'clippy --workspace --all-targets -- -D warnings'"
+            ),
+            "{text}"
+        );
+        assert!(
+            !text.contains("Invoke-Step 'cargo-test'") && !text.contains("pytest"),
+            "{text}"
+        );
+        assert!(script::bound(&spec) < script::bound(&spec_with_parity()));
+        for step in script::steps(&spec) {
+            assert!(
+                text.contains(&format!("Invoke-Step '{}' {} ", step.name, step.minutes)),
+                "{step:?}"
+            );
+        }
+    }
+
     #[test]
     fn the_stop_restores_the_user_path_an_ended_smoke_left() {
         let text = script::stop_script("kluris-0000abcd-12345678");
@@ -1016,6 +1066,7 @@ mod runs {
             cargo_args: vec![],
             installer_smoke: false,
             wrapper: None,
+        clippy: false,
         }
     }
 
@@ -1197,6 +1248,7 @@ mod runs {
                 cargo_args: vec![],
                 installer_smoke: false,
                 wrapper: None,
+            clippy: false,
             },
             vec![],
         );
@@ -1228,6 +1280,7 @@ mod runs {
                 cargo_args: vec![],
                 installer_smoke: false,
                 wrapper: None,
+            clippy: false,
             },
             vec![
                 said(0, ""),
@@ -1253,6 +1306,7 @@ mod runs {
                 cargo_args: vec![],
                 installer_smoke: false,
                 wrapper: None,
+            clippy: false,
             },
             vec![
                 said(0, "held\n"),

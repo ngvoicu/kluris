@@ -29,6 +29,7 @@ fn spec<'a>(parity: bool, parity_files: &'a [String], cargo_args: &'a [String]) 
         cargo_args,
         installer_smoke: false,
         wrapper: false,
+        clippy: false,
     }
 }
 
@@ -63,6 +64,7 @@ mod words_of_the_command {
                 cargo_args: vec![],
                 installer_smoke: false,
                 wrapper: None,
+            clippy: false,
             }
         );
     }
@@ -78,6 +80,20 @@ mod words_of_the_command {
             ("--installer-smoke --parity", "not with --parity"),
             ("--installer-smoke -- -p kluris-core", "runs no cargo test"),
             ("--installer-smoke --wrapper", "--wrapper takes"),
+        ] {
+            let refused = options::parse(&words(line)).expect_err(line);
+            assert!(refused.contains(says), "{line:?}: {refused}");
+        }
+    }
+
+    #[test]
+    fn the_clippy_run() {
+        let options = run_of("--clippy");
+        assert!(options.clippy && !options.parity && !options.installer_smoke);
+        for (line, says) in [
+            ("--clippy --parity", "--clippy"),
+            ("--clippy --installer-smoke", "--clippy"),
+            ("--clippy -- -p kluris-core", "--clippy"),
         ] {
             let refused = options::parse(&words(line)).expect_err(line);
             assert!(refused.contains(says), "{line:?}: {refused}");
@@ -289,6 +305,25 @@ mod scripts {
             "2e2b37e9811e17675a9e70bed5e1a58fc8c0388be63d751d72cc735188c149ff"
         );
         assert!(text.contains("\"${HOME:?}/.cargo/bin/rustup\""));
+    }
+
+    #[test]
+    fn a_clippy_run_lints_every_target_and_runs_no_tests() {
+        let spec = Spec {
+            clippy: true,
+            ..super::spec(false, &[], &[])
+        };
+        let steps: Vec<_> = script::steps(&spec).iter().map(|s| s.name).collect();
+        assert_eq!(steps, ["toolchain", "clippy"]);
+        let text = script::run_script(&spec);
+        assert!(
+            text.contains(
+                "step clippy 60 \"$cargo\" 'clippy' '--workspace' '--all-targets' '--' '-D' 'warnings'"
+            ),
+            "{text}"
+        );
+        assert!(!text.contains("step cargo-test") && !text.contains("pytest"), "{text}");
+        assert!(script::bound(&spec) < script::bound(&super::spec(true, &[], &[])));
     }
 
     #[test]
@@ -910,6 +945,7 @@ mod runs {
             cargo_args: vec![],
             installer_smoke: false,
             wrapper: None,
+        clippy: false,
         }
     }
 
@@ -1125,6 +1161,7 @@ mod runs {
             cargo_args: vec![],
             installer_smoke: false,
             wrapper: None,
+        clippy: false,
         };
         let ran = ran_in(dir.path(), options, vec![]);
         assert_eq!(ran.code, 1);
@@ -1137,6 +1174,7 @@ mod runs {
             cargo_args: words("-p kluris-core"),
             installer_smoke: false,
             wrapper: None,
+        clippy: false,
         };
         let ran = ran_in(
             dir.path(),
