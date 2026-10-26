@@ -303,7 +303,10 @@ kluris mri       # write the brain's visual map and print its link
 
 A brain is a git repository: commit, push and pull it with `git` like any
 other. Run `kluris dream` before you commit structural changes so the
-regenerated maps go into the same commit.
+regenerated maps go into the same commit, or let `kluris commit --brain
+<name> --paths a.md,b.md` do it: it commits just those files and the
+`map.md`/`brain.md` files they change, under your git identity, and leaves
+every other change in the brain as it is.
 
 ### How the agent starts a session
 
@@ -548,6 +551,7 @@ from disk or send it to a colleague.
 | `kluris wake-up` | The compact snapshot agents load at the start of a session (`--brain`) |
 | `kluris dream` | Regenerate maps, fix what is safe to fix, validate links (`--brain`, `--broken-only` with `--json`) |
 | `kluris mri` | Write the brain's visual map and print its link (`--brain`, `--output`) |
+| `kluris commit` | Commit only the files you name and the maps they change (`--brain`, `--paths`, `--message`) |
 | `kluris companion list` | The companion playbooks, which are installed, and which brains use them (`--brain`) |
 | `kluris companion add <name>` | Turn a companion on for a brain (`--brain`) |
 | `kluris companion remove <name>` | Turn a companion off for a brain (`--brain`) |
