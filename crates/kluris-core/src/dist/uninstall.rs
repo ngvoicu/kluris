@@ -101,12 +101,19 @@ impl std::error::Error for UninstallError {}
 ///    line sourcing env.sh, unless env.sh is there and is not dist's (then it
 ///    and its lines are kept and reported). A failure stops here: env
 ///    scripts, receipt and binary all stay.
-/// 2. The fish conf.d file loses its line (the same rule for env.fish), the
-///    env scripts dist wrote go, and on Windows the user PATH entry. A
-///    failure stops before the binary. A purge's skills go here too.
-/// 3. The binary, through `remove_binary` (the running one may need the
-///    platform's self-delete). A failure stops: the receipt stays.
-/// 4. A purge's `~/.kluris`, then last the receipt.
+/// 2. The fish conf.d file loses its line (the same rule for env.fish); a
+///    failure stops, as it still sources env.fish.
+/// 3. The env scripts dist wrote, and on Windows the user PATH entry.
+/// 4. With a purge: the Kluris-written skills, then everything in
+///    `~/.kluris` but the folder the binary is in.
+///
+/// Then the binary and the receipt, the last two things removed, once
+/// every step before has succeeded (a failure anywhere stops and keeps
+/// both): the receipt's folder is first checked to take a removal; 5. the
+/// binary, through `remove_binary` (the running one may need the
+/// platform's self-delete; one that will not go keeps the receipt), its
+/// emptied folder and under a purge what is left of `~/.kluris`; 6. the
+/// receipt.
 ///
 /// Without `modify_path` (KLURIS_NO_MODIFY_PATH=1) no rc file, env script,
 /// fish file or PATH entry is touched: the user manages PATH. A rerun after
@@ -166,7 +173,8 @@ pub fn uninstall(
             }
         }
 
-        // 2. The fish file, the env scripts, the user PATH entry.
+        // 2. The fish conf.d file. A failure stops here: it still sources
+        // env.fish.
         if fish_ours {
             let fish_lines = source_lines("source", &[&env_fish], home);
             let fish_conf = home
@@ -175,6 +183,13 @@ pub fn uninstall(
                 .join("conf.d")
                 .join(format!("{}.env.fish", super::APP_NAME));
             edit_rc(&fish_conf, &fish_lines, true, &mut report);
+            if !report.failed.is_empty() {
+                return Ok(report);
+            }
+        }
+
+        // 3. The env scripts and the Windows user PATH entry.
+        if fish_ours {
             remove_file(&env_fish, &mut report);
         }
         if sh_ours {
@@ -199,18 +214,39 @@ pub fn uninstall(
             }
         }
     }
+    if !report.ok() {
+        return Ok(report);
+    }
+
+    // 4. A purge: the skills, then ~/.kluris but the folder the binary is in.
+    let binary = prefix.join(req.env.binary_name());
     if req.purge {
         report.skills = remove_generated_skills(home, req.copilot_home)
             .into_iter()
             .filter(|d| !d.removed.is_empty() || !d.kept.is_empty() || !d.failed.is_empty())
             .collect();
+        if !report.ok() {
+            return Ok(report);
+        }
+        clear_kluris_dir(&kluris_dir, prefix, &binary, &mut report);
+        if !report.ok() {
+            return Ok(report);
+        }
     }
-    if !report.ok() {
+
+    // The receipt goes last, so its folder must take a removal now: one
+    // that would not is found before the binary is gone.
+    if let Err(e) = probe_removable(receipt_dir) {
+        report.failed.push(format!(
+            "cannot remove the receipt {}: {e}",
+            req.receipt_path.display()
+        ));
         return Ok(report);
     }
 
-    // 3. The binary: the one the receipt's prefix holds, by its own name.
-    let binary = prefix.join(req.env.binary_name());
+    // 5. The binary, by its own name in the receipt's prefix, then its
+    // empty folder (and under a purge what is left of ~/.kluris). A binary
+    // that will not go keeps the receipt.
     if fs::symlink_metadata(&binary).is_ok() {
         match remove_binary(&binary) {
             Ok(()) => report.removed.push(binary),
@@ -223,24 +259,70 @@ pub fn uninstall(
         }
     }
     remove_dir_if_empty(prefix, &mut report);
-
-    // 4. A purge's ~/.kluris, then the receipt.
-    if req.purge && fs::symlink_metadata(&kluris_dir).is_ok() {
-        match fs::remove_dir_all(&kluris_dir) {
-            Ok(()) => {
-                report.removed.push(kluris_dir);
-                report.purged = true;
+    if req.purge {
+        if fs::symlink_metadata(&kluris_dir).is_ok() {
+            match fs::remove_dir_all(&kluris_dir) {
+                Ok(()) => {
+                    report.removed.push(kluris_dir);
+                    report.purged = true;
+                }
+                Err(e) => report
+                    .failed
+                    .push(format!("cannot remove {}: {e}", kluris_dir.display())),
             }
-            Err(e) => report
-                .failed
-                .push(format!("cannot remove {}: {e}", kluris_dir.display())),
+        } else {
+            report.purged = true;
         }
-    } else if req.purge {
-        report.purged = true;
     }
+
+    // 6. The receipt.
     remove_file(req.receipt_path, &mut report);
     remove_dir_if_empty(receipt_dir, &mut report);
     Ok(report)
+}
+
+/// A purge's ~/.kluris before the binary goes: every entry but the one that
+/// holds the install prefix (`~/.kluris/bin`) or is the binary itself.
+fn clear_kluris_dir(kluris_dir: &Path, prefix: &Path, binary: &Path, report: &mut UninstallReport) {
+    let entries = match fs::read_dir(kluris_dir) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return,
+        Err(e) => {
+            report
+                .failed
+                .push(format!("cannot read {}: {e}", kluris_dir.display()));
+            return;
+        }
+    };
+    let mut paths: Vec<PathBuf> = entries.filter_map(|e| e.ok().map(|e| e.path())).collect();
+    paths.sort();
+    for path in paths {
+        if prefix.starts_with(&path) || path == binary {
+            continue;
+        }
+        let removed = match fs::symlink_metadata(&path) {
+            Ok(meta) if meta.is_dir() => fs::remove_dir_all(&path),
+            Ok(_) => fs::remove_file(&path),
+            Err(e) => Err(e),
+        };
+        match removed {
+            Ok(()) => report.removed.push(path),
+            Err(e) => {
+                report
+                    .failed
+                    .push(format!("cannot remove {}: {e}", path.display()));
+                return;
+            }
+        }
+    }
+}
+
+/// Whether a file in `dir` can be removed: a probe file made and removed
+/// there (the folder's own permission decides both).
+fn probe_removable(dir: &Path) -> io::Result<()> {
+    let probe = dir.join(format!(".{}-uninstall-probe", super::APP_NAME));
+    fs::write(&probe, b"")?;
+    fs::remove_file(&probe)
 }
 
 /// How the installer names the install folder inside its env scripts:
