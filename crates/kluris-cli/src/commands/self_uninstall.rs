@@ -254,10 +254,20 @@ fn report_text(report: &UninstallReport, home: &Path) -> String {
             home_relative(path, home)
         ));
     }
-    for path in &report.kept {
+    for path in report
+        .kept
+        .iter()
+        .filter(|p| !report.kept_links.contains(p))
+    {
         out.push_str(&format!(
             "Kept {} and the lines that source it: it is not the file the installer wrote\n",
             home_relative(path, home)
+        ));
+    }
+    for link in &report.kept_links {
+        out.push_str(&format!(
+            "Kept {}: it is your link, and the folder it points to stays\n",
+            home_relative(link, home)
         ));
     }
     for entry in &report.path_entries {

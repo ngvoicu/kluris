@@ -8,11 +8,13 @@ Compared, after root normalization:
 - the whole ``work/`` tree byte for byte: every scaffolded brain file (each
   ``--type``, ``--from-config``), ``config.yml``, and HOME, with the
   decided differences applied to v2's tree: a ``kluris.yml`` v3 writes has
-  PAR-003's agent names, and the skills are v2's SKILL.md with the decided
-  changes in v3's folders (PAR-026 ... PAR-031, via ``test_skill_install``);
-- each new brain's git state: ``HEAD``, its branch, every path and blob of
-  the first commit, author and committer, the remote (dates and identity are
-  pinned, so the commit hashes are equal too).
+  PAR-003's agent names, the skills are v2's SKILL.md with the decided
+  changes in v3's folders (PAR-026 ... PAR-031, via ``test_skill_install``),
+  and a new brain's ``README.md`` is v2's with PAR-071's three changes;
+- each new brain's git state: its branch, every path and blob of the first
+  commit, the commit object without its ``tree`` line (author, committer,
+  dates, message), the remote; together these fix ``HEAD``'s hash, which
+  differs only through the README's blob (PAR-071).
 
 The wizard and the pickers need a terminal on stdin: those tests drive both
 binaries through a pseudo-terminal (stdout and stderr stay pipes) and are
@@ -23,11 +25,12 @@ without a name, the wizard's brain type checked like ``--type``, no prompt
 without a terminal or with ``KLURIS_NO_PROMPT=1`` (``create`` and
 ``register``), ``--from-config`` lobe names and nested values, the stricter
 rule for new brain names, a git failure that leaves the brain unregistered,
-and a target path that is a file.
+a target path that is a file, and the new brain's ``README.md`` (PAR-071).
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import select
@@ -83,14 +86,17 @@ def git_state(repo: Path, env: dict[str, str]) -> dict | None:
         proc = subprocess.run(["git", *args], cwd=repo, env=env, capture_output=True, text=True)
         return proc.stdout if proc.returncode == 0 else f"<exit {proc.returncode}> {proc.stderr.strip()}"
 
-    head, tree = git("rev-parse", "HEAD"), git("ls-tree", "-r", "HEAD")
+    tree = git("ls-tree", "-r", "HEAD")
+    # The commit without its tree line: with ``tree`` (every path and blob) it
+    # fixes HEAD's hash, and the README's blob is the one decided difference.
+    commit = "".join(line + "\n" for line in git("cat-file", "commit", "HEAD").splitlines()
+                     if not line.startswith("tree "))
     if IS_WINDOWS:
-        # v2 writes the files CRLF there and v3 LF (PAR-035), so the blob and
-        # commit hashes differ; the paths, modes and the rest must not.
-        head = "<HEAD>"
+        # v2 writes the files CRLF there and v3 LF (PAR-035), so the blob
+        # hashes differ; the paths, modes and the rest must not.
         tree = "".join(f"{line.split(' ', 2)[0]} {line.split(chr(9), 1)[-1]}\n" for line in tree.splitlines())
     return {
-        "head": head,
+        "commit": commit,
         "branch": git("symbolic-ref", "HEAD"),
         "tree": tree,
         "log": git("log", "--format=%an <%ae>|%cn <%ce>|%aI|%cI|%s"),
@@ -213,12 +219,55 @@ def par003(v2_yml: bytes) -> bytes:
     return (text.replace("\n", "\r\n") if crlf else text).encode("utf-8")
 
 
+# PAR-071: the README ``create`` writes is v2's with today's install route,
+# agent list and companion wording; nothing else in it changes.
+V2_README_INSTALL = """```bash
+pipx install kluris
+git clone <this-repo-url> ~/path/to/brain  # if the brain lives at a git remote
+"""
+V3_README_INSTALL = """Install Kluris, then open a new terminal (the installer adds it to your PATH):
+
+```bash
+curl -fsSL https://kluris.ngvoicu.dev/install.sh | sh   # macOS and Linux
+```
+
+```powershell
+irm https://kluris.ngvoicu.dev/install.ps1 | iex        # Windows (PowerShell)
+```
+
+Then clone this brain and register it:
+
+```bash
+git clone <this-repo-url> ~/path/to/brain  # if the brain lives at a git remote
+"""
+V2_README_AGENTS = "Windsurf, Gemini CLI, Hermes Agent, Kilo Code, Junie, and other tools that\nsupport skills."
+V3_README_AGENTS = "Devin, Gemini CLI, Hermes Agent, Kilo Code, Junie, OpenCode, and other\ntools that support skills."
+V2_README_COMPANIONS = "Companions are copied from\nthe installed Kluris package into"
+V3_README_COMPANIONS = "Companions ship embedded\nin Kluris; turning one on copies it into"
+
+
+def par071(v2_readme: bytes) -> bytes:
+    """v2's generated brain ``README.md`` as v3 writes it (PAR-071)."""
+    text = v2_readme.decode("utf-8")
+    crlf = "\r\n" in text
+    text = text.replace("\r\n", "\n")
+    text = _replace_once(text, V2_README_INSTALL, V3_README_INSTALL)
+    text = _replace_once(text, V2_README_AGENTS, V3_README_AGENTS)
+    text = _replace_once(text, V2_README_COMPANIONS, V3_README_COMPANIONS)
+    return (text.replace("\n", "\r\n") if crlf else text).encode("utf-8")
+
+
 def expected_v3(v2_tree: dict[str, bytes], rewritten_yml: set[str] = frozenset(),
-                v3_yml: dict[str, bytes] | None = None) -> dict[str, bytes]:
+                v3_yml: dict[str, bytes] | None = None, *, before: dict[str, bytes]) -> dict[str, bytes]:
     """The tree v3 should leave, from v2's: every brain's skills per
-    PAR-026...PAR-031 (v2's copies migrated), and each ``kluris.yml`` in
-    ``rewritten_yml`` (paths relative to ``work/``) with PAR-003's names."""
+    PAR-026...PAR-031 (v2's copies migrated), each ``kluris.yml`` in
+    ``rewritten_yml`` (paths relative to ``work/``) with PAR-003's names, and
+    each brain ``README.md`` the run wrote (not in ``before``, the frozen
+    tree, as it was) per PAR-071."""
     exp = dict(v2_tree)
+    for key, text in v2_tree.items():
+        if key.endswith("/README.md") and before.get(key) != text:
+            exp[key] = par071(text)
     prefix, suffix = "home/.claude/skills/kluris-", "/SKILL.md"
     skills = [k[len(prefix):-len(suffix)] for k in v2_tree if k.startswith(prefix) and k.endswith(suffix)]
     for brain in skills:
@@ -233,6 +282,24 @@ def expected_v3(v2_tree: dict[str, bytes], rewritten_yml: set[str] = frozenset()
         exp[key] = par003(v2_tree[key])
     exp.update(v3_yml or {})
     return exp
+
+
+def _blob(data: bytes) -> str:
+    return hashlib.sha1(b"blob %d\0" % len(data) + data).hexdigest()
+
+
+def expected_git(v2_git: dict, v2_tree: dict[str, bytes], *, before: dict[str, bytes]) -> dict:
+    """v2's git states with each README the run wrote committed as PAR-071's
+    bytes (its blob in ``tree``; on Windows ``tree`` holds no blobs)."""
+    out = {}
+    for rel, state in v2_git.items():
+        key = f"{rel}/README.md"
+        if state is not None and not IS_WINDOWS and key in v2_tree and before.get(key) != v2_tree[key]:
+            old, new = _blob(v2_tree[key]), _blob(par071(v2_tree[key]))
+            assert state["tree"].count(old) == 1, state["tree"]
+            state = {**state, "tree": state["tree"].replace(old, new)}
+        out[rel] = state
+    return out
 
 
 def _lf(tree: dict[str, bytes]) -> dict[str, bytes]:
@@ -259,8 +326,8 @@ def assert_same_run(r: dict[str, Result], sb: Sandbox, *, yml: set[str] = frozen
     else:
         same_words(v2.stdout, v3.stdout, sb.root)
     assert v3.stderr == v2.stderr
-    assert_tree(v3.tree, expected_v3(v2.tree, yml))
-    assert v3.git == v2.git  # type: ignore[attr-defined]
+    assert_tree(v3.tree, expected_v3(v2.tree, yml, before=pristine(sb)))
+    assert v3.git == expected_git(v2.git, v2.tree, before=pristine(sb))  # type: ignore[attr-defined]
 
 
 def assert_same_error(r: dict[str, Result], sb: Sandbox, code: int = 1) -> None:
@@ -556,8 +623,8 @@ def assert_wizard(r: dict[str, Result], sb: Sandbox, yml: set[str]) -> None:
     assert normalize(wizard_transcript(v3.stdout), sb.root) == normalize(wizard_transcript(v2.stdout), sb.root)
     same_words(v2.stdout, v3.stdout, sb.root)
     assert v3.stderr == v2.stderr == ""
-    assert_tree(v3.tree, expected_v3(v2.tree, yml))
-    assert v3.git == v2.git  # type: ignore[attr-defined]
+    assert_tree(v3.tree, expected_v3(v2.tree, yml, before=pristine(sb)))
+    assert v3.git == expected_git(v2.git, v2.tree, before=pristine(sb))  # type: ignore[attr-defined]
 
 
 @pty_only
@@ -667,8 +734,8 @@ def test_create_without_a_terminal_uses_the_defaults(sandbox: Sandbox):
     v3 = run_trees(sandbox, ["create", "demo"], git=("demo",), sides=("v3",))["v3"]
     assert v3.code == 0, (v3.stdout, v3.stderr)
     assert "Brain created: demo (product-group)" in v3.stdout
-    assert_tree(v3.tree, expected_v3(v2_json.tree, {"demo/kluris.yml"}))
-    assert v3.git == v2_json.git  # type: ignore[attr-defined]
+    assert_tree(v3.tree, expected_v3(v2_json.tree, {"demo/kluris.yml"}, before=pristine(sandbox)))
+    assert v3.git == expected_git(v2_json.git, v2_json.tree, before=pristine(sandbox))  # type: ignore[attr-defined]
 
 
 @pytest.mark.parametrize("json_flag", [False, True], ids=["text", "json"])
@@ -942,7 +1009,7 @@ def test_register_prompts_on_a_terminal(sandbox: Sandbox):
                                                                               sandbox.root)
     assert v3.stdout.startswith("\nRegister a brain\n\n  Path to brain directory:   Path to brain directory: \n")
     same_words(v2.stdout, v3.stdout, sandbox.root)
-    assert_tree(v3.tree, expected_v3(v2.tree, {"brains/team/kluris.yml"}))
+    assert_tree(v3.tree, expected_v3(v2.tree, {"brains/team/kluris.yml"}, before=pristine(sandbox)))
 
 
 @pty_only
@@ -955,7 +1022,7 @@ def test_register_end_of_input_at_the_picker(sandbox: Sandbox):
     for side in ("v2", "v3"):
         assert r[side].code == 1 and r[side].stderr == "Error: Register failed: \n", r[side]
     assert r["v3"].stdout == r["v2"].stdout
-    assert_tree(r["v3"].tree, expected_v3(r["v2"].tree, {"brains/team/kluris.yml"}))
+    assert_tree(r["v3"].tree, expected_v3(r["v2"].tree, {"brains/team/kluris.yml"}, before=pristine(sandbox)))
 
 
 @pty_only
@@ -968,8 +1035,8 @@ def test_create_end_of_input_at_the_picker(sandbox: Sandbox):
         assert r[side].code == 1 and r[side].stderr == "Aborted!\n", r[side]
         assert "wiz/brain.md" in r[side].tree and "home/.kluris/config.yml" not in r[side].tree
     assert r["v3"].stdout == r["v2"].stdout
-    assert_tree(r["v3"].tree, expected_v3(r["v2"].tree, {"wiz/kluris.yml"}))
-    assert r["v3"].git == r["v2"].git
+    assert_tree(r["v3"].tree, expected_v3(r["v2"].tree, {"wiz/kluris.yml"}, before=pristine(sandbox)))
+    assert r["v3"].git == expected_git(r["v2"].git, r["v2"].tree, before=pristine(sandbox))
 
 
 @pytest.mark.parametrize("json_flag", [False, True], ids=["text", "json"])

@@ -50,8 +50,14 @@ pub struct UninstallReport {
     pub removed: Vec<PathBuf>,
     /// rc files a line was taken out of.
     pub edited: Vec<PathBuf>,
-    /// Files the installer's names point at that are not what it wrote, kept.
+    /// What the uninstall leaves that it would otherwise remove: files the
+    /// installer's names point at that are not what it wrote, and the
+    /// user's links to folders it would have removed ([`Self::kept_links`]).
     pub kept: Vec<PathBuf>,
+    /// The entries of `kept` that are the user's links to folders (`~/.kluris`,
+    /// its bin folder, the receipt's folder): each link stays, and so does
+    /// the folder it points to; what Kluris put in that folder went.
+    pub kept_links: Vec<PathBuf>,
     /// What the pre-flight found in the way: nothing was changed.
     pub blocked: Vec<Blocker>,
     /// What is left to remove by hand after a failure once the binary was
@@ -264,8 +270,26 @@ pub fn uninstall_with(
     remove_dir_if_empty(prefix, ops, &mut report);
     if req.purge {
         match fs::symlink_metadata(&kluris_dir) {
+            // A link of the user's stays, and so does its folder: only what
+            // is in it goes.
+            Ok(meta) if meta.file_type().is_symlink() => {
+                match remove_entries(&kluris_dir, &|_| false, ops, &mut report) {
+                    Ok(()) => report.purged = true,
+                    Err((path, e)) => left(
+                        &mut report,
+                        format!("cannot remove {}: {e}", path.display()),
+                        format!("remove {} and everything in it", path.display()),
+                    ),
+                }
+                keep_link(&mut report, kluris_dir);
+            }
             Ok(_) => match ops.remove_dir_all(&kluris_dir) {
                 Ok(()) => {
+                    // Links in ~/.kluris went with it (never what they
+                    // point to).
+                    let gone = |link: &PathBuf| link.starts_with(&kluris_dir);
+                    report.kept.retain(|path| !gone(path));
+                    report.kept_links.retain(|path| !gone(path));
                     report.removed.push(kluris_dir);
                     report.purged = true;
                 }
@@ -300,6 +324,12 @@ pub fn uninstall_with(
     }
     remove_dir_if_empty(receipt_dir, ops, &mut report);
     Ok(report)
+}
+
+/// The user's link to a folder, kept ([`UninstallReport::kept_links`]).
+fn keep_link(report: &mut UninstallReport, link: PathBuf) {
+    report.kept.push(link.clone());
+    report.kept_links.push(link);
 }
 
 /// A failure once the binary is gone: `message` in `failed`, and the
@@ -410,7 +440,24 @@ impl Plan {
             for (path, e) in errors {
                 plan.blocked.push(Blocker::unchecked(&path, &e));
             }
-            plan.planned.push(Planned::RemoveTree(home.join(".kluris")));
+            let kluris_dir = home.join(".kluris");
+            match fs::symlink_metadata(&kluris_dir) {
+                // A link stays: the purge goes through it and removes each
+                // entry of its folder, so each is checked as it is removed.
+                Ok(meta) if meta.file_type().is_symlink() => match fs::read_dir(&kluris_dir) {
+                    Ok(entries) => {
+                        for entry in entries {
+                            match entry {
+                                Ok(entry) => plan.planned.push(Planned::RemoveTree(entry.path())),
+                                Err(e) => plan.blocked.push(Blocker::unchecked(&kluris_dir, &e)),
+                            }
+                        }
+                    }
+                    Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+                    Err(e) => plan.blocked.push(Blocker::unchecked(&kluris_dir, &e)),
+                },
+                _ => plan.planned.push(Planned::RemoveTree(kluris_dir)),
+            }
         }
         plan.planned.push(Planned::Remove(binary.clone()));
         plan.planned
@@ -421,6 +468,10 @@ impl Plan {
         let mut going = vec![binary, req.receipt_path.to_path_buf()];
         going.extend(plan.scripts.iter().cloned());
         for folder in [prefix, receipt_dir] {
+            // A link of the user's is never removed.
+            if fs::symlink_metadata(folder).is_ok_and(|m| m.file_type().is_symlink()) {
+                continue;
+            }
             match fs::read_dir(folder) {
                 Ok(entries) => {
                     let empties = entries
@@ -473,31 +524,35 @@ fn clear_kluris_dir(
     ops: &dyn FileOps,
     report: &mut UninstallReport,
 ) {
-    let entries = match fs::read_dir(kluris_dir) {
+    let keep = |path: &Path| prefix.starts_with(path) || path == binary;
+    if let Err((path, e)) = remove_entries(kluris_dir, &keep, ops, report) {
+        report
+            .failed
+            .push(format!("cannot remove {}: {e}", path.display()));
+    }
+}
+
+/// Remove every entry of the folder `dir` (through it when it is a link)
+/// but those `keep` holds for: a folder with everything in it, a file or a
+/// link (only the link). Stops at the first failure, with its path.
+fn remove_entries(
+    dir: &Path,
+    keep: &dyn Fn(&Path) -> bool,
+    ops: &dyn FileOps,
+    report: &mut UninstallReport,
+) -> Result<(), (PathBuf, io::Error)> {
+    let entries = match fs::read_dir(dir) {
         Ok(entries) => entries,
-        Err(e) if e.kind() == io::ErrorKind::NotFound => return,
-        Err(e) => {
-            report
-                .failed
-                .push(format!("cannot read {}: {e}", kluris_dir.display()));
-            return;
-        }
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err((dir.to_path_buf(), e)),
     };
     let mut paths = Vec::new();
     for entry in entries {
-        match entry {
-            Ok(entry) => paths.push(entry.path()),
-            Err(e) => {
-                report
-                    .failed
-                    .push(format!("cannot read {}: {e}", kluris_dir.display()));
-                return;
-            }
-        }
+        paths.push(entry.map_err(|e| (dir.to_path_buf(), e))?.path());
     }
     paths.sort();
     for path in paths {
-        if prefix.starts_with(&path) || path == binary {
+        if keep(&path) {
             continue;
         }
         let removed = match fs::symlink_metadata(&path) {
@@ -507,14 +562,10 @@ fn clear_kluris_dir(
         };
         match removed {
             Ok(()) => report.removed.push(path),
-            Err(e) => {
-                report
-                    .failed
-                    .push(format!("cannot remove {}: {e}", path.display()));
-                return;
-            }
+            Err(e) => return Err((path, e)),
         }
     }
+    Ok(())
 }
 
 /// How the installer names the install folder inside its env scripts:
@@ -746,8 +797,21 @@ fn remove_if_there(path: &Path, ops: &dyn FileOps, report: &mut UninstallReport)
 }
 
 /// Remove the folder `path` when it is there and empty; it goes once the
-/// binary is gone, so a failure is [`left`] to the user.
+/// binary is gone, so a failure is [`left`] to the user. A link of the
+/// user's to an emptied folder stays, and so does the folder: it is in
+/// `kept_links`.
 fn remove_dir_if_empty(path: &Path, ops: &dyn FileOps, report: &mut UninstallReport) {
+    let link = match fs::symlink_metadata(path) {
+        Ok(meta) => meta.file_type().is_symlink(),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return,
+        Err(e) => {
+            return left(
+                report,
+                format!("cannot check {}: {e}", path.display()),
+                format!("remove the folder {} if it is empty", path.display()),
+            );
+        }
+    };
     let empty = match fs::read_dir(path) {
         Ok(mut entries) => entries.next().is_none(),
         Err(e) if e.kind() == io::ErrorKind::NotFound => return,
@@ -760,6 +824,10 @@ fn remove_dir_if_empty(path: &Path, ops: &dyn FileOps, report: &mut UninstallRep
         }
     };
     if !empty {
+        return;
+    }
+    if link {
+        keep_link(report, path.to_path_buf());
         return;
     }
     match ops.remove_dir(path) {

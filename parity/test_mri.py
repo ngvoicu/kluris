@@ -471,7 +471,7 @@ def test_mri_help_wording(sandbox):
 
 
 def test_mri_is_in_the_root_help(sandbox):
-    """PAR-025: ``kluris --help`` lists ``mri`` once it is ported."""
+    """``kluris --help`` lists ``mri`` with v2's line (PAR-018: v2's list without ``pack``)."""
     write_config(sandbox, [])
     sandbox.freeze()
     out = run_steps(sandbox, [], [Step(["--help"])])

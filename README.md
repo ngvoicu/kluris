@@ -168,6 +168,7 @@ kluris create            # a short wizard: name, description, location, type, gi
 or non-interactively:
 
 ```sh
+mkdir -p ~/brains
 kluris create acme --description "Acme platform knowledge" --path ~/brains
 ```
 
@@ -540,7 +541,7 @@ date, and `deprecated` (with `replaced_by` for a deprecated neuron):
   "score": 186,
   "deprecated": false,
   "heading": "Token refresh",
-  "line": 16,
+  "line": 14,
   "matched_terms": ["refreshing", "tokens"],
   "coverage": 1.0,
   "related": ["knowledge/use-clerk.md"],

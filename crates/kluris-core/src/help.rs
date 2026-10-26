@@ -1,6 +1,6 @@
 //! `kluris help`: v2's command table (`cli.py:2010-2024`) without `pack`,
 //! with `mri`'s description as fixed in v2.28.11, then the commands new in
-//! v3 (PAR-064, PAR-071, PAR-072). Commands Kluris 3 has not ported yet are listed as v2 lists
+//! v3 (PAR-064, PAR-074, PAR-075). Commands Kluris 3 has not ported yet are listed as v2 lists
 //! them.
 
 /// One row of the table.
