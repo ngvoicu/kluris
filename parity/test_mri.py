@@ -48,6 +48,26 @@ def oracle_python() -> Path:
     return oracle_kluris().parent / ("python.exe" if IS_WINDOWS else "python")
 
 
+def is_wsl(env: dict[str, str]) -> bool:
+    """v2's ``_is_wsl`` (cli.py:1525) as the binaries run it: ``WSL_DISTRO_NAME``
+    set in their environment, or "microsoft" in ``/proc/version``."""
+    if env.get("WSL_DISTRO_NAME"):
+        return True
+    try:
+        with open("/proc/version", encoding="utf-8") as f:
+            return "microsoft" in f.read().lower()
+    except OSError:
+        return False
+
+
+def open_link(stdout: str) -> str:
+    """The link of the ``Open:`` line of ``kluris mri``'s text, up to the
+    ``N nodes, M edges`` line (v2's Rich may wrap it over several lines)."""
+    match = re.search(r"Open: (.*?)\n\s*\d+ nodes, \d+ edges", stdout, re.DOTALL)
+    assert match, f"no Open line in {stdout!r}"
+    return match.group(1).strip()
+
+
 # --- the page -----------------------------------------------------------------
 
 
@@ -316,7 +336,18 @@ def test_output_relative_to_cwd_with_missing_parents(sandbox):
     assert j3["brains"][0]["output_path"] == str(Path(target))
     assert "brains/calm/brain-mri.html" not in out["v3"][0].result.tree
     check_run(sandbox, out, 1, {"calm": "brains/calm"}, json_out=False, page_rel={"calm": page})
-    assert "/work/out%20dir/deep/%C3%A9%20page.html" in out["v3"][1].result.stdout.replace("\n", "")
+    if is_wsl(sandbox.env):
+        # Under WSL v2 links the page through `wslpath -w` as
+        # file://wsl.localhost/<distro>/<path>, unencoded (cli.py:1587-1597),
+        # and v3 does the same (mri/uri.rs). Both ran in the same `work/`, so
+        # the links are equal; v2's Rich wraps long lines, so they are
+        # compared without whitespace, and v3's own line exactly.
+        v2_open, v3_open = open_link(out["v2"][1].result.stdout), open_link(out["v3"][1].result.stdout)
+        assert v3_open.startswith("file://wsl.localhost/"), v3_open
+        assert v3_open.endswith("/work/out dir/deep/é page.html"), v3_open
+        assert re.sub(r"\s+", "", v3_open) == re.sub(r"\s+", "", v2_open), f"v3: {v3_open!r}\nv2: {v2_open!r}"
+    else:
+        assert "/work/out%20dir/deep/%C3%A9%20page.html" in out["v3"][1].result.stdout.replace("\n", "")
 
 
 def test_brain_all(sandbox):

@@ -173,6 +173,11 @@ cargo xtask linux --parity --parity-files parity/test_smoke.py   # only that par
 - **Parity on Linux.** v2.28.11 runs there as the oracle (the hash-pinned
   universal `parity/oracle.lock`) against the release `kluris`
   (`KLURIS_V3_BIN`); `--parity-files` as for Windows.
+- **zeelin is WSL2, not native Linux.** v2's and v3's WSL code paths run
+  there (`mri` prints `file://wsl.localhost/<distro>/...` links, built with
+  `wslpath -w`; `parity/test_mri.py` expects that form on a WSL host), so
+  behaviour only native Linux shows is first covered by GitHub's Ubuntu
+  runners at release.
 
 ## Parity rule
 
