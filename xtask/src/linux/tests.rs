@@ -31,6 +31,7 @@ fn spec<'a>(parity: bool, parity_files: &'a [String], cargo_args: &'a [String]) 
         wrapper: false,
         clippy: false,
         published: None,
+        unpinned: false,
     }
 }
 
@@ -49,6 +50,15 @@ fn published_spec(version: &'static str) -> Spec<'static> {
         installer_smoke: true,
         published: Some(version),
         ..spec(false, &[], &[])
+    }
+}
+
+/// The same without `KLURIS_VERSION`: the wrapper installs GitHub's latest,
+/// which must be `version`.
+fn unpinned_spec(version: &'static str) -> Spec<'static> {
+    Spec {
+        unpinned: true,
+        ..published_spec(version)
     }
 }
 
@@ -76,6 +86,7 @@ mod words_of_the_command {
                 wrapper: None,
                 clippy: false,
                 published: None,
+                unpinned: false,
             }
         );
     }
@@ -91,6 +102,28 @@ mod words_of_the_command {
             ("--installer-smoke --parity", "not with --parity"),
             ("--installer-smoke -- -p kluris-core", "runs no cargo test"),
             ("--installer-smoke --wrapper", "--wrapper takes"),
+        ] {
+            let refused = options::parse(&words(line)).expect_err(line);
+            assert!(refused.contains(says), "{line:?}: {refused}");
+        }
+    }
+
+    #[test]
+    fn unpinned_installs_githubs_latest_and_expects_the_named_release() {
+        let options = run_of("--installer-smoke --published 3.0.0 --unpinned");
+        assert!(options.unpinned, "{options:?}");
+        assert_eq!(options.published.as_deref(), Some("3.0.0"));
+        assert!(!run_of("--installer-smoke --published 3.0.0").unpinned);
+        for (line, says) in [
+            (
+                "--installer-smoke --unpinned",
+                "--unpinned goes with --published",
+            ),
+            ("--unpinned", "--unpinned goes with --published"),
+            (
+                "--installer-smoke --published 3.0.0 --unpinned=yes",
+                "--unpinned takes no value",
+            ),
         ] {
             let refused = options::parse(&words(line)).expect_err(line);
             assert!(refused.contains(says), "{line:?}: {refused}");
@@ -429,6 +462,24 @@ mod scripts {
         assert!(
             with.contains("'scripts/release/installer-smoke.sh' '--wrapper' '.kluris-site/install.sh' 'target/distrib'"),
             "{with}"
+        );
+    }
+
+    #[test]
+    fn an_unpinned_published_smoke_tells_the_script_to_leave_the_version_out() {
+        let pinned = script::run_script(&published_spec("3.0.0"));
+        assert!(pinned.contains("step published-smoke 20 env KLURIS_SMOKE_PYTHON=\"$python\" sh 'scripts/release/published-smoke.sh' '3.0.0'"), "{pinned}");
+        assert!(!pinned.contains("npinned"), "{pinned}");
+        let spec = unpinned_spec("3.0.0");
+        let text = script::run_script(&spec);
+        assert!(text.contains("step published-smoke 20 env KLURIS_SMOKE_PYTHON=\"$python\" sh 'scripts/release/published-smoke.sh' '--unpinned' '3.0.0'"), "{text}");
+        assert_eq!(
+            script::steps(&spec),
+            script::steps(&published_spec("3.0.0"))
+        );
+        assert_eq!(
+            script::bound(&spec),
+            script::bound(&published_spec("3.0.0"))
         );
     }
 
@@ -1062,6 +1113,7 @@ mod runs {
             wrapper: None,
             clippy: false,
             published: None,
+            unpinned: false,
         }
     }
 
@@ -1307,6 +1359,7 @@ mod runs {
             wrapper: None,
             clippy: false,
             published: None,
+            unpinned: false,
         };
         let ran = ran_in(dir.path(), options, vec![]);
         assert_eq!(ran.code, 1);
@@ -1321,6 +1374,7 @@ mod runs {
             wrapper: None,
             clippy: false,
             published: None,
+            unpinned: false,
         };
         let ran = ran_in(
             dir.path(),

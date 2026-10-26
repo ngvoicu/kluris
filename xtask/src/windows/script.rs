@@ -85,6 +85,9 @@ pub struct Spec<'a> {
     /// With the installer smoke: the published release it installs through
     /// the live site wrapper; nothing of this tree is built.
     pub published: Option<&'a str>,
+    /// With `published`: the wrapper installs GitHub's latest release, which
+    /// the smoke expects to be `published`.
+    pub unpinned: bool,
 }
 
 #[cfg(test)]
@@ -221,6 +224,7 @@ pub fn run_script(spec: &Spec) -> String {
             &[
                 ("smoke_minutes", &PUBLISHED_SMOKE.minutes.to_string()),
                 ("version", version),
+                ("unpinned", if spec.unpinned { " -Unpinned" } else { "" }),
             ],
         );
         (String::new(), smoke)
@@ -515,7 +519,7 @@ const SMOKE_TEMPLATE: &str = r##"if (Test-Path -LiteralPath $uv -PathType Leaf) 
 /// is checked by the words before it gets here (digits, letters, `.`, `-`).
 const PUBLISHED_TEMPLATE: &str = r##"$powershell = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
 $record = Join-Path $run 'user-path.saved'
-Invoke-Step 'published-smoke' «smoke_minutes» $powershell "-NoProfile -ExecutionPolicy Bypass -File scripts\release\published-smoke.ps1 -Version «version» -Record `"$record`""
+Invoke-Step 'published-smoke' «smoke_minutes» $powershell "-NoProfile -ExecutionPolicy Bypass -File scripts\release\published-smoke.ps1 -Version «version»«unpinned» -Record `"$record`""
 if (Test-Path -LiteralPath $record) {
   Write-Output '== the published smoke left the user PATH it saved: writing it back'
   Invoke-Step 'user-path' 2 $powershell "-NoProfile -ExecutionPolicy Bypass -File scripts\release\user-path.ps1 -Restore `"$record`""

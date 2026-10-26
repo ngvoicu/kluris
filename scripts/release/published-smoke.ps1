@@ -2,12 +2,15 @@
 # Windows, into a sandbox profile, check it and uninstall it:
 #
 #   powershell -NoProfile -ExecutionPolicy Bypass -File scripts\release\published-smoke.ps1 `
-#       -Version 3.0.0-rc.1 [-Site <install.ps1 URL>] [-Record <file>]
+#       -Version 3.0.0-rc.1 [-Unpinned] [-Site <install.ps1 URL>] [-Record <file>]
 #
 # The site URL defaults to https://kluris.ngvoicu.dev/install.ps1. The
 # wrapper runs the documented way, `powershell -ExecutionPolicy ByPass -c
 # "irm <url> | iex"`, with KLURIS_VERSION=<version>, so it fetches
 # github.com/ngvoicu/kluris/releases/download/v<version>/kluris-installer.ps1.
+# With -Unpinned it runs without KLURIS_VERSION, as a user's first install
+# does, so it installs GitHub's latest release; every check still expects
+# <version>.
 #
 # The installer runs as the current user with HOME, USERPROFILE and
 # LOCALAPPDATA pointed at a sandbox (and PowerShell's own $HOME set to it),
@@ -31,6 +34,7 @@
 # Exits 0 when every check passes and the PATH comparison holds, 1 otherwise.
 param(
     [Parameter(Mandatory = $true)][string]$Version,
+    [switch]$Unpinned,
     [string]$Site = 'https://kluris.ngvoicu.dev/install.ps1',
     [string]$Record = ''
 )
@@ -123,8 +127,13 @@ try {
     $realReceipt = Join-Path $env:LOCALAPPDATA 'kluris\kluris-receipt.json'
     $realBefore = "$(Hash-Of $realBin) $(Hash-Of $realReceipt)"
 
-    Step "installing kluris $Version through $Site"
-    $install = Invoke-Installer "irm '$Site' | iex" @{ KLURIS_VERSION = $Version }
+    if ($Unpinned) {
+        Step "installing GitHub's latest kluris (expecting $Version) through $Site, no KLURIS_VERSION"
+        $install = Invoke-Installer "irm '$Site' | iex" @{ KLURIS_VERSION = $null }
+    } else {
+        Step "installing kluris $Version through $Site"
+        $install = Invoke-Installer "irm '$Site' | iex" @{ KLURIS_VERSION = $Version }
+    }
     Write-Output $install.Out
     # Windows PowerShell writes its progress and information records to a
     # redirected stderr as CLIXML: shown only when the install failed.
@@ -207,5 +216,6 @@ if (-not $restored) {
     Write-Output 'published-smoke: FAIL: the user PATH was not written back identically'
     exit 1
 }
-Step "ok (Windows $env:PROCESSOR_ARCHITECTURE, kluris $Version from GitHub through $Site)"
+$how = if ($Unpinned) { ', GitHub''s latest, unpinned' } else { '' }
+Step "ok (Windows $env:PROCESSOR_ARCHITECTURE, kluris $Version$how from GitHub through $Site)"
 exit 0

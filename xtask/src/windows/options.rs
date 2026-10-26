@@ -1,7 +1,7 @@
 //! The words of `cargo xtask windows` ([`crate::ssh_ci::words`]): `--machine
 //! zeewin|zeewin2`, `--parity`, `--parity-files`, `--installer-smoke`,
-//! `--wrapper`, `--published`, `--help`, and after `--` the extra arguments
-//! of `cargo test`.
+//! `--wrapper`, `--published`, `--unpinned`, `--help`, and after `--` the
+//! extra arguments of `cargo test`.
 
 use crate::ssh_ci::words;
 pub use crate::ssh_ci::words::checked_parity_files;
@@ -9,7 +9,7 @@ pub use crate::ssh_ci::words::checked_parity_files;
 pub const USAGE: &str =
     "usage: cargo xtask windows [--machine zeewin|zeewin2] [--parity [--parity-files parity/test.py[,...]]] [-- <cargo test args>]
        cargo xtask windows [--machine zeewin|zeewin2] --installer-smoke [--wrapper <site install.ps1>]
-       cargo xtask windows [--machine zeewin|zeewin2] --installer-smoke --published <version>
+       cargo xtask windows [--machine zeewin|zeewin2] --installer-smoke --published <version> [--unpinned]
        cargo xtask windows [--machine zeewin|zeewin2] --clippy
 
 Runs `cargo test --workspace` (and with --parity the parity harness against a
@@ -34,7 +34,9 @@ scripts\\release\\published-smoke.ps1, which installs that published GitHub
 release through the live https://kluris.ngvoicu.dev/install.ps1
 (KLURIS_VERSION=<version>) into a sandbox profile, checks --version, doctor
 --json and self-update --check --json, then self-uninstall --yes; the user
-PATH is saved, written back and compared the same way.";
+PATH is saved, written back and compared the same way. With --unpinned the
+wrapper runs without KLURIS_VERSION, so it installs GitHub's latest release,
+which must be <version>.";
 
 /// The machines `--machine` names.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -61,6 +63,9 @@ pub struct Options {
     /// With the installer smoke: the published release to install from
     /// GitHub through the live site wrapper, instead of this tree's build.
     pub published: Option<String>,
+    /// With `--published`: no `KLURIS_VERSION`, so the wrapper installs
+    /// GitHub's latest release, which must be the one `--published` names.
+    pub unpinned: bool,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -87,6 +92,7 @@ pub fn parse(args: &[String]) -> Result<Parsed, String> {
         wrapper: words.wrapper,
         clippy: words.clippy,
         published: words.published,
+        unpinned: words.unpinned,
     }))
 }
 
