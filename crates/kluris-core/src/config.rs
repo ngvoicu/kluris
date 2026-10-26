@@ -192,11 +192,12 @@ pub fn global_config_path(
 /// (YAML 1.1 types): any falsy document (empty, `null`, `false`, `0`, `""`,
 /// `[]`) is an empty mapping; more than one document is an error.
 fn load_mapping(text: &str) -> Result<Map, String> {
-    match yaml::load(text).map_err(|e| e.to_string())? {
-        doc if doc.is_falsy() => Ok(Map::new()),
-        Value::Map(map) => Ok(map),
-        _ => Err("the top level is not a mapping".into()),
+    let doc = yaml::load(text).map_err(|e| e.to_string())?;
+    if doc.is_falsy() {
+        return Ok(Map::new());
     }
+    doc.into_map()
+        .map_err(|_| "the top level is not a mapping".into())
 }
 
 /// A pydantic `str` field: only a YAML string validates.

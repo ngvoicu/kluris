@@ -6,7 +6,7 @@ use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
-use crate::yaml::{self, Map, Profile, Value, YamlError, is_py_space};
+use crate::yaml::{self, Map, Profile, YamlError, is_py_space};
 
 /// The line ending a file uses, for the writer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -112,10 +112,9 @@ fn universal_newlines(text: &str) -> String {
 /// Load frontmatter YAML: a mapping is the metadata; an empty document or
 /// any other value is no metadata, as in v2.
 fn load_meta(yaml: &str) -> Result<Map, YamlError> {
-    match yaml::load(&universal_newlines(yaml))? {
-        Value::Map(map) => Ok(map),
-        _ => Ok(Map::new()),
-    }
+    Ok(yaml::load(&universal_newlines(yaml))?
+        .into_map()
+        .unwrap_or_default())
 }
 
 /// Split markdown text into its frontmatter YAML and its body, the way

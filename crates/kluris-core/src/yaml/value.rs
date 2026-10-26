@@ -123,7 +123,12 @@ impl DateTime {
 }
 
 /// One YAML value (YAML 1.1 types, as PyYAML resolves them).
-#[derive(Debug, Clone)]
+///
+/// `Clone`, `PartialEq` and `Drop` walk the value with an explicit stack, so a
+/// value nested as deep as the reader accepts needs no deep call stack. (With
+/// `Drop`, a payload is taken out with [`Value::into_map`] or
+/// `std::mem::take`, not moved out of a pattern.)
+#[derive(Debug)]
 pub enum Value {
     Null,
     Bool(bool),
@@ -142,23 +147,122 @@ pub enum Value {
 /// equals every NaN: `0.0` and `-0.0` differ (Python writes them differently).
 /// Maps compare in order (unlike Python dicts): key order is part of what the
 /// writer reproduces.
+impl Drop for Value {
+    fn drop(&mut self) {
+        let nested = |value: &Value| matches!(value, Value::Seq(_) | Value::Map(_));
+        let mut stack: Vec<Value> = match self {
+            Value::Seq(items) if items.iter().any(nested) => std::mem::take(items),
+            Value::Map(map) if map.values().any(nested) => {
+                std::mem::take(map).into_values().collect()
+            }
+            _ => return,
+        };
+        while let Some(mut value) = stack.pop() {
+            match &mut value {
+                Value::Seq(items) => stack.append(items),
+                Value::Map(map) => stack.extend(std::mem::take(map).into_values()),
+                _ => {}
+            }
+            // `value` drops here with no children left.
+        }
+    }
+}
+
 impl PartialEq for Value {
     fn eq(&self, other: &Value) -> bool {
-        match (self, other) {
-            (Value::Null, Value::Null) => true,
-            (Value::Bool(a), Value::Bool(b)) => a == b,
-            (Value::Int(a), Value::Int(b)) => a == b,
-            (Value::Float(a), Value::Float(b)) => {
-                (a.is_nan() && b.is_nan()) || a.to_bits() == b.to_bits()
+        let mut pending = vec![(self, other)];
+        while let Some((a, b)) = pending.pop() {
+            let same = match (a, b) {
+                (Value::Null, Value::Null) => true,
+                (Value::Bool(a), Value::Bool(b)) => a == b,
+                (Value::Int(a), Value::Int(b)) => a == b,
+                (Value::Float(a), Value::Float(b)) => {
+                    (a.is_nan() && b.is_nan()) || a.to_bits() == b.to_bits()
+                }
+                (Value::Str(a), Value::Str(b)) => a == b,
+                (Value::Date(a), Value::Date(b)) => a == b,
+                (Value::DateTime(a), Value::DateTime(b)) => a == b,
+                (Value::Seq(a), Value::Seq(b)) => {
+                    pending.extend(a.iter().zip(b));
+                    a.len() == b.len()
+                }
+                (Value::Map(a), Value::Map(b)) => {
+                    pending.extend(a.values().zip(b.values()));
+                    a.len() == b.len() && a.keys().eq(b.keys())
+                }
+                _ => false,
+            };
+            if !same {
+                return false;
             }
-            (Value::Str(a), Value::Str(b)) => a == b,
-            (Value::Date(a), Value::Date(b)) => a == b,
-            (Value::DateTime(a), Value::DateTime(b)) => a == b,
-            (Value::Seq(a), Value::Seq(b)) => a == b,
-            (Value::Map(a), Value::Map(b)) => {
-                a.len() == b.len() && a.iter().zip(b).all(|(x, y)| x == y)
+        }
+        true
+    }
+}
+
+impl Clone for Value {
+    fn clone(&self) -> Value {
+        /// A collection being copied: what is left of the source, the copy
+        /// so far, and (in a mapping) the key of the item being copied.
+        enum Frame<'a> {
+            Seq(std::slice::Iter<'a, Value>, Vec<Value>),
+            Map(indexmap::map::Iter<'a, String, Value>, Map, Option<String>),
+        }
+        fn open(value: &Value) -> Result<Value, Frame<'_>> {
+            match value {
+                Value::Seq(items) => Err(Frame::Seq(items.iter(), Vec::with_capacity(items.len()))),
+                Value::Map(map) => Err(Frame::Map(map.iter(), Map::with_capacity(map.len()), None)),
+                Value::Null => Ok(Value::Null),
+                Value::Bool(b) => Ok(Value::Bool(*b)),
+                Value::Int(i) => Ok(Value::Int(i.clone())),
+                Value::Float(f) => Ok(Value::Float(*f)),
+                Value::Str(s) => Ok(Value::Str(s.clone())),
+                Value::Date(d) => Ok(Value::Date(*d)),
+                Value::DateTime(t) => Ok(Value::DateTime(*t)),
             }
-            _ => false,
+        }
+        let mut stack = match open(self) {
+            Ok(leaf) => return leaf,
+            Err(frame) => vec![frame],
+        };
+        loop {
+            let next = match stack.last_mut() {
+                Some(Frame::Seq(items, _)) => items.next(),
+                Some(Frame::Map(entries, _, key)) => entries.next().map(|(k, v)| {
+                    *key = Some(k.clone());
+                    v
+                }),
+                None => unreachable!("the loop returns when the stack empties"),
+            };
+            let copy = match next {
+                Some(value) => match open(value) {
+                    Ok(leaf) => leaf,
+                    Err(frame) => {
+                        stack.push(frame);
+                        continue;
+                    }
+                },
+                None => {
+                    let done = match stack.pop() {
+                        Some(Frame::Seq(_, items)) => Value::Seq(items),
+                        Some(Frame::Map(_, map, _)) => Value::Map(map),
+                        None => unreachable!("checked above"),
+                    };
+                    if stack.is_empty() {
+                        return done;
+                    }
+                    done
+                }
+            };
+            match stack.last_mut() {
+                Some(Frame::Seq(_, items)) => items.push(copy),
+                Some(Frame::Map(_, map, key)) => {
+                    if let Some(key) = key.take() {
+                        map.insert(key, copy);
+                    }
+                }
+                None => unreachable!("checked above"),
+            }
         }
     }
 }
@@ -183,6 +287,14 @@ impl Value {
         match self {
             Value::Str(s) => Some(s),
             _ => None,
+        }
+    }
+
+    /// The mapping, taken out of the value; any other value back as it is.
+    pub fn into_map(mut self) -> Result<Map, Value> {
+        match &mut self {
+            Value::Map(map) => Ok(std::mem::take(map)),
+            _ => Err(self),
         }
     }
 

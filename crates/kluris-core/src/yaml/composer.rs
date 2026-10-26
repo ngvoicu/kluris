@@ -58,6 +58,31 @@ pub struct Node {
     pub body: Body,
 }
 
+/// Dropped with an explicit stack: a graph nested as deep as the composer
+/// allows needs no deep call stack.
+impl Drop for Node {
+    fn drop(&mut self) {
+        let children = |body: &mut Body| -> Vec<Rc<Node>> {
+            match body {
+                Body::Seq(items) => std::mem::take(items),
+                Body::Map(pairs) => std::mem::take(pairs)
+                    .into_iter()
+                    .flat_map(|(key, value)| [key, value])
+                    .collect(),
+                Body::Scalar { .. } | Body::Recursive(_) => Vec::new(),
+            }
+        };
+        let mut stack = children(&mut self.body);
+        while let Some(child) = stack.pop() {
+            // A node another alias still holds is dropped with its last
+            // holder.
+            if let Ok(mut node) = Rc::try_unwrap(child) {
+                stack.extend(children(&mut node.body));
+            }
+        }
+    }
+}
+
 const CORE: &str = "tag:yaml.org,2002:";
 
 /// An explicit tag (handles already expanded) as a [`NodeTag`].

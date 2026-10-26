@@ -183,7 +183,7 @@ impl Constructor {
                 self.fill(&node, slot, fill)?;
             }
         }
-        self.assemble(&item, root.mark, 0)
+        self.assemble(&item, root.mark)
     }
 
     fn tag<'a>(&self, node: &'a Node) -> &'a NodeTag {
@@ -240,7 +240,7 @@ impl Constructor {
                 return fail("a timestamp cannot be built from a mapping".into());
             }
             (NodeTag::Scalar(tag), _) => {
-                let (text, surrogate) = self.scalar(node, 0)?;
+                let (text, surrogate) = self.scalar(node)?;
                 match tag {
                     // Python builds the string; a Rust one cannot hold it.
                     ScalarTag::Str if surrogate => outside(node, "a lone surrogate", true),
@@ -253,7 +253,7 @@ impl Constructor {
                 }
             }
             (NodeTag::Binary, _) => {
-                let (text, _) = self.scalar(node, 0)?;
+                let (text, _) = self.scalar(node)?;
                 check_base64(&text).map_err(|e| YamlError::at(node.mark, e))?;
                 outside(node, "binary data", true)
             }
@@ -273,26 +273,37 @@ impl Constructor {
     /// `SafeConstructor.construct_scalar`: a scalar's text (and whether it
     /// holds a lone surrogate), or for a mapping the text of the value of its
     /// first `=` key.
-    fn scalar(&self, node: &Node, depth: usize) -> Result<(String, bool), YamlError> {
-        match &node.body {
-            Body::Scalar { text, surrogate } => Ok((text.clone(), *surrogate)),
-            Body::Map(pairs) if depth < MAX_DEPTH => {
-                match pairs
-                    .iter()
-                    .find(|(key, _)| *self.tag(key) == NodeTag::Value)
-                {
-                    Some((_, value)) => self.scalar(value, depth + 1),
-                    None => Err(YamlError::at(
+    fn scalar(&self, node: &Node) -> Result<(String, bool), YamlError> {
+        let mut node = node;
+        for _ in 0..=MAX_DEPTH {
+            match &node.body {
+                Body::Scalar { text, surrogate } => return Ok((text.clone(), *surrogate)),
+                Body::Map(pairs) => {
+                    match pairs
+                        .iter()
+                        .find(|(key, _)| *self.tag(key) == NodeTag::Value)
+                    {
+                        Some((_, value)) => node = value,
+                        None => {
+                            return Err(YamlError::at(
+                                node.mark,
+                                "expected a scalar node, but found mapping",
+                            ));
+                        }
+                    }
+                }
+                _ => {
+                    return Err(YamlError::at(
                         node.mark,
-                        "expected a scalar node, but found mapping",
-                    )),
+                        format!("expected a scalar node, but found {}", kind(node)),
+                    ));
                 }
             }
-            _ => Err(YamlError::at(
-                node.mark,
-                format!("expected a scalar node, but found {}", kind(node)),
-            )),
         }
+        Err(YamlError::at(
+            node.mark,
+            format!("`=` values nested more than {MAX_DEPTH} deep"),
+        ))
     }
 
     /// A mapping key as `construct_mapping` takes it: `Ok(Ok(name))` for a
@@ -300,11 +311,13 @@ impl Constructor {
     /// error only if the mapping is used), `Err` for an unhashable key.
     fn key(&mut self, key: &Rc<Node>) -> Result<Result<String, YamlError>, YamlError> {
         match self.object(key)? {
-            Item::Value(Value::Str(name)) => Ok(Ok(name)),
-            Item::Value(other) => Ok(Err(YamlError::at(
-                key.mark,
-                format!("mapping keys must be strings, found {}", other.type_name()),
-            ))),
+            Item::Value(mut value) => Ok(match &mut value {
+                Value::Str(name) => Ok(std::mem::take(name)),
+                other => Err(YamlError::at(
+                    key.mark,
+                    format!("mapping keys must be strings, found {}", other.type_name()),
+                )),
+            }),
             Item::Outside {
                 error,
                 hashable: true,
@@ -392,9 +405,8 @@ impl Constructor {
         Ok(())
     }
 
-    /// The owned value of an item, expanding shared collections into copies
-    /// within the node budget.
-    fn assemble(&mut self, item: &Item, mark: Mark, depth: usize) -> Result<Value, YamlError> {
+    /// One more node of the value, within the node budget and the depth.
+    fn count(&mut self, mark: Mark, depth: usize) -> Result<(), YamlError> {
         self.nodes += 1;
         if self.nodes > MAX_NODES {
             return Err(YamlError::at(
@@ -408,41 +420,109 @@ impl Constructor {
                 format!("the value is nested more than {MAX_VALUE_DEPTH} deep"),
             ));
         }
+        Ok(())
+    }
+
+    /// An item as a finished value, or the slot to expand. A slot is taken
+    /// out while it is expanded, so the items it holds are assembled without
+    /// cloning them, and an alias back into it is a cycle.
+    fn open(&mut self, item: &Item, mark: Mark) -> Result<Result<Value, (usize, Slot)>, YamlError> {
         let slot = match item {
-            Item::Value(value) => return Ok(value.clone()),
+            Item::Value(value) => return Ok(Ok(value.clone())),
             Item::Outside { error, .. } => return Err(error.clone()),
             Item::Slot(slot) => *slot,
         };
-        // Take the slot out while it is expanded, so the items it holds can
-        // be assembled without cloning them.
-        let filled = std::mem::replace(&mut self.slots[slot], Slot::Pending);
-        let value = match &filled {
+        match std::mem::replace(&mut self.slots[slot], Slot::Pending) {
             Slot::Pending => Err(YamlError::at(mark, "recursive aliases are not supported")),
-            Slot::Outside(error) => Err(error.clone()),
-            Slot::Seq(items) => items
-                .iter()
-                .map(|item| self.assemble(item, mark, depth + 1))
-                .collect::<Result<_, _>>()
-                .map(Value::Seq),
-            Slot::Map(entries) => {
-                let mut map = Map::new();
-                let mut result = Ok(());
-                for (key, item) in entries {
-                    match self.assemble(item, mark, depth + 1) {
-                        Ok(value) => {
-                            map.insert(key.clone(), value);
-                        }
-                        Err(e) => {
-                            result = Err(e);
-                            break;
+            Slot::Outside(error) => {
+                self.slots[slot] = Slot::Outside(error.clone());
+                Err(error)
+            }
+            filled => Ok(Err((slot, filled))),
+        }
+    }
+
+    /// The owned value of an item, expanding shared collections into copies
+    /// within the node budget. Iterative: a document nested as deep as the
+    /// composer allows needs no deep stack.
+    fn assemble(&mut self, item: &Item, mark: Mark) -> Result<Value, YamlError> {
+        /// A collection being assembled: its slot (taken out), the next item
+        /// and the value so far.
+        struct Frame {
+            slot: usize,
+            filled: Slot,
+            next: usize,
+            value: Value,
+        }
+        let start = |slot: usize, filled: Slot| {
+            let value = match filled {
+                Slot::Map(_) => Value::Map(Map::new()),
+                _ => Value::Seq(Vec::new()),
+            };
+            Frame {
+                slot,
+                filled,
+                next: 0,
+                value,
+            }
+        };
+        self.count(mark, 0)?;
+        let mut stack = match self.open(item, mark)? {
+            Ok(value) => return Ok(value),
+            Err((slot, filled)) => vec![start(slot, filled)],
+        };
+        loop {
+            let depth = stack.len();
+            let Some(frame) = stack.last_mut() else {
+                unreachable!("the loop returns when the stack empties")
+            };
+            let next = match &frame.filled {
+                Slot::Seq(items) => items.get(frame.next).cloned().map(|item| (None, item)),
+                Slot::Map(entries) => entries
+                    .get_index(frame.next)
+                    .map(|(key, item)| (Some(key.clone()), item.clone())),
+                Slot::Pending | Slot::Outside(_) => None,
+            };
+            frame.next += 1;
+            let (key, value) = match next {
+                Some((key, item)) => {
+                    self.count(mark, depth)?;
+                    match self.open(&item, mark)? {
+                        Ok(value) => (key, value),
+                        Err((slot, filled)) => {
+                            stack.push(start(slot, filled));
+                            continue;
                         }
                     }
                 }
-                result.map(|()| Value::Map(map))
+                None => {
+                    let Some(done) = stack.pop() else {
+                        unreachable!("checked above")
+                    };
+                    self.slots[done.slot] = done.filled;
+                    let Some(parent) = stack.last() else {
+                        return Ok(done.value);
+                    };
+                    let key = match &parent.filled {
+                        Slot::Map(entries) => {
+                            entries.get_index(parent.next - 1).map(|(k, _)| k.clone())
+                        }
+                        _ => None,
+                    };
+                    (key, done.value)
+                }
+            };
+            let Some(parent) = stack.last_mut() else {
+                unreachable!("a child has a parent")
+            };
+            match (&mut parent.value, key) {
+                (Value::Map(map), Some(key)) => {
+                    map.insert(key, value);
+                }
+                (Value::Seq(items), _) => items.push(value),
+                _ => unreachable!("a map entry has a key"),
             }
-        };
-        self.slots[slot] = filled;
-        value
+        }
     }
 }
 

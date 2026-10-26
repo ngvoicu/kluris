@@ -18,7 +18,7 @@ pub fn emit(args: &[String]) -> Result<(), String> {
         _ => return Err("yaml-emit needs --profile md|yml|config".into()),
     };
     each_line(|request| {
-        let Value::Map(map) = decode(&request)? else {
+        let Ok(map) = decode(&request)?.into_map() else {
             return Err("yaml-emit writes mappings only".into());
         };
         Ok(Json::String(yaml::emit(&map, profile)))

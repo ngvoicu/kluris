@@ -2749,8 +2749,8 @@ fn check_rows(rows: Vec<(&'static str, Expected)>) {
     check(
         rows,
         |case| format!("v: {case}"),
-        |doc| match doc {
-            Value::Map(m) if m.len() == 1 => m.get("v").cloned(),
+        |doc| match doc.as_map() {
+            Some(m) if m.len() == 1 => m.get("v").cloned(),
             _ => None,
         },
     );
