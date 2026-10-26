@@ -882,21 +882,22 @@ fn a_prerelease_installs_when_named() {
 #[test]
 fn a_v2_release_published_after_v3_never_wins() {
     let f = Fixture::new();
-    let v3 = marked_binary(&f, "3.0.0", "v3");
+    // A v3 release newer than this build (3.0.0 itself would be no update).
+    let v3 = marked_binary(&f, "3.0.1", "v3");
     // Newest first, as GitHub lists them: v2.29.0 (no binaries) came later.
     let v2 = Release {
         tag: "v2.29.0".into(),
         assets: Vec::new(),
     };
-    f.serve(&[v2, f.release("v3.0.0", &v3)]);
+    f.serve(&[v2, f.release("v3.0.1", &v3)]);
     let out = f.run(&["self-update", "--check", "--json"]);
     assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
     assert!(
-        stdout(&out).contains("\"latest\": \"3.0.0\""),
+        stdout(&out).contains("\"latest\": \"3.0.1\""),
         "{}",
         stdout(&out)
     );
-    assert_installed(&f, &["self-update"], &v3, "3.0.0");
+    assert_installed(&f, &["self-update"], &v3, "3.0.1");
 }
 
 /// A v2 release as GitHub lists them: Python wheels, no Kluris 3 archive.
