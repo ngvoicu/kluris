@@ -25,10 +25,32 @@ mod uninstall;
 use std::path::{Path, PathBuf};
 
 pub use receipt::{Receipt, ReceiptError};
+
+use crate::service::Installed;
 pub use uninstall::{
     Blocker, Planned, UninstallError, UninstallReport, UninstallRequest, UserPath, preflight,
     remove_path_entry, uninstall, uninstall_with,
 };
+
+/// The sync services `kluris sync --install-service` made
+/// ([`crate::service::Services`]), which `self-uninstall` stops and removes
+/// before anything else.
+pub trait SyncServices {
+    /// Where their definitions are (the blocker's path when they cannot be
+    /// listed).
+    fn location(&self) -> PathBuf;
+    /// Every installed one; only reads. An error when one is there that
+    /// cannot be stopped (no service manager to ask).
+    fn installed(&self) -> Result<Vec<Installed>, String>;
+    /// Stop it and remove its definition.
+    fn remove(&self, service: &Installed) -> Result<(), String>;
+}
+
+impl std::fmt::Debug for dyn SyncServices + '_ {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "SyncServices({})", self.location().display())
+    }
+}
 
 /// dist's app name: the receipt, env-script and archive names follow it.
 pub const APP_NAME: &str = "kluris";

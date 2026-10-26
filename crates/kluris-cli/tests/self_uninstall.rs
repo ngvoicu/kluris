@@ -23,8 +23,10 @@ use std::process::{Command, Output, Stdio};
 
 use kluris_core::agents::render::MARKER;
 use kluris_core::dist::{
-    DistEnv, Receipt, UninstallError, UninstallRequest, UserPath, remove_path_entry, uninstall,
+    DistEnv, Receipt, SyncServices, UninstallError, UninstallRequest, UserPath, remove_path_entry,
+    uninstall,
 };
+use kluris_core::service::{Installed, ServiceState};
 use tempfile::TempDir;
 
 const ENV_SH: &str = r#"#!/bin/sh
@@ -298,6 +300,7 @@ fn request<'a>(h: &'a Home, receipt: &'a Receipt, purge: bool) -> UninstallReque
         purge,
         copilot_home: None,
         brains: &[],
+        services: None,
     }
 }
 
@@ -918,9 +921,11 @@ fn cli_uninstall_json() {
             "purged",
             "failed",
             "blocked",
-            "left"
+            "left",
+            "services"
         ]
     );
+    assert_eq!(v["services"], serde_json::json!([]));
     h.assert_installer_files_gone();
     h.assert_rc_files_restored();
     h.assert_user_things_kept();
@@ -1799,4 +1804,254 @@ fn a_purge_removes_dot_kluris_with_a_linked_bin_folder_in_it_but_not_the_target(
         fs::read_to_string(target.join("mine.txt")).unwrap(),
         "the user's\n"
     );
+}
+
+// The sync services (`kluris sync --install-service`, TEST-K3-51): stopped
+// and removed before anything else changes, and in the pre-flight's plan.
+
+/// Services as a list, recording what is removed; `listing` fails the
+/// listing, `failing` the removal of that service.
+struct FakeServices {
+    location: PathBuf,
+    list: Vec<Installed>,
+    listing: Option<String>,
+    failing: Option<String>,
+    removed: std::cell::RefCell<Vec<String>>,
+}
+
+impl FakeServices {
+    /// Two services whose definitions are files in `<home>/agents`.
+    fn two(h: &Home) -> FakeServices {
+        let location = h.home.join("agents");
+        fs::create_dir_all(&location).unwrap();
+        let list = ["acme", "beta"]
+            .iter()
+            .map(|brain| {
+                let definition = location.join(format!("sync-{brain}.plist"));
+                fs::write(&definition, "<plist/>").unwrap();
+                Installed {
+                    brain: brain.to_string(),
+                    name: format!("dev.ngvoicu.kluris.sync.{brain}"),
+                    definition: Some(definition),
+                    state: ServiceState::Running,
+                }
+            })
+            .collect();
+        FakeServices {
+            location,
+            list,
+            listing: None,
+            failing: None,
+            removed: Default::default(),
+        }
+    }
+}
+
+impl SyncServices for FakeServices {
+    fn location(&self) -> PathBuf {
+        self.location.clone()
+    }
+
+    fn installed(&self) -> Result<Vec<Installed>, String> {
+        match &self.listing {
+            Some(why) => Err(why.clone()),
+            // What was removed is no longer installed.
+            None => Ok(self
+                .list
+                .iter()
+                .filter(|s| !self.removed.borrow().contains(&s.name))
+                .cloned()
+                .collect()),
+        }
+    }
+
+    fn remove(&self, service: &Installed) -> Result<(), String> {
+        if self.failing.as_deref() == Some(service.name.as_str()) {
+            return Err("launchctl bootout: Operation not permitted".into());
+        }
+        if let Some(definition) = &service.definition {
+            fs::remove_file(definition).map_err(|e| e.to_string())?;
+        }
+        self.removed.borrow_mut().push(service.name.clone());
+        Ok(())
+    }
+}
+
+#[test]
+fn sync_services_are_stopped_and_removed() {
+    let h = Home::installed();
+    let services = FakeServices::two(&h);
+    let receipt = h.receipt();
+    let req = UninstallRequest {
+        services: Some(&services),
+        ..request(&h, &receipt, false)
+    };
+    let report = uninstall(&req, None, &mut remove_file).unwrap();
+    assert!(report.ok(), "{report:?}");
+    assert_eq!(
+        report.services,
+        [
+            "dev.ngvoicu.kluris.sync.acme",
+            "dev.ngvoicu.kluris.sync.beta"
+        ]
+    );
+    assert_eq!(*services.removed.borrow(), report.services);
+    for s in &services.list {
+        assert!(!s.definition.as_ref().unwrap().exists());
+    }
+    h.assert_installer_files_gone();
+    h.assert_rc_files_restored();
+}
+
+#[test]
+fn sync_services_that_cannot_be_listed_block_before_any_change() {
+    let h = Home::installed();
+    let mut services = FakeServices::two(&h);
+    services.listing = Some("Failed to connect to bus: No medium found".into());
+    let receipt = h.receipt();
+    let req = UninstallRequest {
+        services: Some(&services),
+        ..request(&h, &receipt, false)
+    };
+    let report = uninstall(&req, None, &mut remove_file).unwrap();
+    assert!(!report.ok());
+    let blocker = report
+        .blocked
+        .iter()
+        .find(|b| b.path == services.location)
+        .unwrap_or_else(|| panic!("{:?}", report.blocked));
+    assert!(
+        blocker.problem.contains("Failed to connect to bus"),
+        "{blocker:?}"
+    );
+    assert!(
+        blocker.fix.contains("kluris sync --uninstall-service"),
+        "{blocker:?}"
+    );
+    assert!(services.removed.borrow().is_empty());
+    assert!(report.removed.is_empty() && report.edited.is_empty());
+    assert!(h.prefix.join(exe_name()).exists());
+    assert!(h.receipt.exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn a_sync_service_definition_that_cannot_be_removed_blocks_before_any_change() {
+    let h = Home::installed();
+    let services = FakeServices::two(&h);
+    read_only(&services.location, true);
+    let receipt = h.receipt();
+    let req = UninstallRequest {
+        services: Some(&services),
+        ..request(&h, &receipt, false)
+    };
+    let report = uninstall(&req, None, &mut remove_file).unwrap();
+    read_only(&services.location, false);
+    assert!(!report.ok());
+    assert!(
+        report.blocked.iter().any(|b| b.path == services.location),
+        "{:?}",
+        report.blocked
+    );
+    assert!(services.removed.borrow().is_empty());
+    assert!(report.removed.is_empty() && report.edited.is_empty());
+    assert!(h.prefix.join(exe_name()).exists());
+}
+
+#[test]
+fn a_sync_service_that_will_not_stop_stops_the_uninstall_with_the_install_kept() {
+    let h = Home::installed();
+    let mut services = FakeServices::two(&h);
+    services.failing = Some("dev.ngvoicu.kluris.sync.beta".into());
+    let receipt = h.receipt();
+    let req = UninstallRequest {
+        services: Some(&services),
+        ..request(&h, &receipt, false)
+    };
+    let report = uninstall(&req, None, &mut remove_file).unwrap();
+    assert!(!report.ok());
+    assert_eq!(report.services, ["dev.ngvoicu.kluris.sync.acme"]);
+    assert!(
+        report
+            .failed
+            .iter()
+            .any(|f| f.contains("dev.ngvoicu.kluris.sync.beta")
+                && f.contains("Operation not permitted")),
+        "{:?}",
+        report.failed
+    );
+    // Nothing of the install went: a rerun finishes.
+    assert!(report.edited.is_empty(), "{:?}", report.edited);
+    assert!(h.prefix.join(exe_name()).exists());
+    assert!(h.receipt.exists());
+    services.failing = None;
+    let receipt = h.receipt();
+    let req = UninstallRequest {
+        services: Some(&services),
+        ..request(&h, &receipt, false)
+    };
+    let report = uninstall(&req, None, &mut remove_file).unwrap();
+    assert!(report.ok(), "{report:?}");
+    h.assert_installer_files_gone();
+}
+
+/// `kluris self-uninstall` with a sync service installed and a fake
+/// `launchctl`/`systemctl` first on PATH that reports it running.
+#[cfg(unix)]
+#[test]
+fn cli_uninstall_removes_the_sync_services() {
+    use std::os::unix::fs::PermissionsExt;
+    let h = Home::installed();
+    let (definition, name) = if cfg!(target_os = "macos") {
+        (
+            h.home
+                .join("Library/LaunchAgents/dev.ngvoicu.kluris.sync.acme.plist"),
+            "dev.ngvoicu.kluris.sync.acme",
+        )
+    } else {
+        (
+            h.config_home.join("systemd/user/kluris-sync-acme.service"),
+            "kluris-sync-acme.service",
+        )
+    };
+    fs::create_dir_all(definition.parent().unwrap()).unwrap();
+    fs::write(&definition, "x").unwrap();
+    let bin = h.root.join("fake-bin");
+    fs::create_dir_all(&bin).unwrap();
+    let calls = h.root.join("calls");
+    for tool in ["launchctl", "systemctl"] {
+        let path = bin.join(tool);
+        fs::write(
+            &path,
+            format!(
+                "#!/bin/sh\necho \"{tool} $*\" >> '{}'\nprintf '\\tstate = running\\n'\necho active\nexit 0\n",
+                calls.display()
+            ),
+        )
+        .unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let mut cmd = h.cmd(Path::new(assert_cmd::cargo::cargo_bin!("kluris")));
+    cmd.env(
+        "PATH",
+        format!("{}:{}", bin.display(), std::env::var("PATH").unwrap()),
+    )
+    .args(["self-uninstall", "--json"]);
+    let out = cmd.output().unwrap();
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "{}{}",
+        stdout(&out),
+        stderr(&out)
+    );
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["services"], serde_json::json!([name]));
+    assert!(!definition.exists());
+    let calls = fs::read_to_string(&calls).unwrap();
+    assert!(
+        calls.contains("bootout") || calls.contains("disable --now"),
+        "{calls}"
+    );
+    h.assert_installer_files_gone();
 }

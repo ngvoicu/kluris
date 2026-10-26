@@ -35,6 +35,11 @@ impl CliError {
         }
     }
 
+    /// What is printed after `Error: ` (empty for an exit-only error).
+    pub fn message(&self) -> &str {
+        &self.message
+    }
+
     /// Exit 1 after the command printed its own output (`dream` when the
     /// brain is unhealthy; v2's `SystemExit(1)`).
     pub fn exit_only() -> Self {

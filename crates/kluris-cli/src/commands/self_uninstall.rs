@@ -7,9 +7,10 @@ use std::path::{Path, PathBuf};
 use kluris_core::companions::prompt::Aborted;
 use kluris_core::config::read_global_config;
 use kluris_core::dist::{
-    Receipt, ReceiptError, UninstallReport, UninstallRequest, UserPath, uninstall,
+    Receipt, ReceiptError, SyncServices, UninstallReport, UninstallRequest, UserPath, uninstall,
 };
 use kluris_core::doctor::{home_relative, slashed};
+use kluris_core::service::Services;
 
 use crate::error::CliError;
 use crate::output::human;
@@ -59,6 +60,14 @@ pub fn run(purge: bool, yes: bool, as_json: bool) -> Result<(), CliError> {
         Vec::new()
     };
     let copilot = copilot_home();
+    // The sync services, stopped and removed first (none listed when the
+    // service environment cannot be read: there is nothing to find them by).
+    let service_env = crate::platform::service::env().ok();
+    let runner = crate::platform::service::SystemRunner;
+    let services = service_env.as_ref().map(|env| Services {
+        env,
+        runner: &runner,
+    });
     let request = UninstallRequest {
         env,
         receipt: &receipt,
@@ -66,6 +75,7 @@ pub fn run(purge: bool, yes: bool, as_json: bool) -> Result<(), CliError> {
         purge,
         copilot_home: copilot.as_deref(),
         brains: &brains,
+        services: services.as_ref().map(|s| s as &dyn SyncServices),
     };
     let exe = std::env::current_exe().ok();
     let protect = if purge {
@@ -228,6 +238,7 @@ fn report_json(report: &UninstallReport) -> Json {
             ),
         ),
         ("left".into(), strings(&report.left)),
+        ("services".into(), strings(&report.services)),
     ])
 }
 
@@ -244,6 +255,9 @@ fn report_text(report: &UninstallReport, home: &Path) -> String {
             ));
         }
         return out;
+    }
+    for name in &report.services {
+        out.push_str(&format!("Stopped and removed the sync service {name}\n"));
     }
     for path in &report.removed {
         out.push_str(&format!("Removed {}\n", home_relative(path, home)));

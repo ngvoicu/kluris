@@ -13,7 +13,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 pub use super::preflight::{Blocker, Planned, preflight};
-use super::{DistEnv, Receipt, ReceiptError};
+use super::{DistEnv, Receipt, ReceiptError, SyncServices};
 use crate::agents::install::{
     DestinationReport, generated_skill_entries, remove_generated_skills_with,
 };
@@ -41,6 +41,8 @@ pub struct UninstallRequest<'a> {
     pub copilot_home: Option<&'a Path>,
     /// The registered brains, `(name, path)`: a purge never removes one.
     pub brains: &'a [(String, PathBuf)],
+    /// The sync services to stop and remove first.
+    pub services: Option<&'a dyn SyncServices>,
 }
 
 /// What [`uninstall`] did.
@@ -69,6 +71,8 @@ pub struct UninstallReport {
     pub skills: Vec<DestinationReport>,
     /// `~/.kluris` was removed.
     pub purged: bool,
+    /// The sync services stopped and removed, by name.
+    pub services: Vec<String>,
     /// One message per thing that could not be done; the rest went on.
     pub failed: Vec<String>,
 }
@@ -119,9 +123,14 @@ impl std::error::Error for UninstallError {}
 /// The pre-flight then builds the whole plan from reads alone and checks
 /// it ([`preflight`]): anything in the way (a path that cannot be looked
 /// at, a folder that cannot lose an entry, an immutable flag, a read-only
-/// attribute) is listed in `blocked`, each with its fix, and nothing is
-/// changed.
+/// attribute, sync services that cannot be listed because no service
+/// manager answers) is listed in `blocked`, each with its fix, and nothing
+/// is changed. Whether a service manager will agree to stop a service
+/// cannot be asked without stopping it.
 ///
+/// 0. The sync services ([`SyncServices`]), stopped and removed, as they
+///    run the binary about to go. A failure stops here, with the install
+///    whole: a rerun finishes.
 /// 1. With `modify_path` (the installer set PATH up), the rc files lose the
 ///    line sourcing env.sh, unless env.sh is there and is not dist's (then it
 ///    and its lines are kept and reported). A failure stops here: env
@@ -182,6 +191,20 @@ pub fn uninstall_with(
     report.blocked.extend(preflight(&plan.planned));
     if !report.blocked.is_empty() {
         return Ok(report);
+    }
+    if let Some(services) = req.services {
+        for service in &plan.services {
+            match services.remove(service) {
+                Ok(()) => report.services.push(service.name.clone()),
+                Err(e) => {
+                    report.failed.push(format!(
+                        "cannot stop and remove the sync service {}: {e}",
+                        service.name
+                    ));
+                    return Ok(report);
+                }
+            }
+        }
     }
     let prefix = req.receipt.install_prefix.as_path();
     let receipt_dir = req.receipt_path.parent().unwrap_or(Path::new(""));
@@ -352,6 +375,8 @@ struct Plan {
     planned: Vec<Planned>,
     /// What the reads themselves found in the way.
     blocked: Vec<Blocker>,
+    /// The sync services to stop and remove.
+    services: Vec<crate::service::Installed>,
 }
 
 impl Plan {
@@ -368,7 +393,27 @@ impl Plan {
             scripts: Vec::new(),
             planned: Vec::new(),
             blocked: Vec::new(),
+            services: Vec::new(),
         };
+        if let Some(services) = req.services {
+            match services.installed() {
+                Ok(list) => {
+                    for service in &list {
+                        if let Some(definition) = &service.definition {
+                            plan.planned.push(Planned::Remove(definition.clone()));
+                        }
+                    }
+                    plan.services = list;
+                }
+                Err(e) => plan.blocked.push(Blocker {
+                    path: services.location(),
+                    problem: format!("the Kluris sync services here cannot be listed: {e}"),
+                    fix: "remove each with `kluris sync --uninstall-service --brain <name>` \
+                          where its service manager runs, or by hand"
+                        .to_string(),
+                }),
+            }
+        }
 
         if req.receipt.modify_path {
             let exprs = install_dir_exprs(prefix, home);

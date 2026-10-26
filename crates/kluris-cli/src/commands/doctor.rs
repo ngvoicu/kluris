@@ -5,6 +5,7 @@ use kluris_core::agents::install::{DestinationReport, InstallReport};
 use kluris_core::doctor::{
     self, Check, CompanionRefresh, DoctorReport, DoctorRequest, Status, home_relative,
 };
+use kluris_core::service::{self, ServiceState};
 
 use crate::error::CliError;
 use crate::output::human::{self, Painter, Style};
@@ -23,7 +24,7 @@ pub fn run(no_refresh: bool, as_json: bool) -> Result<(), CliError> {
     if let Some(dir) = current_exe.as_deref().and_then(|exe| exe.parent()) {
         kluris_core::dist::swap::remove_swap_leftovers(dir);
     }
-    let report = doctor::run(&DoctorRequest {
+    let mut report = doctor::run(&DoctorRequest {
         config_path: &config_path,
         home: &home,
         copilot_home: copilot_home.as_deref(),
@@ -31,6 +32,7 @@ pub fn run(no_refresh: bool, as_json: bool) -> Result<(), CliError> {
         current_exe: current_exe.as_deref(),
         refresh: !no_refresh,
     });
+    report.checks.extend(sync_service_checks());
     if as_json {
         human::print(&json::to_line(&report_json(&report)));
     } else {
@@ -40,6 +42,42 @@ pub fn run(no_refresh: bool, as_json: bool) -> Result<(), CliError> {
         Ok(())
     } else {
         Err(CliError::exit_only())
+    }
+}
+
+/// One `sync-service:<brain>` check per installed sync service: passed when
+/// it runs, a warning when not (never a failure); `sync-services`, a
+/// warning, when they cannot be listed. None without sync services.
+fn sync_service_checks() -> Vec<Check> {
+    let Ok(env) = crate::platform::service::env() else {
+        return Vec::new();
+    };
+    match service::installed(&env, &crate::platform::service::SystemRunner) {
+        Ok(list) => list
+            .into_iter()
+            .map(|s| {
+                let (status, detail) = match &s.state {
+                    ServiceState::Running => (Status::Pass, format!("running ({})", s.name)),
+                    ServiceState::Stopped(state) => (
+                        Status::Warn,
+                        format!(
+                            "installed, not running ({state}): {}; `kluris sync --install-service --brain {}` starts it",
+                            s.name, s.brain
+                        ),
+                    ),
+                };
+                Check {
+                    name: format!("sync-service:{}", s.brain),
+                    status,
+                    detail,
+                }
+            })
+            .collect(),
+        Err(e) => vec![Check {
+            name: "sync-services".into(),
+            status: Status::Warn,
+            detail: e.to_string(),
+        }],
     }
 }
 

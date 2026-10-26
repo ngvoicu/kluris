@@ -141,6 +141,8 @@ pub struct SystemGit {
     program: OsString,
     /// Environment changes for every run, in order (`None` removes).
     env: Vec<(OsString, Option<OsString>)>,
+    /// Every run in a process group of its own ([`SystemGit::shielded`]).
+    shielded: bool,
 }
 
 impl Default for SystemGit {
@@ -160,6 +162,7 @@ impl SystemGit {
         SystemGit {
             program: OsString::from("git"),
             env: Vec::new(),
+            shielded: false,
         }
     }
 
@@ -172,6 +175,15 @@ impl SystemGit {
     /// Set an environment variable for every run.
     pub fn env(mut self, key: impl Into<OsString>, value: impl Into<OsString>) -> SystemGit {
         self.env.push((key.into(), Some(value.into())));
+        self
+    }
+
+    /// Start every run in a process group of its own, so a Ctrl-C at the
+    /// terminal (SIGINT to the foreground group; CTRL_C on Windows) reaches
+    /// kluris but not git: `kluris sync --watch` lets a sync it is in finish
+    /// whole, then exits.
+    pub fn shielded(mut self) -> SystemGit {
+        self.shielded = true;
         self
     }
 
@@ -195,6 +207,13 @@ impl SystemGit {
         cmd.args(args);
         if let Some(dir) = dir {
             cmd.current_dir(dir);
+        }
+        if self.shielded {
+            #[cfg(unix)]
+            std::os::unix::process::CommandExt::process_group(&mut cmd, 0);
+            // CREATE_NEW_PROCESS_GROUP: CTRL_C is not sent to the group.
+            #[cfg(windows)]
+            std::os::windows::process::CommandExt::creation_flags(&mut cmd, 0x0000_0200);
         }
         for (key, value) in &self.env {
             match value {

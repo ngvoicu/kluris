@@ -131,7 +131,8 @@ to a GitHub token.
 kluris self-uninstall
 ```
 
-This takes out the binary, the PATH setup and the installer's receipt. Your
+This stops and removes the sync services (`kluris sync --install-service`),
+then takes out the binary, the PATH setup and the installer's receipt. Your
 config, the companion playbooks, the agent skills and every brain stay.
 `kluris self-uninstall --purge` also deletes `~/.kluris` and every agent skill
 Kluris wrote, after asking (`--yes` skips the question). Brains are never
@@ -374,6 +375,42 @@ With `--json`, a call prints `path`, `choice`, `remaining` (the paths still
 to settle), `committed`, `commit` and `pushed`; `--abort` prints `aborted`
 and `dropped`. While a conflict is open, `kluris status --json` adds
 `sync: {blocked: true, conflicts: [...]}` to that brain.
+
+### Stay in sync while you work
+
+```sh
+kluris sync --watch --brain acme                # in a terminal, until Ctrl-C
+kluris sync --watch --brain all --interval 60   # every brain, once a minute
+kluris sync --install-service --brain acme      # in the background, from login on
+kluris sync --uninstall-service --brain acme
+```
+
+`kluris sync --watch` checks every 30 seconds (`--interval`, at least 5)
+whether the remote's branch moved (`git ls-remote`, which never asks for
+credentials) or you made a commit, and when either did it runs one
+`kluris sync` for that brain, with the same rules, and prints one line
+(`--json`: the document `kluris sync --json` prints, one per line). A
+conflict or a block is printed once; that brain then waits until its branch
+or the remote moves (`kluris resolve`, your commit, a teammate's push).
+Offline it stays quiet and picks up when the remote answers again. Ctrl-C
+lets a sync in progress finish, then exits with 0.
+
+`--install-service` makes your system run that watch for one brain, from
+login on, as you, without admin rights, and starts it:
+
+| System | Service | Log |
+|--------|---------|-----|
+| macOS | launchd agent `~/Library/LaunchAgents/dev.ngvoicu.kluris.sync.<brain>.plist` | `~/Library/Logs/kluris/sync-<brain>.log` |
+| Linux | systemd user unit `~/.config/systemd/user/kluris-sync-<brain>.service` (`$XDG_CONFIG_HOME` when set) | `journalctl --user -u kluris-sync-<brain>` |
+| Windows | Task Scheduler task `\Kluris\sync-<brain>`, at logon, hidden | `%LOCALAPPDATA%\kluris\logs\sync-<brain>.log` |
+
+The service runs the `kluris` that installed it, by its full path, with
+your `PATH` and `KLURIS_CONFIG`; run `--install-service` again after you
+move Kluris. Both flags can be run again safely. On Linux it needs a
+systemd user instance (on WSL, `systemd=true` in `/etc/wsl.conf`); a
+service there starts with your session, unless `loginctl enable-linger`
+keeps it running without one. `kluris doctor` lists the installed services
+and whether they run, and `kluris self-uninstall` stops and removes them.
 
 ### How the agent starts a session
 
@@ -619,7 +656,7 @@ from disk or send it to a colleague.
 | `kluris dream` | Regenerate maps, fix what is safe to fix, validate links (`--brain`, `--broken-only` with `--json`) |
 | `kluris mri` | Write the brain's visual map and print its link (`--brain`, `--output`) |
 | `kluris commit` | Commit only the files you name and the maps they change (`--brain`, `--paths`, `--message`, `--no-verify`) |
-| `kluris sync` | Fetch, merge and push a brain, or every brain (`--brain`, `--no-verify`) |
+| `kluris sync` | Fetch, merge and push a brain, or every brain (`--brain`, `--no-verify`); keep doing it (`--watch`, `--interval`), or in the background (`--install-service`, `--uninstall-service`) |
 | `kluris resolve <path>` | Settle an open sync conflict path by path (`--ours`, `--theirs`, `--file`, `--abort`, `--no-verify`) |
 | `kluris companion list` | The companion playbooks, which are installed, and which brains use them (`--brain`) |
 | `kluris companion add <name>` | Turn a companion on for a brain (`--brain`) |
