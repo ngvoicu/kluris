@@ -282,11 +282,16 @@ fn windows_join(base: &Path, parts: &[&str]) -> PathBuf {
     joined(base, parts, '\\')
 }
 
+/// The unit's first line.
 fn comment(brain: &str) -> String {
     format!(
         "Written by `kluris sync --install-service --brain {brain}`; `kluris sync --uninstall-service --brain {brain}` removes it."
     )
 }
+
+/// The XML definitions' comment: no `--` (and so no brain name, which may
+/// hold one), as XML comments cannot.
+const XML_COMMENT: &str = "<!-- A Kluris sync service: kluris sync writes it with its install-service option and removes it with uninstall-service. -->";
 
 impl ServiceEnv {
     /// The label, unit or task name of the brain's service.
@@ -364,7 +369,8 @@ impl ServiceEnv {
             "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
              <!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n",
         );
-        out.push_str(&format!("<!-- {} -->\n", comment(brain)));
+        out.push_str(XML_COMMENT);
+        out.push('\n');
         out.push_str("<plist version=\"1.0\">\n<dict>\n");
         out.push_str(&format!(
             "\t<key>Label</key>\n\t<string>{}</string>\n",
@@ -441,7 +447,7 @@ impl ServiceEnv {
         let user = xml(user);
         Ok(format!(
             r#"<?xml version="1.0" encoding="UTF-16"?>
-<!-- {comment} -->
+{comment}
 <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
   <RegistrationInfo>
     <Description>Kluris sync for the brain {brain}</Description>
@@ -491,7 +497,7 @@ impl ServiceEnv {
   </Actions>
 </Task>
 "#,
-            comment = comment(brain),
+            comment = XML_COMMENT,
             uri = xml(&self.name(brain)),
             arguments = xml(&arguments),
         ))

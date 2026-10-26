@@ -1187,7 +1187,7 @@ fn the_launchd_plist_byte_for_byte() {
         env.render("acme").unwrap(),
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<!-- Written by `kluris sync --install-service --brain acme`; `kluris sync --uninstall-service --brain acme` removes it. -->
+<!-- A Kluris sync service: kluris sync writes it with its install-service option and removes it with uninstall-service. -->
 <plist version="1.0">
 <dict>
 	<key>Label</key>
@@ -1321,7 +1321,7 @@ fn the_task_xml_byte_for_byte() {
     assert_eq!(
         env.render("acme").unwrap(),
         r#"<?xml version="1.0" encoding="UTF-16"?>
-<!-- Written by `kluris sync --install-service --brain acme`; `kluris sync --uninstall-service --brain acme` removes it. -->
+<!-- A Kluris sync service: kluris sync writes it with its install-service option and removes it with uninstall-service. -->
 <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
   <RegistrationInfo>
     <Description>Kluris sync for the brain acme</Description>
@@ -1385,6 +1385,28 @@ fn the_task_xml_byte_for_byte() {
         env.render("acme"),
         Err(ServiceError::Unquotable(_))
     ));
+}
+
+/// An XML comment may not hold `--` (schtasks refuses the task: "incorrect
+/// comment syntax").
+#[test]
+fn xml_comments_are_well_formed() {
+    for manager in [Manager::Launchd, Manager::TaskScheduler] {
+        let mut env = literal_env(manager);
+        env.kluris = PathBuf::from(r"C:\k\kluris.exe");
+        let text = env.render("my--brain").unwrap();
+        let mut rest = text.as_str();
+        while let Some(start) = rest.find("<!--") {
+            let after = &rest[start + 4..];
+            let end = after.find("-->").expect("an open comment");
+            assert!(
+                !after[..end].contains("--"),
+                "{manager:?}: {}",
+                &after[..end]
+            );
+            rest = &after[end + 3..];
+        }
+    }
 }
 
 #[test]
