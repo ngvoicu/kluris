@@ -22,6 +22,7 @@ use crate::output::human;
     name = "kluris",
     version = "3.0.0-dev",
     about = "Kluris — Turn AI agents into team subject matter experts.",
+    override_usage = ROOT_USAGE,
     arg_required_else_help = true
 )]
 struct Cli {
@@ -54,7 +55,8 @@ enum Command {
     #[command(
         args_override_self = true,
         about = "Search a brain's neurons, glossary, and brain.md for a query string.",
-        long_about = SEARCH_HELP
+        long_about = SEARCH_HELP,
+        override_usage = "kluris search [OPTIONS] QUERY"
     )]
     Search {
         #[arg(value_name = "QUERY")]
@@ -68,15 +70,15 @@ enum Command {
         /// Filter to neurons with this frontmatter tag
         #[arg(long, value_name = "TAG", allow_hyphen_values = true)]
         tag: Option<String>,
-        /// Max number of results (default 10)
+        /// Max number of results (default 10). Kept as given: only the
+        /// winning occurrence is converted ([`converted`]).
         #[arg(
             long,
             value_name = "INTEGER",
             default_value = "10",
-            allow_hyphen_values = true,
-            value_parser = commands::search::parse_limit
+            allow_hyphen_values = true
         )]
-        limit: i64,
+        limit: String,
         /// JSON output
         #[arg(long)]
         json: bool,
@@ -129,6 +131,9 @@ Examples:
   kluris search \"raw sql\" --lobe knowledge --json
   kluris search \"auth\" --tag oauth --limit 5";
 
+/// v2's root usage line (clap's would be `kluris [COMMAND]`).
+const ROOT_USAGE: &str = "kluris [OPTIONS] COMMAND [ARGS]...";
+
 /// The `--help` flag Click gives every command. It is a plain flag, not
 /// clap's help action (which prints at once), so the whole line is parsed
 /// first, as Click does ([`parse`]).
@@ -139,12 +144,11 @@ fn help_flag() -> Arg {
         .action(ArgAction::SetTrue)
 }
 
-/// The root command with Click's surface (see [`Cli`]). Every option may
-/// repeat, the last value winning, as in Click.
-fn command() -> clap::Command {
-    Cli::command()
-        // Usage says `kluris` whatever argv[0] is (`kluris.exe` on Windows).
-        .bin_name("kluris")
+/// The root's own options, Click's: `--version` and `--help`. Every option
+/// may repeat, the last value winning, as in Click.
+fn root_options(cmd: clap::Command) -> clap::Command {
+    // Usage says `kluris` whatever argv[0] is (`kluris.exe` on Windows).
+    cmd.bin_name("kluris")
         .disable_help_subcommand(true)
         .disable_help_flag(true)
         .disable_version_flag(true)
@@ -156,11 +160,15 @@ fn command() -> clap::Command {
                 .action(ArgAction::SetTrue),
         )
         .arg(help_flag())
-        .mut_subcommands(|sub| {
-            sub.disable_help_flag(true)
-                .args_override_self(true)
-                .arg(help_flag())
-        })
+}
+
+/// The root command with Click's surface (see [`Cli`]).
+fn command() -> clap::Command {
+    root_options(Cli::command()).mut_subcommands(|sub| {
+        sub.disable_help_flag(true)
+            .args_override_self(true)
+            .arg(help_flag())
+    })
 }
 
 /// What the command line asks for.
@@ -172,23 +180,64 @@ enum Parsed {
     Version(String),
 }
 
-/// Parse in Click's order: every token first (an unknown option, an option
-/// without its value or a value given to a flag fail here, wherever
-/// `--help` is), then the eager `--help` / `--version` in the order given,
-/// and only then values are converted, required arguments checked and extra
-/// arguments refused (so `--help` wins over those). The first step is a
-/// parse with [`lenient`], which fails only where Click's parser fails.
+/// Parse in Click's order:
+/// 1. the root's own tokens, up to the command name ([`root_only`]): an
+///    unknown root option fails here, then the root's eager `--help` /
+///    `--version` act, the first given first, before anything after the
+///    command name is looked at;
+/// 2. the command's tokens ([`lenient`]): an unknown option, an option
+///    without its value or a value given to a flag fail here, wherever
+///    `--help` is, then the command's `--help` acts;
+/// 3. the strict parse: required arguments, extra arguments, and the
+///    conversion of each option's winning value only ([`converted`]).
+///
+/// Help is always rendered from the strict schema.
 fn parse(args: &[OsString]) -> Result<Parsed, clap::Error> {
-    let mut first = lenient(command());
-    let matches = first.try_get_matches_from_mut(args)?;
-    if let Some(parsed) = eager(&mut first, &matches) {
-        return Ok(parsed);
+    let matches = root_only().try_get_matches_from(args)?;
+    let help = first_root_token(args, "--help").filter(|_| flag(&matches, "help"));
+    let version = first_root_token(args, "--version").filter(|_| flag(&matches, "version"));
+    match (help, version) {
+        (Some(h), Some(v)) if v < h => return Ok(Parsed::Version(command().render_version())),
+        (Some(_), _) => return Ok(Parsed::Help(command().render_long_help().to_string())),
+        (None, Some(_)) => return Ok(Parsed::Version(command().render_version())),
+        (None, None) => {}
     }
+
+    let matches = lenient(command()).try_get_matches_from(args)?;
+    if let Some((name, sub_matches)) = matches.subcommand()
+        && flag(sub_matches, "help")
+    {
+        let mut strict = command();
+        strict.build();
+        if let Some(sub) = strict.find_subcommand_mut(name) {
+            return Ok(Parsed::Help(sub.render_long_help().to_string()));
+        }
+    }
+
     let mut root = command();
     let matches = root
         .try_get_matches_from_mut(args)
         .map_err(|e| with_usage(e, &mut root, args))?;
-    Cli::from_arg_matches(&matches).map(Parsed::Run)
+    let cli = Cli::from_arg_matches(&matches)?;
+    converted(&cli).map_err(|e| with_usage(e, &mut root, args))?;
+    Ok(Parsed::Run(cli))
+}
+
+/// The root alone, as Click's group parses it: its own options, and the
+/// command name with everything after it taken as it is.
+fn root_only() -> clap::Command {
+    root_options(clap::Command::new("kluris"))
+        .override_usage(ROOT_USAGE)
+        .allow_external_subcommands(true)
+}
+
+/// Where `token` first appears among the root's own tokens (before the
+/// command name); the first occurrence decides the eager order, as in Click.
+fn first_root_token(args: &[OsString], token: &str) -> Option<usize> {
+    args.iter()
+        .skip(1)
+        .take_while(|a| a.to_string_lossy().starts_with('-') && *a != "--")
+        .position(|a| a == token)
 }
 
 /// `cmd` with what Click checks after its parser left out: values are kept
@@ -217,26 +266,36 @@ fn lenient(cmd: clap::Command) -> clap::Command {
         .mut_subcommands(relax)
 }
 
-fn flag(matches: &ArgMatches, id: &str) -> Option<usize> {
-    match matches.try_get_one::<bool>(id) {
-        Ok(Some(true)) => matches.index_of(id),
-        _ => None,
-    }
+fn flag(matches: &ArgMatches, id: &str) -> bool {
+    matches!(matches.try_get_one::<bool>(id), Ok(Some(true)))
 }
 
-/// The root's `--help` or `--version` (the first given), else a command's
-/// `--help`.
-fn eager(root: &mut clap::Command, matches: &ArgMatches) -> Option<Parsed> {
-    match (flag(matches, "help"), flag(matches, "version")) {
-        (Some(h), Some(v)) if v < h => return Some(Parsed::Version(root.render_version())),
-        (Some(_), _) => return Some(Parsed::Help(root.render_long_help().to_string())),
-        (None, Some(_)) => return Some(Parsed::Version(root.render_version())),
-        (None, None) => {}
+/// Convert the options that are not strings, from their winning (last)
+/// value only: Click converts once, after parsing, where a clap value
+/// parser would check every repeated occurrence. The error is the one the
+/// value parser gives (`Invalid value for '--limit': 'x' is not a valid
+/// integer.`).
+fn converted(cli: &Cli) -> Result<(), clap::Error> {
+    if let Command::Search { limit, .. } = &cli.command {
+        search_limit(limit)?;
     }
-    let (name, sub_matches) = matches.subcommand()?;
-    let sub = root.find_subcommand_mut(name)?;
-    flag(sub_matches, "help")?;
-    Some(Parsed::Help(sub.render_long_help().to_string()))
+    Ok(())
+}
+
+/// `search --limit` as an integer.
+fn search_limit(raw: &str) -> Result<i64, clap::Error> {
+    use clap::builder::TypedValueParser;
+    let mut root = command();
+    root.build();
+    let search = root.find_subcommand("search");
+    let arg = search.and_then(|s| s.get_arguments().find(|a| a.get_id() == "limit"));
+    match search {
+        Some(search) => {
+            commands::search::parse_limit.parse_ref(search, arg, std::ffi::OsStr::new(raw))
+        }
+        None => commands::search::parse_limit(raw)
+            .map_err(|reason| clap::Error::raw(ErrorKind::ValueValidation, reason)),
+    }
 }
 
 /// A value parser's error carries no usage line; Click prints the command's
@@ -269,7 +328,8 @@ fn run(cli: Cli) -> Result<(), CliError> {
             brain: brain.as_deref(),
             lobe: lobe.as_deref(),
             tag: tag.as_deref(),
-            limit,
+            // Checked by `parse` (`converted`).
+            limit: search_limit(&limit).map_err(|e| CliError::new(e.to_string()))?,
             json,
         }),
         Command::Status { brain, json } => commands::status::run(brain.as_deref(), json),

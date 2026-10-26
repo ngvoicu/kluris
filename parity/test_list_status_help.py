@@ -658,6 +658,15 @@ PRECEDENCE = [
     (["--version", "--bogus"], ("error", 2, "Error: No such option '--bogus'.")),
     (["--bogus", "--version"], ("error", 2, "Error: No such option '--bogus'.")),
     (["--version", "list"], ("version",)),
+    # The root's eager options act before Click descends into the command,
+    # and the first occurrence decides their order (review T-84 finding 4).
+    (["--help", "list", "--bogus"], ("help", "kluris")),
+    (["--version", "list", "--bogus"], ("version",)),
+    (["--version", "bogus", "--bogus"], ("version",)),
+    (["--help", "search"], ("help", "kluris")),
+    (["--help", "--version", "--help"], ("help", "kluris")),
+    (["--version", "--help", "--version"], ("version",)),
+    (["--version", "--help", "--help", "--version"], ("version",)),
 ]
 
 
@@ -667,3 +676,61 @@ def test_help_and_usage_errors_in_clicks_order(sandbox, two_brains, args, expect
     v2, v3 = outcome(r["v2"], sandbox.root), outcome(r["v3"], sandbox.root)
     assert v2 == expected, f"the oracle no longer does this: {r['v2']}"
     assert v3 == expected, r["v3"]
+
+
+# Every option that takes a value, repeated with an invalid value before or
+# after a valid one: Click converts only the value that wins (review T-84
+# finding 1).
+REPEATED_VALUES = [
+    ["search", "needle", "--brain", "a", "--limit", "", "--limit", "2", "--json"],
+    ["search", "needle", "--brain", "a", "--limit", "invalid", "--limit", "2", "--json"],
+    ["search", "needle", "--brain", "a", "--limit", "2.0", "--limit", "2", "--json"],
+    ["search", "needle", "--brain", "a", "--limit", "2", "--limit", "x", "--json"],
+    ["search", "needle", "--brain", "a", "--limit", "2", "--limit", "x"],
+    ["search", "needle", "--brain", "a", "--limit", "2", "--limit", "", "--json"],
+    ["search", "needle", "--brain", "nope", "--brain", "a", "--json"],
+    ["search", "needle", "--brain", "a", "--brain", "nope", "--json"],
+    ["search", "needle", "--brain", "", "--brain", "a", "--json"],
+    ["search", "needle", "--brain", "a", "--lobe", "", "--lobe", "lobe", "--json"],
+    ["search", "needle", "--brain", "a", "--tag", "", "--tag", "y", "--json"],
+    ["status", "--brain", "nope", "--brain", "a", "--json"],
+    ["status", "--brain", "a", "--brain", "nope", "--json"],
+    ["status", "--brain", "a", "--brain", "nope"],
+    ["status", "--brain", "", "--brain", "all", "--json"],
+    ["wake-up", "--brain", "nope", "--brain", "a", "--json"],
+    ["wake-up", "--brain", "a", "--brain", "nope", "--json"],
+    ["wake-up", "--brain", "all", "--brain", "a", "--json"],
+]
+
+
+@pytest.mark.parametrize("args", REPEATED_VALUES, ids=lambda a: " ".join(a))
+def test_only_the_winning_value_is_converted(sandbox, two_brains, args):
+    r = run(sandbox, *args)
+    v2, v3 = r["v2"], r["v3"]
+    assert v3.code == v2.code, (v2.code, v3.code, v2.stdout + v2.stderr, v3.stdout + v3.stderr)
+    if v2.code == 0:
+        j2, j3 = parse_exact(v2.stdout, sandbox.root, "v2"), parse_exact(v3.stdout, sandbox.root, "v3")
+        assert (search_view(j3) == search_view(j2)) if args[0] == "search" else (j3 == j2)
+    else:
+        assert normalize(v3.stdout, sandbox.root) == normalize(v2.stdout, sandbox.root)
+        assert outcome(v3, sandbox.root) == outcome(v2, sandbox.root)
+
+
+@pytest.mark.parametrize("args", [[], ["list"], ["status"], ["wake-up"], ["search"], ["help"]],
+                         ids=lambda a: " ".join(a) or "root")
+def test_usage_line_is_v2s(sandbox, two_brains, args):
+    """Required arguments read `QUERY`, optional ones `[COMMAND]`, in help
+    (rendered from the strict schema, review T-84 finding 3) and in errors."""
+    r = run(sandbox, *args, "--help")
+    usage = [next(line for line in r[side].stdout.splitlines() if line.startswith("Usage: ")) for side in ("v2", "v3")]
+    assert usage[1] == usage[0]
+
+
+def test_usage_line_of_a_usage_error_is_v2s(sandbox, two_brains):
+    r = run(sandbox, "search")
+    v2, v3 = r["v2"], r["v3"]
+    assert v2.code == v3.code == 2
+    assert v3.stderr == v2.stderr == (
+        "Usage: kluris search [OPTIONS] QUERY\nTry 'kluris search --help' for help.\n\n"
+        "Error: Missing argument 'QUERY'.\n"
+    )
