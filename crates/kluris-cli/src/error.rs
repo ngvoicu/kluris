@@ -133,6 +133,25 @@ fn usage_message(err: &clap::Error) -> String {
                 return format!("Option '{option}' requires an argument.");
             }
         }
+        ErrorKind::ValueValidation => {
+            // A value parser's own reason, in Click's frame (`--limit abc`).
+            if let (Some(arg), Some(value), Some(reason)) = (
+                context(ContextKind::InvalidArg),
+                context(ContextKind::InvalidValue),
+                std::error::Error::source(err),
+            ) {
+                let option = arg.split([' ', '=']).next().unwrap_or(&arg);
+                return format!("Invalid value for '{option}': '{value}' {reason}.");
+            }
+        }
+        ErrorKind::MissingRequiredArgument => {
+            if let Some(ContextValue::Strings(args)) = err.get(ContextKind::InvalidArg)
+                && let Some(first) = args.first()
+                && first.starts_with('<')
+            {
+                return format!("Missing argument '{}'.", first.trim_matches(['<', '>']));
+            }
+        }
         ErrorKind::UnknownArgument => {
             if let Some(arg) = context(ContextKind::InvalidArg) {
                 if !arg.starts_with('-') {

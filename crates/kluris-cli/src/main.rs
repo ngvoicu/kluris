@@ -51,6 +51,36 @@ enum Command {
     },
     #[command(
         args_override_self = true,
+        about = "Search a brain's neurons, glossary, and brain.md for a query string.",
+        long_about = SEARCH_HELP
+    )]
+    Search {
+        #[arg(value_name = "QUERY")]
+        query: String,
+        /// Specific brain
+        #[arg(long = "brain", value_name = "BRAIN", allow_hyphen_values = true)]
+        brain: Option<String>,
+        /// Filter to neurons under this lobe
+        #[arg(long, value_name = "LOBE", allow_hyphen_values = true)]
+        lobe: Option<String>,
+        /// Filter to neurons with this frontmatter tag
+        #[arg(long, value_name = "TAG", allow_hyphen_values = true)]
+        tag: Option<String>,
+        /// Max number of results (default 10)
+        #[arg(
+            long,
+            value_name = "INTEGER",
+            default_value = "10",
+            allow_hyphen_values = true,
+            value_parser = commands::search::parse_limit
+        )]
+        limit: i64,
+        /// JSON output
+        #[arg(long)]
+        json: bool,
+    },
+    #[command(
+        args_override_self = true,
         about = "Show brain status and recent changes."
     )]
     Status {
@@ -83,6 +113,20 @@ glossary.md, and every map.md.
   kluris wake-up --brain foo     # target a specific brain when 2+ are registered
   kluris wake-up --json          # machine-readable (for agents)";
 
+/// v2's `search` docstring.
+const SEARCH_HELP: &str = "Search a brain's neurons, glossary, and brain.md for a query string.
+
+Searches:
+  - neuron file paths, titles, and frontmatter tags
+  - neuron body text (with a 200-char snippet around the first match)
+  - glossary terms and definitions
+  - brain.md body content
+
+Examples:
+  kluris search \"oauth\"
+  kluris search \"raw sql\" --lobe knowledge --json
+  kluris search \"auth\" --tag oauth --limit 5";
+
 /// The `--help` flag Click gives every command.
 fn help_flag() -> Arg {
     Arg::new("help")
@@ -110,8 +154,26 @@ fn command() -> clap::Command {
 }
 
 fn parse(args: &[OsString]) -> Result<Cli, clap::Error> {
-    let matches = command().try_get_matches_from(args)?;
+    let mut root = command();
+    let matches = root
+        .try_get_matches_from_mut(args)
+        .map_err(|e| with_usage(e, &mut root, args))?;
     Cli::from_arg_matches(&matches)
+}
+
+/// A value parser's error carries no usage line; Click prints the command's
+/// (`Usage: kluris search [OPTIONS] QUERY`), so it is added.
+fn with_usage(mut err: clap::Error, root: &mut clap::Command, args: &[OsString]) -> clap::Error {
+    use clap::error::{ContextKind, ContextValue, ErrorKind};
+    if err.kind() != ErrorKind::ValueValidation || err.get(ContextKind::Usage).is_some() {
+        return err;
+    }
+    let name = args.get(1).map(|a| a.to_string_lossy().into_owned());
+    if let Some(sub) = name.and_then(|n| root.find_subcommand_mut(n)) {
+        let usage = sub.render_usage();
+        err.insert(ContextKind::Usage, ContextValue::StyledStr(usage));
+    }
+    err
 }
 
 /// `kluris __resolve [--brain NAME] [--allow-all] [--json]`: the resolver of
@@ -133,6 +195,21 @@ fn run(cli: Cli) -> Result<(), CliError> {
     match cli.command {
         Command::List { json } => commands::list::run(json),
         Command::WakeUp { brain, json } => commands::wake_up::run(brain.as_deref(), json),
+        Command::Search {
+            query,
+            brain,
+            lobe,
+            tag,
+            limit,
+            json,
+        } => commands::search::run(&commands::search::Options {
+            query: &query,
+            brain: brain.as_deref(),
+            lobe: lobe.as_deref(),
+            tag: tag.as_deref(),
+            limit,
+            json,
+        }),
         Command::Status { brain, json } => commands::status::run(brain.as_deref(), json),
         Command::Help { command, json } => commands::help::run(command.as_deref(), json),
     }

@@ -11,6 +11,9 @@ repository.workspace = true
 indexmap.workspace = true
 num-bigint.workspace = true
 regex.workspace = true
+rust-stemmers.workspace = true
+unicode-normalization.workspace = true
+unicode-segmentation.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

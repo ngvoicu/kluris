@@ -10,6 +10,7 @@ pub mod help;
 pub mod list;
 pub mod pyrepr;
 pub mod resolve;
+pub mod search;
 pub mod status;
 pub mod wake_up;
 pub mod yaml;

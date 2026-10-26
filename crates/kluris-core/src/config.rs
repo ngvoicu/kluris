@@ -5,6 +5,10 @@
 //! fields must be YAML strings, unknown keys are ignored (and so dropped by
 //! the next write). Writing is `yaml.dump(model_dump(), sort_keys=False)`:
 //! the [`Profile::Config`] emitter, in the models' field order.
+//!
+//! One exception: a brain's `search: {language: ...}`, which v2 ignores, is
+//! read for `kluris search` and written back after `companions`
+//! (PAR-021).
 
 use std::collections::BTreeSet;
 use std::ffi::OsStr;
@@ -91,6 +95,16 @@ pub struct BrainConfig {
     pub agents: AgentsConfig,
     /// As written; [`companions::normalize`] gives the known ones.
     pub companions: Vec<String>,
+    /// Kluris 3's `search:` settings (v2 ignores the key).
+    pub search: SearchConfig,
+}
+
+/// A brain's `search:` settings in `kluris.yml`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SearchConfig {
+    /// `search.language` as written (`en`, `ro`); `None` when absent or not
+    /// a string, and then not written back.
+    pub language: Option<String>,
 }
 
 impl BrainConfig {
@@ -101,6 +115,7 @@ impl BrainConfig {
             description: String::new(),
             agents: AgentsConfig::default(),
             companions: Vec::new(),
+            search: SearchConfig::default(),
         }
     }
 }
@@ -291,11 +306,20 @@ pub fn parse_brain_config(text: &str) -> Result<BrainConfig, String> {
         Some(_) => return Err("'agents' must be a mapping".into()),
     };
     let companions = string_list_field(&root, "companions")?.unwrap_or_default();
+    // Never an error: v2 ignores the key, so a brain v2 reads must read here.
+    let language = match root.get("search") {
+        Some(Value::Map(search)) => match search.get("language") {
+            Some(Value::Str(language)) => Some(language.clone()),
+            _ => None,
+        },
+        _ => None,
+    };
     Ok(BrainConfig {
         name,
         description,
         agents,
         companions,
+        search: SearchConfig { language },
     })
 }
 
@@ -357,18 +381,23 @@ pub fn global_config_to_yaml(config: &GlobalConfig) -> String {
 }
 
 /// A brain's `kluris.yml` as v2 writes it (`model_dump` order: name,
-/// description, agents.commands_for, companions).
+/// description, agents.commands_for, companions), then `search` when it has
+/// a language.
 pub fn brain_config_to_yaml(config: &BrainConfig) -> String {
     let agents = Map::from([(
         "commands_for".to_string(),
         str_seq(&config.agents.commands_for),
     )]);
-    let root = Map::from([
+    let mut root = Map::from([
         ("name".to_string(), str_value(&config.name)),
         ("description".to_string(), str_value(&config.description)),
         ("agents".to_string(), Value::Map(agents)),
         ("companions".to_string(), str_seq(&config.companions)),
     ]);
+    if let Some(language) = &config.search.language {
+        let search = Map::from([("language".to_string(), str_value(language))]);
+        root.insert("search".to_string(), Value::Map(search));
+    }
     yaml::emit(&root, Profile::Config)
 }
 

@@ -11,9 +11,9 @@ use std::path::{Path, PathBuf};
 use indexmap::IndexMap;
 use kluris_core::config::{
     AgentsConfig, BrainConfig, BrainEntry, ConfigErrorKind, DEFAULT_AGENT_COMMANDS, GlobalConfig,
-    brain_config_to_yaml, global_config_path, global_config_to_yaml, home_dir, parse_brain_config,
-    parse_global_config, read_brain_config, read_global_config, register_brain, unregister_brain,
-    write_brain_config, write_global_config,
+    SearchConfig, brain_config_to_yaml, global_config_path, global_config_to_yaml, home_dir,
+    parse_brain_config, parse_global_config, read_brain_config, read_global_config, register_brain,
+    unregister_brain, write_brain_config, write_global_config,
 };
 
 const BETA_DESCRIPTION: &str = "Équipe données — connaissances partagées über alles, naïve café façade 日本語 and a long tail to fold";
@@ -73,6 +73,7 @@ fn brain(name: &str, description: &str, agents: &[&str], companions: &[&str]) ->
             commands_for: strings(agents),
         },
         companions: strings(companions),
+        search: SearchConfig::default(),
     }
 }
 
@@ -848,4 +849,31 @@ fn brain_paths_are_stored_as_given() {
     ]);
     let text = global_config_to_yaml(&cfg);
     assert_eq!(parse_global_config(&text).unwrap(), cfg);
+}
+
+#[test]
+fn the_search_language_key_is_read_and_kept_on_rewrite() {
+    // v2 ignores (and drops) the key; Kluris 3 reads it for `kluris search`
+    // and writes it back after `companions`.
+    let text =
+        "name: alpha\ndescription: ''\ncompanions: []\nsearch:\n  language: ro\n  other: 1\n";
+    let cfg = parse_brain_config(text).unwrap();
+    assert_eq!(cfg.search.language.as_deref(), Some("ro"));
+    let written = brain_config_to_yaml(&cfg);
+    assert!(
+        written.ends_with("companions: []\nsearch:\n  language: ro\n"),
+        "{written}"
+    );
+    assert_eq!(parse_brain_config(&written).unwrap(), cfg);
+    // Without the key nothing changes; a malformed key is ignored, as in v2.
+    for text in [
+        "name: alpha\n",
+        "name: alpha\nsearch: 5\n",
+        "name: alpha\nsearch:\n  language: [en]\n",
+        "name: alpha\nsearch: {}\n",
+    ] {
+        let cfg = parse_brain_config(text).unwrap();
+        assert_eq!(cfg.search.language, None, "{text}");
+        assert!(!brain_config_to_yaml(&cfg).contains("search"), "{text}");
+    }
 }
