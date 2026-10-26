@@ -175,8 +175,9 @@ try {
         $install = Invoke-Installer 'ByPass' "irm '$download/kluris-installer.ps1' | iex" @{ KLURIS_DOWNLOAD_URL = $download }
     }
     Write-Output $install.Out
-    if ($install.Err) { Write-Output $install.Err }
-    if ($install.Code -ne 0) { throw "the installer exited with $($install.Code)" }
+    # Windows PowerShell writes its progress and information records to a
+    # redirected stderr as CLIXML: shown only when the install failed.
+    if ($install.Code -ne 0) { throw "the installer exited with $($install.Code): $($install.Err)" }
     if ($install.Out -notmatch 'kluris installed\. Open a new terminal, then run: kluris doctor') { throw 'the installer did not print the success message' }
 
     $bin = Join-Path $sandbox '.kluris\bin'
@@ -215,7 +216,8 @@ try {
     Step "kluris --version: $($ver.Out.Trim())"
     $doctor = Invoke-Child $found 'doctor --json' $freshEnv $work
     if ($doctor.Code -ne 0) { throw "kluris doctor --json exited $($doctor.Code): $($doctor.Out) $($doctor.Err)" }
-    $report = ($doctor.Out -split "`r?`n" | Where-Object { $_.Trim() })[-1] | ConvertFrom-Json
+    $last = @($doctor.Out -split "`r?`n" | Where-Object { $_.Trim() })[-1]
+    try { $report = $last | ConvertFrom-Json } catch { throw "kluris doctor --json printed no JSON ($($_.Exception.Message)): stdout [$($doctor.Out)] stderr [$($doctor.Err)]" }
     $pathCheck = $report.checks | Where-Object { $_.name -eq 'path' }
     if (-not $report.ok -or -not $pathCheck.passed -or $pathCheck.warning -or $pathCheck.detail -ne $exe) { throw "kluris doctor --json is not ok with this binary first on PATH: $($doctor.Out)" }
     Step "kluris doctor --json: ok; $(($report.checks | ForEach-Object { "$($_.name) $(if ($_.passed) { 'passed' } else { 'FAILED' })" }) -join ', ')"
