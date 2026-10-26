@@ -19,10 +19,15 @@ rust-stemmers.workspace = true
 unicode-normalization.workspace = true
 unicode-segmentation.workspace = true
 
-# The uninstall pre-flight's access checks (faccessat with AT_EACCESS);
-# already in the graph through tempfile.
+# The uninstall pre-flight's access checks (faccessat with AT_EACCESS) and
+# killing a timed-out git's process group; already in the graph through
+# tempfile.
 [target.'cfg(unix)'.dependencies]
 rustix.workspace = true
+
+# A timed-out git's process tree ends with its job object.
+[target.'cfg(windows)'.dependencies]
+windows-sys.workspace = true
 
 [dev-dependencies]
 insta.workspace = true

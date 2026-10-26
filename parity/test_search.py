@@ -39,7 +39,7 @@ from pathlib import Path
 import pytest
 
 from harness import IS_WINDOWS, PARITY_DIR, Sandbox, normalize, oracle_kluris, run_both, run_v2, run_v3
-from runs import clear_runs, parse_exact, write_config
+from runs import clear_runs, parse_exact, run_v2_after_pull, team_brain, write_config
 
 WORKSPACE = PARITY_DIR.parent
 FIXTURES = WORKSPACE / "crates" / "kluris-core" / "tests" / "fixtures" / "brains"
@@ -555,3 +555,40 @@ def test_a_backslash_file_name_is_searched(sandbox):
     assert not failures, "\n".join(failures)
     r = run_v3(["search", "zebra", "--brain", "bs", "--json"], sandbox.env)
     assert [x["file"] for x in parse_exact(r.stdout, sandbox.root, "v3")["results"]] == ["k/x/y.md"]
+
+
+# --- fresh reads (PAR-073) ----------------------------------------------------
+
+
+def _items(doc: dict) -> list[tuple[str, str]]:
+    return sorted((r["file"], r["title"]) for r in doc["results"])
+
+
+def test_fresh_read_with_nothing_new_finds_what_v2_finds(sandbox):
+    team_brain(sandbox, teammate_pushed=False)
+    sandbox.freeze()
+    r = run_both(sandbox, ["search", "jwt", "--json"])
+    assert r["v2"].code == r["v3"].code == 0
+    j2, j3 = parse_exact(r["v2"].stdout, sandbox.root, "v2"), parse_exact(r["v3"].stdout, sandbox.root, "v3")
+    check_shape(j3, "team", "jwt", 10)
+    assert _items(j3) == _items(j2)
+    assert r["v3"].stderr == ""
+    assert r["v3"].tree == r["v2"].tree
+
+
+def test_fresh_read_finds_a_teammates_push(sandbox):
+    # v3 fast-forwards before searching: it finds what v2 finds on the brain
+    # pulled by hand, with v2's keys (and v3's PAR-020 ones) only.
+    team_brain(sandbox, teammate_pushed=True)
+    sandbox.freeze()
+    r = run_both(sandbox, ["search", "zebras", "--json"])
+    pulled = run_v2_after_pull(sandbox, ["search", "zebras", "--json"])
+    assert r["v2"].code == r["v3"].code == pulled.code == 0
+    j2 = parse_exact(r["v2"].stdout, sandbox.root, "v2")
+    jp = parse_exact(pulled.stdout, sandbox.root, "v2")
+    j3 = parse_exact(r["v3"].stdout, sandbox.root, "v3")
+    assert j2["results"] == []
+    check_shape(j3, "team", "zebras", 10)
+    assert _items(j3) == _items(jp) == [("k/zebra.md", "Zebra")]
+    assert r["v3"].stderr == ""
+    assert r["v3"].tree == pulled.tree

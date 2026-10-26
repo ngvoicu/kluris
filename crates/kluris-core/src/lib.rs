@@ -17,6 +17,7 @@ pub mod help;
 pub mod json;
 pub mod list;
 pub mod mri;
+pub mod process;
 pub mod pycase;
 pub mod pyrepr;
 pub mod register;

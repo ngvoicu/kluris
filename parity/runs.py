@@ -15,7 +15,8 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from harness import IS_WINDOWS, Result, Sandbox, _decode, normalize, oracle_kluris, remove_tree, run_v3
+from harness import IS_WINDOWS, Result, Sandbox, _decode, normalize, oracle_kluris, remove_tree, run_v3, snapshot_tree
+from harness import run_v2 as _run_v2
 
 def write_config(sb: Sandbox, brains: list[tuple[str, str, str]]) -> None:
     """Write ``config.yml`` with ``(name, path, description)`` brains, in
@@ -251,3 +252,57 @@ __all__ = [
     "IS_WINDOWS", "PtyResult", "assert_wake_up_equal", "clear_runs", "issue_key", "parse_exact", "slash_paths",
     "run_pair", "run_pty", "same_words", "transcript", "write_config",
 ]
+
+
+# --- fresh reads (PAR-073) ----------------------------------------------------
+
+
+def git(sb: Sandbox, cwd: Path, *args: str) -> str:
+    out = subprocess.run(["git", *args], cwd=cwd, env=sb.env, capture_output=True, text=True, encoding="utf-8")
+    assert out.returncode == 0, f"git {args}: {out.stderr}"
+    return out.stdout.strip()
+
+
+def _write(root: Path, rel: str, text: str) -> None:
+    path = root / rel
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8", newline="\n")
+
+
+def team_brain(sb: Sandbox, *, teammate_pushed: bool) -> Path:
+    """A bare remote under ``work/``, a teammate's clone, and the clone that
+    is registered as the brain ``team`` (its branch tracks the remote's
+    ``main``). With ``teammate_pushed`` the teammate pushes ``k/zebra.md``
+    after the brain was cloned, so only a fresh read sees it. Not frozen."""
+    remote, teammate, brain = sb.work / "remote.git", sb.work / "teammate", sb.work / "brains" / "team"
+    git(sb, sb.work, "init", "-q", "--bare", "-b", "main", str(remote))
+    git(sb, sb.work, "clone", "-q", str(remote), str(teammate))
+    _write(teammate, "brain.md", "# team\n\n## Lobes\n\n- [k](k/map.md)\n")
+    _write(teammate, "glossary.md", "# Glossary\n\n**JWT** - JSON Web Token\n")
+    _write(teammate, "k/map.md", "# k\n")
+    _write(teammate, "k/jwt.md", "---\nparent: map.md\nupdated: 2026-02-03\n---\n# JWT tokens\n\nWe sign every JWT.\n")
+    git(sb, teammate, "add", "-A")
+    git(sb, teammate, "commit", "-q", "-m", "seed")
+    git(sb, teammate, "push", "-q", "-u", "origin", "main")
+    brain.parent.mkdir(parents=True, exist_ok=True)
+    git(sb, sb.work, "clone", "-q", str(remote), str(brain))
+    if teammate_pushed:
+        _write(teammate, "k/zebra.md", "---\nparent: map.md\nupdated: 2026-03-01\n---\n# Zebra\n\nAll about zebras.\n")
+        git(sb, teammate, "add", "-A")
+        git(sb, teammate, "commit", "-q", "-m", "zebra")
+        git(sb, teammate, "push", "-q")
+    write_config(sb, [("team", str(brain), "")])
+    return brain
+
+
+def run_v2_after_pull(sb: Sandbox, args: list[str]) -> Result:
+    """v2 on a copy of the frozen state whose brain was first brought up to
+    date by hand (``git pull --ff-only``): what a v3 fresh read must show."""
+    sb.checkout()
+    try:
+        git(sb, sb.work / "brains" / "team", "pull", "-q", "--ff-only")
+        result = _run_v2(args, sb.env)
+        result.tree = snapshot_tree(sb.work)
+    finally:
+        sb.stash("v2-pulled")
+    return result

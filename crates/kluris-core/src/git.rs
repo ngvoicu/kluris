@@ -181,14 +181,15 @@ impl SystemGit {
     }
 
     /// A variable as the runs see it: the last change, else the process's.
-    fn env_var(&self, key: &str) -> Option<OsString> {
+    pub(crate) fn env_var(&self, key: &str) -> Option<OsString> {
         match self.env.iter().rev().find(|(k, _)| k == key) {
             Some((_, value)) => value.clone(),
             None => std::env::var_os(key),
         }
     }
 
-    fn command(&self, dir: Option<&Path>, args: &[&str]) -> Command {
+    /// git with `args`, in `dir` when given, with this runner's environment.
+    pub(crate) fn command(&self, dir: Option<&Path>, args: &[&str]) -> Command {
         let mut cmd = Command::new(&self.program);
         cmd.args(args);
         if let Some(dir) = dir {

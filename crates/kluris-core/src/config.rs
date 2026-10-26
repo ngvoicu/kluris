@@ -6,9 +6,10 @@
 //! the next write). Writing is `yaml.dump(model_dump(), sort_keys=False)`:
 //! the [`Profile::Config`] emitter, in the models' field order.
 //!
-//! One exception: a brain's `search: {language: ...}`, which v2 ignores, is
-//! read for `kluris search` and written back after `companions`
-//! (PAR-021).
+//! Two exceptions: a brain's `search: {language: ...}`, which v2 ignores, is
+//! read for `kluris search` and written back after `companions` (PAR-021);
+//! its `sync: {auto_fetch: ...}`, also ignored by v2, is read for the fresh
+//! reads of `wake-up` and `search` and written back after `search` (PAR-072).
 
 use std::collections::BTreeSet;
 use std::ffi::OsStr;
@@ -97,6 +98,8 @@ pub struct BrainConfig {
     pub companions: Vec<String>,
     /// Kluris 3's `search:` settings (v2 ignores the key).
     pub search: SearchConfig,
+    /// Kluris 3.1's `sync:` settings (v2 ignores the key).
+    pub sync: SyncConfig,
 }
 
 /// A brain's `search:` settings in `kluris.yml`.
@@ -105,6 +108,14 @@ pub struct SearchConfig {
     /// `search.language` as written (`en`, `ro`); `None` when absent or not
     /// a string, and then not written back.
     pub language: Option<String>,
+}
+
+/// A brain's `sync:` settings in `kluris.yml`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SyncConfig {
+    /// `sync.auto_fetch` as written (`false` turns the fresh reads off);
+    /// `None` when absent or not a boolean, and then not written back.
+    pub auto_fetch: Option<bool>,
 }
 
 impl BrainConfig {
@@ -116,6 +127,7 @@ impl BrainConfig {
             agents: AgentsConfig::default(),
             companions: Vec::new(),
             search: SearchConfig::default(),
+            sync: SyncConfig::default(),
         }
     }
 }
@@ -314,12 +326,20 @@ pub fn parse_brain_config(text: &str) -> Result<BrainConfig, String> {
         },
         _ => None,
     };
+    let auto_fetch = match root.get("sync") {
+        Some(Value::Map(sync)) => match sync.get("auto_fetch") {
+            Some(Value::Bool(on)) => Some(*on),
+            _ => None,
+        },
+        _ => None,
+    };
     Ok(BrainConfig {
         name,
         description,
         agents,
         companions,
         search: SearchConfig { language },
+        sync: SyncConfig { auto_fetch },
     })
 }
 
@@ -382,7 +402,7 @@ pub fn global_config_to_yaml(config: &GlobalConfig) -> String {
 
 /// A brain's `kluris.yml` as v2 writes it (`model_dump` order: name,
 /// description, agents.commands_for, companions), then `search` when it has
-/// a language.
+/// a language and `sync` when it has `auto_fetch`.
 pub fn brain_config_to_yaml(config: &BrainConfig) -> String {
     let agents = Map::from([(
         "commands_for".to_string(),
@@ -397,6 +417,10 @@ pub fn brain_config_to_yaml(config: &BrainConfig) -> String {
     if let Some(language) = &config.search.language {
         let search = Map::from([("language".to_string(), str_value(language))]);
         root.insert("search".to_string(), Value::Map(search));
+    }
+    if let Some(auto_fetch) = config.sync.auto_fetch {
+        let sync = Map::from([("auto_fetch".to_string(), Value::Bool(auto_fetch))]);
+        root.insert("sync".to_string(), Value::Map(sync));
     }
     yaml::emit(&root, Profile::Config)
 }

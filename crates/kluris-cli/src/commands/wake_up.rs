@@ -17,7 +17,9 @@ pub fn run(brain: Option<&str>, as_json: bool) -> Result<(), CliError> {
     let Some(brain) = brains.first() else {
         return Ok(());
     };
-    let store = LocalGitStore::open(Path::new(&py_path_str(&brain.entry.path)));
+    let root = py_path_str(&brain.entry.path);
+    super::fresh_read(Path::new(&root));
+    let store = LocalGitStore::open(Path::new(&root));
     let payload = wake_up(
         &store,
         &brain.name,

@@ -38,6 +38,7 @@ pub fn run(options: &Options) -> Result<(), CliError> {
         return Ok(());
     };
     let root = py_path_str(&brain.entry.path);
+    super::fresh_read(Path::new(&root));
     let language = read_brain_config(Path::new(&root))
         .ok()
         .and_then(|cfg| cfg.search.language)
