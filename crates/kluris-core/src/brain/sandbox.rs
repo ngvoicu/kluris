@@ -168,7 +168,6 @@ mod windows {
 
     fn is_loop(e: &io::Error) -> bool {
         e.raw_os_error() == Some(ERROR_CANT_RESOLVE_FILENAME)
-            || e.kind() == io::ErrorKind::FilesystemLoop
     }
 
     /// `\\?\C:\x` -> `C:\x` (`\\?\UNC\...` is kept).
@@ -216,7 +215,7 @@ mod windows {
         let normal = normpath(path);
         let mut head = normal.clone();
         let mut tail: Vec<std::ffi::OsString> = Vec::new();
-        let out = loop {
+        let mut out = loop {
             match fs::canonicalize(&head) {
                 Ok(real) => break strip_verbatim(real),
                 Err(_) => {
@@ -234,7 +233,6 @@ mod windows {
                 }
             }
         };
-        let mut out = out;
         for name in tail.iter().rev() {
             out.push(name);
         }

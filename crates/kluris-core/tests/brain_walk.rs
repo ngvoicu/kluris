@@ -520,12 +520,14 @@ fn store_reads_through_inside_links_and_refuses_the_rest() {
 fn resolve_follows_python_path_resolve() {
     let Some(b) = links_brain() else { return };
     let r = &b.root;
-    // `..` after a symlink is physical: lobe/up -> .. is the brain root, so
-    // lobe/up/.. is the brain's parent (lexically it would be lobe/).
-    assert_eq!(
-        sandbox::resolve(&r.join(native("lobe/up/../links/to-inlink.md"))).unwrap(),
-        r.join("to-inlink.md")
-    );
+    // On POSIX `..` after a symlink is physical: lobe/up -> .. is the brain
+    // root, so lobe/up/.. is the brain's parent. Python's ntpath.realpath
+    // normalizes lexically first, so on Windows lobe/up/.. is lobe/.
+    let up = sandbox::resolve(&r.join(native("lobe/up/../links/to-inlink.md"))).unwrap();
+    #[cfg(not(windows))]
+    assert_eq!(up, r.join("to-inlink.md"));
+    #[cfg(windows)]
+    assert_eq!(up, r.join(native("lobe/links/to-inlink.md")));
     assert_eq!(
         sandbox::resolve(&r.join(native("lobe/inlink.md"))).unwrap(),
         r.join(native("lobe/a.md"))
