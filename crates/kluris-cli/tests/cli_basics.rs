@@ -30,13 +30,13 @@ fn yaml_path(path: &Path) -> String {
 }
 
 #[test]
-fn version_prints_kluris_3_dev() {
+fn version_prints_the_release_version() {
     let home = TempDir::new().unwrap();
     kluris(home.path())
         .arg("--version")
         .assert()
         .success()
-        .stdout("kluris 3.0.0-dev\n");
+        .stdout("kluris 3.0.0-rc.1\n");
 }
 
 #[test]
