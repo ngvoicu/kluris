@@ -29,7 +29,9 @@ use crate::commands::sync::{entry, text};
 use crate::error::CliError;
 use crate::output::human;
 use crate::output::json::{self, Json};
-use crate::platform::service::{STOP, SystemRunner, catch_stop_signals, env as service_env};
+use crate::platform::service::{
+    STOP, SystemRunner, catch_stop_signals, env as service_env, stop_when_parent_ends,
+};
 use crate::resolve::resolve_brains;
 
 pub struct Options<'a> {
@@ -143,6 +145,10 @@ fn watch_brains(options: &Options, out: &mut Out) -> Result<(), CliError> {
     let git = SystemGit::new().shielded();
     check_git(&git).map_err(|e| CliError::new(e.to_string()))?;
     catch_stop_signals();
+    if options.log_file.is_some() {
+        // The Windows service's watch.
+        stop_when_parent_ends();
+    }
     let roots: Vec<(String, PathBuf)> = brains
         .iter()
         .map(|b| (b.name.clone(), PathBuf::from(py_path_str(&b.entry.path))))

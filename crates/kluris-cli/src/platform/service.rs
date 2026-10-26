@@ -138,3 +138,67 @@ pub fn catch_stop_signals() {
         SetConsoleCtrlHandler(Some(handler), TRUE);
     }
 }
+
+/// Set [`STOP`] once the process that started this one ends: the Windows
+/// service runs the watch under `conhost.exe --headless`, and `schtasks
+/// /End` ends conhost without its child. Unix services signal the watch
+/// itself, so there it does nothing.
+#[cfg(windows)]
+pub fn stop_when_parent_ends() {
+    use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
+    use windows_sys::Win32::System::Diagnostics::ToolHelp::{
+        CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW,
+        TH32CS_SNAPPROCESS,
+    };
+    use windows_sys::Win32::System::Threading::{
+        GetCurrentProcessId, INFINITE, OpenProcess, PROCESS_SYNCHRONIZE, WaitForSingleObject,
+    };
+
+    // SAFETY: plain Win32 calls; the entry is a live local of the stated
+    // size, and the snapshot handle is closed once, here.
+    let parent = unsafe {
+        let me = GetCurrentProcessId();
+        let snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+        if snapshot == INVALID_HANDLE_VALUE {
+            return;
+        }
+        let mut entry = PROCESSENTRY32W {
+            dwSize: u32::try_from(std::mem::size_of::<PROCESSENTRY32W>()).unwrap_or(0),
+            ..Default::default()
+        };
+        let mut parent = None;
+        let mut more = Process32FirstW(snapshot, &mut entry) != 0;
+        while more {
+            if entry.th32ProcessID == me {
+                parent = Some(entry.th32ParentProcessID);
+                break;
+            }
+            more = Process32NextW(snapshot, &mut entry) != 0;
+        }
+        CloseHandle(snapshot);
+        parent
+    };
+    let Some(parent) = parent else {
+        return;
+    };
+    // SAFETY: opens a handle only waited on, by the thread that owns it.
+    let handle = unsafe { OpenProcess(PROCESS_SYNCHRONIZE, 0, parent) };
+    if handle.is_null() {
+        // Already gone (or not ours to watch).
+        return;
+    }
+    // A raw handle is not Send; its value is.
+    let raw = handle as usize;
+    std::thread::spawn(move || {
+        // SAFETY: the handle opened above, waited on then closed once.
+        unsafe {
+            let handle = raw as windows_sys::Win32::Foundation::HANDLE;
+            WaitForSingleObject(handle, INFINITE);
+            CloseHandle(handle);
+        }
+        STOP.store(true, Ordering::SeqCst);
+    });
+}
+
+#[cfg(unix)]
+pub fn stop_when_parent_ends() {}
