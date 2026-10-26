@@ -43,9 +43,17 @@
 # 10. An unsearchable ~/.config/fish/conf.d (T-118): the same.
 # 11. macOS: the receipt with the immutable flag (`chflags uchg`, T-118):
 #    the same.
-# 7 to 11 are stopped by the pre-flight (T-119): every file under the
+# 12. `--purge` with ~/.kluris moved to a dotfiles folder and linked back,
+#    and a protected (0555) folder in its companions (T-129): the same,
+#    and the rerun keeps the link and its folder, emptied.
+# 13. The same with a registered brain and its generated skills.
+# 14. macOS: the same with the immutable flag on the companion folder.
+# 7 to 14 are stopped by the pre-flight (T-119): every file under the
 # sandbox HOME is byte-identical after the blocked run, and its JSON lists
 # the blockers.
+# 15. ~/.config/kluris a link to a dotfiles folder before the install, and
+# 16. ~/.kluris/bin one (T-129): the uninstall finishes, removes what the
+#    installer put there and keeps the link and its target.
 #
 # The local server and the JSON checks run on KLURIS_SMOKE_PYTHON (default
 # python3). Exits 0 when every check passes, 1 at the first failure.
@@ -402,12 +410,17 @@ done
 step "the rerun after the fish failure finished"
 
 # A blocked uninstall ($case, the obstacle made by the function `obstacle`
-# and cleared by `clear_obstacle`), then a rerun that finishes.
+# and cleared by `clear_obstacle`; `setup` runs after the install, `$purge`
+# is --purge or empty), then a rerun that finishes.
+setup() { :; }
+purge=""
 blocked_then_rerun() {
     fresh_install "$case"
+    setup
     inventory > "$work/$case-before"
     obstacle
-    if in_sandbox "$sandbox/.kluris/bin/kluris" self-uninstall --yes --json > "$work/$case-1.json" 2>&1; then
+    # shellcheck disable=SC2086 # $purge is one flag or none
+    if in_sandbox "$sandbox/.kluris/bin/kluris" self-uninstall $purge --yes --json > "$work/$case-1.json" 2>&1; then
         clear_obstacle
         cat "$work/$case-1.json"
         fail "$case: self-uninstall succeeded through its obstacle"
@@ -416,7 +429,8 @@ blocked_then_rerun() {
     assert_retry_possible
     blockers=$(assert_blocked "$case")
     step "$case: exit 1, nothing changed: $blockers"
-    in_sandbox "$sandbox/.kluris/bin/kluris" self-uninstall --yes --json > "$work/$case-2.json" 2>&1 \
+    # shellcheck disable=SC2086 # $purge is one flag or none
+    in_sandbox "$sandbox/.kluris/bin/kluris" self-uninstall $purge --yes --json > "$work/$case-2.json" 2>&1 \
         || { cat "$work/$case-2.json"; fail "$case: the rerun failed"; }
     for gone in .kluris/bin/kluris .config/kluris/kluris-receipt.json .config/kluris/env.sh .config/kluris/env.fish .config/fish/conf.d/kluris.env.fish; do
         [ ! -e "$sandbox/$gone" ] || fail "$case: the rerun left ~/$gone"
@@ -441,5 +455,98 @@ if [ "$(uname -s)" = Darwin ]; then
     blocked_then_rerun
     cases="$cases, immutable-receipt"
 fi
+
+# The link $1 (under the sandbox) still points at $2, a folder with nothing
+# left in it.
+assert_link_kept() {
+    [ -L "$1" ] || fail "$case: the user's link $1 went"
+    [ "$(readlink "$1")" = "$2" ] || fail "$case: the link $1 points elsewhere now"
+    [ -d "$2" ] || fail "$case: the link's folder $2 went"
+    left_over=$(find "$2" -mindepth 1 | tr '\n' ' ')
+    [ -z "$left_over" ] || fail "$case: $2 still holds $left_over"
+}
+
+# 12. A linked ~/.kluris with a protected companion folder, purged.
+link_dot_kluris() {
+    mkdir -p "$sandbox/dotfiles"
+    mv "$sandbox/.kluris" "$sandbox/dotfiles/kluris"
+    ln -s "$sandbox/dotfiles/kluris" "$sandbox/.kluris"
+    mkdir -p "$sandbox/.kluris/companions/protected"
+    printf 'remaining data\n' > "$sandbox/.kluris/companions/protected/notes.txt"
+}
+purge=--purge
+case=linked-kluris-protected
+sandbox="$work/home-$case"
+setup() { link_dot_kluris; }
+obstacle() { chmod 555 "$sandbox/.kluris/companions/protected"; }
+clear_obstacle() { chmod 755 "$sandbox/.kluris/companions/protected"; }
+blocked_then_rerun
+assert_link_kept "$sandbox/.kluris" "$sandbox/dotfiles/kluris"
+step "$case: the link and its folder kept, the folder emptied"
+cases="$cases, $case"
+
+# 13. The same with a registered brain and its skills.
+case=linked-kluris-brain
+sandbox="$work/home-$case"
+setup() {
+    mkdir -p "$sandbox/brains"
+    # shellcheck disable=SC2016 # $HOME is the sandbox shell's
+    fresh 'kluris create lc-brain --type personal --path "$HOME/brains" --description "Life-cycle smoke" --json' \
+        > "$work/$case-create.json" 2>&1 || { cat "$work/$case-create.json"; fail "$case: kluris create failed"; }
+    [ -f "$sandbox/.agents/skills/kluris-lc-brain/SKILL.md" ] || fail "$case: no generated skill"
+    link_dot_kluris
+}
+blocked_then_rerun
+assert_link_kept "$sandbox/.kluris" "$sandbox/dotfiles/kluris"
+[ -f "$sandbox/brains/lc-brain/brain.md" ] || fail "$case: the purge removed the brain"
+[ ! -e "$sandbox/.agents/skills/kluris-lc-brain" ] || fail "$case: the purge left the generated skill"
+step "$case: the brain kept, its skills gone, the link and its folder kept"
+cases="$cases, $case"
+
+# 14. The same with the immutable flag (macOS).
+if [ "$(uname -s)" = Darwin ]; then
+    case=linked-kluris-immutable
+    sandbox="$work/home-$case"
+    setup() { link_dot_kluris; }
+    obstacle() { chflags uchg "$sandbox/.kluris/companions/protected"; }
+    clear_obstacle() { chflags nouchg "$sandbox/.kluris/companions/protected"; }
+    blocked_then_rerun
+    assert_link_kept "$sandbox/.kluris" "$sandbox/dotfiles/kluris"
+    step "$case: the link and its folder kept, the folder emptied"
+    cases="$cases, $case"
+fi
+purge=""
+setup() { :; }
+
+# 15 and 16. An install into a linked folder, then the uninstall.
+for rel in .config/kluris .kluris/bin; do
+    case=linked-$(basename "$rel")
+    sandbox="$work/home-$case"
+    target="$sandbox/dotfiles/$(basename "$rel")"
+    mkdir -p "$target" "$(dirname "$sandbox/$rel")"
+    ln -s "$target" "$sandbox/$rel"
+    fresh_install "$case"
+    case $rel in
+        .config/kluris) installed=kluris-receipt.json ;;
+        *) installed=kluris ;;
+    esac
+    [ -f "$target/$installed" ] || fail "$case: the installer did not write $installed into the linked folder"
+    in_sandbox "$sandbox/.kluris/bin/kluris" self-uninstall --yes --json > "$work/$case.json" 2>&1 \
+        || { cat "$work/$case.json"; fail "$case: self-uninstall failed"; }
+    json_check "$work/$case.json" "$sandbox/$rel" <<'PY'
+import json, sys
+with open(sys.argv[1], encoding="utf-8") as handle:
+    v = json.loads(handle.read().splitlines()[-1])
+assert v["ok"] and v["failed"] == [] and v["left"] == [], v
+assert sys.argv[2] in v["kept"], v["kept"]
+PY
+    for gone in .config/kluris/kluris-receipt.json .config/kluris/env.sh .config/kluris/env.fish .config/fish/conf.d/kluris.env.fish; do
+        [ ! -e "$sandbox/$gone" ] || fail "$case: the uninstall left ~/$gone"
+    done
+    [ ! -e "$target/kluris" ] || fail "$case: the uninstall left the binary"
+    assert_link_kept "$sandbox/$rel" "$target"
+    step "$case: exit 0, the installer's files gone, ~/$rel and its folder kept"
+    cases="$cases, $case"
+done
 
 step "ok ($(uname -s) $(uname -m), v$old -> v$new -> uninstalled; $cases)"

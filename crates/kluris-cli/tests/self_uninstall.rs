@@ -1348,10 +1348,30 @@ fn assert_blocked_then_finishes(
     undo: impl FnOnce(),
     blocked_path: &Path,
 ) {
+    assert_blocked_then_finishes_with(h, purge, &[], obstacle, undo, blocked_path);
+}
+
+/// [`assert_blocked_then_finishes`] with these registered brains.
+fn assert_blocked_then_finishes_with(
+    h: &Home,
+    purge: bool,
+    brains: &[(String, PathBuf)],
+    obstacle: impl FnOnce(),
+    undo: impl FnOnce(),
+    blocked_path: &Path,
+) {
     let before = tree(&h.root);
     obstacle();
     let receipt = h.receipt();
-    let report = uninstall(&request(h, &receipt, purge), None, &mut remove_file).unwrap();
+    let report = uninstall(
+        &UninstallRequest {
+            brains,
+            ..request(h, &receipt, purge)
+        },
+        None,
+        &mut remove_file,
+    )
+    .unwrap();
     undo();
     assert!(!report.ok(), "the uninstall should have been blocked");
     assert!(
@@ -1379,7 +1399,15 @@ fn assert_blocked_then_finishes(
     );
 
     let receipt = h.receipt();
-    let report = uninstall(&request(h, &receipt, purge), None, &mut remove_file).unwrap();
+    let report = uninstall(
+        &UninstallRequest {
+            brains,
+            ..request(h, &receipt, purge)
+        },
+        None,
+        &mut remove_file,
+    )
+    .unwrap();
     assert!(
         report.ok(),
         "the rerun: {:?} {:?}",
@@ -1595,4 +1623,180 @@ fn cli_a_blocked_uninstall_lists_the_blockers_and_changes_nothing() {
     assert!(text.contains("Nothing was changed"), "{text}");
     assert!(text.contains("conf.d"), "{text}");
     assert!(!text.contains("uninstalled"), "{text}");
+}
+
+// Folders the user made links (T-129, SPEC decision 2026-10-26 on the
+// pre-flight): a purge checks the very tree it removes, through a linked
+// ~/.kluris as the removal goes through it; a folder the uninstall would
+// remove once empty is kept when it is a link, the link and its target
+// both, and listed in `kept`; the files Kluris installed in it still go.
+
+/// Move `home/<rel>` to `root/dotfiles/<rel's name>` and link it back;
+/// returns (link, target).
+#[cfg(unix)]
+fn relink(h: &Home, rel: &str) -> (PathBuf, PathBuf) {
+    let link = h.home.join(rel);
+    let target = h.root.join("dotfiles").join(link.file_name().unwrap());
+    fs::create_dir_all(target.parent().unwrap()).unwrap();
+    fs::rename(&link, &target).unwrap();
+    std::os::unix::fs::symlink(&target, &link).unwrap();
+    (link, target)
+}
+
+#[cfg(unix)]
+fn assert_link_kept(link: &Path, target: &Path) {
+    assert!(
+        fs::symlink_metadata(link).unwrap().file_type().is_symlink(),
+        "{} is no longer the user's link",
+        link.display()
+    );
+    assert_eq!(fs::read_link(link).unwrap(), target);
+    assert!(target.is_dir(), "{} went", target.display());
+}
+
+/// A linked ~/.kluris with a protected folder in its companions: blocked
+/// with nothing changed, then a purge that keeps the link and its folder.
+#[cfg(unix)]
+fn assert_linked_dot_kluris_purge(
+    brains: impl Fn(&Home) -> Vec<(String, PathBuf)>,
+    protect: impl Fn(&Path, bool),
+) {
+    let h = Home::installed();
+    let (link, target) = relink(&h, ".kluris");
+    let protected = link.join("companions/protected");
+    fs::create_dir_all(&protected).unwrap();
+    fs::write(protected.join("notes.txt"), "remaining data\n").unwrap();
+    let brains = brains(&h);
+    assert_blocked_then_finishes_with(
+        &h,
+        true,
+        &brains,
+        || protect(&protected, true),
+        || protect(&protected, false),
+        &protected,
+    );
+    assert_link_kept(&link, &target);
+    assert_eq!(
+        fs::read_dir(&target).unwrap().count(),
+        0,
+        "the purge left files in ~/.kluris"
+    );
+    h.assert_installer_files_gone();
+    assert!(h.home.join("brains/b1/brain.md").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn a_linked_dot_kluris_with_a_protected_folder_blocks_a_purge_before_any_change() {
+    assert_linked_dot_kluris_purge(
+        |_| Vec::new(),
+        |dir, on| chmod(dir, if on { 0o555 } else { 0o755 }),
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_linked_dot_kluris_blocks_a_purge_with_a_registered_brain_before_any_change() {
+    assert_linked_dot_kluris_purge(
+        |h| vec![("b1".to_string(), h.home.join("brains/b1"))],
+        |dir, on| chmod(dir, if on { 0o555 } else { 0o755 }),
+    );
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn a_linked_dot_kluris_with_an_immutable_folder_blocks_a_purge_before_any_change() {
+    assert_linked_dot_kluris_purge(|_| Vec::new(), uchg);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_linked_dot_kluris_is_kept_by_a_purge() {
+    let h = Home::installed();
+    let (link, target) = relink(&h, ".kluris");
+    let receipt = h.receipt();
+    let report = uninstall(&request(&h, &receipt, true), None, &mut remove_file).unwrap();
+    assert!(report.ok(), "{:?} {:?}", report.failed, report.blocked);
+    assert!(report.purged);
+    assert!(report.kept.contains(&link), "{:?}", report.kept);
+    assert_link_kept(&link, &target);
+    assert_eq!(fs::read_dir(&target).unwrap().count(), 0);
+    h.assert_installer_files_gone();
+}
+
+/// An install into linked folders: the uninstall finishes, removes the
+/// files it installed there and keeps the link and its target.
+#[cfg(unix)]
+fn assert_linked_folder_kept(rel: &str, purge: bool) {
+    let h = Home::installed();
+    if purge {
+        // Nothing of the user's in ~/.kluris but the bin folder.
+        fs::remove_dir_all(h.home.join(".kluris/companions")).unwrap();
+        fs::remove_file(h.home.join(".kluris/config.yml")).unwrap();
+    }
+    let (link, target) = relink(&h, rel);
+    let receipt = h.receipt();
+    let report = uninstall(&request(&h, &receipt, purge), None, &mut remove_file).unwrap();
+    assert!(
+        report.ok(),
+        "{:?} {:?} {:?}",
+        report.failed,
+        report.left,
+        report.blocked
+    );
+    assert!(report.left.is_empty(), "{:?}", report.left);
+    assert!(report.kept.contains(&link), "{:?}", report.kept);
+    assert_link_kept(&link, &target);
+    assert_eq!(
+        fs::read_dir(&target).unwrap().count(),
+        0,
+        "the installer's files in {} were not removed",
+        target.display()
+    );
+    assert!(!h.receipt.exists() && !h.prefix.join(exe_name()).exists());
+    h.assert_rc_files_restored();
+}
+
+#[cfg(unix)]
+#[test]
+fn a_linked_receipt_folder_is_kept_with_its_target() {
+    assert_linked_folder_kept(".config/kluris", false);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_linked_bin_folder_is_kept_with_its_target() {
+    assert_linked_folder_kept(".kluris/bin", false);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_linked_receipt_folder_is_kept_by_a_purge() {
+    assert_linked_folder_kept(".config/kluris", true);
+}
+
+/// A linked ~/.kluris/bin is in ~/.kluris, which a purge removes: the link
+/// goes with ~/.kluris (never followed), its target and everything the
+/// installer did not put there stay.
+#[cfg(unix)]
+#[test]
+fn a_purge_removes_dot_kluris_with_a_linked_bin_folder_in_it_but_not_the_target() {
+    let h = Home::installed();
+    let (_link, target) = relink(&h, ".kluris/bin");
+    fs::write(target.join("mine.txt"), "the user's\n").unwrap();
+    let receipt = h.receipt();
+    let report = uninstall(&request(&h, &receipt, true), None, &mut remove_file).unwrap();
+    assert!(
+        report.ok(),
+        "{:?} {:?} {:?}",
+        report.failed,
+        report.left,
+        report.blocked
+    );
+    assert!(!h.home.join(".kluris").exists());
+    assert!(!target.join(exe_name()).exists());
+    assert_eq!(
+        fs::read_to_string(target.join("mine.txt")).unwrap(),
+        "the user's\n"
+    );
 }
