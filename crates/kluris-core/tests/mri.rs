@@ -122,6 +122,8 @@ fn every_markdown_file_but_readme_is_a_node_then_opted_in_yaml() {
 
 #[test]
 fn pruned_directories_and_escaping_symlinks_are_not_graphed() {
+    // The escaping symlink is Unix's: elsewhere there is no outside brain.
+    #[cfg(unix)]
     let outside = brain(&[("secret.md", "# Secret\n")]);
     let dir = brain(&[
         ("projects/a.md", "# A\n"),

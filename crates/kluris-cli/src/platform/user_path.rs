@@ -98,8 +98,10 @@ impl UserPath for RegistryUserPath {
         }
         data.truncate(len as usize);
         let units: Vec<u16> = data
-            .chunks_exact(2)
-            .map(|c| u16::from_le_bytes([c[0], c[1]]))
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|pair| u16::from_le_bytes(*pair))
             .collect();
         let text = String::from_utf16(&units)
             .map_err(|_| io::Error::other("the user PATH is not valid UTF-16; left as it is"))?;
