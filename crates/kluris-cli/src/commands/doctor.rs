@@ -18,6 +18,10 @@ pub fn run(no_refresh: bool, as_json: bool) -> Result<(), CliError> {
     let copilot_home = copilot_home();
     let path_var = std::env::var_os("PATH");
     let current_exe = std::env::current_exe().ok();
+    // Old binaries a Windows self-update left beside this one.
+    if let Some(dir) = current_exe.as_deref().and_then(|exe| exe.parent()) {
+        kluris_core::dist::swap::remove_stale_old(dir);
+    }
     let report = doctor::run(&DoctorRequest {
         config_path: &config_path,
         home: &home,

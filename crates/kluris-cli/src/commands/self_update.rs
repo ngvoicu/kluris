@@ -11,9 +11,15 @@
 //!    root of a (flat) zip, as dist builds them; its SHA-256 must match
 //!    the release's `sha256.sum` and GitHub's digest when there is one, or
 //!    nothing is replaced.
-//! 4. The binary is replaced in place (`self_replace`, Windows included),
-//!    the receipt's `version` updated, then the new binary runs as a fresh
+//! 4. The checked binary is extracted into a private temp folder, then
+//!    `kluris_core::dist::swap` stages it beside the installed one, runs it
+//!    with `--version` (it must print `kluris <that version>`), and swaps it
+//!    in so that any failure leaves the installed kluris as it was. Then
+//!    the receipt's `version` is updated and the new binary runs as a fresh
 //!    process, `<install path> doctor`, and its exit code is the command's.
+//!    On Windows the old exe (still running) is moved out to be deleted
+//!    when this process ends; old ones a swap left are swept at the start
+//!    of `self-update` and `doctor`.
 //!
 //! `KLURIS_GITHUB_TOKEN` is sent when set (never `GITHUB_TOKEN`).
 //! `KLURIS_GITHUB_API_URL` replaces `https://api.github.com` for a GitHub
@@ -25,6 +31,7 @@ use std::fs;
 use std::path::Path;
 use std::process::{Command, Stdio};
 
+use kluris_core::dist::swap::{RealSteps, SwapRequest, remove_stale_old, swap};
 use kluris_core::dist::{
     self, REPO_NAME, REPO_OWNER, Receipt, ReceiptError, SUMS_ASSET, archive_name, binary_in_archive,
 };
@@ -60,6 +67,7 @@ pub fn run(check: bool, version: Option<&str>, as_json: bool) -> Result<(), CliE
             installed.display()
         )));
     }
+    remove_stale_old(&receipt.install_prefix);
     let api = Api::from_env()?;
 
     // `--version` names the release; otherwise the listing's newest decides.
@@ -84,7 +92,7 @@ pub fn run(check: bool, version: Option<&str>, as_json: bool) -> Result<(), CliE
             }
         }
     };
-    let release = install(&api, &wanted, &exe)?;
+    let release = install(&api, &wanted, &installed)?;
     let new_version = release.version().to_string();
     let receipt_note = receipt
         .write_version(&receipt_path, &new_version)
@@ -210,8 +218,13 @@ fn semver_ok(v: &str) -> bool {
     self_update::version::bump_is_greater(v, v).is_ok()
 }
 
-/// Download, verify and put release `version` in place of `exe`.
-fn install(api: &Api, version: &str, exe: &Path) -> Result<self_update::Release, CliError> {
+/// Download and verify release `version`, then swap its binary in for
+/// `installed` (`kluris_core::dist::swap`).
+fn install(api: &Api, version: &str, installed: &Path) -> Result<self_update::Release, CliError> {
+    // self_update extracts the checked binary here, never over `installed`.
+    let extracted = tempfile::tempdir()
+        .map_err(|e| CliError::new(format!("Cannot make a temporary folder: {e}")))?;
+    let new_binary = extracted.path().join(dist::APP_NAME);
     let want = archive_name(TARGET);
     let matcher_want = want.clone();
     let mut builder = github::Update::configure();
@@ -222,7 +235,7 @@ fn install(api: &Api, version: &str, exe: &Path) -> Result<self_update::Release,
         .target(TARGET)
         .current_version(CURRENT)
         .release_tag(format!("v{version}"))
-        .bin_install_path(exe)
+        .bin_install_path(&new_binary)
         .bin_path_in_archive(binary_in_archive(TARGET))
         .asset_matcher(move |assets| assets.iter().find(|a| a.name() == matcher_want).cloned())
         .checksum_from_asset(SUMS_ASSET)
@@ -243,12 +256,38 @@ fn install(api: &Api, version: &str, exe: &Path) -> Result<self_update::Release,
         .build()
         .and_then(|u| u.update_extended())
         .map_err(|e| update_error(&e, Some((version, &want))))?;
-    match status {
-        ReleaseStatus::Updated(release) => Ok(release),
-        _ => Err(CliError::new(format!(
-            "Release v{version} was not installed; nothing was replaced."
-        ))),
+    let release = match status {
+        ReleaseStatus::Updated(release) => release,
+        _ => {
+            return Err(CliError::new(format!(
+                "Release v{version} was not installed; nothing was replaced."
+            )));
+        }
+    };
+    let swapped = swap(
+        &SwapRequest {
+            installed,
+            new_binary: &new_binary,
+            version: release.version(),
+            windows: cfg!(windows),
+        },
+        &mut RealSteps::default(),
+    )
+    .map_err(|e| {
+        let tag = release.version();
+        CliError::new(if e.kept_installed() {
+            format!("Release v{tag} was not installed: {e}; nothing was replaced.")
+        } else {
+            format!("Release v{tag} was not installed: {e}.")
+        })
+    })?;
+    // The old exe is this running process's: moved out of the install
+    // folder now and deleted once the process ends. If that cannot be
+    // scheduled, the next self-update or doctor sweeps it.
+    if let Some(old) = swapped.old {
+        let _ = self_replace::self_delete_at(&old);
     }
+    Ok(release)
 }
 
 /// Why the receipt does not let this copy update.

@@ -941,7 +941,8 @@ fn every_page_of_the_listing_is_read() {
 /// doctor runs.
 #[test]
 fn an_unusable_release_replaces_nothing() {
-    let cases: Vec<(&str, Box<dyn Fn(&Fixture) -> Vec<u8>>)> = vec![
+    type MakeBinary = Box<dyn Fn(&Fixture) -> Vec<u8>>;
+    let cases: Vec<(&str, MakeBinary)> = vec![
         ("wrong format", Box::new(|_| common::wrong_format())),
         (
             "--version exits 1",

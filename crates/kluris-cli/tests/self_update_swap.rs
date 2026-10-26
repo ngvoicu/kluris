@@ -18,7 +18,11 @@ mod common;
 const CURRENT: &str = env!("CARGO_PKG_VERSION");
 
 fn exe_name() -> &'static str {
-    if cfg!(windows) { "kluris.exe" } else { "kluris" }
+    if cfg!(windows) {
+        "kluris.exe"
+    } else {
+        "kluris"
+    }
 }
 
 /// An install folder holding a copy of the built `kluris`, and a release's
@@ -81,11 +85,25 @@ impl Setup {
 
     /// The installed kluris is the old one, byte for byte, and runs.
     fn assert_old_kluris_works(&self, case: &str) {
-        assert!(fs::read(&self.installed).unwrap() == self.old, "{case}: bytes");
-        let out = Command::new(&self.installed).arg("--version").output().unwrap();
+        assert!(
+            fs::read(&self.installed).unwrap() == self.old,
+            "{case}: bytes"
+        );
+        let out = Command::new(&self.installed)
+            .arg("--version")
+            .output()
+            .unwrap();
         assert_eq!(out.status.code(), Some(0), "{case}");
-        assert_eq!(String::from_utf8_lossy(&out.stdout), format!("kluris {CURRENT}\n"), "{case}");
-        assert_eq!(self.names(), vec![exe_name().to_string()], "{case}: leftovers");
+        assert_eq!(
+            String::from_utf8_lossy(&out.stdout),
+            format!("kluris {CURRENT}\n"),
+            "{case}"
+        );
+        assert_eq!(
+            self.names(),
+            vec![exe_name().to_string()],
+            "{case}: leftovers"
+        );
     }
 }
 
@@ -198,7 +216,10 @@ fn a_good_swap_puts_the_new_binary_in_place() {
         let s = Setup::new();
         let Swapped { old } = swap(&s.request(windows), &mut RealSteps::default())
             .unwrap_or_else(|e| panic!("windows: {windows}: {e}"));
-        assert!(fs::read(&s.installed).unwrap() == s.new, "windows: {windows}");
+        assert!(
+            fs::read(&s.installed).unwrap() == s.new,
+            "windows: {windows}"
+        );
         let names = s.names();
         if windows {
             // The old binary stays beside the new one (a running exe cannot
@@ -249,10 +270,7 @@ fn a_real_failed_swap_on_windows_restores_kluris() {
         }
         fn rename(&mut self, from: &Path, to: &Path) -> io::Result<()> {
             if name_has(from, ".new-") {
-                let _held = fs::OpenOptions::new()
-                    .read(true)
-                    .share_mode(0)
-                    .open(from)?;
+                let _held = fs::OpenOptions::new().read(true).share_mode(0).open(from)?;
                 return self.0.rename(from, to);
             }
             self.0.rename(from, to)

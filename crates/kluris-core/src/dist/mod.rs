@@ -18,6 +18,7 @@
 //! Every name derives from [`APP_NAME`], dist's app name.
 
 mod receipt;
+pub mod swap;
 mod uninstall;
 
 use std::path::{Path, PathBuf};
