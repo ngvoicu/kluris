@@ -39,6 +39,10 @@
 #    blocks the uninstall, exit 1, with every file under the sandbox and the
 #    user PATH as they were; once the attribute is cleared a rerun removes
 #    kluris.exe, the receipt and the user PATH entry.
+# 8. .kluris\bin, and 9. LOCALAPPDATA\kluris, a junction to a folder made
+#    before the install (T-129): the install writes through it, and the
+#    uninstall exits 0, removes what the installer put there and the user
+#    PATH entry, and keeps the junction and its folder.
 #
 # Exits 0 when every check passes and the PATH comparison holds, 1 otherwise.
 param(
@@ -328,6 +332,39 @@ try {
     $userAfter3 = Read-Environment ([Microsoft.Win32.Registry]::CurrentUser) 'Environment'
     if (@($userAfter3.Text -split ';') -contains $bin3) { throw "the rerun left $bin3 in the user PATH" }
     Step 'the rerun finished: kluris.exe, the receipt and the user PATH entry gone'
+
+    # 8 and 9. Installs into junctioned folders.
+    foreach ($rel in @('.kluris\bin', 'AppData\Local\kluris')) {
+        $name = if ($rel -eq '.kluris\bin') { 'junction-bin' } else { 'junction-receipt' }
+        $sandbox = Join-Path $work "home-$name"
+        $localAppData = Join-Path $sandbox 'AppData\Local'
+        $null = New-Item -ItemType Directory -Force -Path $sandbox, $localAppData, (Join-Path $sandbox '.kluris')
+        $sandboxEnv['HOME'] = $sandbox; $sandboxEnv['USERPROFILE'] = $sandbox; $sandboxEnv['LOCALAPPDATA'] = $localAppData
+        $junction = Join-Path $sandbox $rel
+        $target = Join-Path $sandbox "dotfiles\$name"
+        $null = New-Item -ItemType Directory -Force -Path $target
+        $null = New-Item -ItemType Junction -Path $junction -Target $target
+        $install = Invoke-Installer "irm '$download/kluris-installer.ps1' | iex" @{ KLURIS_DOWNLOAD_URL = $download }
+        if ($install.Code -ne 0) { throw "${name}: the installer refused the junction $rel (exit $($install.Code)): $($install.Out) $($install.Err)" }
+        $exe4 = Join-Path $sandbox '.kluris\bin\kluris.exe'
+        $receipt4 = Join-Path $localAppData 'kluris\kluris-receipt.json'
+        $written = if ($name -eq 'junction-bin') { 'kluris.exe' } else { 'kluris-receipt.json' }
+        if (-not (Test-Path -LiteralPath (Join-Path $target $written))) { throw "${name}: the installer did not write $written through the junction" }
+        $run4 = Invoke-Child $exe4 'self-uninstall --yes --json' $sandboxEnv.Clone() $work
+        if ($run4.Code -ne 0) { throw "${name}: self-uninstall exited $($run4.Code): $($run4.Out) $($run4.Err)" }
+        $json4 = Last-Json $run4 "$name self-uninstall"
+        $kept4 = @($json4.kept) | ForEach-Object { $_.Replace('/', '\') }
+        if (-not $json4.ok -or @($json4.left).Count -ne 0 -or $kept4 -notcontains $junction) { throw "${name}: not kept as the user's link: $($run4.Out)" }
+        $null = Wait-Until { -not (Test-Path -LiteralPath $exe4) }
+        if ((Test-Path -LiteralPath $exe4) -or (Test-Path -LiteralPath $receipt4)) { throw "${name}: the uninstall left kluris.exe or the receipt" }
+        $item = Get-Item -LiteralPath $junction -Force -ErrorAction SilentlyContinue
+        if (-not $item -or $item.LinkType -ne 'Junction') { throw "${name}: the junction $rel went" }
+        if (-not (Test-Path -LiteralPath $target -PathType Container)) { throw "${name}: the junction's folder went" }
+        if (@(Get-ChildItem -LiteralPath $target -Force).Count -ne 0) { throw "${name}: the junction's folder still holds $((Get-ChildItem -LiteralPath $target -Force | ForEach-Object { $_.Name }) -join ', ')" }
+        $user4 = Read-Environment ([Microsoft.Win32.Registry]::CurrentUser) 'Environment'
+        if (@($user4.Text -split ';') -contains (Join-Path $sandbox '.kluris\bin')) { throw "${name}: the uninstall left its user PATH entry" }
+        Step "${name}: the install wrote through the junction $rel; the uninstall exit 0, the installer's files and the user PATH entry gone, the junction and its folder kept"
+    }
 } catch {
     $failure = $_
 } finally {
@@ -346,5 +383,5 @@ if (-not $restored) {
     Write-Output 'lifecycle-smoke: FAIL: the user PATH was not written back identically'
     exit 1
 }
-Step "ok (Windows $env:PROCESSOR_ARCHITECTURE, v$Old -> v$New -> uninstalled; no-modify-path, read-only-receipt)"
+Step "ok (Windows $env:PROCESSOR_ARCHITECTURE, v$Old -> v$New -> uninstalled; no-modify-path, read-only-receipt, junction-bin, junction-receipt)"
 exit 0

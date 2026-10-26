@@ -520,7 +520,7 @@ setup() { :; }
 
 # 15 and 16. An install into a linked folder, then the uninstall.
 for rel in .config/kluris .kluris/bin; do
-    case=linked-$(basename "$rel")
+    case=linked-$(printf '%s' "${rel#.}" | tr '/.' '--')
     sandbox="$work/home-$case"
     target="$sandbox/dotfiles/$(basename "$rel")"
     mkdir -p "$target" "$(dirname "$sandbox/$rel")"

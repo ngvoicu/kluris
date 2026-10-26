@@ -346,6 +346,16 @@ package, hence the package `kluris`.
   a Windows file. Anything in the way: exit 1, nothing changed, each
   blocker in `blocked` (`{path, problem, fix}` in the JSON). Not checked:
   Windows ACLs and Linux `chattr` flags.
+- **The user's folder links stay** (T-131): a folder the uninstall would
+  remove (the bin folder, the receipt's folder, under `--purge` ~/.kluris)
+  that is a link (or a Windows junction) is never removed, nor is the
+  folder it points to; what Kluris put in it goes, and the link is in
+  `kept`. A purge through a linked ~/.kluris checks and removes each entry
+  of its folder, nested links not followed; a link inside a plain
+  ~/.kluris goes with it, never its target. The life cycles install into
+  linked folders (Unix: ~/.config/kluris, ~/.kluris/bin, a linked
+  ~/.kluris purged; Windows: junctioned `.kluris\bin` and
+  `LOCALAPPDATA\kluris`).
 - **`self-uninstall`'s order keeps what a retry needs**: with `modify_path`
   false (KLURIS_NO_MODIFY_PATH=1) no rc file, env script, fish file or PATH
   entry is touched. Otherwise: the rc lines first (a failure stops
