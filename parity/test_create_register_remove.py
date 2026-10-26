@@ -60,6 +60,11 @@ NAME_REQUIRED = "Brain name is required in non-interactive mode. Run 'kluris cre
 PATH_REQUIRED = "Brain path is required in non-interactive mode. Run 'kluris register <path>'."
 
 
+def at(rel: str) -> str:
+    """``<ROOT>`` + ``rel`` (``/``-separated) as the OS prints a path."""
+    return "<ROOT>" + (rel.replace("/", "\\") if IS_WINDOWS else rel)
+
+
 @pytest.fixture
 def sandbox(tmp_path, oracle):
     return Sandbox(tmp_path)
@@ -78,10 +83,16 @@ def git_state(repo: Path, env: dict[str, str]) -> dict | None:
         proc = subprocess.run(["git", *args], cwd=repo, env=env, capture_output=True, text=True)
         return proc.stdout if proc.returncode == 0 else f"<exit {proc.returncode}> {proc.stderr.strip()}"
 
+    head, tree = git("rev-parse", "HEAD"), git("ls-tree", "-r", "HEAD")
+    if IS_WINDOWS:
+        # v2 writes the files CRLF there and v3 LF (PAR-035), so the blob and
+        # commit hashes differ; the paths, modes and the rest must not.
+        head = "<HEAD>"
+        tree = "".join(f"{line.split(' ', 2)[0]} {line.split(chr(9), 1)[-1]}\n" for line in tree.splitlines())
     return {
-        "head": git("rev-parse", "HEAD"),
+        "head": head,
         "branch": git("symbolic-ref", "HEAD"),
-        "tree": git("ls-tree", "-r", "HEAD"),
+        "tree": tree,
         "log": git("log", "--format=%an <%ae>|%cn <%ce>|%aI|%cI|%s"),
         "remote": git("remote", "-v"),
         "status": git("status", "--porcelain", "--ignored"),
@@ -224,7 +235,15 @@ def expected_v3(v2_tree: dict[str, bytes], rewritten_yml: set[str] = frozenset()
     return exp
 
 
+def _lf(tree: dict[str, bytes]) -> dict[str, bytes]:
+    return {k: v.replace(b"\r\n", b"\n") for k, v in tree.items()}
+
+
 def assert_tree(v3_tree: dict[str, bytes], exp: dict[str, bytes]) -> None:
+    if IS_WINDOWS:
+        # v2 writes text files CRLF there, v3 creates them LF and keeps an
+        # existing file's endings (PAR-005, PAR-029, PAR-035).
+        v3_tree, exp = _lf(v3_tree), _lf(exp)
     changed = sorted(k for k in set(exp) | set(v3_tree) if exp.get(k) != v3_tree.get(k))
     assert not changed, {k: (v3_tree.get(k, b"<none>")[:300], exp.get(k, b"<none>")[:300]) for k in changed[:6]}
 
@@ -379,24 +398,24 @@ ERRORS = {
     "digit-first": (["9x"], "Brain name '9x' is invalid. Use lowercase letters, numbers, and hyphens only."),
     "dot": ([".x"], "Brain name '.x' is invalid. Use lowercase letters, numbers, and hyphens only."),
     "empty": ([""], "Brain name '' is invalid. Use lowercase letters, numbers, and hyphens only."),
-    "registered": (["taken"], "A brain named 'taken' is already registered at <ROOT>/work/brains/taken. "
+    "registered": (["taken"], f"A brain named 'taken' is already registered at {at('/work/brains/taken')}. "
                               "Choose a different name."),
     "path-file": (["new", "--path", "afile"], "--path 'afile' is not a directory."),
     "path-missing": (["new", "--path", "no/such"], "--path 'no/such' is not a directory."),
     "path-brain": (["new", "--path", "brains/taken"],
                    "--path 'brains/taken' is already a brain. Pass the parent directory, not the brain itself."),
     "inside-brain": (["inner", "--path", "brains/taken/projects"],
-                     "Target path <ROOT>/work/brains/taken/projects/inner is inside existing brain "
-                     "'<ROOT>/work/brains/taken'. Create the brain outside of other brains."),
+                     f"Target path {at('/work/brains/taken/projects/inner')} is inside existing brain "
+                     f"'{at('/work/brains/taken')}'. Create the brain outside of other brains."),
     "not-empty": (["full", "--path", "brains"],
-                  "<ROOT>/work/brains/full already exists and is not empty. "
+                  f"{at('/work/brains/full')} already exists and is not empty. "
                   "Choose a different name or use --path to specify a location."),
     "has-yml": (["hasyml", "--path", "brains"],
-                "<ROOT>/work/brains/hasyml already contains a kluris.yml. Use a different name."),
+                f"{at('/work/brains/hasyml')} already contains a kluris.yml. Use a different name."),
     "order-reserved": (["all", "--path", "afile"],
                        "'all' is a reserved brain name (used by --brain all). Pick a different name."),
     "order-registered": (["taken", "--path", "afile"],
-                         "A brain named 'taken' is already registered at <ROOT>/work/brains/taken. "
+                         f"A brain named 'taken' is already registered at {at('/work/brains/taken')}. "
                          "Choose a different name."),
     "order-path": (["inner", "--path", "brains/taken"],
                    "--path 'brains/taken' is already a brain. Pass the parent directory, not the brain itself."),
@@ -502,10 +521,13 @@ def test_from_config_escape_is_v2_damage(sandbox: Sandbox):
 
 
 def wizard_transcript(stdout: str) -> str:
-    """The prompts: everything up to the last ``Choice [4]: `` (or all of
-    stdout when there is none)."""
+    """The prompts: everything up to the last ``Choice [4]: ``, or without
+    the picker up to the result (human output, compared by wording only)."""
     at = stdout.rfind("Choice [4]: ")
-    return stdout if at < 0 else stdout[: at + len("Choice [4]: ")]
+    if at >= 0:
+        return stdout[: at + len("Choice [4]: ")]
+    ends = [i for i in (stdout.find("Brain created:"), stdout.find("Brain registered:")) if i >= 0]
+    return stdout[: min(ends)] if ends else stdout
 
 
 def assert_wizard(r: dict[str, Result], sb: Sandbox, yml: set[str]) -> None:
@@ -739,7 +761,7 @@ def test_a_git_failure_leaves_the_brain_unregistered(sandbox: Sandbox):
     assert v3.code == 1
     error = json_of(v3, sandbox)["error"]
     assert error.startswith("`git checkout -b bad..name` failed (exit "), error
-    assert "<ROOT>/work/demo" in error and "not registered" in error, error
+    assert at("/work/demo") in error and "not registered" in error, error
     assert "home/.kluris/config.yml" not in v3.tree
     assert "demo/brain.md" in v3.tree, "the scaffold is left on disk, as the message says"
 
@@ -875,7 +897,7 @@ def test_register_by_home_and_symlink(sandbox: Sandbox):
     if not IS_WINDOWS:
         r = run_trees(sandbox, ["register", "link", "--json"])
         assert_same_run(r, sandbox)
-        assert json_of(r["v3"], sandbox)["path"] == "<ROOT>/work/home/brains/team"
+        assert json_of(r["v3"], sandbox)["path"] == at("/work/home/brains/team")
 
 
 def test_register_with_an_unreadable_kluris_yml(sandbox: Sandbox):
@@ -902,6 +924,33 @@ def test_register_prompts_on_a_terminal(sandbox: Sandbox):
     assert v3.stdout.startswith("\nRegister a brain\n\n  Path to brain directory:   Path to brain directory: \n")
     same_words(v2.stdout, v3.stdout, sandbox.root)
     assert_tree(v3.tree, expected_v3(v2.tree, {"brains/team/kluris.yml"}))
+
+
+@pty_only
+def test_register_end_of_input_at_the_picker(sandbox: Sandbox):
+    """v2 catches Click's ``Abort`` as any other exception: ``Register
+    failed: `` with nothing after it; the ``kluris.yml`` it wrote stays."""
+    team_brain(sandbox, keep_yml=False)
+    sandbox.freeze()
+    r = pty_both(sandbox, ["register"], ["brains/team"])
+    for side in ("v2", "v3"):
+        assert r[side].code == 1 and r[side].stderr == "Error: Register failed: \n", r[side]
+    assert r["v3"].stdout == r["v2"].stdout
+    assert_tree(r["v3"].tree, expected_v3(r["v2"].tree, {"brains/team/kluris.yml"}))
+
+
+@pty_only
+def test_create_end_of_input_at_the_picker(sandbox: Sandbox):
+    """``Aborted!`` after the scaffold: the files stay, nothing is
+    registered or committed (v2 too)."""
+    sandbox.freeze()
+    r = pty_both(sandbox, ["create"], ["wiz", "d", "", "", "1", ""], git=("wiz",))
+    for side in ("v2", "v3"):
+        assert r[side].code == 1 and r[side].stderr == "Aborted!\n", r[side]
+        assert "wiz/brain.md" in r[side].tree and "home/.kluris/config.yml" not in r[side].tree
+    assert r["v3"].stdout == r["v2"].stdout
+    assert_tree(r["v3"].tree, expected_v3(r["v2"].tree, {"wiz/kluris.yml"}))
+    assert r["v3"].git == r["v2"].git
 
 
 @pytest.mark.parametrize("json_flag", [False, True], ids=["text", "json"])
@@ -947,7 +996,7 @@ def test_remove_the_last_brain(sandbox: Sandbox):
     sandbox.freeze()
     r = run_trees(sandbox, ["remove", "only", "--json"])
     assert_same_run(r, sandbox)
-    assert r["v3"].tree["home/.kluris/config.yml"] == b"brains: {}\n"
+    assert r["v3"].tree["home/.kluris/config.yml"].replace(b"\r\n", b"\n") == b"brains: {}\n"
     assert not any("/kluris-" in k for k in r["v3"].tree if k.startswith("home/"))
 
 

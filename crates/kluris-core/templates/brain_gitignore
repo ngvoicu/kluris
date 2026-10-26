@@ -1,0 +1,18 @@
+# Secrets
+.env
+*.key
+*.pem
+*.p12
+*.pfx
+credentials.*
+secrets.*
+
+# Local config (not shared — each user has their own agent/git settings)
+kluris.yml
+
+# Generated
+brain-mri.html
+
+# OS
+.DS_Store
+Thumbs.db

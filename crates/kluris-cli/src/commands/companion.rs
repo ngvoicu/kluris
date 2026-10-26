@@ -1,10 +1,7 @@
 //! `kluris companion list|add|remove [NAME] [--brain NAME|all] [--json]`
 //! (research-03 §1.7-1.9).
 
-use std::io;
-
-use kluris_core::agents::install::{InstallRequest, install_skills, read_brain_configs};
-use kluris_core::companions::prompt::{Aborted, pick_to_add, pick_to_remove};
+use kluris_core::companions::prompt::{pick_to_add, pick_to_remove};
 use kluris_core::companions::{self, BrainOptIns, KNOWN, OptInBrain};
 use kluris_core::config::read_global_config;
 use kluris_core::resolve::ResolvedBrain;
@@ -12,7 +9,9 @@ use kluris_core::resolve::ResolvedBrain;
 use crate::error::CliError;
 use crate::output::human::{self, Painter};
 use crate::output::json::{self, Json};
-use crate::resolve::{AbortOnInterrupt, config_path, copilot_home, home, resolve_brains};
+use crate::prompt::{ask, can_prompt};
+use crate::resolve::{config_path, home, resolve_brains};
+use crate::skills::refresh_skills;
 
 /// The NAME argument's value name: Click shows a `Choice`'s choices.
 pub const NAME_CHOICES: &str = "specmint-core|specmint-tdd|specmint-core-html|specmint-tdd-html";
@@ -33,25 +32,6 @@ fn name_required() -> CliError {
     ))
 }
 
-/// v2 `_wizard_can_prompt`: not `--json`, `KLURIS_NO_PROMPT` not `1`, and
-/// stdin a terminal.
-fn can_prompt(as_json: bool) -> bool {
-    use std::io::IsTerminal;
-    let no_prompt = std::env::var_os("KLURIS_NO_PROMPT").is_some_and(|v| v == "1");
-    !as_json && !no_prompt && io::stdin().is_terminal()
-}
-
-/// Run a picker on the terminal, Ctrl-C and end of input aborting as Click
-/// does.
-fn ask<T>(
-    picker: impl FnOnce(&mut io::StdinLock, &mut io::StdoutLock) -> Result<T, Aborted>,
-) -> Result<T, CliError> {
-    let guard = AbortOnInterrupt::install();
-    let picked = picker(&mut io::stdin().lock(), &mut io::stdout().lock());
-    drop(guard);
-    picked.map_err(|_| CliError::aborted())
-}
-
 fn strings(items: &[String]) -> Json {
     Json::Array(items.iter().map(|s| Json::Str(s.clone())).collect())
 }
@@ -62,21 +42,6 @@ fn names(brains: &[ResolvedBrain]) -> Vec<String> {
 
 fn cli_error(err: impl std::fmt::Display) -> CliError {
     CliError::new(err.to_string())
-}
-
-/// Re-render every registered brain's agent skills (v2 `_do_install`,
-/// whose report `companion add|remove` does not print).
-fn refresh_skills(home: &std::path::Path) -> Result<(), CliError> {
-    let config = read_global_config(&config_path()?).map_err(cli_error)?;
-    let brains = read_brain_configs(&config);
-    let copilot_home = copilot_home();
-    install_skills(&InstallRequest {
-        config: &config,
-        brains: &brains,
-        home,
-        copilot_home: copilot_home.as_deref(),
-    });
-    Ok(())
 }
 
 // --- list ---------------------------------------------------------------------

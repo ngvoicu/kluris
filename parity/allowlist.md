@@ -180,9 +180,9 @@ One entry per difference, under its own heading:
 
 ### PAR-025: root `kluris --help` lists only the ported commands (temporary, until Phase 4 ends)
 - Command: `kluris --help` (and `kluris` with no arguments, which prints the same list)
-- Differs: the Commands section lists only the commands Kluris 3 has ported so far (today `list`, `wake-up`, `search`, `status`, `companion`, `dream`, `mri`, `doctor`, `help`), with v2's one-line descriptions; v2 lists all 13 (with `pack`). `kluris help` (with and without `--json`) lists every command but `pack`, as decided (PAR-018). Temporary: by the end of Phase 4 every command exists and `kluris --help` lists exactly the SPEC acceptance list.
+- Differs: the Commands section lists only the commands Kluris 3 has ported so far (today `create`, `register`, `list`, `wake-up`, `search`, `status`, `companion`, `dream`, `mri`, `remove`, `doctor`, `help`), with v2's one-line descriptions; v2 lists all 13 (with `pack`). `kluris help` (with and without `--json`) lists every command but `pack`, as decided (PAR-018). Temporary: by the end of Phase 4 every command exists and `kluris --help` lists exactly the SPEC acceptance list.
 - Decision: SPEC decision 2026-10-27 (tracebacks) row ("a temporary surface difference (root `kluris --help` listing only ported commands until Phase 4 ends) gets its own allowlist entry marked temporary"); SPEC Deviations [IMPL-K3-18]
-- Tests: `parity/test_list_status_help.py::test_root_help_flag` (each ported command's v2 line; no `pack`), `parity/test_mri.py::test_mri_is_in_the_root_help`
+- Tests: `parity/test_list_status_help.py::test_root_help_flag` (each ported command's v2 line; no `pack`), `parity/test_mri.py::test_mri_is_in_the_root_help`, `parity/test_create_register_remove.py::test_root_help_lists_the_new_commands`
 
 ### PAR-026: SKILL.md placeholder fixes
 - Command: every command that installs agent skills (`create`, `register`, `remove`, `companion add`, `companion remove`, `doctor`); today `companion add`, `companion remove` and `cargo xtask skills-install`
@@ -387,3 +387,53 @@ One entry per difference, under its own heading:
 - Differs: in each folder the install writes or clears, a `.kluris-<brain>.tmp` or `.kluris-<brain>.old` entry for a skill the folder no longer holds is removed and listed in that folder's `removed`, when it is a real folder holding nothing but, at most, a `SKILL.md` file; anything else with such a name is kept. v2 never removes the staging folders of skills it no longer writes.
 - Decision: chief's brief for T-97, 2026-10-26 ("remove stale Kluris staging folders left by a crash"), from the T-90 result's known leftover
 - Tests: `crates/kluris-core/tests/skill_install.rs::{stale_staging_folders_of_gone_skills_are_cleared, staging_like_entries_that_are_not_kluris_are_kept}`, `crates/kluris-cli/tests/doctor.rs::stale_staging_folders_are_removed`
+
+### PAR-056: `create --json` without a name is a JSON error
+- Command: `kluris create --json` with no NAME
+- Differs: v3 prints `{"ok": false, "error": "Brain name is required in non-interactive mode. Run 'kluris create <name>'."}` and exits 1, writing nothing. v2 raises `TypeError: object of type 'NoneType' has no len()` (traceback on stderr, exit 1, no JSON). `create --json ""` (an empty NAME given) is v2's `Brain name '' is invalid. ...` in both.
+- Decision: SPEC decision log 2026-10-27 (every v2 traceback becomes a correct result or a clean Kluris error); research-03 §5 #7; chief's brief for T-100
+- Tests: `crates/kluris-cli/tests/create_fixes.rs::create_json_without_a_name_is_a_json_error`, `parity/test_create_register_remove.py::test_create_without_a_name_and_no_terminal_is_an_error[json]`
+
+### PAR-057: the wizard's brain type is checked like `--type`
+- Command: `kluris create` on a terminal, the `Brain type (...) [product-group]:` prompt
+- Differs: an answer that is not a brain type prints Click's `Choice` message, `Error: 'foo' is not one of 'product-group', 'personal', 'product', 'research', 'blank'.`, and the prompt is asked again (an empty answer is still the default). v2 takes any text: `foo` scaffolds a blank brain (no lobes) reported as `Brain created: wiz (foo)` with `"type": "foo"`, `Lobes: 0`.
+- Decision: interview-01 #5 ("unvalidated wizard brain type"); research-03 §5 #8; chief's brief for T-100
+- Tests: `crates/kluris-cli/tests/create_fixes.rs::{wizard_brain_type_is_checked_like_the_option, wizard_empty_type_answer_is_the_default}`, `parity/test_create_register_remove.py::test_wizard_brain_type_is_checked_like_the_option`
+
+### PAR-058: nothing is asked without a terminal or with `KLURIS_NO_PROMPT=1`
+- Command: `kluris create` and `kluris register` without `--json`, when stdin is not a terminal or `KLURIS_NO_PROMPT` is `1`; `kluris register --json`
+- Differs:
+  - `create`: v3 asks nothing. A missing NAME is the error `Brain name is required in non-interactive mode. Run 'kluris create <name>'.` (exit 1); with a NAME, every other value takes the default `--json` uses (description `<name> knowledge base`, `<cwd>/<name>`, `product-group`, local git on `main`), and the blank line v2's wizard ends with is still printed (the companion picker needs a terminal in both versions). v2 runs its wizard whenever `--json` is absent: from a pipe it reads the answers (an empty pipe aborts with `Aborted!`, exit 1), and on a terminal with `KLURIS_NO_PROMPT=1` it asks anyway.
+  - `register`: without SOURCE, v3's error is `Brain path is required in non-interactive mode. Run 'kluris register <path>'.` (the JSON envelope under `--json`); v2 asks `Path to brain directory:` even under `--json` and aborts on an empty pipe. On a terminal without `--json` and `KLURIS_NO_PROMPT`, both ask as v2 does.
+- Decision: interview-01 #5 ("wizard ignoring no-TTY and `KLURIS_NO_PROMPT`"); research-03 §5 #9 (the `register` path prompt behaves the same way); chief's brief for T-100
+- Tests: `crates/kluris-cli/tests/create_fixes.rs::{without_a_terminal_create_asks_nothing_and_needs_a_name, no_prompt_variable_asks_nothing, without_a_terminal_register_needs_a_path}`, `parity/test_create_register_remove.py::{test_create_without_a_terminal_uses_the_defaults, test_create_without_a_name_and_no_terminal_is_an_error, test_create_with_no_prompt_set_asks_nothing_on_a_terminal, test_register_without_a_path_and_no_terminal_is_an_error}`
+
+### PAR-059: `--from-config` refuses paths, nested values and what v2 cannot read
+- Command: `kluris create --from-config FILE`
+- Differs: v3 stops before writing anything, with an error starting `--from-config: `, when the file's `structure` has a lobe name that is not one plain directory name (empty, `.`, `..`, containing `/` or `\`, on Windows `:`) or a lobe whose value is a mapping or a list, when `structure` is not a mapping (`null`, a list), when the document is a non-empty non-mapping, when the YAML does not load (a key that is not a string included) or the file cannot be read. v2 writes `../escape/map.md` outside the brain, writes a nested value as its Python repr into `map.md` and `brain.md`, and raises (traceback) on the others. Unchanged: an empty or false-like document and a mapping without `structure` give the `--type` lobes, a scalar value is written as Python's `str()` (`42`, `True`, `None`), and the JSON `lobes` count is the `--type` count, as in v2.
+- Decision: interview-01 #5 ("`--from-config` path traversal"); research-03 §5 #10; SPEC decision log 2026-10-27 (tracebacks become clean errors); chief's brief for T-100
+- Tests: `crates/kluris-cli/tests/create_fixes.rs::{from_config_refuses_paths_and_nested_values, from_config_keeps_scalar_values_as_python_text}`, `parity/test_create_register_remove.py::{test_from_config_refuses_paths_and_nested_values, test_from_config_escape_is_v2_damage, test_create_from_config}`
+
+### PAR-060: new brain names follow the stricter rule
+- Command: `kluris create`
+- Differs: a new name must match `^[a-z][a-z0-9]*(-[a-z0-9]+)*$` (at most 48 characters, not `all`). Names v2's rule also refuses get v2's messages; a name only the stricter rule refuses (`a--b`, `a-`, `abc` followed by a newline, which v2's `$` lets through) is `Brain name '<name>' is invalid. Use lowercase letters and numbers, with single hyphens between them (no '--', no '-' at the end).` v2 creates such brains. Brains already registered under a name v2 allowed keep working with every command, and `register` keeps v2's rule for the name it reads from `brain.md`, so a brain v2 made registers under its own name.
+- Decision: SPEC decision log 2026-10-24 (stricter name rule for new brains; research-04: VS Code and OpenCode silently drop skills named with `--` or a trailing `-`); chief's brief for T-100
+- Tests: `crates/kluris-core/src/scaffold.rs` (unit tests: the rule against the pattern for every short name), `crates/kluris-cli/tests/create_fixes.rs::{new_names_follow_the_stricter_rule, v2_names_keep_loading}`, `parity/test_create_register_remove.py::{test_new_names_follow_the_stricter_rule, test_a_registered_name_v2_allowed_still_loads, test_name_rule_against_v2}` (random names: v3 accepts exactly the pattern, a subset of what v2's `validate_brain_name` accepts)
+
+### PAR-061: a failure after the scaffold leaves the brain unregistered and says so
+- Command: `kluris create` (git on or off)
+- Differs: v3 registers the new brain last, after the maps and the first commit; v2 registers it right after `git remote add`, before the maps and the commit. When a step after the scaffold fails (a git command, writing a config file, installing a chosen companion), v3 stops with a clean error, ``<cause> (the brain files are left in <path> and the brain is not registered: delete that directory, or fix the problem and run 'kluris register <path>')``, where a git cause names the command (`` `git checkout -b bad..name` failed (exit 128): fatal: ... ``). Nothing is registered and no skill is installed. v2 raises `CalledProcessError` (traceback, exit 1); a failing `git add` or `git commit` there leaves the brain registered but uncommitted and its skill not installed. When nothing fails, the files, config, skills and commit are v2's.
+- Decision: SPEC decision log 2026-10-27 (tracebacks become clean errors; git-layer fixes cite interview-01 #5); research-03 §5 #11; chief's brief for T-100 ("a git failure after scaffolding: a clean error naming the git command, and the half-created brain is NOT registered")
+- Tests: `crates/kluris-cli/tests/create_fixes.rs::{a_failing_git_command_leaves_the_brain_unregistered, a_failing_commit_leaves_the_brain_unregistered}`, `parity/test_create_register_remove.py::test_a_git_failure_leaves_the_brain_unregistered`
+
+### PAR-062: a target path that is a file is an error
+- Command: `kluris create` when `<path>/<name>` is a file
+- Differs: v3 refuses before writing anything: `<path> already exists and is not a directory. Choose a different name or use --path to specify a location.` (exit 1). v2's checks only look at directories, so its scaffold raises `FileExistsError` (traceback, exit 1).
+- Decision: SPEC decision log 2026-10-27 (every v2 traceback becomes a correct result or a clean Kluris error)
+- Tests: `crates/kluris-cli/tests/create_fixes.rs::a_target_that_is_a_file_is_an_error`
+
+### PAR-063: `Register failed: ` carries v3's reason
+- Command: `kluris register` when the brain's `kluris.yml` (or the global config) does not read, or writing a config fails
+- Differs: the message is `Register failed: ` followed by v3's config error (`Invalid config file <path>: <reason>`), where v2 follows it with Python's exception text (a PyYAML or pydantic message). The prefix, exit code (1) and the JSON envelope are v2's, and nothing is registered in either. End of input at the companion picker is `Register failed: ` with nothing after it in both (v2 catches Click's `Abort` there).
+- Decision: SPEC decision log 2026-10-24 (Kluris's own messages must match; library wording may differ, as Click's usage errors do); the reason text comes from v3's YAML reader and config model, which word errors their own way (as PAR-040's `Invalid config file`)
+- Tests: `parity/test_create_register_remove.py::{test_register_with_an_unreadable_kluris_yml, test_register_end_of_input_at_the_picker}`

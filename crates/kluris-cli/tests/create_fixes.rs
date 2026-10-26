@@ -20,7 +20,8 @@ use assert_fs::TempDir;
 use kluris_core::create::{CreateInput, wizard};
 use serde_json::Value;
 
-const NAME_REQUIRED: &str = "Brain name is required in non-interactive mode. Run 'kluris create <name>'.";
+const NAME_REQUIRED: &str =
+    "Brain name is required in non-interactive mode. Run 'kluris create <name>'.";
 const PATH_REQUIRED: &str =
     "Brain path is required in non-interactive mode. Run 'kluris register <path>'.";
 const TYPE_PROMPT: &str =
@@ -170,7 +171,10 @@ fn wizard_empty_type_answer_is_the_default() {
         ..CreateInput::default()
     };
     let (answers, out) = ask(given, "\n");
-    assert_eq!(answers.unwrap().brain_type.as_deref(), Some("product-group"));
+    assert_eq!(
+        answers.unwrap().brain_type.as_deref(),
+        Some("product-group")
+    );
     assert_eq!(out, format!("{TYPE_PROMPT}\n"));
 }
 
@@ -214,7 +218,11 @@ fn without_a_terminal_create_asks_nothing_and_needs_a_name() {
         String::from_utf8(out.stderr).unwrap(),
         format!("Error: {NAME_REQUIRED}\n")
     );
-    assert!(!String::from_utf8(out.stdout).unwrap().contains("Brain name"));
+    assert!(
+        !String::from_utf8(out.stdout)
+            .unwrap()
+            .contains("Brain name")
+    );
 
     // With a name, every other value takes its default.
     let out = env
@@ -224,11 +232,20 @@ fn without_a_terminal_create_asks_nothing_and_needs_a_name() {
         .unwrap();
     assert_eq!(out.status.code(), Some(0), "{out:?}");
     let stdout = String::from_utf8(out.stdout).unwrap();
-    assert!(stdout.contains("Brain created: demo (product-group)"), "{stdout}");
+    assert!(
+        stdout.contains("Brain created: demo (product-group)"),
+        "{stdout}"
+    );
     assert!(!stdout.contains("What does this brain cover"), "{stdout}");
     let brain_md = fs::read_to_string(env.work.join("demo").join("brain.md")).unwrap();
     assert!(brain_md.contains("\ndemo knowledge base\n"), "{brain_md}");
-    assert!(env.work.join("demo").join("projects").join("map.md").is_file());
+    assert!(
+        env.work
+            .join("demo")
+            .join("projects")
+            .join("map.md")
+            .is_file()
+    );
 }
 
 #[test]
@@ -257,7 +274,11 @@ fn without_a_terminal_register_needs_a_path() {
         String::from_utf8(out.stderr).unwrap(),
         format!("Error: {PATH_REQUIRED}\n")
     );
-    assert!(!String::from_utf8(out.stdout).unwrap().contains("Path to brain"));
+    assert!(
+        !String::from_utf8(out.stdout)
+            .unwrap()
+            .contains("Path to brain")
+    );
 }
 
 // --- --from-config ------------------------------------------------------------------------
@@ -273,7 +294,8 @@ fn from_config_refuses_paths_and_nested_values() {
         ("structure:\n  ..: x\n", "lobe name '..'"),
         ("structure:\n  .: x\n", "lobe name '.'"),
         ("structure:\n  '': x\n", "lobe name ''"),
-        ("structure:\n  1: x\n", "lobe name 1"),
+        // The YAML reader refuses a key that is not a string as it loads.
+        ("structure:\n  1: x\n", "mapping keys must be strings"),
         ("structure:\n  lobe:\n    sub: x\n", "lobe 'lobe'"),
         ("structure:\n  lobe: [a, b]\n", "lobe 'lobe'"),
         ("structure: [a, b]\n", "structure"),
@@ -285,13 +307,7 @@ fn from_config_refuses_paths_and_nested_values() {
         let env = Env::new();
         fs::write(env.work.join("structure.yml"), text).unwrap();
         let before = env.listing();
-        let error = env.error(&[
-            "create",
-            "demo",
-            "--from-config",
-            "structure.yml",
-            "--json",
-        ]);
+        let error = env.error(&["create", "demo", "--from-config", "structure.yml", "--json"]);
         assert!(error.starts_with("--from-config: "), "{text:?}: {error}");
         assert!(error.contains(needle), "{text:?}: {error}");
         assert_eq!(env.listing(), before, "{text:?} wrote something");
@@ -317,8 +333,14 @@ fn from_config_keeps_scalar_values_as_python_text() {
     ]);
     assert_eq!(code, 0, "{doc}");
     let brain_md = fs::read_to_string(env.work.join("demo").join("brain.md")).unwrap();
-    assert!(brain_md.contains("[stats/](./stats/map.md) — 42"), "{brain_md}");
-    assert!(brain_md.contains("[flags/](./flags/map.md) — True"), "{brain_md}");
+    assert!(
+        brain_md.contains("[stats/](./stats/map.md) — 42"),
+        "{brain_md}"
+    );
+    assert!(
+        brain_md.contains("[flags/](./flags/map.md) — True"),
+        "{brain_md}"
+    );
 }
 
 // --- names ----------------------------------------------------------------------------------

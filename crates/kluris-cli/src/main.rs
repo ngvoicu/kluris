@@ -3,7 +3,9 @@
 mod commands;
 mod error;
 mod output;
+mod prompt;
 mod resolve;
+mod skills;
 
 use std::ffi::OsString;
 use std::process::ExitCode;
@@ -32,6 +34,65 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
+    #[command(
+        args_override_self = true,
+        about = "Create a new brain.",
+        long_about = CREATE_HELP,
+        override_usage = "kluris create [OPTIONS] [NAME]"
+    )]
+    Create {
+        #[arg(value_name = "NAME")]
+        name: Option<String>,
+        /// What this brain covers (one sentence)
+        #[arg(long, value_name = "TEXT", allow_hyphen_values = true)]
+        description: Option<String>,
+        /// Directory to create the brain in (default: current dir)
+        #[arg(long, value_name = "PATH", allow_hyphen_values = true)]
+        path: Option<String>,
+        /// Brain type. Kept as given: only the winning occurrence is
+        /// converted ([`converted`]).
+        #[arg(
+            long = "type",
+            value_name = "[product-group|personal|product|research|blank]",
+            allow_hyphen_values = true,
+            help = "Brain type"
+        )]
+        brain_type: Option<String>,
+        /// Optional git remote URL (default: local git only)
+        #[arg(long, value_name = "TEXT", allow_hyphen_values = true)]
+        remote: Option<String>,
+        /// Default git branch
+        #[arg(long, value_name = "TEXT", allow_hyphen_values = true)]
+        branch: Option<String>,
+        /// Skip git entirely (default: local git only)
+        #[arg(long = "no-git")]
+        no_git: bool,
+        /// Custom YAML config file for structure. Checked like the type
+        /// ([`converted`]).
+        #[arg(
+            long = "from-config",
+            value_name = "PATH",
+            allow_hyphen_values = true,
+            help = "Custom YAML config file for structure"
+        )]
+        from_config: Option<String>,
+        /// JSON output
+        #[arg(long)]
+        json: bool,
+    },
+    #[command(
+        args_override_self = true,
+        about = "Register an existing brain directory on disk.",
+        long_about = REGISTER_HELP,
+        override_usage = "kluris register [OPTIONS] [SOURCE]"
+    )]
+    Register {
+        #[arg(value_name = "SOURCE")]
+        source: Option<String>,
+        /// JSON output
+        #[arg(long)]
+        json: bool,
+    },
     #[command(about = "List registered brains.")]
     List {
         /// JSON output
@@ -138,6 +199,19 @@ enum Command {
     },
     #[command(
         args_override_self = true,
+        about = "Unregister a brain (does not delete files).",
+        long_about = REMOVE_HELP,
+        override_usage = "kluris remove [OPTIONS] BRAIN_NAME"
+    )]
+    Remove {
+        #[arg(value_name = "BRAIN_NAME")]
+        brain_name: String,
+        /// JSON output
+        #[arg(long)]
+        json: bool,
+    },
+    #[command(
+        args_override_self = true,
         about = "Check prerequisites and refresh installed agent skills.",
         long_about = DOCTOR_HELP
     )]
@@ -209,6 +283,31 @@ enum CompanionCommand {
         json: bool,
     },
 }
+
+/// v2's `create` docstring.
+const CREATE_HELP: &str = "Create a new brain.
+
+Prompts for anything not provided via flags. Use --json to skip all prompts.
+
+  kluris create                    # full wizard
+  kluris create my-brain           # prompts for description, location, type, git
+  kluris create my-brain --type personal --path ~/brains --no-git  # no prompts
+  kluris create team-brain --remote git@github.com:team/brain.git";
+
+/// v2's `register` docstring.
+const REGISTER_HELP: &str = "Register an existing brain directory on disk.
+
+The brain stays where it is -- registration is in-place, no copy. For brains \
+hosted on git, use ``git clone <url> <path>`` first, then ``kluris register \
+<path>``.
+
+  kluris register ~/brains/acme-sme";
+
+/// v2's `remove` docstring.
+const REMOVE_HELP: &str = "Unregister a brain (does not delete files).
+
+Always preserves the files on disk. Git state is the user's responsibility \
+after unregistering.";
 
 /// v2's `companion add` docstring.
 const COMPANION_ADD_HELP: &str = "Opt one or more brains into an embedded companion playbook.
@@ -358,7 +457,7 @@ fn parse(args: &[OsString]) -> Result<Parsed, clap::Error> {
         .try_get_matches_from_mut(args)
         .map_err(|e| with_usage(e, &mut root, args))?;
     let cli = Cli::from_arg_matches(&matches)?;
-    converted(&cli).map_err(|e| with_usage(e, &mut root, args))?;
+    converted(&cli, args).map_err(|e| with_usage(e, &mut root, args))?;
     Ok(Parsed::Run(cli))
 }
 
@@ -437,11 +536,71 @@ fn flag(matches: &ArgMatches, id: &str) -> bool {
 /// parser would check every repeated occurrence. The error is the one the
 /// value parser gives (`Invalid value for '--limit': 'x' is not a valid
 /// integer.`).
-fn converted(cli: &Cli) -> Result<(), clap::Error> {
-    if let Command::Search { limit, .. } = &cli.command {
-        search_limit(limit)?;
+fn converted(cli: &Cli, args: &[OsString]) -> Result<(), clap::Error> {
+    match &cli.command {
+        Command::Search { limit, .. } => {
+            search_limit(limit)?;
+        }
+        Command::Create {
+            brain_type,
+            from_config,
+            ..
+        } => {
+            // Click converts the options in the order they first appear.
+            let mut checks = [
+                (
+                    first_option(args, "--type"),
+                    brain_type.as_deref().map(check_type),
+                ),
+                (
+                    first_option(args, "--from-config"),
+                    from_config.as_deref().map(check_from_config),
+                ),
+            ];
+            checks.sort_by_key(|(at, _)| *at);
+            for (_, check) in checks {
+                if let Some(Err(message)) = check {
+                    return Err(clap::Error::raw(ErrorKind::ValueValidation, message));
+                }
+            }
+        }
+        _ => {}
     }
     Ok(())
+}
+
+/// Where `--name` (or `--name=...`) first appears in the command line.
+fn first_option(args: &[OsString], name: &str) -> usize {
+    args.iter()
+        .position(|a| {
+            let a = a.to_string_lossy();
+            a == name
+                || a.strip_prefix(name)
+                    .is_some_and(|rest| rest.starts_with('='))
+        })
+        .unwrap_or(usize::MAX)
+}
+
+/// `create --type` as Click's `Choice` converts it.
+fn check_type(value: &str) -> Result<(), String> {
+    if kluris_core::scaffold::is_brain_type(value) {
+        return Ok(());
+    }
+    Err(format!(
+        "Invalid value for '--type': {}\n",
+        kluris_core::scaffold::not_a_brain_type(value)
+    ))
+}
+
+/// `create --from-config` as Click's `Path(exists=True)` converts it.
+fn check_from_config(value: &str) -> Result<(), String> {
+    if std::path::Path::new(value).exists() {
+        return Ok(());
+    }
+    Err(format!(
+        "Invalid value for '--from-config': Path {} does not exist.\n",
+        kluris_core::pyrepr::py_repr_str(value)
+    ))
 }
 
 /// `search --limit` as an integer.
@@ -493,6 +652,11 @@ fn with_usage(mut err: clap::Error, root: &mut clap::Command, args: &[OsString])
         };
         sub = next;
     }
+    if err.get(ContextKind::InvalidArg).is_none() {
+        // A message of our own (`create --type`): clap renders the usage
+        // of a raw error once it knows the command.
+        return err.format(sub);
+    }
     let usage = sub.render_usage();
     err.insert(ContextKind::Usage, ContextValue::StyledStr(usage));
     err
@@ -540,6 +704,31 @@ fn run(cli: Cli) -> Result<(), CliError> {
             output,
             json,
         } => commands::mri::run(brain.as_deref(), output.as_deref(), json),
+        Command::Create {
+            name,
+            description,
+            path,
+            brain_type,
+            remote,
+            branch,
+            no_git,
+            from_config,
+            json,
+        } => commands::create::run(commands::create::Options {
+            input: kluris_core::create::CreateInput {
+                name,
+                description,
+                path,
+                brain_type,
+                remote,
+                branch,
+                no_git,
+            },
+            from_config,
+            json,
+        }),
+        Command::Register { source, json } => commands::register::run(source.as_deref(), json),
+        Command::Remove { brain_name, json } => commands::remove::run(&brain_name, json),
         Command::Doctor { no_refresh, json } => commands::doctor::run(no_refresh, json),
         Command::Help { command, json } => commands::help::run(command.as_deref(), json),
     }

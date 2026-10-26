@@ -244,6 +244,22 @@ fn sync<S: BrainStore>(
     }
 }
 
+/// v2's `_run_dream_on_brain`, what `create` runs on a new brain: every
+/// directory's `map.md`, twice, then `brain.md` (steps 5 and 6 alone, no
+/// dates or link fixes), as one change set. Returns the files it could not
+/// read or write.
+pub fn regenerate_maps<S: BrainStore>(store: &mut S, options: &DreamOptions) -> Vec<SkippedFile> {
+    let order = maps::map_order(store.dirs());
+    let mut ws = workspace::Workspace::new(&*store);
+    maps::generate_maps(&mut ws, &order, options.today);
+    maps::generate_brain_md(&mut ws, options.name, options.description, options.today);
+    let (changes, mut skipped) = ws.into_change_set();
+    for failed in store.apply(&changes).failed {
+        skipped.entry(failed.rel).or_insert(failed.error);
+    }
+    skipped_files(skipped)
+}
+
 /// Run dream on a brain: compute every write, apply them as one change set,
 /// and validate the result.
 pub fn dream<S: BrainStore>(store: &mut S, git: &impl Git, options: &DreamOptions) -> DreamReport {
