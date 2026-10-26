@@ -9,14 +9,13 @@ import json
 import os
 import re
 import select
-import shutil
 import signal
 import subprocess
 import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from harness import IS_WINDOWS, Result, Sandbox, _decode, normalize, oracle_kluris, run_v3
+from harness import IS_WINDOWS, Result, Sandbox, _decode, normalize, oracle_kluris, remove_tree, run_v3
 
 def write_config(sb: Sandbox, brains: list[tuple[str, str, str]]) -> None:
     """Write ``config.yml`` with ``(name, path, description)`` brains, in
@@ -209,7 +208,7 @@ def assert_wake_up_equal(
 def clear_runs(sb: Sandbox) -> None:
     """Drop the finished trees of ``harness.run_both`` so it can run again."""
     for side in ("v2", "v3"):
-        shutil.rmtree(sb.root / side, ignore_errors=True)
+        remove_tree(sb.root / side)
 
 
 def same_words(v2_text: str, v3_text: str, root: Path) -> None:

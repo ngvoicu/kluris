@@ -39,7 +39,7 @@ from pathlib import Path
 import pytest
 
 from harness import IS_WINDOWS, PARITY_DIR, Sandbox, normalize, oracle_kluris, run_both, run_v2, run_v3
-from runs import parse_exact, write_config
+from runs import clear_runs, parse_exact, write_config
 
 WORKSPACE = PARITY_DIR.parent
 FIXTURES = WORKSPACE / "crates" / "kluris-core" / "tests" / "fixtures" / "brains"
@@ -303,8 +303,7 @@ def test_multiple_brains_need_brain(sandbox):
         assert r["v3"].code == r["v2"].code == 1
         assert normalize(r["v3"].stdout, sandbox.root) == normalize(r["v2"].stdout, sandbox.root)
         assert r["v3"].stderr.splitlines()[-1:] == r["v2"].stderr.splitlines()[-1:]
-        for d in ("v2", "v3"):
-            shutil.rmtree(sandbox.root / d)
+        clear_runs(sandbox)
 
 
 def test_no_brains_registered(sandbox):
@@ -319,8 +318,7 @@ def test_text_output_wording(demo):
     r = run_both(demo, ["search", "zebra-not-there"])
     assert r["v2"].code == r["v3"].code == 0
     assert r["v3"].stdout.strip() == r["v2"].stdout.strip() == "No results for 'zebra-not-there' in acme-sme."
-    for d in ("v2", "v3"):
-        shutil.rmtree(demo.root / d)
+    clear_runs(demo)
     r = run_both(demo, ["search", "backup"])
     v2, v3 = r["v2"].stdout, r["v3"].stdout
     head = lambda text: text.strip().splitlines()[0]  # noqa: E731
@@ -340,9 +338,7 @@ def test_cli_json_shape_and_invariant_on_the_eval_brain(demo):
     # The CLI of both, byte-level: v2's own JSON next to v3's.
     brain = demo.root / "pristine" / "brains" / "acme-sme"
     for q in ["backup", "release notes", "jwt", "glossary", "DLQ", "NamedParameterJdbcTemplate", "!!!!"]:
-        for d in ("v2", "v3"):
-            if (demo.root / d).exists():
-                shutil.rmtree(demo.root / d)
+        clear_runs(demo)
         r = run_both(demo, ["search", q, "--json", "--limit", str(EVERYTHING)])
         assert r["v2"].code == r["v3"].code == 0, (r["v2"], r["v3"])
         j2, j3 = parse_exact(r["v2"].stdout, demo.root, "v2"), parse_exact(r["v3"].stdout, demo.root, "v3")
@@ -502,8 +498,7 @@ def test_malformed_neuron_is_skipped_and_reported(sandbox):
     assert [s["file"] for s in j3["skipped"]] == ["k/bad.md"]
     assert j3["skipped"][0]["error"].startswith("invalid frontmatter: ")
     assert r["v2"].stderr == r["v3"].stderr == ""
-    for d in ("v2", "v3"):
-        shutil.rmtree(sandbox.root / d)
+    clear_runs(sandbox)
     r = run_both(sandbox, ["search", "zebra"])
     assert r["v2"].code == r["v3"].code == 0
     assert r["v2"].stderr == ""

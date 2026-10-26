@@ -16,6 +16,7 @@ import shutil
 import subprocess
 import sys
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -97,7 +98,7 @@ def oracle_kluris() -> Path:
         if marker.exists():
             marker.unlink()
         if venv.exists():
-            shutil.rmtree(venv)
+            remove_tree(venv)
         subprocess.run(
             ["uv", "venv", "--quiet", "--no-project", "--python", ORACLE_PYTHON, str(venv)],
             env=env, check=True,
@@ -122,6 +123,93 @@ def oracle_kluris() -> Path:
         pytest.fail(f"oracle venv has no kluris executable at {exe}")
     _ORACLE_BIN = exe
     return exe
+
+
+# --- filesystem moves and removals -------------------------------------------
+#
+# Windows holds short-lived locks on a just-exited process's tree (a lingering
+# handle, Defender, the search indexer), so a rename, copy or rmtree right
+# after a run can fail with PermissionError (WinError 5) and go through a
+# moment later. Every sandbox directory goes through these helpers: retry on
+# OSError with growing pauses (10 tries, ~5 s in all), and a move that still
+# fails falls back to copy + remove.
+
+_LOCK_TRIES = 10
+
+
+def _retry_locked(fn: Callable[[], None], what: str) -> None:
+    """Run ``fn`` until it stops raising ``OSError``; raise the last failure,
+    with ``what`` naming the path, when it never does."""
+    error: OSError | None = None
+    for attempt in range(_LOCK_TRIES):
+        try:
+            fn()
+            return
+        except OSError as e:
+            error = e
+            if attempt + 1 < _LOCK_TRIES:
+                time.sleep(min(0.05 * 2**attempt, 0.7))
+    assert error is not None
+    if error.errno is None:
+        raise OSError(f"{what}: {error}") from error
+    raise OSError(error.errno, f"{what}: {error.strerror or error}") from error
+
+
+def _fix_readonly(fn, path: str, _exc) -> None:
+    """rmtree's onerror/onexc: a read-only entry (a git object, say) cannot be
+    removed on Windows; make it writable and try that one entry again."""
+    os.chmod(path, 0o700)
+    fn(path)
+
+
+def _rmtree(path: Path) -> None:
+    if sys.version_info >= (3, 12):
+        shutil.rmtree(path, onexc=_fix_readonly)
+    else:
+        shutil.rmtree(path, onerror=_fix_readonly)
+
+
+def remove_tree(path: Path) -> None:
+    """Remove the tree ``path`` (a file or symlink is unlinked), riding out
+    the short-lived locks Windows holds on a just-exited process's tree. A
+    path that is not there is fine."""
+
+    def rm() -> None:
+        if path.is_dir() and not path.is_symlink():
+            _rmtree(path)
+        elif path.is_symlink() or path.exists():
+            path.unlink()
+
+    _retry_locked(rm, f"could not remove {path}")
+
+
+def copy_tree(src: Path, dst: Path) -> None:
+    """Copy the tree (or file) ``src`` to a fresh ``dst``, with the same
+    retries. A partial copy a failed try left behind is removed before the
+    next; a ``dst`` that was already there is never touched."""
+    fresh = not (dst.exists() or dst.is_symlink())
+
+    def cp() -> None:
+        if fresh and dst.exists():
+            remove_tree(dst)  # a previous try's partial copy
+        if src.is_dir() and not src.is_symlink():
+            shutil.copytree(src, dst, symlinks=True)
+        else:
+            shutil.copy2(src, dst)
+
+    _retry_locked(cp, f"could not copy {src} to {dst}")
+
+
+def move_tree(src: Path, dst: Path) -> None:
+    """Move ``src`` to ``dst`` as one rename, with the same retries; a lock
+    that outlasts them falls back to copy + remove, each with its own."""
+    try:
+        _retry_locked(lambda: os.rename(src, dst), f"could not rename {src} to {dst}")
+        return
+    except OSError:
+        pass  # a stubborn lock: copy the tree over, then remove the old one
+    copy_tree(src, dst)
+    remove_tree(src)
 
 
 # --- the isolated environment ----------------------------------------------
@@ -187,7 +275,7 @@ class Sandbox:
         """Keep the current ``work/`` as the state every binary starts from."""
         if self._pristine.exists():
             raise RuntimeError("sandbox state is already frozen")
-        self.work.rename(self._pristine)
+        move_tree(self.work, self._pristine)
 
     def checkout(self) -> None:
         """Copy the frozen state to ``work/`` (freezing the current ``work/``
@@ -196,12 +284,12 @@ class Sandbox:
             self.freeze()
         if self.work.exists():
             raise RuntimeError("work/ is in use; stash() the previous run first")
-        shutil.copytree(self._pristine, self.work, symlinks=True)
+        copy_tree(self._pristine, self.work)
 
     def stash(self, label: str) -> Path:
         """Move the finished ``work/`` to ``<root>/<label>`` and return it."""
         dest = self.root / label
-        self.work.rename(dest)
+        move_tree(self.work, dest)
         return dest
 
 
