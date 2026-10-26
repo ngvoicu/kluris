@@ -1,0 +1,20 @@
+{"id": "ac01", "brain": "acme-sme", "type": "paraphrase", "q": "what happens to background jobs that keep failing", "rel": {"architecture/job-queue.md": 3, "glossary.md": 1, "operations/on-call.md": 1}}
+{"id": "ac02", "brain": "acme-sme", "type": "paraphrase", "q": "are database roles included in the nightly backup", "rel": {"operations/backups.md": 3, "operations/operator-access.md": 0}}
+{"id": "ac03", "brain": "acme-sme", "type": "hard_paraphrase", "q": "connecting to the live database from my own laptop", "rel": {"operations/operator-access.md": 3, "operations/backups.md": 0}}
+{"id": "ac04", "brain": "acme-sme", "type": "hard_paraphrase", "q": "the worker container keeps getting killed for using too much RAM", "rel": {"operations/memory-limits.md": 3, "architecture/job-queue.md": 0}}
+{"id": "ac05", "brain": "acme-sme", "type": "multiword", "q": "tooltip not working on touch devices", "rel": {"knowledge/tooltip-touch.md": 3}}
+{"id": "ac06", "brain": "acme-sme", "type": "multiword", "q": "flaky test mac runner", "rel": {"knowledge/test-flakes.md": 3}}
+{"id": "ac07", "brain": "acme-sme", "type": "exact", "q": "NamedParameterJdbcTemplate", "rel": {"decisions/2026-03-01-no-orm.md": 3, "glossary.md": 2}}
+{"id": "ac08", "brain": "acme-sme", "type": "exact", "q": "SIGTERM", "rel": {"operations/deploy-runbook.md": 3}}
+{"id": "ac09", "brain": "acme-sme", "type": "glossary", "q": "DLQ", "rel": {"glossary.md": 3, "architecture/job-queue.md": 2}}
+{"id": "ac10", "brain": "acme-sme", "type": "idf_title", "q": "release notes", "rel": {"knowledge/release-notes.md": 3, "decisions/2026-05-02-one-repo.md": 0}}
+{"id": "ac11", "brain": "acme-sme", "type": "idf_title", "q": "system overview", "rel": {"architecture/overview.md": 3, "brain.md": 1}}
+{"id": "ac12", "brain": "acme-sme", "type": "paraphrase", "q": "should timestamps be saved in local time", "rel": {"knowledge/timezones.md": 3}}
+{"id": "ac13", "brain": "acme-sme", "type": "paraphrase", "q": "how often do we rotate the key that signs tokens", "rel": {"architecture/auth-tokens.md": 3, "knowledge/deprecated-sessions.md": 0}}
+{"id": "ac14", "brain": "acme-sme", "type": "none", "q": "kubernetes helm chart autoscaling", "rel": {}}
+{"id": "cl01", "brain": "clinica-sme", "type": "crosslingual", "q": "how long do we keep personal data", "rel": {"operare/retentia-datelor.md": 3}}
+{"id": "cl02", "brain": "clinica-sme", "type": "no_diacritics", "q": "unde schimb pretul unei sedinte", "rel": {"operare/preturile.md": 3, "glossary.md": 0}}
+{"id": "cl03", "brain": "clinica-sme", "type": "paraphrase", "q": "ce mail primește consilierul când cineva cere o programare", "rel": {"formulare/programarea.md": 3}}
+{"id": "cl04", "brain": "clinica-sme", "type": "glossary", "q": "honeypot", "rel": {"formulare/protectie-spam.md": 3, "glossary.md": 2}}
+{"id": "cl05", "brain": "clinica-sme", "type": "paraphrase", "q": "ce oprește publicarea dacă apare text românesc pe paginile în engleză", "rel": {"operare/publicarea.md": 3}}
+{"id": "cl06", "brain": "clinica-sme", "type": "none", "q": "plata online cu cardul", "rel": {}}

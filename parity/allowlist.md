@@ -143,3 +143,19 @@ One entry per difference, under its own heading:
 - Differs: both read `~/.kluris/config.yml` first and fail on one that does not parse, with exit 1; v3 prints `Error: Invalid config file <path>: ...` (the envelope under `--json`), as its `list` does, where v2 ends in a traceback (no JSON).
 - Decision: no traceback for a bad config (research-03 §5 item 20; chief's brief for T-78), 2026-10-26
 - Tests: `parity/test_list_status_help.py::test_help_with_a_corrupt_config`
+
+### PAR-020: `search` ranks with BM25F over heading chunks
+- Command: `kluris search` (with and without `--json`)
+- Differs: v3 ranks with field-weighted BM25 over heading chunks (Snowball stemming in the brain's language, diacritic folding, prefix fallback, phrase guard, deprecated ×0.5), so against v2's literal-substring search:
+  - result order, `score` values (`round(bm25 × 100)`, at least 1; still an integer) and `snippet` text differ, and v3 returns more results (any item BM25 matches; `total` is still the count after `--limit`);
+  - `matched_fields` lists the fields where a query word matched or v2's substring matched, in the order `title, tag, path, heading, body` (`heading` is new);
+  - each result has, after v2's seven keys (`file, file_type, title, matched_fields, snippet, score, deprecated`), the keys `heading` (string or null), `line` (1-based line of the best chunk, or null for glossary entries), `matched_terms`, `coverage` (float 0-1), `related` (up to 3 brain-relative neuron paths), `updated` (string or null), and on deprecated results only `replaced_by` (string or null); the top level ends with `"engine": "bm25"` after `results`.
+  - Kept as v2: the error envelope and messages, exit codes, `--lobe`/`--tag` filters (nothing v3 returns is an item v2's filters drop), glossary entries as their own results (`file: "glossary.md"`, term as `title`), the `brain.md` item, `file_type`, `title` and `deprecated` of each item, `limit <= 0` giving no results, and the text output's wording. Invariant: with `--limit` high enough every item v2 returns (file and title) is also in v3's results, with v2's `matched_fields` among v3's. The reader differences of PAR-001, PAR-006, PAR-009 and PAR-010 carry over (a neuron v3 reads otherwise is searched as v3 reads it).
+- Decision: research-05 §6 (rung 1 for v3.0: "Don't keep v2's ordering as the default"; the JSON contract and the parity invariant), research-06 §6; chief's brief for T-77 (Kluris 3 Phase 2, TEST-K3-15 / IMPL-K3-16), 2026-10-26
+- Tests: `crates/kluris-core/tests/search.rs`, `crates/kluris-cli/tests/search.rs`, `parity/test_search.py` (fixture brains, the search-eval brains, the registered brains with the 74 tuning queries), `cargo xtask search-eval`
+
+### PAR-021: `search.language` in `kluris.yml` is kept on rewrite
+- Command: every command that rewrites a brain's `kluris.yml` (`create`, `register`, `companion add`, `companion remove`, `doctor`); read by `kluris search`
+- Differs: a `search:` mapping whose `language` is a string is read (`en` or `ro`, any case, picks the search stemmer and stop words; another value means autodetect) and written back after `companions` as `search:\n  language: <value>\n`; v2's pydantic model ignores the key and drops it on rewrite. Any other `search` value (not a mapping, no string `language`) is ignored and dropped, as in v2, and never makes the file invalid. Without the key every byte is v2's.
+- Decision: chief's brief for T-77 ("a local override `search: {language: en|ro}` in the brain's `kluris.yml` ... check the config module keeps that key on rewrite"), research-05 question 2, 2026-10-26
+- Tests: `crates/kluris-core/tests/config.rs::the_search_language_key_is_read_and_kept_on_rewrite`, `parity/test_search.py::test_language_override_keeps_the_invariant`
