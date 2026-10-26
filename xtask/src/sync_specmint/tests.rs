@@ -180,7 +180,10 @@ fn path_mentions_match_v2s_regex() {
 #[test]
 fn missing_mentions_checks_files_and_globs() {
     let tree = tree_of(&[
-        ("SKILL.md", b"see references/a.md. and `references/*.md` and assets/*.js"),
+        (
+            "SKILL.md",
+            b"see references/a.md. and `references/*.md` and assets/*.js",
+        ),
         ("references/a.md", b"see references/b.md"),
         ("assets/x.css", b"references/nope.md is not markdown"),
     ]);
@@ -224,7 +227,10 @@ fn build_copies_allowlist_only() {
 fn build_fails_without_skill_md() {
     let tmp = TempDir::new().unwrap();
     let err = build("specmint-core", tmp.path(), &mut Vec::new()).unwrap_err();
-    assert!(err.starts_with("specmint-core: missing SKILL.md at "), "{err}");
+    assert!(
+        err.starts_with("specmint-core: missing SKILL.md at "),
+        "{err}"
+    );
 }
 
 #[test]
@@ -315,7 +321,10 @@ fn report_with_full_diff_is_v2s_text() {
     let mut out = Vec::new();
     report(
         "specmint-core",
-        &tree_of(&[("SKILL.md", b"a\nb\nc\nd\ne\nf\ng\nh\n"), ("old.md", b"x\n")]),
+        &tree_of(&[
+            ("SKILL.md", b"a\nb\nc\nd\ne\nf\ng\nh\n"),
+            ("old.md", b"x\n"),
+        ]),
         &tree_of(&[
             ("SKILL.md", b"a\nB\nc\nd\ne\nf\ng\nh\ni"),
             ("references/new.md", b"y\nz\n"),
@@ -344,7 +353,10 @@ fn line_counts_follow_python_splitlines() {
 fn four_sources(tmp: &Path) -> Vec<String> {
     let html_skill = SKILL.replace("Be nice.\n", HTML_STEP);
     let mut args = Vec::new();
-    for (name, flag) in NAMES.iter().zip(["--core", "--tdd", "--core-html", "--tdd-html"]) {
+    for (name, flag) in NAMES
+        .iter()
+        .zip(["--core", "--tdd", "--core-html", "--tdd-html"])
+    {
         let src = tmp.join("sources").join(name);
         fs::create_dir_all(src.join("references")).unwrap();
         let is_html = name.ends_with("-html");
@@ -402,7 +414,11 @@ fn main_writes_then_second_run_is_a_noop() {
     let html = dest.join("specmint-tdd-html");
     assert_eq!(
         read_tree(&html).keys().collect::<Vec<_>>(),
-        ["SKILL.md", "assets/spec-runtime.js", "references/spec-format.md"]
+        [
+            "SKILL.md",
+            "assets/spec-runtime.js",
+            "references/spec-format.md"
+        ]
     );
     assert!(
         fs::read_to_string(html.join("SKILL.md"))
@@ -412,7 +428,10 @@ fn main_writes_then_second_run_is_a_noop() {
 
     let mut out = Vec::new();
     assert_eq!(run(&with(&["--check"]), &workspace(), &mut out), Ok(0));
-    assert_eq!(String::from_utf8(out).unwrap().matches("in sync").count(), 4);
+    assert_eq!(
+        String::from_utf8(out).unwrap().matches("in sync").count(),
+        4
+    );
     let mut out = Vec::new();
     assert_eq!(run(&with(&[]), &workspace(), &mut out), Ok(0));
     assert!(!String::from_utf8(out).unwrap().contains("synced"));
@@ -431,7 +450,10 @@ fn nothing_is_written_when_one_companion_fails() {
     args.extend(["--dest".to_string(), dest.to_string_lossy().into_owned()]);
 
     let err = run(&args, &workspace(), &mut Vec::new()).unwrap_err();
-    assert!(err.starts_with("specmint-tdd-html: sanitizer rule"), "{err}");
+    assert!(
+        err.starts_with("specmint-tdd-html: sanitizer rule"),
+        "{err}"
+    );
     assert!(sorted_names(&dest).is_empty());
 }
 
@@ -467,10 +489,7 @@ fn real_check_against_specmint_is_in_sync() {
         .iter()
         .all(|n| specmint.join(n).join("SKILL.md").is_file())
     {
-        eprintln!(
-            "skipped: no Specmint checkout at {}",
-            specmint.display()
-        );
+        eprintln!("skipped: no Specmint checkout at {}", specmint.display());
         return;
     }
     let mut out = Vec::new();

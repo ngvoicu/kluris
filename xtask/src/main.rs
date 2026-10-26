@@ -35,6 +35,16 @@ Tasks:
       Install every registered brain's agent skills into <dir> as HOME (the
       config at KLURIS_CONFIG, else <dir>/.kluris/config.yml; COPILOT_HOME
       from the environment) and print the report as JSON.
+  sync-specmint [--core PATH] [--tdd PATH] [--core-html PATH] [--tdd-html PATH] [--check] [--diff]
+      Re-vendor the four Specmint companion folders into vendored/ from
+      ../specmint/<name> (or the paths given): SKILL.md, references/ and
+      assets/ only, SKILL.md sanitized for Kluris (each rule must match
+      once), checked for plugin text and for mentioned files that are not
+      shipped. --check writes nothing and exits 1 when vendored/ is stale;
+      --diff prints the full diffs.
+  sync-specmint-oracle
+      Answer parity/tools/sync_specmint_oracle.py's requests (report text,
+      path mentions) one JSON line each, for parity/test_sync_specmint.py.
   windows [--machine zeewin|zeewin2] [--parity] [-- <cargo test args>]
       Run cargo test (and with --parity the parity harness) on a household
       Windows machine over ssh. `cargo xtask windows --help` says more.
@@ -60,6 +70,8 @@ fn main() -> ExitCode {
         Some("posix-path") => skills_install::posix(&args[1..]),
         Some("search-eval") => search_eval::main(&args[1..]),
         Some("skills-install") => skills_install::main(&args[1..]),
+        Some("sync-specmint") => return sync_specmint::main(&args[1..]),
+        Some("sync-specmint-oracle") => sync_specmint::oracle(&args[1..]),
         Some("windows") => return windows::main(&args[1..]),
         Some("yaml-emit") => yaml_emit::emit(&args[1..]),
         Some("yaml-load") => yaml_emit::load(&args[1..]),

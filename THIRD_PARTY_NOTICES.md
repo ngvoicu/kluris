@@ -24,3 +24,15 @@ kept next to the ported code.
   Kirill Simonov. Full text: `crates/kluris-core/src/yaml/LICENSE-libyaml`.
 - Ported in `crates/kluris-core/src/yaml/emit.rs`: the scalar analysis,
   style selection and line folding of `emitter.c`.
+
+## CPython 3.11 `difflib`
+
+- Source: https://github.com/python/cpython/blob/3.11/Lib/difflib.py (the
+  Python 3.11 the parity oracle runs).
+- License: Python Software Foundation License Version 2. Copyright (c)
+  2001-2024 Python Software Foundation. Full text:
+  https://docs.python.org/3.11/license.html.
+- Ported in `xtask/src/sync_specmint/difflib.rs` (a development task, not
+  shipped in the `kluris` binary): `SequenceMatcher`'s matching blocks,
+  opcodes and grouped opcodes, and `unified_diff`, so `cargo xtask
+  sync-specmint --diff` prints what v2's `scripts/sync-specmint.py` prints.
