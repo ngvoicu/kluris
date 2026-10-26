@@ -3,12 +3,15 @@
 # macOS or Linux, in a sandbox HOME (never the real one), check it and
 # uninstall it:
 #
-#   scripts/release/published-smoke.sh <version> [<site install.sh URL>]
+#   scripts/release/published-smoke.sh [--unpinned] <version> [<site install.sh URL>]
 #
 # The site URL defaults to https://kluris.ngvoicu.dev/install.sh. The wrapper
 # runs the documented way, `curl -fsSL <url> | sh`, with KLURIS_VERSION set
 # to <version>, so it fetches github.com/ngvoicu/kluris/releases/download/
 # v<version>/kluris-installer.sh, which downloads this machine's archive.
+# With --unpinned it runs without KLURIS_VERSION, as a user's first install
+# does, so it installs GitHub's latest release; every check below still
+# expects <version>.
 #
 # Checks: the installer verified the archive's SHA-256 and printed its
 # success message; the receipt names ~/.kluris/bin and <version>; a fresh
@@ -27,8 +30,13 @@
 # shellcheck disable=SC2016,SC2088
 set -eu
 
+pinned=1
+if [ "${1:-}" = "--unpinned" ]; then
+    pinned=0
+    shift
+fi
 if [ $# -lt 1 ] || [ $# -gt 2 ]; then
-    echo "usage: published-smoke.sh <version> [<site install.sh URL>]" >&2
+    echo "usage: published-smoke.sh [--unpinned] <version> [<site install.sh URL>]" >&2
     exit 2
 fi
 version=${1#v}
@@ -112,10 +120,17 @@ json_check() {
     "$python" -I - "$file" "$@" || { cat "$file"; fail "$(basename "$file") is not what it should be"; }
 }
 
-# The install: `curl -fsSL <site> | sh`, pinned to the release.
-step "installing kluris $version through $site"
-in_sandbox KLURIS_VERSION="$version" sh -c 'curl -fsSL "$0" | sh' "$site" > "$work/install.out" 2>&1 \
-    || { cat "$work/install.out"; fail "the site wrapper's install failed"; }
+# The install: `curl -fsSL <site> | sh`, pinned to the release, or unpinned
+# (GitHub's latest, which must be <version>).
+if [ "$pinned" -eq 1 ]; then
+    step "installing kluris $version through $site"
+    in_sandbox KLURIS_VERSION="$version" sh -c 'curl -fsSL "$0" | sh' "$site" > "$work/install.out" 2>&1 \
+        || { cat "$work/install.out"; fail "the site wrapper's install failed"; }
+else
+    step "installing GitHub's latest kluris (expecting $version) through $site, no KLURIS_VERSION"
+    in_sandbox sh -c 'curl -fsSL "$0" | sh' "$site" > "$work/install.out" 2>&1 \
+        || { cat "$work/install.out"; fail "the site wrapper's install failed"; }
+fi
 cat "$work/install.out"
 grep -q "no checksums to verify" "$work/install.out" && fail "the installer verified no checksum"
 grep -q "skipping sha256 checksum verification" "$work/install.out" && fail "the installer skipped the SHA-256 check"
@@ -228,4 +243,8 @@ PY
 snapshot > "$work/real-home.after"
 diff -u "$work/real-home.before" "$work/real-home.after" || fail "the real HOME's rc or kluris files changed"
 step "the real HOME's rc and kluris files are unchanged"
-step "ok ($(uname -s) $(uname -m), kluris $version from GitHub through $site)"
+if [ "$pinned" -eq 1 ]; then
+    step "ok ($(uname -s) $(uname -m), kluris $version from GitHub through $site)"
+else
+    step "ok ($(uname -s) $(uname -m), kluris $version, GitHub's latest, from GitHub through $site, unpinned)"
+fi

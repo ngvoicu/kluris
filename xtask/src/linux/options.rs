@@ -1,13 +1,13 @@
 //! The words of `cargo xtask linux` ([`crate::ssh_ci::words`]): `--parity`,
-//! `--parity-files`, `--installer-smoke`, `--wrapper`, `--published`, `--help`, and after
-//! `--` the extra arguments of `cargo test`. There is one machine, so no
+//! `--parity-files`, `--installer-smoke`, `--wrapper`, `--published`,
+//! `--unpinned`, `--help`, and after `--` the extra arguments of `cargo test`. There is one machine, so no
 //! `--machine`.
 
 use crate::ssh_ci::words;
 
 pub const USAGE: &str = "usage: cargo xtask linux [--parity [--parity-files parity/test.py[,...]]] [-- <cargo test args>]
        cargo xtask linux --installer-smoke [--wrapper <site install.sh>]
-       cargo xtask linux --installer-smoke --published <version>
+       cargo xtask linux --installer-smoke --published <version> [--unpinned]
        cargo xtask linux --clippy
 
 Runs `cargo test --workspace` (and with --parity the parity harness against a
@@ -29,7 +29,9 @@ runs scripts/release/installer-smoke.sh against it in a HOME of its own (with
 scripts/release/published-smoke.sh, which installs that published GitHub
 release through the live https://kluris.ngvoicu.dev/install.sh
 (KLURIS_VERSION=<version>) in a HOME of its own, checks --version, doctor
---json and self-update --check --json, then self-uninstall --yes.";
+--json and self-update --check --json, then self-uninstall --yes. With
+--unpinned the wrapper runs without KLURIS_VERSION, so it installs GitHub's
+latest release, which must be <version>.";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Options {
@@ -47,6 +49,9 @@ pub struct Options {
     /// With the installer smoke: the published release to install from
     /// GitHub through the live site wrapper, instead of this tree's build.
     pub published: Option<String>,
+    /// With `--published`: no `KLURIS_VERSION`, so the wrapper installs
+    /// GitHub's latest release, which must be the one `--published` names.
+    pub unpinned: bool,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -67,6 +72,7 @@ pub fn parse(args: &[String]) -> Result<Parsed, String> {
         wrapper: words.wrapper,
         clippy: words.clippy,
         published: words.published,
+        unpinned: words.unpinned,
     }))
 }
 

@@ -64,6 +64,7 @@ cargo xtask windows --parity                      # zeewin2 if free and allowed,
 cargo xtask windows --parity --parity-files parity/test_smoke.py   # only that parity file
 cargo xtask windows --machine zeewin --installer-smoke --wrapper ../sites/kluris-site/install.ps1
 cargo xtask windows --machine zeewin --installer-smoke --published 3.0.0-rc.1   # a GitHub release, live wrapper
+cargo xtask windows --machine zeewin --installer-smoke --published 3.0.0 --unpinned   # GitHub's latest, which must be 3.0.0
 cargo xtask windows --clippy                      # cargo clippy --workspace --all-targets -- -D warnings, no tests
 ```
 
@@ -143,6 +144,7 @@ cargo xtask linux -- -p kluris-core               # extra cargo test args after 
 cargo xtask linux --parity --parity-files parity/test_smoke.py   # only that parity file
 cargo xtask linux --installer-smoke --wrapper ../sites/kluris-site/install.sh
 cargo xtask linux --installer-smoke --published 3.0.0-rc.1   # a GitHub release, live wrapper
+cargo xtask linux --installer-smoke --published 3.0.0 --unpinned   # GitHub's latest, which must be 3.0.0
 cargo xtask linux --clippy                        # clippy -D warnings on every target, no tests
 ```
 
@@ -295,10 +297,12 @@ package, hence the package `kluris`.
   it from a local server in a sandbox HOME, and checks the rc lines, a fresh
   login shell, `kluris --version` and `kluris doctor --json`.
 - **A published release, for real** (`cargo xtask windows|linux
-  --installer-smoke --published <version>`, which builds nothing; on the Mac
-  `sh scripts/release/published-smoke.sh <version>`):
-  `scripts/release/published-smoke.sh` (`.ps1` on Windows) installs that
-  GitHub release through the live site wrapper (`KLURIS_VERSION=<version>`)
+  --installer-smoke --published <version> [--unpinned]`, which builds
+  nothing; on the Mac `sh scripts/release/published-smoke.sh [--unpinned]
+  <version>`): `scripts/release/published-smoke.sh` (`.ps1` on Windows)
+  installs that GitHub release through the live site wrapper
+  (`KLURIS_VERSION=<version>`; with `--unpinned`/`-Unpinned` no
+  `KLURIS_VERSION`, so GitHub's latest, which must be `<version>`)
   in a sandbox HOME or profile, checks `kluris --version`, `kluris doctor
   --json` and `kluris self-update --check --json` (no update), then
   `kluris self-uninstall --yes`: the installer's files go and the sandbox's

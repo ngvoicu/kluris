@@ -50,6 +50,7 @@ fn spec<'a>(parity: bool, cargo_args: &'a [String]) -> Spec<'a> {
         wrapper: false,
         clippy: false,
         published: None,
+        unpinned: false,
     }
 }
 
@@ -68,6 +69,15 @@ fn published_spec(version: &'static str) -> Spec<'static> {
         installer_smoke: true,
         published: Some(version),
         ..spec(false, &[])
+    }
+}
+
+/// The same without `KLURIS_VERSION`: the wrapper installs GitHub's latest,
+/// which must be `version`.
+fn unpinned_spec(version: &'static str) -> Spec<'static> {
+    Spec {
+        unpinned: true,
+        ..published_spec(version)
     }
 }
 
@@ -96,6 +106,7 @@ mod words_of_the_command {
                 wrapper: None,
                 clippy: false,
                 published: None,
+                unpinned: false,
             }
         );
     }
@@ -126,6 +137,28 @@ mod words_of_the_command {
             ),
             ("--installer-smoke=yes", "--installer-smoke takes no value"),
             ("--installer-smoke --wrapper a.ps1 --wrapper b.ps1", "once"),
+        ] {
+            let refused = options::parse(&words(line)).expect_err(line);
+            assert!(refused.contains(says), "{line:?}: {refused}");
+        }
+    }
+
+    #[test]
+    fn unpinned_installs_githubs_latest_and_expects_the_named_release() {
+        let options = run_of("--machine zeewin --installer-smoke --published 3.0.0 --unpinned");
+        assert!(options.unpinned, "{options:?}");
+        assert_eq!(options.published.as_deref(), Some("3.0.0"));
+        assert!(!run_of("--installer-smoke --published 3.0.0").unpinned);
+        for (line, says) in [
+            (
+                "--installer-smoke --unpinned",
+                "--unpinned goes with --published",
+            ),
+            ("--unpinned", "--unpinned goes with --published"),
+            (
+                "--installer-smoke --published 3.0.0 --unpinned=yes",
+                "--unpinned takes no value",
+            ),
         ] {
             let refused = options::parse(&words(line)).expect_err(line);
             assert!(refused.contains(says), "{line:?}: {refused}");
@@ -854,6 +887,24 @@ mod scripts {
     }
 
     #[test]
+    fn an_unpinned_published_smoke_tells_the_script_to_leave_the_version_out() {
+        let pinned = script::run_script(&published_spec("3.0.0"));
+        assert!(pinned.contains("Invoke-Step 'published-smoke' 20 $powershell \"-NoProfile -ExecutionPolicy Bypass -File scripts\\release\\published-smoke.ps1 -Version 3.0.0 -Record `\"$record`\"\""), "{pinned}");
+        assert!(!pinned.contains("npinned"), "{pinned}");
+        let spec = unpinned_spec("3.0.0");
+        let text = script::run_script(&spec);
+        assert!(text.contains("Invoke-Step 'published-smoke' 20 $powershell \"-NoProfile -ExecutionPolicy Bypass -File scripts\\release\\published-smoke.ps1 -Version 3.0.0 -Unpinned -Record `\"$record`\"\""), "{text}");
+        assert_eq!(
+            script::steps(&spec),
+            script::steps(&published_spec("3.0.0"))
+        );
+        assert_eq!(
+            script::bound(&spec),
+            script::bound(&published_spec("3.0.0"))
+        );
+    }
+
+    #[test]
     fn a_published_smoke_installs_the_release_through_the_live_wrapper_and_builds_nothing() {
         let spec = published_spec("3.0.0-rc.1");
         let steps: Vec<_> = script::steps(&spec).iter().map(|s| s.name).collect();
@@ -1231,6 +1282,7 @@ mod runs {
             wrapper: None,
             clippy: false,
             published: None,
+            unpinned: false,
         }
     }
 
@@ -1439,6 +1491,7 @@ mod runs {
                 wrapper: None,
                 clippy: false,
                 published: None,
+                unpinned: false,
             },
             vec![],
         );
@@ -1472,6 +1525,7 @@ mod runs {
                 wrapper: None,
                 clippy: false,
                 published: None,
+                unpinned: false,
             },
             vec![
                 said(0, ""),
@@ -1499,6 +1553,7 @@ mod runs {
                 wrapper: None,
                 clippy: false,
                 published: None,
+                unpinned: false,
             },
             vec![
                 said(0, "held\n"),

@@ -1,6 +1,7 @@
 //! The words `cargo xtask windows` and `cargo xtask linux` share: `--parity`,
 //! `--parity-files parity/TEST.PY[,...]` (repeatable, needs `--parity`),
-//! `--installer-smoke` and its `--wrapper FILE` or `--published VERSION`,
+//! `--installer-smoke` and its `--wrapper FILE` or `--published VERSION`
+//! (with `--unpinned`),
 //! `--help`, after `--` the
 //! extra arguments of `cargo test` taken as they are, and for a task with more
 //! than one machine `--machine NAME` (or `--machine=NAME`).
@@ -29,6 +30,9 @@ pub struct Words {
     /// The release `--published` names, installed from GitHub through the
     /// live site wrapper instead of a build of this tree.
     pub published: Option<String>,
+    /// With `--published`: install GitHub's latest release (no
+    /// `KLURIS_VERSION`) and expect it to be the one `--published` names.
+    pub unpinned: bool,
 }
 
 /// `args` as [`Words`], or none for `--help`. `machines` are the values
@@ -54,6 +58,8 @@ pub fn parse(args: &[String], machines: &[&str]) -> Result<Option<Words>, String
                 return Err("--installer-smoke takes no value".into());
             }
             "--installer-smoke" => words.installer_smoke = true,
+            "--unpinned" if inline.is_some() => return Err("--unpinned takes no value".into()),
+            "--unpinned" => words.unpinned = true,
             "--clippy" if inline.is_some() => return Err("--clippy takes no value".into()),
             "--clippy" => words.clippy = true,
             "--wrapper" => {
@@ -140,6 +146,9 @@ pub fn parse(args: &[String], machines: &[&str]) -> Result<Option<Words>, String
     }
     if words.wrapper.is_some() && !words.installer_smoke {
         return Err("--wrapper goes with --installer-smoke".into());
+    }
+    if words.unpinned && words.published.is_none() {
+        return Err("--unpinned goes with --published <version>".into());
     }
     if words.published.is_some() && !words.installer_smoke {
         return Err("--published goes with --installer-smoke".into());

@@ -58,6 +58,7 @@ fn go(options: &Options, ctx: &mut Ctx) -> Result<i32, String> {
         wrapper: options.wrapper.is_some(),
         clippy: options.clippy,
         published: options.published.as_deref(),
+        unpinned: options.unpinned,
     };
     let bootstrap = script::powershell_line(&script::bootstrap(&id))?;
     let stop = script::powershell_line(&script::stop_script(&id))?;

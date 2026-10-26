@@ -102,6 +102,9 @@ pub struct Spec<'a> {
     /// With the installer smoke: the published release it installs through
     /// the live site wrapper; nothing of this tree is built.
     pub published: Option<&'a str>,
+    /// With `published`: the wrapper installs GitHub's latest release, which
+    /// the smoke expects to be `published`.
+    pub unpinned: bool,
 }
 
 #[cfg(test)]
@@ -260,6 +263,7 @@ pub fn run_script(spec: &Spec) -> String {
                 ("python", SMOKE_PYTHON),
                 ("python_minutes", &PYTHON.minutes.to_string()),
                 ("smoke_minutes", &PUBLISHED_SMOKE.minutes.to_string()),
+                ("unpinned", if spec.unpinned { "'--unpinned' " } else { "" }),
                 ("version", &quote(version)),
             ],
         );
@@ -584,7 +588,7 @@ const PUBLISHED_TEMPLATE: &str = r#"if [ -x "$uv" ]; then
   python=""
   if [ "$last" -eq 0 ]; then python=$("$uv" python find «python») || python=""; fi
   if [ -n "$python" ]; then
-    step published-smoke «smoke_minutes» env KLURIS_SMOKE_PYTHON="$python" sh 'scripts/release/published-smoke.sh' «version»
+    step published-smoke «smoke_minutes» env KLURIS_SMOKE_PYTHON="$python" sh 'scripts/release/published-smoke.sh' «unpinned»«version»
   fi
 fi
 "#;
