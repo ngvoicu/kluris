@@ -1,0 +1,88 @@
+{
+  "basic": {
+    "brain_name": "acme",
+    "brain_path": "/home/dev/brains/acme",
+    "has_git": true,
+    "brain_description": "Acme platform knowledge",
+    "companions": [],
+    "companion_home": "/home/dev/.kluris/companions"
+  },
+  "no-git-default-description": {
+    "brain_name": "notes",
+    "brain_path": "/home/dev/notes",
+    "has_git": false,
+    "brain_description": "",
+    "companions": [],
+    "companion_home": "/home/dev/.kluris/companions"
+  },
+  "quotes-and-unicode": {
+    "brain_name": "team-data-2",
+    "brain_path": "/srv/team brains/data",
+    "has_git": true,
+    "brain_description": "The \"data\" team's brain \\ Équipe données — 日本語 ✓",
+    "companions": [],
+    "companion_home": "/srv/home/.kluris/companions"
+  },
+  "windows-path": {
+    "brain_name": "winbrain",
+    "brain_path": "C:\\Users\\Dev\\brains\\winbrain",
+    "has_git": true,
+    "brain_description": "Windows brain",
+    "companions": [
+      "specmint-core"
+    ],
+    "companion_home": "C:/Users/Dev/.kluris/companions"
+  },
+  "companion-core-only": {
+    "brain_name": "core",
+    "brain_path": "/home/dev/brains/core",
+    "has_git": true,
+    "brain_description": "Core companion only",
+    "companions": [
+      "specmint-core"
+    ],
+    "companion_home": "/home/dev/.kluris/companions"
+  },
+  "companions-all": {
+    "brain_name": "all-four",
+    "brain_path": "/home/dev/brains/all-four",
+    "has_git": true,
+    "brain_description": "Every companion",
+    "companions": [
+      "specmint-core",
+      "specmint-tdd",
+      "specmint-core-html",
+      "specmint-tdd-html"
+    ],
+    "companion_home": "/home/dev/.kluris/companions"
+  },
+  "companions-html-pair": {
+    "brain_name": "html",
+    "brain_path": "/home/dev/brains/html",
+    "has_git": false,
+    "brain_description": "HTML companions, given out of order",
+    "companions": [
+      "specmint-tdd-html",
+      "specmint-core-html"
+    ],
+    "companion_home": "/home/dev/.kluris/companions"
+  },
+  "companion-tdd-only": {
+    "brain_name": "tdd",
+    "brain_path": "/home/dev/brains/tdd",
+    "has_git": true,
+    "brain_description": "TDD companion only",
+    "companions": [
+      "specmint-tdd"
+    ],
+    "companion_home": "/home/dev/.kluris/companions"
+  },
+  "messy-posix-path": {
+    "brain_name": "messy",
+    "brain_path": "/srv//brains/./messy/",
+    "has_git": true,
+    "brain_description": "A path v2 normalizes",
+    "companions": [],
+    "companion_home": "/srv/home/.kluris/companions"
+  }
+}

@@ -1,0 +1,6 @@
+---
+source: crates/kluris-core/tests/agents_render.rs
+assertion_line: 329
+expression: render_skill(&case.input())
+---
+
