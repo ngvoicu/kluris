@@ -11,7 +11,7 @@ use crate::output::human::{self, Painter};
 use crate::output::json::{self, Json};
 use crate::prompt::{ask, can_prompt};
 use crate::resolve::{config_path, home, resolve_brains};
-use crate::skills::refresh_skills;
+use crate::skills::{print_failures, refresh_skills, with_problems};
 
 /// The NAME argument's value name: Click shows a `Choice`'s choices.
 pub const NAME_CHOICES: &str = "specmint-core|specmint-tdd|specmint-core-html|specmint-tdd-html";
@@ -178,9 +178,11 @@ pub fn add(name: Option<&str>, brain: Option<&str>, as_json: bool) -> Result<(),
     let brains = companions::load_brains(&resolved).map_err(cli_error)?;
     let home = home()?;
     let changed = companions::add(&brains, &selected, &home).map_err(cli_error)?;
-    refresh_skills(&home)?;
+    let skills = refresh_skills(&home)?;
+    print_failures(&skills, &home);
     if as_json {
-        human::print(&json::to_line(&result_json(&selected, &changed, ADDED)));
+        let doc = result_json(&selected, &changed, ADDED);
+        human::print(&json::to_line(&with_problems(doc, &skills)));
     } else {
         let label = Painter::stdout().bold(&selected.join(", "));
         human::print(&format!(
@@ -218,9 +220,12 @@ pub fn remove(name: Option<&str>, brain: Option<&str>, as_json: bool) -> Result<
     }
     let brains = companions::load_brains(&resolved).map_err(cli_error)?;
     let changed = companions::remove(&brains, &selected).map_err(cli_error)?;
-    refresh_skills(&home()?)?;
+    let home = home()?;
+    let skills = refresh_skills(&home)?;
+    print_failures(&skills, &home);
     if as_json {
-        human::print(&json::to_line(&result_json(&selected, &changed, REMOVED)));
+        let doc = result_json(&selected, &changed, REMOVED);
+        human::print(&json::to_line(&with_problems(doc, &skills)));
     } else {
         let label = Painter::stdout().bold(&selected.join(", "));
         let brains = if changed.is_empty() {

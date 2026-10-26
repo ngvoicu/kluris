@@ -373,7 +373,7 @@ def test_create_second_brain_installs_both_skills(sandbox: Sandbox):
 
 def test_create_clean_json_keeps_v2s_bytes(sandbox: Sandbox):
     """A clean install adds nothing to ``create --json`` (the ``skills`` key
-    appears only when a destination failed or kept a near miss, PAR-069),
+    appears only when a destination failed or kept a near miss, PAR-070),
     and a user's own plain ``kluris-notes`` is no near miss: v3's stdout is
     v2's byte for byte (v2 deletes that skill; v3 leaves it, PAR-031)."""
     notes = sandbox.home / ".agents" / "skills" / "kluris-notes" / "SKILL.md"

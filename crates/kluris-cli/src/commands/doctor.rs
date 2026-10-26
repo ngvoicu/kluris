@@ -1,15 +1,16 @@
 //! `kluris doctor [--no-refresh] [--json]` (research-03 §1.13; the checks
 //! are `kluris_core::doctor`'s).
 
-use kluris_core::agents::install::{DestinationReport, DestinationRole, InstallReport};
+use kluris_core::agents::install::{DestinationReport, InstallReport};
 use kluris_core::doctor::{
-    self, Check, CompanionRefresh, DoctorReport, DoctorRequest, Status, home_relative, slashed,
+    self, Check, CompanionRefresh, DoctorReport, DoctorRequest, Status, home_relative,
 };
 
 use crate::error::CliError;
 use crate::output::human::{self, Painter, Style};
 use crate::output::json::{self, Json};
 use crate::resolve::{config_path, copilot_home, home};
+use crate::skills::destination_json;
 
 pub fn run(no_refresh: bool, as_json: bool) -> Result<(), CliError> {
     let config_path = config_path()?;
@@ -83,38 +84,10 @@ fn companion_json(refresh: &CompanionRefresh) -> Json {
     Json::Object(fields)
 }
 
-fn role(role: &DestinationRole) -> String {
-    match role {
-        DestinationRole::Universal => "universal".into(),
-        DestinationRole::Agent(a) => format!("agent:{a}"),
-        DestinationRole::Deselected(a) => format!("deselected:{a}"),
-        DestinationRole::Migration => "migration".into(),
-    }
-}
-
 /// `{"agents", "destinations": [{"path", "role", "alias_of", "written",
 /// "removed", "kept", "failed"}], "brain_errors": [{"brain", "error"}]}`.
 fn skills_json(skills: &InstallReport) -> Json {
-    let destinations = skills
-        .destinations
-        .iter()
-        .map(|d| {
-            Json::Object(vec![
-                ("path".into(), Json::Str(slashed(&d.path))),
-                ("role".into(), Json::Str(role(&d.role))),
-                (
-                    "alias_of".into(),
-                    d.alias_of
-                        .as_ref()
-                        .map_or(Json::Null, |p| Json::Str(slashed(p))),
-                ),
-                ("written".into(), strings(&d.written)),
-                ("removed".into(), strings(&d.removed)),
-                ("kept".into(), strings(&d.kept)),
-                ("failed".into(), strings(&d.failed)),
-            ])
-        })
-        .collect();
+    let destinations = skills.destinations.iter().map(destination_json).collect();
     let brain_errors = skills
         .brain_errors
         .iter()

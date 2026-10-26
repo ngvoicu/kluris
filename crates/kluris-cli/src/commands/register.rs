@@ -12,7 +12,7 @@ use crate::output::human::{self, Painter};
 use crate::output::json::{self, Json};
 use crate::prompt::{ask, can_prompt, on_terminal};
 use crate::resolve::{config_path, home};
-use crate::skills::{refresh_skills, skill_usage};
+use crate::skills::{print_failures, refresh_skills, skill_note, with_problems};
 
 /// The message for a missing SOURCE without a terminal (v2 asked, even
 /// under `--json`).
@@ -90,20 +90,22 @@ pub fn run(source: Option<&str>, as_json: bool) -> Result<(), CliError> {
             path,
             companions,
         } => {
-            refresh_skills(&home)?;
+            let skills = refresh_skills(&home)?;
+            print_failures(&skills, &home);
             if as_json {
                 let companions = companions.into_iter().map(Json::Str).collect();
-                human::print(&json::to_line(&Json::Object(vec![
+                let doc = Json::Object(vec![
                     ("ok".into(), Json::Bool(true)),
                     ("name".into(), Json::Str(name)),
                     ("path".into(), Json::Str(path)),
                     ("companions".into(), Json::Array(companions)),
-                ])));
+                ]);
+                human::print(&json::to_line(&with_problems(doc, &skills)));
             } else {
                 human::print(&format!(
                     "Brain registered: {}\n  Path: {path}\n\n{}",
                     painter.bold(&name),
-                    skill_usage(painter, &name)
+                    skill_note(painter, &name, &skills)
                 ));
             }
         }

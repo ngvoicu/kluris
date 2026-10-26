@@ -13,7 +13,7 @@ use crate::output::human::{self, Painter};
 use crate::output::json::{self, Json};
 use crate::prompt::{ask, can_prompt, on_terminal};
 use crate::resolve::{config_path, home};
-use crate::skills::{refresh_skills, skill_usage};
+use crate::skills::{print_failures, refresh_skills, skill_note, with_problems};
 
 /// The message for a missing NAME without a terminal (v2 asked, or raised
 /// under `--json`).
@@ -88,21 +88,25 @@ pub fn run(options: Options) -> Result<(), CliError> {
     for warning in &created.warnings {
         eprintln!("{warning}");
     }
-    refresh_skills(&home)?;
+    let skills = refresh_skills(&home)?;
+    print_failures(&skills, &home);
 
     if as_json {
         let companions = created.companions.iter().map(|c| Json::Str(c.clone()));
-        human::print(&json::to_line(&Json::Object(vec![
-            ("ok".into(), Json::Bool(true)),
-            ("name".into(), Json::Str(created.name.clone())),
-            ("path".into(), Json::Str(created.path.clone())),
-            ("type".into(), Json::Str(created.brain_type.clone())),
-            (
-                "lobes".into(),
-                Json::Int(i64::try_from(created.lobes).unwrap_or(i64::MAX)),
-            ),
-            ("companions".into(), Json::Array(companions.collect())),
-        ])));
+        human::print(&json::to_line(&with_problems(
+            Json::Object(vec![
+                ("ok".into(), Json::Bool(true)),
+                ("name".into(), Json::Str(created.name.clone())),
+                ("path".into(), Json::Str(created.path.clone())),
+                ("type".into(), Json::Str(created.brain_type.clone())),
+                (
+                    "lobes".into(),
+                    Json::Int(i64::try_from(created.lobes).unwrap_or(i64::MAX)),
+                ),
+                ("companions".into(), Json::Array(companions.collect())),
+            ]),
+            &skills,
+        )));
     } else {
         let painter = Painter::stdout();
         human::print(&format!(
@@ -111,7 +115,7 @@ pub fn run(options: Options) -> Result<(), CliError> {
             created.brain_type,
             created.path,
             created.lobes,
-            skill_usage(painter, &created.name)
+            skill_note(painter, &created.name, &skills)
         ));
     }
     Ok(())
