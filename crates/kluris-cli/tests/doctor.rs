@@ -802,10 +802,12 @@ fn doctor_is_listed_in_root_help() {
     let s = Sandbox::new();
     let r = run(s.kluris(&[&bin_dir()]).arg("--help"));
     assert_eq!(r.code, 0);
-    assert!(
-        r.stdout
-            .contains("doctor     Check prerequisites and refresh installed agent skills."),
-        "{}",
-        r.stdout
-    );
+    // The wording is checked; the column width is clap's layout (padded to
+    // the longest command name), which parity does not cover.
+    use predicates::prelude::*;
+    let line = predicates::str::is_match(
+        r"(?m)^  doctor +Check prerequisites and refresh installed agent skills\.$",
+    )
+    .unwrap();
+    assert!(line.eval(&r.stdout), "{}", r.stdout);
 }
