@@ -14,7 +14,8 @@
 //! Nothing is deleted before the new binary is in place; a staged copy that
 //! is not used is removed. A running exe cannot be deleted on Windows, so
 //! the old one stays until its process ends: the caller schedules that, and
-//! [`remove_stale_old`] (run by `self-update` and `doctor`) sweeps any left.
+//! [`remove_swap_leftovers`] (run by `self-update` and `doctor`) sweeps any
+//! left, with the staged copies an interrupted update left.
 //!
 //! Every step goes through [`SwapSteps`], so tests can fail each one.
 
@@ -167,7 +168,7 @@ pub struct SwapRequest<'a> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Swapped {
     /// Windows: where the old binary went (it is deleted once its process
-    /// ends, or swept by [`remove_stale_old`]).
+    /// ends, or swept by [`remove_swap_leftovers`]).
     pub old: Option<PathBuf>,
 }
 
@@ -337,37 +338,65 @@ fn side_names(installed: &Path) -> (PathBuf, PathBuf) {
     }
 }
 
-/// Whether `name` is an old binary a Windows swap left:
-/// `.kluris.old-<pid>-<n>` or `.kluris.exe.old-<pid>-<n>`, nothing more.
-pub fn is_stale_old(name: &str) -> bool {
-    let Some(rest) = name
-        .strip_prefix('.')
-        .and_then(|r| r.strip_prefix(APP_NAME))
-    else {
-        return false;
-    };
+/// `.kluris(.exe).<kind>-<pid>-<n>`, nothing more: `kind` when `name` is
+/// one, with `<pid>` and `<n>` decimal digits.
+fn side_kind(name: &str) -> Option<&str> {
+    let rest = name.strip_prefix('.')?.strip_prefix(APP_NAME)?;
     let rest = rest.strip_prefix(".exe").unwrap_or(rest);
-    let Some((pid, n)) = rest.strip_prefix(".old-").and_then(|r| r.split_once('-')) else {
-        return false;
-    };
+    let (kind, rest) = rest.strip_prefix('.')?.split_once('-')?;
+    let (pid, n) = rest.split_once('-')?;
     let digits = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
-    digits(pid) && digits(n)
+    (digits(pid) && digits(n)).then_some(kind)
 }
 
-/// Remove the old binaries earlier swaps left in `dir` ([`is_stale_old`]);
-/// one still running (Windows) stays for a later sweep. What went.
-pub fn remove_stale_old(dir: &Path) -> Vec<PathBuf> {
+/// Whether `name` is an old binary a Windows swap left:
+/// `.kluris.old-<pid>-<n>` or `.kluris.exe.old-<pid>-<n>`.
+pub fn is_stale_old(name: &str) -> bool {
+    side_kind(name) == Some("old")
+}
+
+/// Whether `name` is a staged copy: `.kluris(.exe).new-<pid>-<n>`.
+pub fn is_staging_name(name: &str) -> bool {
+    side_kind(name) == Some("new")
+}
+
+/// A staged copy this old was left by an interrupted update, not made by
+/// one running now.
+pub const STAGING_MAX_AGE: Duration = Duration::from_secs(3600);
+
+/// Remove what earlier swaps left in `dir`, regular files only (never a
+/// symlink): every old binary ([`is_stale_old`]; one still running on
+/// Windows stays for a later sweep), and every staged copy
+/// ([`is_staging_name`]) last written over [`STAGING_MAX_AGE`] ago. What
+/// went.
+pub fn remove_swap_leftovers(dir: &Path) -> Vec<PathBuf> {
     let Ok(entries) = fs::read_dir(dir) else {
         return Vec::new();
     };
+    let now = std::time::SystemTime::now();
     let mut removed = Vec::new();
     for entry in entries.flatten() {
         let name = entry.file_name();
-        if !is_stale_old(&name.to_string_lossy()) {
+        let name = name.to_string_lossy();
+        // DirEntry::metadata does not follow a symlink.
+        let Ok(meta) = entry.metadata() else {
+            continue;
+        };
+        if !meta.is_file() {
             continue;
         }
+        let gone = if is_stale_old(&name) {
+            true
+        } else if is_staging_name(&name) {
+            meta.modified()
+                .ok()
+                .and_then(|m| now.duration_since(m).ok())
+                .is_some_and(|age| age > STAGING_MAX_AGE)
+        } else {
+            false
+        };
         let path = entry.path();
-        if entry.file_type().is_ok_and(|t| t.is_file()) && fs::remove_file(&path).is_ok() {
+        if gone && fs::remove_file(&path).is_ok() {
             removed.push(path);
         }
     }

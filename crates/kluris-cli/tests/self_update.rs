@@ -1093,6 +1093,9 @@ fn interrupted_staging_files_are_swept_once_an_hour_old() {
         kept.sort();
         assert_eq!(f.prefix_names(), kept, "{args:?}: {}", stderr(&out));
         #[cfg(unix)]
-        assert_eq!(fs::read(f.home.join("target-of-link")).unwrap(), b"not ours");
+        assert_eq!(
+            fs::read(f.home.join("target-of-link")).unwrap(),
+            b"not ours"
+        );
     }
 }

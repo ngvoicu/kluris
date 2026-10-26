@@ -18,8 +18,9 @@
 //!    the receipt's `version` is updated and the new binary runs as a fresh
 //!    process, `<install path> doctor`, and its exit code is the command's.
 //!    On Windows the old exe (still running) is moved out to be deleted
-//!    when this process ends; old ones a swap left are swept at the start
-//!    of `self-update` and `doctor`.
+//!    when this process ends; old ones a swap left, and staged copies over
+//!    an hour old an interrupted update left, are swept at the start of
+//!    `self-update` and `doctor`.
 //!
 //! `KLURIS_GITHUB_TOKEN` is sent when set (never `GITHUB_TOKEN`).
 //! `KLURIS_GITHUB_API_URL` replaces `https://api.github.com` for a GitHub
@@ -31,7 +32,7 @@ use std::fs;
 use std::path::Path;
 use std::process::{Command, Stdio};
 
-use kluris_core::dist::swap::{RealSteps, SwapRequest, remove_stale_old, swap};
+use kluris_core::dist::swap::{RealSteps, SwapRequest, remove_swap_leftovers, swap};
 use kluris_core::dist::{
     self, REPO_NAME, REPO_OWNER, Receipt, ReceiptError, SUMS_ASSET, archive_name, binary_in_archive,
 };
@@ -67,7 +68,7 @@ pub fn run(check: bool, version: Option<&str>, as_json: bool) -> Result<(), CliE
             installed.display()
         )));
     }
-    remove_stale_old(&receipt.install_prefix);
+    remove_swap_leftovers(&receipt.install_prefix);
     let api = Api::from_env()?;
 
     // `--version` names the release; otherwise the listing's newest decides.
