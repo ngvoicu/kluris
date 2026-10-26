@@ -1016,10 +1016,15 @@ fn staging_lookalikes_are_kept_and_reported() {
         ".agents/skills/.kluris-acme.tmp/SKILL.md",
         ".agents/skills/.kluris-acme.old/SKILL.md",
         ".agents/skills/.kluris-notes.old/SKILL.md",
-        ".agents/skills/.KLURIS-ACME.OLD/my-file",
     ] {
+        assert!(before.contains_key(rel), "{rel}");
         assert_eq!(after.get(rel), before.get(rel), "{rel}");
     }
+    // On a case-insensitive file system this is the folder above.
+    assert_eq!(
+        fs::read_to_string(skills.join(".KLURIS-ACME.OLD/my-file")).expect("kept"),
+        "mine"
+    );
     let universal = dest(&report, &skills);
     assert!(universal.removed.is_empty(), "{universal:?}");
     assert_eq!(

@@ -64,8 +64,10 @@ fn report_json(report: &InstallReport, home: &Path) -> Value {
             json!({
                 "path": rel(&d.path, home),
                 "role": role,
+                "alias_of": d.alias_of.as_deref().map(|p| rel(p, home)),
                 "written": d.written,
                 "removed": d.removed,
+                "kept": d.kept,
                 "failed": d.failed,
             })
         })
