@@ -371,6 +371,25 @@ def test_create_second_brain_installs_both_skills(sandbox: Sandbox):
         assert f"home/.agents/skills/kluris-{brain}/SKILL.md" in r["v3"].tree
 
 
+def test_create_clean_json_keeps_v2s_bytes(sandbox: Sandbox):
+    """A clean install adds nothing to ``create --json`` (the ``skills`` key
+    appears only when a destination failed or kept a near miss, PAR-069),
+    and a user's own plain ``kluris-notes`` is no near miss: v3's stdout is
+    v2's byte for byte (v2 deletes that skill; v3 leaves it, PAR-031)."""
+    notes = sandbox.home / ".agents" / "skills" / "kluris-notes" / "SKILL.md"
+    notes.parent.mkdir(parents=True)
+    notes.write_text("---\nname: kluris-notes\ndescription: mine\n---\n\n# Notes\n", encoding="utf-8")
+    sandbox.freeze()
+    r = run_trees(sandbox, ["create", "demo", "--no-git", "--json"])
+    v2, v3 = r["v2"], r["v3"]
+    assert v2.code == v3.code == 0, (v2.stdout, v3.stdout, v3.stderr)
+    assert_json_equal(v2.stdout, v3.stdout, sandbox.root)
+    assert "skills" not in json_of(v3, sandbox)
+    assert v3.stderr == v2.stderr == ""
+    assert "home/.agents/skills/kluris-notes/SKILL.md" in v3.tree
+    assert "home/.agents/skills/kluris-notes/SKILL.md" not in v2.tree
+
+
 # --- create: validation -------------------------------------------------------------------
 
 
