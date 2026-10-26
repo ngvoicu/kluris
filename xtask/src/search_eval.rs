@@ -179,12 +179,12 @@ fn binary(o: &Options) -> Result<PathBuf, String> {
     }
     let root = workspace_root();
     let status = Command::new(std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into()))
-        .args(["build", "--release", "-q", "-p", "kluris-cli"])
+        .args(["build", "--release", "-q", "-p", "kluris"])
         .current_dir(&root)
         .status()
         .map_err(|e| format!("cargo build: {e}"))?;
     if !status.success() {
-        return Err("cargo build --release -p kluris-cli failed".into());
+        return Err("cargo build --release -p kluris failed".into());
     }
     let target =
         std::env::var_os("CARGO_TARGET_DIR").map_or_else(|| root.join("target"), PathBuf::from);

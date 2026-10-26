@@ -1,5 +1,5 @@
 [package]
-name = "kluris-cli"
+name = "kluris"
 description = "Kluris 3 command-line interface (binary `kluris`)"
 version.workspace = true
 edition.workspace = true

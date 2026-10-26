@@ -380,7 +380,7 @@ if (Test-Path -LiteralPath $uv -PathType Leaf) {
   $env:KLURIS_PARITY_ORACLE_DIR = Join-Path $cache 'oracle'
   $env:KLURIS_V3_BIN = Join-Path $env:CARGO_TARGET_DIR 'release\kluris.exe'
   $env:Path = "$uvdir;" + $env:Path
-  Invoke-Step 'release-build' «release» $cargo 'build --release --package kluris-cli'
+  Invoke-Step 'release-build' «release» $cargo 'build --release --package kluris'
   if ($state.last -eq 0) { Invoke-Step 'parity' «parity» $uv «pytest» }
 }
 "##;

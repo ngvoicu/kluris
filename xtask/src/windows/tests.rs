@@ -588,7 +588,7 @@ mod scripts {
         assert!(text.contains(
             "$cargo 'test --workspace --no-fail-fast -p kluris-core --test list -- --nocapture \"\\\"two\" \"words\\\"\"'"
         ), "{text}");
-        assert!(text.contains("$cargo 'build --release --package kluris-cli'"));
+        assert!(text.contains("$cargo 'build --release --package kluris'"), "{text}");
         assert!(text.contains("$uv 'run --project parity --locked pytest parity -q'"));
         let plain = script::run_script(&spec(false, &[]));
         assert!(

@@ -1343,7 +1343,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "kluris-cli"
+name = "kluris"
 version = "3.0.0-dev"
 dependencies = [
  "assert_cmd",
