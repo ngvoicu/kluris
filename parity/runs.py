@@ -169,7 +169,7 @@ def path_keys(entry: dict) -> tuple[str, ...]:
 
 
 def slash_paths(v2_entries: list[dict], v3_entries: list[dict]) -> None:
-    """PAR-030: Kluris 3 writes the brain-relative paths of wake-up's
+    """PAR-037: Kluris 3 writes the brain-relative paths of wake-up's
     ``deprecation[]`` and dream's ``deprecation[]`` and broken synapses
     ``/``-joined on every OS; v2 writes them native. v3's must hold no
     backslash; on Windows v2's are turned into the ``/`` form (in place)

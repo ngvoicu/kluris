@@ -149,14 +149,14 @@ fn py_sorted(mut names: Vec<String>) -> Vec<String> {
 }
 
 /// A `/`-separated path that stays inside the root it is joined to: no
-/// empty, `.` or `..` part, no `\\` (and no `:` on Windows).
+/// empty, `.` or `..` part (and on Windows no `\\` or `:`, which separate
+/// paths there).
 fn is_plain_rel(rel: &str) -> bool {
     rel.split('/').all(|part| {
         !part.is_empty()
             && part != "."
             && part != ".."
-            && !part.contains('\\')
-            && !(cfg!(windows) && part.contains(':'))
+            && !(cfg!(windows) && (part.contains('\\') || part.contains(':')))
     })
 }
 

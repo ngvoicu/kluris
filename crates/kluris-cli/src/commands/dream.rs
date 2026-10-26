@@ -26,15 +26,15 @@ fn str(text: &str) -> Json {
 
 /// The local date (Python's `date.today()`, which follows `TZ`).
 fn today() -> Result<Date, CliError> {
-    let now = jiff::Zoned::now();
-    let date = now.date();
-    let (y, m, d) = (date.year(), date.month(), date.day());
-    let to = |n: i64| u32::try_from(n).ok();
-    to(i64::from(y))
-        .zip(to(i64::from(m)))
-        .zip(to(i64::from(d)))
-        .and_then(|((y, m), d)| Date::new(y, m, d))
-        .ok_or_else(|| CliError::new(format!("Invalid local date {date}")))
+    let date = jiff::Zoned::now().date();
+    let (Ok(year), Ok(month), Ok(day)) = (
+        u32::try_from(date.year()),
+        u32::try_from(date.month()),
+        u32::try_from(date.day()),
+    ) else {
+        return Err(CliError::new(format!("Invalid local date {date}")));
+    };
+    Date::new(year, month, day).ok_or_else(|| CliError::new(format!("Invalid local date {date}")))
 }
 
 fn add(sum: &mut Fixes, f: &Fixes) {
@@ -173,7 +173,7 @@ pub fn run(brain: Option<&str>, as_json: bool, broken_only: bool) -> Result<(), 
 }
 
 /// A `/`-joined path in native form: the JSON paths are `/`-joined
-/// (PAR-030), the text keeps v2's native ones.
+/// (PAR-037), the text keeps v2's native ones.
 fn native(rel: &str) -> String {
     rel.replace('/', std::path::MAIN_SEPARATOR_STR)
 }

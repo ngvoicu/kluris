@@ -3,7 +3,7 @@
 //! As v2, except for the directories the walker prunes (dot directories,
 //! `node_modules`, `__pycache__` and the rest of `SKIP_DIRS`): they get no
 //! `map.md` and are never listed as a sub-lobe or sibling (interview-01 #4,
-//! PAR-029). A lobe's neurons are its directory listing, as in v2 (a suffix
+//! PAR-036). A lobe's neurons are its directory listing, as in v2 (a suffix
 //! compared case-insensitively, links followed), not the neuron index.
 
 use super::workspace::{Read, Workspace};

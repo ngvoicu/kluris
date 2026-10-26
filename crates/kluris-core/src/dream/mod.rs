@@ -12,10 +12,10 @@
 //! The writes are applied together; the validators (broken and one-way
 //! synapses, orphans, frontmatter issues, deprecation) then run on the brain
 //! as written. Differences from v2: dates are written in the quoted form
-//! v2's dream converges to (PAR-026), YAML anchors as plain copies
-//! (PAR-027), each file keeps its line endings and new files are LF
-//! (PAR-028), pruned directories get no `map.md` and are not listed
-//! (PAR-029), report paths are `/`-joined (PAR-030), and files are taken in
+//! v2's dream converges to (PAR-033), YAML anchors as plain copies
+//! (PAR-034), each file keeps its line endings and new files are LF
+//! (PAR-035), pruned directories get no `map.md` and are not listed
+//! (PAR-036), report paths are `/`-joined (PAR-037), and files are taken in
 //! path order (PAR-008). A file that cannot be read is skipped and reported.
 
 mod linker;

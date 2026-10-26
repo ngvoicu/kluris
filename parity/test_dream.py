@@ -5,10 +5,10 @@ on two identical copies of a brain, one per binary, and compares after every
 dream: the exit code, the JSON (``deprecation`` and ``broken_synapses_detail``
 as multisets, PAR-008), the whole brain tree byte for byte and ``git status
 --porcelain``. A file whose bytes differ must be exactly the converged form of
-v2's file (``tools/dream_oracle.py``): quoted top-level dates (PAR-026),
-anchors as plain copies (PAR-027), the file's own line endings with new files
-LF (PAR-028), and reverse ``related`` links in Kluris 3's path order (PAR-008).
-``map.md`` in directories the walker prunes, and their listing, is PAR-029.
+v2's file (``tools/dream_oracle.py``): quoted top-level dates (PAR-033),
+anchors as plain copies (PAR-034), the file's own line endings with new files
+LF (PAR-035), and reverse ``related`` links in Kluris 3's path order (PAR-008).
+``map.md`` in directories the walker prunes, and their listing, is PAR-036.
 The text output is compared by its wording.
 """
 
@@ -304,7 +304,7 @@ def compare_trees(v2: dict[str, bytes], v3: dict[str, bytes], before: dict[str, 
 
 def without_pruned_listing(data: bytes) -> bytes:
     """A v2 ``map.md`` with the pruned directories taken out of ``siblings``,
-    ``sideways`` and Contents (PAR-029)."""
+    ``sideways`` and Contents (PAR-036)."""
     text = data.decode("utf-8")
     eol = "\r\n" if "\r\n" in text else "\n"
     lines = text.split(eol)
@@ -554,7 +554,7 @@ def test_one_brain_of_two_by_name(sandbox):
 
 
 def test_pruned_directories(sandbox):
-    """PAR-029: v3 writes no map.md into dot directories, ``node_modules`` or
+    """PAR-036: v3 writes no map.md into dot directories, ``node_modules`` or
     ``__pycache__`` and lists none of them as a sub-lobe or sibling."""
     brain = healthy_brain(sandbox)
     write(brain, {
@@ -580,7 +580,7 @@ def test_pruned_directories(sandbox):
 
 
 def test_windows_paths_in_json_use_forward_slashes(sandbox):
-    """PAR-030: ``file``/``source``/``target`` are ``/``-joined on every OS;
+    """PAR-037: ``file``/``source``/``target`` are ``/``-joined on every OS;
     v2 writes native paths, so on Windows they differ."""
     brain = rich_brain(sandbox)
     write_config(sandbox, [("rich", str(brain), "fixture")])
