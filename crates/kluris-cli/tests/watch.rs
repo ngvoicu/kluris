@@ -2197,6 +2197,57 @@ fn end_round_trip_leftovers() {
     }
 }
 
+/// Nothing of any real round trip is on this machine: no service
+/// definition, task or unit for a `kluris-rt-*` brain, no watch for one, no
+/// log of one. `-- --test watch -- --ignored no_round_trip_leftovers`.
+#[test]
+#[ignore = "looks at this machine's real services"]
+fn no_round_trip_leftovers() {
+    let exe = assert_cmd::cargo::cargo_bin!("kluris");
+    let out = StdCommand::new(exe)
+        .args(["doctor", "--no-refresh", "--json"])
+        .env("KLURIS_NO_AUTO_SYNC", "1")
+        .output()
+        .unwrap();
+    let doctor = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert!(!doctor.contains("sync-service:kluris-rt-"), "{doctor}");
+    let mut found = Vec::new();
+    let home = std::env::home_dir().unwrap();
+    let mut folders = vec![
+        home.join("Library").join("LaunchAgents"),
+        home.join("Library").join("Logs").join("kluris"),
+        home.join(".config").join("systemd").join("user"),
+    ];
+    if let Some(lad) = std::env::var_os("LOCALAPPDATA") {
+        folders.push(PathBuf::from(lad).join("kluris").join("logs"));
+    }
+    for folder in folders {
+        for entry in fs::read_dir(&folder).into_iter().flatten().flatten() {
+            if entry.file_name().to_string_lossy().contains("kluris-rt-") {
+                found.push(entry.path().display().to_string());
+            }
+        }
+    }
+    if cfg!(windows) {
+        let tasks = StdCommand::new("schtasks")
+            .args(["/Query", "/FO", "CSV", "/NH"])
+            .output()
+            .unwrap();
+        let tasks = String::from_utf8_lossy(&tasks.stdout).into_owned();
+        found.extend(
+            tasks
+                .lines()
+                .filter(|l| l.contains("kluris-rt-"))
+                .map(str::to_string),
+        );
+    }
+    if watch_running_with("--brain kluris-rt-") {
+        found.push("a watch process for a kluris-rt- brain".into());
+    }
+    assert!(found.is_empty(), "left behind: {found:#?}");
+    eprintln!("no round trip leftovers");
+}
+
 /// Whether a `kluris sync --watch --brain <name>` process is running.
 fn watch_process_running(name: &str) -> bool {
     watch_running_with(&format!("--brain {name}"))
@@ -2219,7 +2270,17 @@ fn watch_running_with(needle: &str) -> bool {
     let text = out
         .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
         .unwrap_or_default();
-    text.lines().any(|line| {
-        line.contains("--watch") && line.contains(needle) && !line.contains("Get-CimInstance")
-    })
+    // Only kluris itself (or the conhost a Windows task runs it under), not
+    // a shell or a search whose command line quotes the words.
+    let program = |line: &str| {
+        let line = line.trim_start();
+        let first = match line.strip_prefix('"') {
+            Some(rest) => rest.split('"').next().unwrap_or_default(),
+            None => line.split_whitespace().next().unwrap_or_default(),
+        };
+        let name = first.rsplit(['/', '\\']).next().unwrap_or_default();
+        ["kluris", "kluris.exe", "conhost.exe"].contains(&name.to_ascii_lowercase().as_str())
+    };
+    text.lines()
+        .any(|line| program(line) && line.contains("--watch") && line.contains(needle))
 }
