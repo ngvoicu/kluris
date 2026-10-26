@@ -73,7 +73,7 @@ One entry per difference, under its own heading:
 - Tests: `crates/kluris-core/tests/brain_walk.rs::{deprecation_skips_malformed_neurons_and_reports_them, deprecation_with_symlinks_matches_v2}`, `parity/test_brain_model.py::test_fixture_brain_model_matches_v2[malformed]` and `[links]` (v2's rules run with `preparsed=` over the neurons that read); wake-up: `crates/kluris-core/tests/wake_up.rs::malformed_neurons_are_skipped_and_counted`, `parity/test_wake_up.py::{test_malformed_fixture_brain, test_fixture_brain[links]}` (v2's `deprecation: []` against v3's issues of the neurons that read)
 
 ### PAR-008: neurons in path order, not directory-read order
-- Command: every output whose order follows v2's neuron walk: `kluris wake-up --json` `deprecation[]`, `kluris dream` (`deprecation[]`, `broken_synapses_detail[]`, `--broken-only`'s `broken_synapses[]`, the text's deprecation lines, and the `related` lists its reverse-link fix writes into neurons), MRI node ids once ported; `kluris_core::brain::walk::walk` and `neuron_index::neuron_files`
+- Command: every output whose order follows v2's neuron walk: `kluris wake-up --json` `deprecation[]`, `kluris dream` (`deprecation[]`, `broken_synapses_detail[]`, `--broken-only`'s `broken_synapses[]`, the text's deprecation lines, and the `related` lists its reverse-link fix writes into neurons), `kluris mri` (the graph's node ids and the order of its `nodes` and `edges`); `kluris_core::brain::walk::walk` and `neuron_index::neuron_files`
 - Differs: v3 lists files sorted by the bytes of their `/`-separated brain-relative path, and neurons as markdown then YAML, each in that order. v2 keeps `os.walk`'s directory-read order (markdown then YAML), which depends on the filesystem and differs between machines. So the same set of entries can come out in another order; parity compares these lists as sets or multisets (research-03 §3.2), and an order that v2 itself sorts (search results, `recent`) is not affected. In brain files: when one dream adds two or more reverse `related` links to the same neuron, v3 appends them in its path order and v2 in readdir order (on APFS, sources `zeta, alpha, mid, Beta, _u, a-b, a.b` gave v2 `alpha, mid, _u, a-b, a.b, zeta, Beta`, v3 `Beta, _u, a-b, a.b, alpha, mid, zeta`); same entries, other bytes.
 - Decision: one deterministic walker for every command (chief's brief for T-75, Kluris 3 Phase 2), 2026-10-26; the reverse `related` order in brain files: chief's answer in T-89 (m-4496), citing the same decision
 - Tests: `crates/kluris-core/tests/brain_walk.rs::{walker_order_is_by_path_bytes, neuron_index_matches_v2_on_the_full_brain}`, `parity/test_brain_model.py` (neuron sets; deprecation in v3's order against v2's rules in that order), `parity/test_wake_up.py` (`deprecation[]` as a multiset, `parity/runs.py::assert_wake_up_equal`); dream: `crates/kluris-core/tests/dream.rs::reverse_links_are_added_in_path_order`, `parity/test_dream.py` (the JSON lists and text lines as multisets; a `related` list holding v2's entries in another order is taken in v3's order by `parity/tools/dream_oracle.py`; the `knowledge/src/*` sources of `test_three_runs_converge_like_v2`)
@@ -85,7 +85,7 @@ One entry per difference, under its own heading:
 - Tests: `crates/kluris-core/tests/wake_up.rs::malformed_neurons_are_skipped_and_counted`, `parity/test_wake_up.py::{test_malformed_fixture_brain, test_fixture_brain[links], test_odd_updated_values, test_frontmatter_v3_refuses}`
 
 ### PAR-010: markdown frontmatter behind a UTF-8 BOM is read
-- Command: every command that reads markdown frontmatter; today `kluris wake-up --json` (`recent`, `brain_md`, lobe descriptions, deprecation)
+- Command: every command that reads markdown frontmatter; today `kluris wake-up --json` (`recent`, `brain_md`, lobe descriptions, deprecation) and `kluris mri` (a node's frontmatter fields, body, title, excerpt and edges)
 - Differs: a markdown file that starts with a UTF-8 BOM and then a `---` block is read with its frontmatter, the BOM dropped. v2 (python-frontmatter) sees no frontmatter there: empty metadata, and the whole text, BOM and `---` lines included, as the body. So in wake-up such a neuron's `updated` puts it in v3's `recent` and not in v2's, brain.md's `brain_md` is its body without the BOM and frontmatter in v3 (v2: `"\ufeff---\n..."`), and a map.md `description` in that frontmatter is used by v3 (v2 falls back to the body).
 - Decision: SPEC TEST-K3-03 ("UTF-8 BOM (read correctly)"), research-01 §1 (the BOM bug); the dream side is TEST-K3-21
 - Tests: `crates/kluris-core/tests/frontmatter_read.rs::{parse_bom_is_detected_and_frontmatter_still_read, read_bom_file}`, `parity/test_wake_up.py::test_bom_frontmatter_is_read`
@@ -103,13 +103,13 @@ One entry per difference, under its own heading:
 - Tests: `crates/kluris-core/tests/git.rs::{log_keeps_a_subject_with_pipes, file_dates_latest_and_created_per_path}`, `parity/test_list_status_help.py::test_status_subject_with_pipes`
 
 ### PAR-013: non-ASCII file names are not C-quoted
-- Command: `kluris status` (`uncommitted`, with and without `--json`); the git layer's `status_short` and `file_dates` (`kluris dream`'s date sync)
+- Command: `kluris status` (`uncommitted`, with and without `--json`); the git layer's `status_short` and `file_dates` (the date sync of `kluris dream` and of `kluris mri`'s preflight)
 - Differs: v3 runs git with `-c core.quotePath=false`, so `uncommitted` has `?? projects/é.md` where v2 has `?? "projects/\303\251.md"` (git's octal C-quoting of every byte over 0x7f). A name git quotes for another reason (a space, `"`, `\`, a control character) is quoted in both. The file-dates log reads NUL-separated names (`-z`), never quoted: v2's quoted names never matched a neuron, so their dates were not refreshed.
 - Decision: interview-01 #5 ("git dates missing ... non-ASCII names"; the same git-layer fix reaches `status`, and git-layer fixes cite #5 per SPEC decision 2026-10-27 (tracebacks)); research-03 §5 item 26; T-78
 - Tests: `crates/kluris-core/tests/git.rs::{status_shows_non_ascii_names_unquoted, file_dates_keep_non_ascii_and_odd_names_as_written}`, `parity/test_list_status_help.py::test_status_non_ascii_names`, `crates/kluris-core/tests/dream.rs::date_sync_uses_brain_relative_paths_in_a_nested_repo_with_non_ascii_names`
 
 ### PAR-014: a brain nested in a larger repo sees only itself
-- Command: `kluris status` (`recent_commits`, `uncommitted`, the text); the git layer's `file_dates` (`kluris dream`'s date sync)
+- Command: `kluris status` (`recent_commits`, `uncommitted`, the text); the git layer's `file_dates` (the date sync of `kluris dream` and of `kluris mri`'s preflight)
 - Differs: when the brain directory is a subdirectory of the work tree (`git rev-parse --show-prefix` is not empty), v3 runs `git log -10 ... -- .` and `git status --short -- .` in the brain, so `recent_commits` lists only commits that touched the brain and `uncommitted` only its own changes, brain-relative (`M projects/alpha.md`). v2 listed the whole outer repo (`outer: code`, `M ../../README.md`). The file-dates log runs with `--relative`, so its paths are brain-relative (`a.md`, v2: `brain/a.md`, which never matched a neuron). A brain at the repo root runs v2's exact commands (no pathspec, which would drop empty commits).
 - Decision: interview-01 #5 ("git dates missing nested-repo brains"; `status` is scoped by the same git-layer fix, and git-layer fixes cite #5 per SPEC decision 2026-10-27 (tracebacks)); research-03 §5 item 26; T-78
 - Tests: `crates/kluris-core/tests/git.rs::{log_of_a_nested_brain_lists_only_its_own_commits, status_of_a_nested_brain_is_scoped_and_brain_relative, file_dates_of_a_nested_brain_are_brain_relative, log_keeps_empty_commits_at_the_repo_root}`, `parity/test_list_status_help.py::test_status_nested_brain_is_scoped_to_the_brain`, `crates/kluris-core/tests/dream.rs::date_sync_uses_brain_relative_paths_in_a_nested_repo_with_non_ascii_names`
@@ -180,9 +180,9 @@ One entry per difference, under its own heading:
 
 ### PAR-025: root `kluris --help` lists only the ported commands (temporary, until Phase 4 ends)
 - Command: `kluris --help` (and `kluris` with no arguments, which prints the same list)
-- Differs: the Commands section lists only the commands Kluris 3 has ported so far (today `list`, `wake-up`, `search`, `status`, `companion`, `dream`, `help`), with v2's one-line descriptions; v2 lists all 13 (with `pack`). `kluris help` (with and without `--json`) lists every command but `pack`, as decided (PAR-018). Temporary: by the end of Phase 4 every command exists and `kluris --help` lists exactly the SPEC acceptance list.
+- Differs: the Commands section lists only the commands Kluris 3 has ported so far (today `list`, `wake-up`, `search`, `status`, `companion`, `dream`, `mri`, `help`), with v2's one-line descriptions; v2 lists all 13 (with `pack`). `kluris help` (with and without `--json`) lists every command but `pack`, as decided (PAR-018). Temporary: by the end of Phase 4 every command exists and `kluris --help` lists exactly the SPEC acceptance list.
 - Decision: SPEC decision 2026-10-27 (tracebacks) row ("a temporary surface difference (root `kluris --help` listing only ported commands until Phase 4 ends) gets its own allowlist entry marked temporary"); SPEC Deviations [IMPL-K3-18]
-- Tests: `parity/test_list_status_help.py::test_root_help_flag` (each ported command's v2 line; no `pack`)
+- Tests: `parity/test_list_status_help.py::test_root_help_flag` (each ported command's v2 line; no `pack`), `parity/test_mri.py::test_mri_is_in_the_root_help`
 
 ### PAR-026: SKILL.md placeholder fixes
 - Command: every command that installs agent skills (`create`, `register`, `remove`, `companion add`, `companion remove`, `doctor`); today `companion add`, `companion remove` and `cargo xtask skills-install`
@@ -227,19 +227,19 @@ One entry per difference, under its own heading:
 - Tests: `crates/kluris-core/tests/skill_install.rs::a_brain_with_an_invalid_kluris_yml_is_reported_and_still_rendered`
 
 ### PAR-033: dates in rewritten frontmatter are always quoted
-- Command: `kluris dream` (with and without `--json`, `--broken-only`, `--brain all`): every neuron it rewrites
+- Command: `kluris dream` (with and without `--json`, `--broken-only`, `--brain all`) and `kluris mri`'s preflight: every neuron they rewrite
 - Differs: v3 writes every top-level date and datetime of a neuron it rewrites as its quoted ISO text: `created: '2026-01-01'`, `when: '2026-01-02T10:00:00+00:00'`. v2 does so only on its date path (`_sync_brain_state`'s `preloaded=` write). Its parent and reverse-link fixes (`fix_missing_frontmatter`, `fix_bidirectional_synapses`) reload a markdown neuron raw and write `created: 2026-01-01` and `when: 2026-01-02 10:00:00+00:00` unquoted. The file stays that way until a later date pass rewrites it, which never happens while `updated` already equals the git date. YAML neurons and map/brain files are no difference: v2 writes them quoted too. Dates nested in a list or mapping (`nested: [2026-01-03]`) are written unquoted by both. The values read back the same in both.
 - Decision: interview-01 #2 (always write the converged, quoted form); SPEC decision log 2026-10-24 ("Always write quoted dates")
 - Tests: `crates/kluris-core/tests/dream.rs::missing_parents_are_inferred_below_the_root_with_quoted_dates`, `parity/test_dream.py` (every file whose bytes differ must equal `parity/tools/dream_oracle.py`'s rewrite of v2's file through v2's own reader and dream-path writer; `projects/no-parent.md` in `test_three_runs_converge_like_v2`)
 
 ### PAR-034: YAML anchors and aliases are written as plain copies
-- Command: `kluris dream`: every neuron it rewrites
+- Command: `kluris dream` and `kluris mri`'s preflight: every neuron they rewrite
 - Differs: a frontmatter value written with an anchor and alias (`base: &x [a, b]` / `copy: *x`) is written by v3 as two plain copies (`base:\n- a\n- b\ncopy:\n- a\n- b`). v2 writes `base: &id001` ... `copy: *id001` on both of its write paths. The SPEC row says v2's date path writes plain copies, but running the oracle in T-89 showed that path writing `&id001` too. The values read back the same.
 - Decision: SPEC decision log 2026-10-25 (YAML anchors/aliases in user frontmatter are written as plain copies; v3's value model holds no shared references)
 - Tests: `crates/kluris-core/tests/dream.rs::missing_parents_are_inferred_below_the_root_with_quoted_dates`, `parity/test_dream.py::test_three_runs_converge_like_v2` (`projects/agent.md`; the expected bytes come from `parity/tools/dream_oracle.py`, which un-shares v2's values before writing)
 
 ### PAR-035: brain files keep their line endings; new files are LF
-- Command: `kluris dream`: every neuron, `map.md` and `brain.md` it writes
+- Command: `kluris dream` and `kluris mri`'s preflight: every neuron, `map.md` and `brain.md` they write
 - Differs: v3 writes an existing file with the line endings it had (CRLF when its first line break is CRLF, else LF), and a file it creates (a new `map.md`, `brain.md`) with LF, on every OS.
   - macOS/Linux: v2 writes markdown LF, so a CRLF neuron or map becomes LF. A CRLF YAML neuron gets v2's LF `#---` block before its CRLF body; v3 writes the block CRLF.
   - Windows: v2 writes markdown in text mode, so every markdown file it writes is CRLF, new files and LF files included. v3 keeps LF files LF and creates LF files.
@@ -247,7 +247,7 @@ One entry per difference, under its own heading:
 - Tests: `crates/kluris-core/tests/dream.rs::files_keep_their_line_endings_and_new_files_are_lf`, `parity/test_dream.py` (`knowledge/crlf.md` in `test_three_runs_converge_like_v2`; the expected bytes use the file's endings before the run, or LF for a new file, so Windows runs compare against the same rule)
 
 ### PAR-036: no `map.md` in pruned directories, and none listed
-- Command: `kluris dream` (and the MRI preflight once ported)
+- Command: `kluris dream` and `kluris mri`'s preflight
 - Differs: v3 writes `map.md` only into the directories its one walker descends into, so never into a dot directory (`.github/`, `.obsidian/`, `.archive/`), `node_modules/`, `__pycache__/` or any other `SKIP_DIRS` name, at any depth. A map never lists such a directory as a sub-lobe (`- [.archive/](./.archive/map.md)`) or sibling (`sideways [.archive](../.archive/map.md) | ...`, `siblings: [../.archive/map.md, ...]`), even when a `map.md` an earlier v2 dream wrote is still there. v3 leaves those old files alone. v2 walks every directory but `.git`, writes a `map.md` into each one, and lists any child directory with a `map.md` except the `SKIP_DIRS` names. On real data: consensflow-sme has a top-level `.archive/` with v2-written maps, so v3's first dream rewrites its 8 top-level lobe maps (the `.archive` sibling taken out, `updated` today). A later v2 dream would add it back while both versions are in use.
 - Decision: interview-01 #4 (`map.md` written into hidden and tooling folders; one shared walker); SPEC decision log 2026-10-27 (pruned dirs; chief's answer in T-89, m-4496)
 - Tests: `crates/kluris-core/tests/dream.rs::{pruned_directories_get_no_map_and_are_never_listed, maps_and_brain_md_are_generated_like_v2}`, `parity/test_dream.py::{test_pruned_directories, test_registered_brains}` (v3's map equals v2's with the pruned directories taken out of `siblings`, `sideways` and Contents, and `updated` today when that changed the body)
@@ -280,3 +280,37 @@ One entry per difference, under its own heading:
 - Differs: the files under `~/.kluris/companions/<name>/` are byte for byte v2's (the embedded `vendored/` tree), written with the install time as modification time and the default file mode; v2 copies them with `shutil.copy2`, keeping the installed package's modification times and mode bits. Folder layout, allowlist and the stage-then-rename are v2's.
 - Decision: SPEC architecture ("companions (embedded)", technology table: `include_dir` for the companion folders) and research-03 §2.10 ("Rust must embed these four folders"): an embedded tree has no file metadata to copy
 - Tests: `crates/kluris-core/tests/companions.rs::{every_embedded_companion_installs_as_vendored, embedded_trees_equal_vendored_byte_for_byte}`, `parity/test_companions.py` (the installed tree compared by bytes)
+
+### PAR-042: the MRI graphs only what the shared walker sees
+- Command: `kluris mri` (the graph in the page, its header counts, and `nodes`/`edges` in the JSON)
+- Differs: v3 builds the graph over the one walker every command uses, so no file under a dot directory (`.archive/`, `.obsidian/`, `.github/`), `node_modules/`, `__pycache__/` or another `SKIP_DIRS` name, and no symlink that resolves outside the brain (or loops), is a node, and links to them make no edges. v2's MRI walk prunes only `.git` and graphs all of those, so its graph has more nodes and edges, and the nodes it shares with v3 can have a higher `degree` and more edges. Every other node and edge is v2's. On real data: consensflow-sme, whose `.archive/` holds most of its files, is 615 nodes and 2,629 edges in v3 and 1,534 nodes and 3,582 edges in v2; the six other local brains are identical.
+- Decision: interview-01 #4 (one shared walker; research-03 §5 items 1-2: the MRI walker graphs `node_modules`, hidden directories and symlinks that escape the brain); chief's brief for T-95 ("the MRI no longer graphs dot-dirs, node_modules or symlinks escaping the brain"); SPEC decision log 2026-10-26 (one deterministic walker) and 2026-10-27 (pruned dirs)
+- Tests: `crates/kluris-core/tests/mri.rs::pruned_directories_and_escaping_symlinks_are_not_graphed`, `parity/test_mri.py::{test_pruned_directories_and_escaping_symlinks, test_registered_brains}` (v2's graph without the pruned files, their edges, and the degrees and edge counts recomputed, equals v3's)
+
+### PAR-043: neuron text cannot end the page's script
+- Command: `kluris mri` (the page)
+- Differs: in the graph JSON injected into the page's `<script>`, v3 writes every `</` as `<\/` and every `<!--` as `\u003c!--`; both are escapes inside JSON strings, so the graph reads back the same. v2 injects `json.dumps(graph, indent=2)` as is, so a neuron containing `</script>` ends the script early and the page breaks (research-03 found 4 such occurrences in one generated page). `<!--` is escaped too because, followed by `<script>`, it puts the HTML parser in the state where the page's own `</script>` no longer closes the element.
+- Decision: interview-01 #4 (v2 crash/damage bugs are fixed); research-03 §5 item 16; chief's brief for T-95 ("escape `</` as `<\/` in the injected JSON")
+- Tests: `crates/kluris-core/tests/mri.rs::neuron_text_cannot_end_the_script`, `parity/test_mri.py::test_mri_rich_brain` (v3's page has one `</script>`, v2's more; every page's JSON must equal `json.dumps(indent=2)` of its parse with these two escapes)
+
+### PAR-044: the page is named after the registered brain
+- Command: `kluris mri` (the page's `<title>`, its header and breadcrumb, and the script's `BRAIN_NAME`)
+- Differs: v3 uses the brain's registered name (the `--brain` name) in all four places; v2 uses the brain directory's name (`brain_path.name`). They differ when the directory is named otherwise (`<title>calm-brain Brain MRI</title>` where v2 has `<title>Some Folder Brain MRI</title>`). A registered name is always a valid brain name, so it needs no HTML escaping, which v2's directory name never got.
+- Decision: research-03 §5 item 17; chief's brief for T-95 ("the page title is the registered brain name, not the directory name")
+- Tests: `parity/test_mri.py::test_page_is_named_after_the_registered_brain`, `crates/kluris-core/tests/mri.rs::the_page_is_v2s_shell_css_and_js_with_the_data_injected`
+
+### PAR-045: the page is LF on Windows
+- Command: `kluris mri`, on Windows
+- Differs: v3 writes `brain-mri.html` (or the `--output` file) with LF line endings on every OS. v2 writes it in text mode, so on Windows every line ends in CRLF. The parity tests read v2's page with CRLF as LF on Windows before comparing.
+- Decision: interview-01 #3 (new files LF); SPEC decision log 2026-10-25 (on Windows v2 writes in text mode; v3 keeps LF)
+- Tests: `crates/kluris-core/tests/mri.rs::generate_writes_the_page_and_creates_parent_directories`, `parity/test_mri.py` (`v3_page` refuses a `\r`; `v2_page` reads CRLF as LF on Windows)
+
+### PAR-046: what makes v2's MRI raise is a result
+- Command: `kluris mri`
+- Differs: where v2's `build_graph` or `json.dumps` raises (traceback, exit 1, no page, no JSON), v3 writes the page:
+  - a `parent`, `replaced_by` or `related` entry that is not a string (`parent: 7`, `related: [5]`, a list, a date in `related`) makes no edge; its node field is Python's `str()` of the value, as in v2 (v2's `pathlib` raises `TypeError`);
+  - a date or datetime nested in `tags` or `related` (`tags: [2026-03-04]`) is written as its ISO text (`"2026-03-04"`); v2's `json.dumps` raises `TypeError` (top-level dates are ISO text in both);
+  - values nested deeper than Python's recursion limit are written (v3's writer keeps its own stack).
+  The preflight skips a neuron it cannot read, as dream does (PAR-038), where v2's preflight raises; the graph then shows that file as v2's `build_graph` would: a node with its stem title and no fields or edges.
+- Decision: SPEC decision log 2026-10-27 (every v2 traceback becomes a correct result or a clean error, each allowlisted); interview-01 #4
+- Tests: `crates/kluris-core/tests/mri.rs::{edges_follow_v2, neuron_fields_follow_v2, missing_fields_are_empty_and_non_strings_are_python_str, a_file_that_does_not_read_is_a_node_without_fields_or_edges, indented_json_matches_python}` (no parity scenario: v2 raises)
