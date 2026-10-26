@@ -551,7 +551,7 @@ from disk or send it to a colleague.
 | `kluris wake-up` | The compact snapshot agents load at the start of a session (`--brain`) |
 | `kluris dream` | Regenerate maps, fix what is safe to fix, validate links (`--brain`, `--broken-only` with `--json`) |
 | `kluris mri` | Write the brain's visual map and print its link (`--brain`, `--output`) |
-| `kluris commit` | Commit only the files you name and the maps they change (`--brain`, `--paths`, `--message`) |
+| `kluris commit` | Commit only the files you name and the maps they change (`--brain`, `--paths`, `--message`, `--no-verify`) |
 | `kluris companion list` | The companion playbooks, which are installed, and which brains use them (`--brain`) |
 | `kluris companion add <name>` | Turn a companion on for a brain (`--brain`) |
 | `kluris companion remove <name>` | Turn a companion off for a brain (`--brain`) |

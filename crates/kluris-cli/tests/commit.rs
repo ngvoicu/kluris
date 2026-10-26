@@ -734,6 +734,40 @@ fn a_deleted_lobe_takes_its_map_and_updates_brain_md_and_siblings() {
 }
 
 #[test]
+fn a_deleted_lobe_takes_the_maps_of_its_empty_sub_lobes_too() {
+    let b = Brain::new();
+    fs::create_dir_all(b.path("ideas/sub")).unwrap();
+    let (code, out, err) = b.run(&["dream", "--brain", "demo", "--json"], &[]);
+    assert_eq!(code, 0, "{out}{err}");
+    b.git(&["add", "-A"]);
+    b.git(&["commit", "-q", "-m", "an empty sub-lobe"]);
+    assert!(
+        b.committed("HEAD")
+            .contains(&"ideas/sub/map.md".to_string())
+    );
+
+    fs::remove_dir_all(b.path("ideas")).unwrap();
+    let (code, doc) = b.commit("ideas/idea.md", &[]);
+    assert_eq!(code, 0, "{doc}");
+    assert_eq!(
+        doc["regenerated"],
+        json!([
+            "brain.md",
+            "ideas/map.md",
+            "ideas/sub/map.md",
+            "notes/map.md"
+        ])
+    );
+    assert!(
+        b.name_status("HEAD")
+            .contains(&"D\tideas/sub/map.md".to_string()),
+        "{:?}",
+        b.name_status("HEAD")
+    );
+    assert_eq!(b.status(), Vec::<String>::new());
+}
+
+#[test]
 fn the_first_commit_of_a_repo_with_no_commit_yet() {
     let b = Brain::without_git();
     b.git(&["init", "-q", "-b", "main"]);

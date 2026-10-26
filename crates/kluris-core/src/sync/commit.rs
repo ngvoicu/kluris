@@ -689,7 +689,9 @@ pub fn commit<G: Plumbing>(
     // The map step over the view, limited to the generated files the paths
     // change.
     let generated_in_base = in_base(&generated_candidates(&paths))?;
-    let affected = affected_generated(&paths, view.dirs(), &generated_in_base);
+    let mut affected = affected_generated(&paths, view.dirs(), &generated_in_base);
+    // A removed lobe's sub-lobe maps go with it, wherever they are.
+    affected.extend(removed_maps.iter().cloned());
     let (changes, skipped) = map_changes(&view, &request.maps);
     if let Some((rel, reason)) = skipped.iter().find(|(rel, _)| affected.contains(*rel)) {
         return Err(CommitError::Regenerate {
@@ -708,16 +710,11 @@ pub fn commit<G: Plumbing>(
             bytes: Some(write.contents),
         })
         .collect();
-    generated.extend(
-        removed_maps
-            .iter()
-            .filter(|rel| affected.contains(*rel))
-            .map(|rel| StagedBlob {
-                rel: rel.clone(),
-                mode: mode(rel),
-                bytes: None,
-            }),
-    );
+    generated.extend(removed_maps.iter().map(|rel| StagedBlob {
+        rel: rel.clone(),
+        mode: mode(rel),
+        bytes: None,
+    }));
 
     let index = git.staging_index(&repo, base.as_deref())?;
     git.stage_worktree(&repo, &index, &paths)?;
