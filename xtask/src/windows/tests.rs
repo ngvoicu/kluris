@@ -96,7 +96,9 @@ mod words_of_the_command {
         assert_eq!(options.machine, Some(Name::Zeewin));
         assert_eq!(options.wrapper.as_deref(), Some("../site/install.ps1"));
         assert_eq!(
-            run_of("--wrapper=x.ps1 --installer-smoke").wrapper.as_deref(),
+            run_of("--wrapper=x.ps1 --installer-smoke")
+                .wrapper
+                .as_deref(),
             Some("x.ps1"),
             "the = spelling, in any order"
         );
@@ -105,7 +107,10 @@ mod words_of_the_command {
             ("--installer-smoke --parity", "not with --parity"),
             ("--installer-smoke -- -p kluris-core", "runs no cargo test"),
             ("--installer-smoke --wrapper", "--wrapper takes"),
-            ("--installer-smoke --wrapper --machine zeewin", "--wrapper takes"),
+            (
+                "--installer-smoke --wrapper --machine zeewin",
+                "--wrapper takes",
+            ),
             ("--installer-smoke=yes", "--installer-smoke takes no value"),
             ("--installer-smoke --wrapper a.ps1 --wrapper b.ps1", "once"),
         ] {
@@ -133,7 +138,10 @@ mod words_of_the_command {
             (dir.path().join("missing.ps1"), "could not read"),
         ] {
             let refused = options::wrapper_file(&path.to_string_lossy()).expect_err("refused");
-            assert!(refused.contains(says) && refused.contains("--wrapper"), "{refused}");
+            assert!(
+                refused.contains(says) && refused.contains("--wrapper"),
+                "{refused}"
+            );
         }
     }
 
@@ -456,7 +464,10 @@ mod scripts {
             ("bootstrap", script::bootstrap("kluris-0000abcd-12345678")),
             ("run", script::run_script(&spec(false, &[]))),
             ("run --parity", script::run_script(&spec(true, &extra))),
-            ("run --installer-smoke", script::run_script(&smoke_spec(true))),
+            (
+                "run --installer-smoke",
+                script::run_script(&smoke_spec(true)),
+            ),
             ("stop", script::stop_script("kluris-0000abcd-12345678")),
             (
                 "cleanup",
@@ -670,7 +681,10 @@ mod scripts {
             .find("scripts\\release\\user-path.ps1 -Restore")
             .expect("the run restores the saved user PATH");
         assert!(restore > smoke, "{text}");
-        assert!(text[smoke..].contains("if (Test-Path -LiteralPath $record)"), "{text}");
+        assert!(
+            text[smoke..].contains("if (Test-Path -LiteralPath $record)"),
+            "{text}"
+        );
 
         let with = script::run_script(&smoke_spec(true));
         assert!(
@@ -729,7 +743,10 @@ mod scripts {
         assert!(text.contains(
             "$cargo 'test --workspace --no-fail-fast -p kluris-core --test list -- --nocapture \"\\\"two\" \"words\\\"\"'"
         ), "{text}");
-        assert!(text.contains("$cargo 'build --release --package kluris'"), "{text}");
+        assert!(
+            text.contains("$cargo 'build --release --package kluris'"),
+            "{text}"
+        );
         assert!(text.contains("$uv 'run --project parity --locked pytest parity -q'"));
         let plain = script::run_script(&spec(false, &[]));
         assert!(
@@ -1062,12 +1079,29 @@ mod runs {
         };
         let err = String::from_utf8(err).unwrap();
         assert_eq!(code, 0, "{err}");
-        assert!(run_script.contains("installer-smoke.ps1 -Release"), "{run_script}");
-        assert!(run_script.contains("-Wrapper .kluris-site\\install.ps1"), "{run_script}");
-        assert!(!run_script.contains("Invoke-Step 'cargo-test'"), "{run_script}");
+        assert!(
+            run_script.contains("installer-smoke.ps1 -Release"),
+            "{run_script}"
+        );
+        assert!(
+            run_script.contains("-Wrapper .kluris-site\\install.ps1"),
+            "{run_script}"
+        );
+        assert!(
+            !run_script.contains("Invoke-Step 'cargo-test'"),
+            "{run_script}"
+        );
         let ssh = &fake.calls[1];
-        assert!(ssh.bound >= script::bound(&smoke_spec(true)), "{:?}", ssh.bound);
-        assert!(ssh.bound < script::bound(&spec(true, &[])), "{:?}", ssh.bound);
+        assert!(
+            ssh.bound >= script::bound(&smoke_spec(true)),
+            "{:?}",
+            ssh.bound
+        );
+        assert!(
+            ssh.bound < script::bound(&spec(true, &[])),
+            "{:?}",
+            ssh.bound
+        );
         let summary = err.lines().last().unwrap();
         assert!(
             summary.contains("release-dist 0 (300s), installer-smoke 0 (40s)"),

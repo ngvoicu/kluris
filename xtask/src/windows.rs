@@ -4,7 +4,17 @@
 //!
 //! ```text
 //! cargo xtask windows --machine zeewin|zeewin2 [--parity [--parity-files f.py[,...]]] [-- <extra cargo test args>]
+//! cargo xtask windows --machine zeewin|zeewin2 --installer-smoke [--wrapper <site install.ps1>]
 //! ```
+//!
+//! `--installer-smoke` runs no tests: after the toolchain, uv's Python, the
+//! tree's release built by dist and `scripts\release\installer-smoke.ps1`
+//! against it (through the site wrapper too, sent beside the tree as
+//! `.kluris-site\install.ps1`). It is the one run that changes something
+//! outside Kluris's folder: the user PATH, for the length of the smoke. The
+//! smoke saves its bytes and type first and writes them back (the run does
+//! again when the step was ended before it could, and so does the stop),
+//! then compares them byte for byte.
 //!
 //! A run, in order:
 //!
@@ -91,7 +101,16 @@ pub fn main(args: &[String]) -> ExitCode {
     }
     let stdout = io::stdout();
     let stderr = io::stderr();
-    let mut pack = |tarball: &Path, run_script: &str| pack::pack(root, tarball, run_script);
+    let files = match options.wrapper.as_deref().map(options::wrapper_file) {
+        None => vec![],
+        Some(Ok(file)) => vec![file],
+        Some(Err(why)) => {
+            eprintln!("windows: {why}");
+            return ExitCode::from(2);
+        }
+    };
+    let mut pack =
+        |tarball: &Path, run_script: &str| pack::pack_with_files(root, tarball, run_script, &files);
     let mut ctx = run::Ctx {
         runner: &mut remote::System,
         out: &mut stdout.lock(),

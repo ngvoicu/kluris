@@ -13,6 +13,10 @@ pub const TREE_FILE: &str = ".kluris-tree";
 
 /// uv, fetched into Kluris's tools folder when the machine has none there.
 pub const UV_VERSION: &str = "0.12.8";
+/// Where the site wrapper `--wrapper` names goes in the tarball.
+pub const WRAPPER_DIR: &str = ".kluris-site";
+/// The Python the installer smoke's local release server runs on (uv's).
+pub const SMOKE_PYTHON: &str = "3.11";
 
 /// One program a run starts, with its bound.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -37,6 +41,21 @@ pub const PARITY: Step = Step {
     name: "parity",
     minutes: 90,
 };
+/// uv's Python for the installer smoke's local server.
+pub const PYTHON: Step = Step {
+    name: "python",
+    minutes: 10,
+};
+/// dist's release of this machine's target (scripts/release/build-local).
+pub const RELEASE_DIST: Step = Step {
+    name: "release-dist",
+    minutes: 60,
+};
+/// scripts/release/installer-smoke against that release.
+pub const INSTALLER_SMOKE: Step = Step {
+    name: "installer-smoke",
+    minutes: 20,
+};
 
 /// What the unpack, the sweep and uv's download may take besides the steps.
 const MARGIN_MINUTES: u32 = 20;
@@ -49,9 +68,23 @@ pub fn steps(parity: bool) -> Vec<Step> {
     steps
 }
 
+/// The steps of an installer smoke, which runs no tests.
+pub fn smoke_steps() -> Vec<Step> {
+    vec![TOOLCHAIN, PYTHON, RELEASE_DIST, INSTALLER_SMOKE]
+}
+
 /// How long the whole run may take, as this side waits for it.
 pub fn bound(parity: bool) -> Duration {
-    let minutes: u32 = steps(parity).iter().map(|step| step.minutes).sum::<u32>() + MARGIN_MINUTES;
+    bound_of(&steps(parity))
+}
+
+/// How long an installer smoke may take.
+pub fn smoke_bound() -> Duration {
+    bound_of(&smoke_steps())
+}
+
+fn bound_of(steps: &[Step]) -> Duration {
+    let minutes: u32 = steps.iter().map(|step| step.minutes).sum::<u32>() + MARGIN_MINUTES;
     Duration::from_secs(u64::from(minutes) * 60)
 }
 

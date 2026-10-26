@@ -48,6 +48,8 @@ fn go(options: &Options, ctx: &mut Ctx) -> Result<i32, String> {
         parity: options.parity,
         parity_files: &parity_files,
         cargo_args: &options.cargo_args,
+        installer_smoke: options.installer_smoke,
+        wrapper: options.wrapper.is_some(),
     };
     let scratch = tempfile::tempdir().map_err(|e| format!("no folder for the tarball: {e}"))?;
     let name = plan::tarball_name(&id);
@@ -67,7 +69,7 @@ fn go(options: &Options, ctx: &mut Ctx) -> Result<i32, String> {
         target: &target,
         commit: &commit,
         bootstrap: script::bootstrap_line(&id, &layout),
-        bound: plan::bound(options.parity),
+        bound: script::bound(&spec),
         stop: &stop,
         cleanup: &cleanup,
     };

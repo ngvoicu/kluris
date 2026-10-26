@@ -1,12 +1,13 @@
 //! The words of `cargo xtask windows` ([`crate::ssh_ci::words`]): `--machine
-//! zeewin|zeewin2`, `--parity`, `--parity-files`, `--help`, and after `--` the
-//! extra arguments of `cargo test`.
+//! zeewin|zeewin2`, `--parity`, `--parity-files`, `--installer-smoke`,
+//! `--wrapper`, `--help`, and after `--` the extra arguments of `cargo test`.
 
 use crate::ssh_ci::words;
 pub use crate::ssh_ci::words::checked_parity_files;
 
 pub const USAGE: &str =
     "usage: cargo xtask windows [--machine zeewin|zeewin2] [--parity [--parity-files parity/test.py[,...]]] [-- <cargo test args>]
+       cargo xtask windows [--machine zeewin|zeewin2] --installer-smoke [--wrapper <site install.ps1>]
 
 Runs `cargo test --workspace` (and with --parity the parity harness against a
 release kluris.exe) on a household Windows machine over ssh, on this worktree
@@ -14,7 +15,13 @@ as it is now (HEAD plus uncommitted tracked changes). --parity-files narrows
 the parity step to the parity/*.py files it names; each must be in this tree.
 With no --machine the run goes to zeewin2 while it is free and allowed, else
 to zeewin. A machine whose one-run lock is held, and a refused zeewin2, end
-the command with 75.";
+the command with 75.
+
+--installer-smoke runs no tests: it builds this tree's release with dist and
+runs scripts\\release\\installer-smoke.ps1 against it (with --wrapper, through
+the site's install.ps1 too). That smoke changes the user PATH while it runs,
+having saved it first, and writes the saved bytes back (the run does again if
+the step was ended), then compares them byte for byte.";
 
 /// The machines `--machine` names.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -32,6 +39,10 @@ pub struct Options {
     pub parity_files: Vec<String>,
     /// Appended to `cargo test --workspace`.
     pub cargo_args: Vec<String>,
+    /// The release installer smoke instead of the tests.
+    pub installer_smoke: bool,
+    /// The site's install.ps1, sent beside the tree for the smoke.
+    pub wrapper: Option<String>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -54,5 +65,12 @@ pub fn parse(args: &[String]) -> Result<Parsed, String> {
         parity: words.parity,
         parity_files: words.parity_files,
         cargo_args: words.cargo_args,
+        installer_smoke: words.installer_smoke,
+        wrapper: words.wrapper,
     }))
+}
+
+/// The `--wrapper` file as it goes in the tarball: a `.ps1`, read whole.
+pub fn wrapper_file(given: &str) -> Result<(String, String), String> {
+    words::wrapper_file(given, "ps1")
 }

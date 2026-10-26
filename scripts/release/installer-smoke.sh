@@ -26,7 +26,8 @@
 # releases/latest/download/kluris-installer.sh, and it must refuse a
 # malformed KLURIS_VERSION before fetching anything.
 #
-# Exits 0 when every check passes, 1 at the first failure.
+# The local server and the JSON checks run on KLURIS_SMOKE_PYTHON (default
+# python3). Exits 0 when every check passes, 1 at the first failure.
 set -eu
 
 wrapper=""
@@ -53,7 +54,8 @@ step() {
 [ -f "$release/sha256.sum" ] || fail "no sha256.sum in $release"
 version=$(sed -n 's/^APP_VERSION="\(.*\)"$/\1/p' "$release/kluris-installer.sh" | head -n 1)
 [ -n "$version" ] || fail "kluris-installer.sh names no APP_VERSION"
-command -v python3 >/dev/null 2>&1 || fail "python3 is needed for the local server and the JSON checks"
+python="${KLURIS_SMOKE_PYTHON:-python3}"
+"$python" -c "" 2>/dev/null || fail "$python (KLURIS_SMOKE_PYTHON) is needed for the local server and the JSON checks"
 
 work=$(mktemp -d "${TMPDIR:-/tmp}/kluris-installer-smoke.XXXXXX")
 server_pid=""
@@ -89,7 +91,7 @@ for f in "$release"/*; do
     [ -f "$f" ] && cp "$f" "$work/served/"
 done
 [ -z "$wrapper" ] || cp "$wrapper" "$work/served/install.sh"
-(cd "$work" && exec python3 -I "$here/serve.py" "$work/served" "$work/port" "$work/requests.log") &
+(cd "$work" && exec "$python" -I "$here/serve.py" "$work/served" "$work/port" "$work/requests.log") &
 server_pid=$!
 tries=0
 while [ ! -s "$work/port" ]; do
@@ -174,7 +176,7 @@ grep -qxF 'source "$HOME/.config/kluris/env.fish"' "$sandbox/.config/fish/conf.d
     || fail "fish's conf.d/kluris.env.fish does not source ~/.config/kluris/env.fish"
 receipt="$config/kluris-receipt.json"
 [ -f "$receipt" ] || fail "no receipt at $receipt"
-python3 -I - "$receipt" "$bin" "$version" <<'PY' || fail "the receipt does not record this install"
+"$python" -I - "$receipt" "$bin" "$version" <<'PY' || fail "the receipt does not record this install"
 import json, sys
 receipt = json.load(open(sys.argv[1], encoding="utf-8"))
 assert receipt["install_prefix"] == sys.argv[2], receipt["install_prefix"]
@@ -224,7 +226,7 @@ step "kluris --version: $got"
 # shellcheck disable=SC2086
 in_sandbox $login_shell 'kluris doctor --json' > "$work/doctor.json" 2> "$work/doctor.err" \
     || { cat "$work/doctor.json" "$work/doctor.err"; fail "kluris doctor --json failed"; }
-python3 -I - "$work/doctor.json" "$bin/kluris" <<'PY' || { cat "$work/doctor.json"; fail "kluris doctor --json is not ok with this binary first on PATH"; }
+"$python" -I - "$work/doctor.json" "$bin/kluris" <<'PY' || { cat "$work/doctor.json"; fail "kluris doctor --json is not ok with this binary first on PATH"; }
 import json, sys
 lines = [line for line in open(sys.argv[1], encoding="utf-8") if line.strip()]
 report = json.loads(lines[-1])

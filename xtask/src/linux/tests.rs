@@ -151,7 +151,10 @@ mod scripts {
                 "run --parity",
                 script::run_script(&spec(true, &files, &extra)),
             ),
-            ("run --installer-smoke", script::run_script(&smoke_spec(true))),
+            (
+                "run --installer-smoke",
+                script::run_script(&smoke_spec(true)),
+            ),
             ("stop", script::stop_script(ID)),
             ("cleanup", script::cleanup_script(ID)),
         ]
@@ -925,12 +928,23 @@ mod runs {
         );
         assert_eq!(ran.code, 0, "{}", ran.err);
         let script = &ran.scripts[0];
-        assert!(script.contains("'--wrapper' '.kluris-site/install.sh'"), "{script}");
+        assert!(
+            script.contains("'--wrapper' '.kluris-site/install.sh'"),
+            "{script}"
+        );
         assert!(!script.contains("step cargo-test"), "{script}");
         let ssh = ran.fake.calls.last().unwrap();
-        assert!(ssh.bound >= script::bound(&smoke_spec(true)), "{:?}", ssh.bound);
         assert!(
-            ran.err.lines().last().unwrap().contains("release-dist 0 (200s), installer-smoke 0 (30s)"),
+            ssh.bound >= script::bound(&smoke_spec(true)),
+            "{:?}",
+            ssh.bound
+        );
+        assert!(
+            ran.err
+                .lines()
+                .last()
+                .unwrap()
+                .contains("release-dist 0 (200s), installer-smoke 0 (30s)"),
             "{}",
             ran.err
         );

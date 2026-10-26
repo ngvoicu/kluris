@@ -86,8 +86,17 @@ pub fn main(args: &[String]) -> ExitCode {
     }
     let stdout = io::stdout();
     let stderr = io::stderr();
-    let mut pack =
-        |tarball: &Path, run_script: &str| pack::pack(root, tarball, script::RUN_FILE, run_script);
+    let files = match options.wrapper.as_deref().map(options::wrapper_file) {
+        None => vec![],
+        Some(Ok(file)) => vec![file],
+        Some(Err(why)) => {
+            eprintln!("linux: {why}");
+            return ExitCode::from(2);
+        }
+    };
+    let mut pack = |tarball: &Path, run_script: &str| {
+        pack::pack_with_files(root, tarball, script::RUN_FILE, run_script, &files)
+    };
     let mut ctx = run::Ctx {
         runner: &mut runner::System,
         out: &mut stdout.lock(),

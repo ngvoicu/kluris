@@ -15,11 +15,23 @@ pub const EXCLUDED: [&str; 3] = ["target", "parity/.oracle", "parity/.venv"];
 
 /// Writes the tarball of the worktree at `root` to `tarball`, with `run_script`
 /// in it as `run_file`, and answers the commit it was made from.
+#[cfg(test)]
 pub fn pack(
     root: &Path,
     tarball: &Path,
     run_file: &str,
     run_script: &str,
+) -> Result<String, String> {
+    pack_with_files(root, tarball, run_file, run_script, &[])
+}
+
+/// [`pack`], with `files` (path in the tarball, text) beside the tree too.
+pub fn pack_with_files(
+    root: &Path,
+    tarball: &Path,
+    run_file: &str,
+    run_script: &str,
+    files: &[(String, String)],
 ) -> Result<String, String> {
     // An identity of its own, so the stash commit can be made in any repository.
     let stash = git(
@@ -52,10 +64,13 @@ pub fn pack(
         tarball.to_string_lossy().into_owned(),
         format!("--add-virtual-file={run_file}:{run_script}"),
         format!("--add-virtual-file={TREE_FILE}:{commit}\n"),
-        commit.clone(),
-        "--".to_owned(),
-        ".".to_owned(),
     ];
+    args.extend(
+        files
+            .iter()
+            .map(|(path, text)| format!("--add-virtual-file={path}:{text}")),
+    );
+    args.extend([commit.clone(), "--".to_owned(), ".".to_owned()]);
     args.extend(EXCLUDED.iter().map(|path| format!(":(exclude){path}")));
     let words: Vec<&str> = args.iter().map(String::as_str).collect();
     git(root, "archive", &words)?;

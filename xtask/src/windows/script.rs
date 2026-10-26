@@ -26,7 +26,10 @@ use base64::engine::general_purpose::STANDARD;
 #[cfg(test)]
 pub use crate::ssh_ci::outcome::exit_said;
 pub use crate::ssh_ci::outcome::{EXIT_MARK, STEP_MARK, TREE_MARK};
-use crate::ssh_ci::plan::{self, CARGO_TEST, PARITY, RELEASE_BUILD, TOOLCHAIN, fill};
+use crate::ssh_ci::plan::{
+    self, CARGO_TEST, INSTALLER_SMOKE, PARITY, PYTHON, RELEASE_BUILD, RELEASE_DIST, SMOKE_PYTHON,
+    TOOLCHAIN, WRAPPER_DIR, fill,
+};
 pub use crate::ssh_ci::plan::{CI_DIR, TREE_FILE, UV_VERSION, run_id, tarball_name};
 
 /// ConsensFlow's copy folder under the profile, whose lock Kluris shares: one
@@ -70,16 +73,28 @@ pub struct Spec<'a> {
     pub parity_files: &'a [String],
     /// Appended to `cargo test --workspace --no-fail-fast`.
     pub cargo_args: &'a [String],
+    /// The release installer smoke instead of the tests.
+    pub installer_smoke: bool,
+    /// The site's install.ps1 is in the tarball, for the smoke to go through.
+    pub wrapper: bool,
 }
 
 #[cfg(test)]
 pub fn steps(spec: &Spec) -> Vec<plan::Step> {
-    plan::steps(spec.parity)
+    if spec.installer_smoke {
+        plan::smoke_steps()
+    } else {
+        plan::steps(spec.parity)
+    }
 }
 
 /// How long the whole run may take, as this side waits for it.
 pub fn bound(spec: &Spec) -> Duration {
-    plan::bound(spec.parity)
+    if spec.installer_smoke {
+        plan::smoke_bound()
+    } else {
+        plan::bound(spec.parity)
+    }
 }
 
 /// The line ssh hands the machine's shell for `script`, or why it does not fit.
@@ -168,21 +183,51 @@ pub fn run_script(spec: &Spec) -> String {
         "toolchain install {} --profile minimal --component clippy --component rustfmt --no-self-update",
         spec.channel
     );
-    let parity = if spec.parity {
-        let pytest = plan::pytest_args(spec.parity_files);
-        fill(
-            PARITY_TEMPLATE,
+    let uv = fill(
+        UV_TEMPLATE,
+        &[
+            ("uv_version", UV_VERSION),
+            ("uv_url", UV_URL),
+            ("uv_sha256", UV_SHA256),
+        ],
+    );
+    let (test_step, after) = if spec.installer_smoke {
+        let wrapper = if spec.wrapper {
+            format!(" -Wrapper {WRAPPER_DIR}\\install.ps1")
+        } else {
+            String::new()
+        };
+        let smoke = fill(
+            SMOKE_TEMPLATE,
             &[
-                ("uv_version", UV_VERSION),
-                ("uv_url", UV_URL),
-                ("uv_sha256", UV_SHA256),
-                ("release", &RELEASE_BUILD.minutes.to_string()),
-                ("parity", &PARITY.minutes.to_string()),
-                ("pytest", &quoted(&command_line(&pytest))),
+                ("python", SMOKE_PYTHON),
+                ("python_minutes", &PYTHON.minutes.to_string()),
+                ("dist_minutes", &RELEASE_DIST.minutes.to_string()),
+                ("smoke_minutes", &INSTALLER_SMOKE.minutes.to_string()),
+                ("wrapper", &wrapper),
             ],
-        )
+        );
+        (String::new(), uv + &smoke)
     } else {
-        String::new()
+        let test_step = format!(
+            "Invoke-Step 'cargo-test' {} $cargo {}\n",
+            CARGO_TEST.minutes,
+            quoted(&command_line(&test))
+        );
+        let parity = if spec.parity {
+            let pytest = plan::pytest_args(spec.parity_files);
+            uv + &fill(
+                PARITY_TEMPLATE,
+                &[
+                    ("release", &RELEASE_BUILD.minutes.to_string()),
+                    ("parity", &PARITY.minutes.to_string()),
+                    ("pytest", &quoted(&command_line(&pytest))),
+                ],
+            )
+        } else {
+            String::new()
+        };
+        (test_step, parity)
     };
     fill(
         RUN_TEMPLATE,
@@ -194,9 +239,8 @@ pub fn run_script(spec: &Spec) -> String {
             ("jobs", &spec.jobs.to_string()),
             ("toolchain_minutes", &TOOLCHAIN.minutes.to_string()),
             ("toolchain", &quoted(&toolchain)),
-            ("test_minutes", &CARGO_TEST.minutes.to_string()),
-            ("test", &quoted(&command_line(&test))),
-            ("parity_steps", &parity),
+            ("test_step", &test_step),
+            ("after_steps", &after),
             ("step_mark", STEP_MARK),
         ],
     )
@@ -210,6 +254,7 @@ pub fn stop_script(id: &str) -> String {
             ("running", RUNNING),
             ("owner", OWNER),
             ("id", id),
+            ("ci", CI_DIR),
             ("tarball", &tarball_name(id)),
         ],
     )
@@ -349,14 +394,12 @@ function Invoke-Step([string]$name, [int]$minutes, [string]$exe, [string]$line) 
 }
 Invoke-Step 'toolchain' «toolchain_minutes» $rustup «toolchain»
 if ($state.failed) { Exit-Run $state.failed }
-Invoke-Step 'cargo-test' «test_minutes» $cargo «test»
-«parity_steps»Exit-Run $state.failed
+«test_step»«after_steps»Exit-Run $state.failed
 "##;
 
-/// The parity steps: uv fetched (and its hash checked) into the tools folder
-/// when it is not there, a release `kluris.exe`, then the harness, with the
-/// oracle's venv, uv's cache and Python kept in Kluris's folder.
-const PARITY_TEMPLATE: &str = r##"$uvdir = Join-Path $tools 'uv-«uv_version»'
+/// uv fetched (and its hash checked) into the tools folder when it is not
+/// there: the parity steps and the installer smoke run on it.
+const UV_TEMPLATE: &str = r##"$uvdir = Join-Path $tools 'uv-«uv_version»'
 $uv = Join-Path $uvdir 'uv.exe'
 if (-not (Test-Path -LiteralPath $uv -PathType Leaf)) {
   $started = Get-Date
@@ -372,7 +415,11 @@ if (-not (Test-Path -LiteralPath $uv -PathType Leaf)) {
   if ($code -and -not $state.failed) { $state.failed = $code }
   Write-Output "== step uv exit $code $([int]((Get-Date) - $started).TotalSeconds)s"
 }
-if (Test-Path -LiteralPath $uv -PathType Leaf) {
+"##;
+
+/// The parity steps: a release `kluris.exe`, then the harness, with the
+/// oracle's venv, uv's cache and Python kept in Kluris's folder.
+const PARITY_TEMPLATE: &str = r##"if (Test-Path -LiteralPath $uv -PathType Leaf) {
   $env:UV_CACHE_DIR = Join-Path $cache 'uv'
   $env:UV_PYTHON_INSTALL_DIR = Join-Path $tools 'python'
   $env:UV_PYTHON_PREFERENCE = 'only-managed'
@@ -382,6 +429,34 @@ if (Test-Path -LiteralPath $uv -PathType Leaf) {
   $env:Path = "$uvdir;" + $env:Path
   Invoke-Step 'release-build' «release» $cargo 'build --release --package kluris'
   if ($state.last -eq 0) { Invoke-Step 'parity' «parity» $uv «pytest» }
+}
+"##;
+
+/// The installer smoke: uv's Python for the local release server, the tree's
+/// release built by dist (scripts\release\build-local.ps1, dist fetched into
+/// the tools folder), then scripts\release\installer-smoke.ps1 against it.
+/// The smoke saves the user PATH in `$record` before it installs and removes
+/// the record once it has written the PATH back; a record still there after
+/// the step (a smoke ended past its bound never reaches its `finally`) is
+/// written back here, and by the stop.
+const SMOKE_TEMPLATE: &str = r##"if (Test-Path -LiteralPath $uv -PathType Leaf) {
+  $env:UV_CACHE_DIR = Join-Path $cache 'uv'
+  $env:UV_PYTHON_INSTALL_DIR = Join-Path $tools 'python'
+  $env:UV_PYTHON_PREFERENCE = 'only-managed'
+  $env:KLURIS_TOOLS_DIR = $tools
+  $env:Path = "$uvdir;" + $env:Path
+  $powershell = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+  $record = Join-Path $run 'user-path.saved'
+  Invoke-Step 'python' «python_minutes» $uv 'python install «python»'
+  $python = if ($state.last -eq 0) { @(& $uv python find «python» 2>$null)[-1] } else { '' }
+  if ($python) { Invoke-Step 'release-dist' «dist_minutes» $powershell '-NoProfile -ExecutionPolicy Bypass -File scripts\release\build-local.ps1' }
+  if ($python -and $state.last -eq 0) {
+    Invoke-Step 'installer-smoke' «smoke_minutes» $powershell "-NoProfile -ExecutionPolicy Bypass -File scripts\release\installer-smoke.ps1 -Release target\distrib -Python `"$python`" -Record `"$record`"«wrapper»"
+  }
+  if (Test-Path -LiteralPath $record) {
+    Write-Output '== the installer smoke left the user PATH it saved: writing it back'
+    Invoke-Step 'user-path' 2 $powershell "-NoProfile -ExecutionPolicy Bypass -File scripts\release\user-path.ps1 -Restore `"$record`""
+  }
 }
 "##;
 
@@ -422,6 +497,8 @@ $running = Join-Path $lockdir '«running»'
 $owner = Join-Path $lockdir '«owner»'
 $of = @(Get-Content $owner -ErrorAction SilentlyContinue)
 if ($of[0] -eq '«id»') { taskkill /PID ($of[1]) /T /F 2>&1 | Out-Null; Remove-Item -LiteralPath $owner -Force -ErrorAction SilentlyContinue; if ((Get-Content $running -ErrorAction SilentlyContinue) -eq $of[1]) { Remove-Item -LiteralPath $running -Force -ErrorAction SilentlyContinue } }
+$record = Join-Path $env:USERPROFILE '«ci»\runs\«id»\user-path.saved'
+if (Test-Path -LiteralPath $record) { & (Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe') -NoProfile -ExecutionPolicy Bypass -File (Join-Path $env:USERPROFILE '«ci»\runs\«id»\scripts\release\user-path.ps1') -Restore $record }
 Remove-Item -LiteralPath (Join-Path $env:USERPROFILE '«tarball»') -Force -ErrorAction SilentlyContinue
 exit 0
 "##;

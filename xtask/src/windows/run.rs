@@ -54,6 +54,8 @@ fn go(options: &Options, ctx: &mut Ctx) -> Result<i32, String> {
         parity: options.parity,
         parity_files: &parity_files,
         cargo_args: &options.cargo_args,
+        installer_smoke: options.installer_smoke,
+        wrapper: options.wrapper.is_some(),
     };
     let bootstrap = script::powershell_line(&script::bootstrap(&id))?;
     let stop = script::powershell_line(&script::stop_script(&id))?;

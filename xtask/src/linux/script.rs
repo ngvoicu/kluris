@@ -22,9 +22,11 @@
 //! The probe and the bootstrap end their output with `== exit N`.
 
 use crate::ssh_ci::outcome::{EXIT_MARK, STEP_MARK, TREE_MARK};
+use std::time::Duration;
+
 use crate::ssh_ci::plan::{
-    self, CARGO_TEST, CI_DIR, PARITY, RELEASE_BUILD, TOOLCHAIN, TREE_FILE, UV_VERSION, fill,
-    tarball_name,
+    self, CARGO_TEST, CI_DIR, INSTALLER_SMOKE, PARITY, PYTHON, RELEASE_BUILD, RELEASE_DIST,
+    SMOKE_PYTHON, TOOLCHAIN, TREE_FILE, UV_VERSION, WRAPPER_DIR, fill, tarball_name,
 };
 
 /// The ssh host: the laptop's Ubuntu under WSL2.
@@ -90,6 +92,28 @@ pub struct Spec<'a> {
     pub parity_files: &'a [String],
     /// Appended to `cargo test --workspace --no-fail-fast`.
     pub cargo_args: &'a [String],
+    /// The release installer smoke instead of the tests.
+    pub installer_smoke: bool,
+    /// The site's install.sh is in the tarball, for the smoke to go through.
+    pub wrapper: bool,
+}
+
+#[cfg(test)]
+pub fn steps(spec: &Spec) -> Vec<plan::Step> {
+    if spec.installer_smoke {
+        plan::smoke_steps()
+    } else {
+        plan::steps(spec.parity)
+    }
+}
+
+/// How long the whole run may take, as this side waits for it.
+pub fn bound(spec: &Spec) -> Duration {
+    if spec.installer_smoke {
+        plan::smoke_bound()
+    } else {
+        plan::bound(spec.parity)
+    }
 }
 
 /// `text` as bash takes it between single quotes.
@@ -200,20 +224,53 @@ pub fn run_script(spec: &Spec) -> String {
         .map(str::to_owned)
         .to_vec();
     test.extend(spec.cargo_args.iter().cloned());
-    let parity = if spec.parity {
-        fill(
-            PARITY_TEMPLATE,
+    let uv = fill(
+        UV_TEMPLATE,
+        &[
+            ("uv_version", UV_VERSION),
+            ("uv_url", UV_URL),
+            ("uv_sha256", UV_SHA256),
+        ],
+    );
+    let (test_step, after) = if spec.installer_smoke {
+        let wrapper = if spec.wrapper {
+            format!(
+                " '--wrapper' {}",
+                quote(&format!("{WRAPPER_DIR}/install.sh"))
+            )
+        } else {
+            String::new()
+        };
+        let smoke = fill(
+            SMOKE_TEMPLATE,
             &[
-                ("uv_version", UV_VERSION),
-                ("uv_url", UV_URL),
-                ("uv_sha256", UV_SHA256),
-                ("release", &RELEASE_BUILD.minutes.to_string()),
-                ("parity", &PARITY.minutes.to_string()),
-                ("pytest", &quote_all(&plan::pytest_args(spec.parity_files))),
+                ("python", SMOKE_PYTHON),
+                ("python_minutes", &PYTHON.minutes.to_string()),
+                ("dist_minutes", &RELEASE_DIST.minutes.to_string()),
+                ("smoke_minutes", &INSTALLER_SMOKE.minutes.to_string()),
+                ("wrapper", &wrapper),
             ],
-        )
+        );
+        (String::new(), uv + &smoke)
     } else {
-        String::new()
+        let test_step = format!(
+            "step cargo-test {} \"$cargo\" {}\n",
+            CARGO_TEST.minutes,
+            quote_all(&test)
+        );
+        let parity = if spec.parity {
+            uv + &fill(
+                PARITY_TEMPLATE,
+                &[
+                    ("release", &RELEASE_BUILD.minutes.to_string()),
+                    ("parity", &PARITY.minutes.to_string()),
+                    ("pytest", &quote_all(&plan::pytest_args(spec.parity_files))),
+                ],
+            )
+        } else {
+            String::new()
+        };
+        (test_step, parity)
     };
     fill(
         RUN_TEMPLATE,
@@ -225,9 +282,8 @@ pub fn run_script(spec: &Spec) -> String {
             ("step_mark", STEP_MARK),
             ("toolchain_minutes", &TOOLCHAIN.minutes.to_string()),
             ("toolchain", &quote_all(&toolchain)),
-            ("test_minutes", &CARGO_TEST.minutes.to_string()),
-            ("test", &quote_all(&test)),
-            ("parity_steps", &parity),
+            ("test_step", &test_step),
+            ("after_steps", &after),
         ],
     )
 }
@@ -402,14 +458,12 @@ step() {
 }
 step toolchain «toolchain_minutes» "$rustup" toolchain install «toolchain»
 if [ "$failed" -ne 0 ]; then exit_run "$failed"; fi
-step cargo-test «test_minutes» "$cargo" «test»
-«parity_steps»exit_run "$failed"
+«test_step»«after_steps»exit_run "$failed"
 "#;
 
-/// The parity steps: uv fetched (its hash checked) into the tools folder when
-/// it is not there, a release `kluris`, then the harness, with the oracle's
-/// venv, uv's cache and Python kept in Kluris's folder.
-const PARITY_TEMPLATE: &str = r#"uvdir="$tools/uv-«uv_version»"
+/// uv fetched (its hash checked) into the tools folder when it is not there:
+/// the parity steps and the installer smoke run on it.
+const UV_TEMPLATE: &str = r#"uvdir="$tools/uv-«uv_version»"
 uv="$uvdir/uv"
 if [ ! -x "$uv" ]; then
   started=$SECONDS
@@ -435,7 +489,11 @@ if [ ! -x "$uv" ]; then
   if [ "$code" -ne 0 ] && [ "$failed" -eq 0 ]; then failed=$code; fi
   printf '== step uv exit %s %ss\n' "$code" "$((SECONDS - started))"
 fi
-if [ -x "$uv" ]; then
+"#;
+
+/// The parity steps: a release `kluris`, then the harness, with the oracle's
+/// venv, uv's cache and Python kept in Kluris's folder.
+const PARITY_TEMPLATE: &str = r#"if [ -x "$uv" ]; then
   export UV_CACHE_DIR="$cache/uv"
   export UV_PYTHON_INSTALL_DIR="$tools/python"
   export UV_PYTHON_BIN_DIR="$tools/python-bin"
@@ -446,6 +504,27 @@ if [ -x "$uv" ]; then
   export PATH="$uvdir:$PATH"
   step release-build «release» "$cargo" 'build' '--release' '--package' 'kluris'
   if [ "$last" -eq 0 ]; then step parity «parity» "$uv" «pytest»; fi
+fi
+"#;
+
+/// The installer smoke: uv's Python for the local release server, the tree's
+/// release built by dist (scripts/release/build-local.sh, dist fetched into
+/// the tools folder), then scripts/release/installer-smoke.sh against it, in
+/// a HOME of its own.
+const SMOKE_TEMPLATE: &str = r#"if [ -x "$uv" ]; then
+  export UV_CACHE_DIR="$cache/uv"
+  export UV_PYTHON_INSTALL_DIR="$tools/python"
+  export UV_PYTHON_BIN_DIR="$tools/python-bin"
+  export UV_PYTHON_PREFERENCE=only-managed
+  export KLURIS_TOOLS_DIR="$tools"
+  export PATH="$uvdir:$PATH"
+  step python «python_minutes» "$uv" 'python' 'install' '«python»'
+  python=""
+  if [ "$last" -eq 0 ]; then python=$("$uv" python find «python») || python=""; fi
+  if [ -n "$python" ]; then step release-dist «dist_minutes» bash 'scripts/release/build-local.sh'; fi
+  if [ -n "$python" ] && [ "$last" -eq 0 ]; then
+    step installer-smoke «smoke_minutes» env KLURIS_SMOKE_PYTHON="$python" sh 'scripts/release/installer-smoke.sh'«wrapper» 'target/distrib'
+  fi
 fi
 "#;
 
