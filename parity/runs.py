@@ -1,0 +1,230 @@
+"""Helpers for the parity tests that need more than ``harness.run_both``: a
+config written by hand, per-run environment changes, an explicit stdin (a
+pipe, or a pseudo-terminal for the brain picker), and the wake-up payload
+comparison."""
+
+from __future__ import annotations
+
+import json
+import os
+import re
+import select
+import shutil
+import signal
+import subprocess
+import time
+from dataclasses import dataclass
+from pathlib import Path
+
+from harness import IS_WINDOWS, Result, Sandbox, _decode, normalize, oracle_kluris, run_v3
+
+# The hidden test-only `kluris __resolve` exists only with this set to "1"; v2
+# ignores it.
+TEST_HOOKS = {"KLURIS_TEST_HOOKS": "1"}
+
+
+def write_config(sb: Sandbox, brains: list[tuple[str, str, str]]) -> None:
+    """Write ``config.yml`` with ``(name, path, description)`` brains, in
+    order. JSON strings are YAML double-quoted scalars."""
+    lines = ["brains:"] if brains else ["brains: {}"]
+    for name, path, description in brains:
+        lines += [
+            f"  {json.dumps(name)}:",
+            f"    path: {json.dumps(path)}",
+            f"    description: {json.dumps(description)}",
+        ]
+    sb.config.parent.mkdir(parents=True, exist_ok=True)
+    sb.config.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _env(sb: Sandbox, changes: dict[str, str | None]) -> dict[str, str]:
+    env = dict(sb.env)
+    env.update(TEST_HOOKS)
+    for key, value in changes.items():
+        if value is None:
+            env.pop(key, None)
+        else:
+            env[key] = value
+    return env
+
+
+def _exe(side: str) -> list[str]:
+    if side == "v2":
+        return [str(oracle_kluris())]
+    # run_v3 fails the test with the usual message when the binary is missing.
+    from harness import V3_BIN
+
+    if V3_BIN is None or not V3_BIN.is_file():
+        run_v3([], {})
+    return [str(V3_BIN)]
+
+
+def run_pair(
+    sb: Sandbox,
+    v2_args: list[str],
+    v3_args: list[str],
+    *,
+    env: dict[str, str | None] | None = None,
+    stdin: bytes = b"",
+) -> dict[str, Result]:
+    """Run each binary on its own copy of the frozen state, with stdin a pipe
+    holding ``stdin`` (never a terminal) and ``env`` applied (``None``
+    removes a variable)."""
+    results: dict[str, Result] = {}
+    for side, args in (("v2", v2_args), ("v3", v3_args)):
+        sb.checkout()
+        try:
+            proc = subprocess.run(
+                [*_exe(side), *args], env=_env(sb, env or {}), cwd=str(sb.work),
+                input=stdin, capture_output=True, timeout=120,
+            )
+            what = f"{side} {' '.join(args)}"
+            results[side] = Result(
+                proc.returncode, _decode(proc.stdout, f"stdout of `{what}`"),
+                _decode(proc.stderr, f"stderr of `{what}`"),
+            )
+        finally:
+            sb.stash(f"{side}-{time.monotonic_ns()}")
+    return results
+
+
+@dataclass
+class PtyResult:
+    code: int
+    stdout: str
+    stderr: str
+
+
+def run_pty(
+    sb: Sandbox,
+    side: str,
+    args: list[str],
+    *,
+    lines: list[str] | None = None,
+    eof: bool = False,
+    sigint: bool = False,
+    env: dict[str, str | None] | None = None,
+) -> PtyResult:
+    """Run one binary with stdin a pseudo-terminal (stdout and stderr stay
+    pipes) on a fresh copy of the frozen state. ``lines`` are typed one per
+    line; then ``eof`` sends Ctrl-D, or ``sigint`` waits for the prompt and
+    sends SIGINT (what Ctrl-C does). POSIX only."""
+    import pty
+
+    changes = {"KLURIS_NO_PROMPT": None}
+    changes.update(env or {})
+    sb.checkout()
+    master, slave = pty.openpty()
+    try:
+        proc = subprocess.Popen(
+            [*_exe(side), *args], env=_env(sb, changes), cwd=str(sb.work),
+            stdin=slave, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        )
+        os.close(slave)
+        slave = -1
+        out = b""
+        if sigint:
+            deadline = time.monotonic() + 30
+            while b"Choice: " not in out and time.monotonic() < deadline:
+                ready, _, _ = select.select([proc.stdout], [], [], 1)
+                if ready:
+                    chunk = os.read(proc.stdout.fileno(), 65536)
+                    if not chunk:
+                        break
+                    out += chunk
+            time.sleep(0.3)
+            proc.send_signal(signal.SIGINT)
+        else:
+            typed = b"".join(line.encode("utf-8") + b"\n" for line in lines or [])
+            try:
+                os.write(master, typed + (b"\x04" if eof else b""))
+            except OSError:
+                pass  # the process is gone and the terminal closed
+        rest, err = proc.communicate(timeout=60)
+        out += rest
+    finally:
+        if slave >= 0:
+            os.close(slave)
+        os.close(master)
+        sb.stash(f"{side}-pty-{time.monotonic_ns()}")
+    return PtyResult(proc.returncode, _decode(out, f"stdout of {side}"), _decode(err, f"stderr of {side}"))
+
+
+def transcript(stdout: str) -> str:
+    """The picker's part of stdout: everything up to and with the last
+    ``Choice: `` prompt."""
+    at = stdout.rfind("Choice: ")
+    assert at >= 0, f"no picker prompt in {stdout!r}"
+    return stdout[: at + len("Choice: ")]
+
+
+# --- wake-up ------------------------------------------------------------------
+
+
+def issue_key(issue: dict) -> str:
+    return json.dumps(issue, sort_keys=True, ensure_ascii=False)
+
+
+def parse_exact(raw: str, root: Path, side: str) -> dict:
+    """The parsed JSON stdout, after checking it is exactly Python's
+    ``json.dumps`` of its parse plus a newline."""
+    text = normalize(raw, root)
+    doc = json.loads(text)
+    assert text == json.dumps(doc) + "\n", f"{side} raw JSON is not json.dumps of its parse: {text!r}"
+    return doc
+
+
+def assert_wake_up_equal(
+    v2: Result, v3: Result, root: Path, *, skipped: list[str] | None = None,
+    v3_deprecation: list[dict] | None = None,
+) -> dict:
+    """Compare two ``wake-up --json`` outputs: byte-exact apart from
+    ``deprecation[]``, compared as a multiset (PAR-008). With ``skipped``
+    (the markdown neurons Kluris 3 cannot read), v2's whole-brain
+    ``deprecation: []`` and ``parse_errors: 0`` stand against v3's issues of
+    the other neurons (PAR-007, ``v3_deprecation`` when given) and its count
+    of the skipped (PAR-009)."""
+    assert v2.code == 0, f"v2 failed: {v2.stdout} {v2.stderr}"
+    assert v3.code == v2.code, f"v3 exit {v3.code}: {v3.stdout} {v3.stderr}"
+    j2, j3 = parse_exact(v2.stdout, root, "v2"), parse_exact(v3.stdout, root, "v3")
+    if skipped:
+        assert j2["parse_errors"] == 0
+        assert j3["parse_errors"] == len(skipped), j3["parse_errors"]
+        assert j2["deprecation"] == [] and j2["deprecation_count"] == 0, "v2 no longer raises"
+        assert j3["deprecation_count"] == len(j3["deprecation"])
+        if v3_deprecation is not None:
+            assert sorted(map(issue_key, j3["deprecation"])) == sorted(map(issue_key, v3_deprecation))
+        for doc in (j2, j3):
+            doc["deprecation"], doc["deprecation_count"], doc["parse_errors"] = [], 0, 0
+    else:
+        assert sorted(map(issue_key, j3["deprecation"])) == sorted(map(issue_key, j2["deprecation"])), (
+            f"deprecation differs as a multiset:\n  v3 {j3['deprecation']}\n  v2 {j2['deprecation']}"
+        )
+        j3["deprecation"] = sorted(j3["deprecation"], key=issue_key)
+        j2["deprecation"] = sorted(j2["deprecation"], key=issue_key)
+    assert j3 == j2, "parsed wake-up JSON differs (v3, v2):\n" + "\n".join(
+        f"  {key}: {json.dumps(j3.get(key))[:2000]}\n  {' ' * len(key)}  {json.dumps(j2.get(key))[:2000]}"
+        for key in dict.fromkeys([*j2, *j3]) if j2.get(key) != j3.get(key)
+    )
+    assert json.dumps(j3) == json.dumps(j2), "wake-up JSON differs in key order (left v3, right v2)"
+    return j2
+
+
+def clear_runs(sb: Sandbox) -> None:
+    """Drop the finished trees of ``harness.run_both`` so it can run again."""
+    for side in ("v2", "v3"):
+        shutil.rmtree(sb.root / side, ignore_errors=True)
+
+
+def same_words(v2_text: str, v3_text: str, root: Path) -> None:
+    """Human output carries v2's wording: equal once every whitespace run is
+    removed (Rich wraps lines, even mid-word, and its blank lines differ)."""
+    # Squash first: Rich may break the temp root itself across lines.
+    squash = lambda text: normalize(re.sub(r"\s+", "", text), root)  # noqa: E731
+    assert squash(v3_text) == squash(v2_text), f"wording differs:\nv3: {v3_text!r}\nv2: {v2_text!r}"
+
+
+__all__ = [
+    "IS_WINDOWS", "PtyResult", "TEST_HOOKS", "assert_wake_up_equal", "clear_runs", "issue_key", "parse_exact",
+    "run_pair", "run_pty", "same_words", "transcript", "write_config",
+]
