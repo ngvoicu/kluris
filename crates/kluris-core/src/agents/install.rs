@@ -25,8 +25,15 @@
 //!   the entry's own name (v3's marker, or a v1/v2 release's full
 //!   template), a link to such a folder (the link goes, never what it
 //!   points at), or a workflow [`render::is_generated_workflow`]
-//!   recognises. A user's `kluris-notes`, anything ambiguous, and every
-//!   name that only differs in case are kept and reported (`kept`).
+//!   recognises. Finder's and Explorer's `.DS_Store`, `Thumbs.db` and
+//!   `desktop.ini` (exact names, regular files) may sit beside the
+//!   `SKILL.md`; they go with the folder.
+//! - Everything else is left alone. Near misses are also listed in `kept`:
+//!   an entry under the name of a skill being written (which also fails
+//!   that folder, with how to fix it), a staging-like name (`.kluris*.tmp`,
+//!   `.old`, `.tmp.md`), and a `kluris*` entry whose SKILL.md or workflow
+//!   carries a trait of Kluris's ([`render::has_kluris_trait`]). A user's
+//!   own `kluris-notes` with none of these is not listed.
 //! - Names come from the folder listing and are compared exactly; staging
 //!   and quarantine names carry a token no other run made
 //!   ([`crate::fileops::unique_token`]).
@@ -416,16 +423,22 @@ fn write_folder(
     let listed = listing(&dest.path).unwrap_or_default();
     for (name, staging) in staged {
         match place(ops, &dest.path, &listed, name, &staging) {
-            Ok(leftover) => {
+            Placed::Written(leftover) => {
                 dest.written.push(name.to_string());
                 dest.failed.extend(leftover);
             }
-            Err(message) => {
+            Placed::InTheWay { listed, message } => {
+                let _ = ops.remove_dir_all(&staging);
+                dest.kept.extend(listed);
+                dest.failed.push(message);
+            }
+            Placed::Failed(message) => {
                 let _ = ops.remove_dir_all(&staging);
                 dest.failed.push(message);
             }
         }
     }
+    dest.kept.sort();
     Some(dest)
 }
 
@@ -443,57 +456,80 @@ fn stage(ops: &dyn FileOps, staging: &Path, text: &str) -> io::Result<()> {
     Ok(())
 }
 
+/// What [`place`] did.
+enum Placed {
+    /// The skill is in place; a message when the old copy could not be
+    /// deleted afterwards.
+    Written(Option<String>),
+    /// An entry Kluris cannot prove it wrote holds the name (`listed`, as
+    /// the listing gives it): left as it is, the skill not written.
+    InTheWay {
+        listed: Option<String>,
+        message: String,
+    },
+    Failed(String),
+}
+
+/// How a user clears an entry in a skill's way.
+const IN_THE_WAY_FIX: &str = "move or delete it, then run `kluris doctor`";
+
 /// Move `staging` to `dir/name`. A Kluris-written entry there is
 /// quarantined first, checked again, and deleted once the new copy is in
 /// place (put back if the move fails); anything else there, a name that
-/// differs only in case included, is left as it is (`Err`). `Ok` carries
-/// a message when the old copy could not be deleted afterwards.
-fn place(
-    ops: &dyn FileOps,
-    dir: &Path,
-    listed: &[String],
-    name: &str,
-    staging: &Path,
-) -> Result<Option<String>, String> {
+/// differs only in case included, is left as it is.
+fn place(ops: &dyn FileOps, dir: &Path, listed: &[String], name: &str, staging: &Path) -> Placed {
     let target = dir.join(name);
+    let in_the_way = |listed: Option<String>, why: &str| Placed::InTheWay {
+        listed,
+        message: format!(
+            "{} {why}, so the skill was not written there: {IN_THE_WAY_FIX}",
+            target.display()
+        ),
+    };
     if !listed.iter().any(|n| n == name) {
         if exists(&target) {
-            return Err(format!(
-                "{} is taken by an entry whose name differs only in case; left as it is",
-                target.display()
-            ));
+            let variant = listed
+                .iter()
+                .find(|n| n.eq_ignore_ascii_case(name))
+                .cloned();
+            return in_the_way(
+                variant,
+                "is taken by an entry whose name differs only in case",
+            );
         }
-        return ops
-            .rename(staging, &target)
-            .map(|()| None)
-            .map_err(|e| format!("cannot move {} into place: {e}", target.display()));
+        return match ops.rename(staging, &target) {
+            Ok(()) => Placed::Written(None),
+            Err(e) => Placed::Failed(format!("cannot move {} into place: {e}", target.display())),
+        };
     }
     let owned = |p: &Path| is_owned_skill_entry(p, name);
     if !owned(&target) {
-        return Err(format!(
-            "{} exists and was not written by Kluris; left as it is",
-            target.display()
-        ));
+        return in_the_way(
+            Some(name.to_string()),
+            "exists and was not written by Kluris",
+        );
     }
     let quarantine = quarantine_path(dir, name);
-    ops.rename(&target, &quarantine)
-        .map_err(|e| format!("cannot replace {}: {e}", target.display()))?;
+    if let Err(e) = ops.rename(&target, &quarantine) {
+        return Placed::Failed(format!("cannot replace {}: {e}", target.display()));
+    }
     if !owned(&quarantine) {
-        return Err(put_back(ops, &quarantine, &target).unwrap_or_else(|| {
-            format!(
-                "{} changed while it was replaced; left as it is",
-                target.display()
-            )
-        }));
+        return match put_back(ops, &quarantine, &target) {
+            None => in_the_way(
+                Some(name.to_string()),
+                "changed while it was being replaced",
+            ),
+            Some(message) => Placed::Failed(message),
+        };
     }
     if let Err(e) = ops.rename(staging, &target) {
         let mut message = format!("cannot move {} into place: {e}", target.display());
         if let Some(kept) = put_back(ops, &quarantine, &target) {
             message.push_str(&format!("; {kept}"));
         }
-        return Err(message);
+        return Placed::Failed(message);
     }
-    Ok(delete_entry(ops, &quarantine).err().map(|e| {
+    Placed::Written(delete_entry(ops, &quarantine).err().map(|e| {
         format!(
             "cannot remove the old copy of {} at {}: {e}",
             target.display(),
@@ -546,16 +582,16 @@ fn clear_folder(
         }
         // The skill (or workflow) the entry would be: its own name, or the
         // one an earlier run's staging or quarantine name carries.
-        let base = match staged_base(&name, kind) {
-            Some(base) => base,
-            None if name.starts_with(".kluris") => {
+        let (base, staged) = match staged_base(&name, kind) {
+            Some(base) => (base, true),
+            None if is_staging_like(&name) => {
                 dest.kept.push(name);
                 continue;
             }
             None if !name.starts_with("kluris") => continue,
             None if kind == Kind::Skills && keep.contains(&name.as_str()) => continue,
             None if kind == Kind::Workflows && !name.ends_with(".md") => continue,
-            None => name.as_str(),
+            None => (name.as_str(), false),
         };
         let owned = |path: &Path| match kind {
             Kind::Skills => is_owned_skill_entry(path, base),
@@ -563,7 +599,11 @@ fn clear_folder(
         };
         match remove_owned(ops, &dest.path, &name, base, owned) {
             Removal::Removed => dest.removed.push(name),
-            Removal::Kept => dest.kept.push(name),
+            Removal::NotOwned if staged || is_near_miss(&dest.path.join(&name), kind) => {
+                dest.kept.push(name)
+            }
+            Removal::NotOwned => {}
+            Removal::PutBack => dest.kept.push(name),
             Removal::Failed(message) => dest.failed.push(message),
         }
     }
@@ -572,8 +612,10 @@ fn clear_folder(
 
 enum Removal {
     Removed,
-    /// Not Kluris's (or no longer): left where it was.
-    Kept,
+    /// Not Kluris's: left where it was.
+    NotOwned,
+    /// Kluris's when checked, then not: moved back where it was.
+    PutBack,
     Failed(String),
 }
 
@@ -588,7 +630,7 @@ fn remove_owned(
 ) -> Removal {
     let path = dir.join(name);
     if !owned(&path) {
-        return Removal::Kept;
+        return Removal::NotOwned;
     }
     let quarantine = quarantine_path(dir, base);
     if let Err(e) = ops.rename(&path, &quarantine) {
@@ -596,7 +638,7 @@ fn remove_owned(
     }
     if !owned(&quarantine) {
         return match put_back(ops, &quarantine, &path) {
-            None => Removal::Kept,
+            None => Removal::PutBack,
             Some(message) => Removal::Failed(message),
         };
     }
@@ -629,6 +671,25 @@ fn staged_base(name: &str, kind: Kind) -> Option<&str> {
             Kind::Workflows => base.ends_with(".md"),
         };
     (base_ok && is_unique_token(token)).then_some(base)
+}
+
+/// A name like a staging folder's, of any run or version:
+/// `.kluris*.tmp`, `.kluris*.old` or v2's workflow `.kluris*.tmp.md`.
+fn is_staging_like(name: &str) -> bool {
+    name.starts_with(".kluris")
+        && [".tmp", ".old", ".tmp.md"]
+            .iter()
+            .any(|suffix| name.ends_with(suffix))
+}
+
+/// A `kluris*` entry Kluris did not write but whose SKILL.md (read through
+/// a link) or workflow carries a trait of Kluris's.
+fn is_near_miss(path: &Path, kind: Kind) -> bool {
+    let file = match kind {
+        Kind::Skills => path.join("SKILL.md"),
+        Kind::Workflows => path.to_path_buf(),
+    };
+    read_text(&file).is_some_and(|text| render::has_kluris_trait(&text))
 }
 
 /// The names in `dir` as its listing gives them (names that are not UTF-8
@@ -666,8 +727,13 @@ fn read_text(path: &Path) -> Option<String> {
     String::from_utf8(bytes).ok()
 }
 
-/// A folder holding nothing but a `SKILL.md` file that Kluris wrote for
-/// `name`, or a link to such a folder.
+/// Files the OS file managers write into folders people open (exact
+/// names); a Kluris skill folder may hold them beside its `SKILL.md`.
+const OS_METADATA_FILES: [&str; 3] = [".DS_Store", "Thumbs.db", "desktop.ini"];
+
+/// A folder holding a `SKILL.md` file that Kluris wrote for `name` and
+/// nothing else but [`OS_METADATA_FILES`] (regular files), or a link to
+/// such a folder.
 fn is_owned_skill_entry(path: &Path, name: &str) -> bool {
     let Ok(meta) = fs::symlink_metadata(path) else {
         return false;
@@ -683,20 +749,22 @@ fn is_owned_skill_entry(path: &Path, name: &str) -> bool {
     let Ok(entries) = fs::read_dir(path) else {
         return false;
     };
-    let mut only_skill_md = false;
+    let mut skill_md = false;
     for entry in entries {
         let Ok(entry) = entry else {
             return false;
         };
-        if only_skill_md
-            || entry.file_name() != "SKILL.md"
-            || !entry.file_type().is_ok_and(|t| t.is_file())
-        {
+        if !entry.file_type().is_ok_and(|t| t.is_file()) {
             return false;
         }
-        only_skill_md = true;
+        let file = entry.file_name();
+        if file == "SKILL.md" {
+            skill_md = true;
+        } else if !OS_METADATA_FILES.iter().any(|m| file == *m) {
+            return false;
+        }
     }
-    only_skill_md
+    skill_md
         && read_text(&path.join("SKILL.md"))
             .is_some_and(|text| render::is_generated_skill(name, &text))
 }

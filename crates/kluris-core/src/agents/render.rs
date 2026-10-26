@@ -262,6 +262,22 @@ fn lf(text: &str) -> std::borrow::Cow<'_, str> {
     }
 }
 
+/// How every v1/v2 description opens.
+pub(super) const DESCRIPTION_OPENINGS: [&str; 2] = [
+    "You are the team's subject matter expert",
+    "Your team's shared AI brain",
+];
+
+/// How v3's marker opens.
+const MARKER_OPENING: &str = "<!-- kluris:generated";
+
+/// Whether `text` (a SKILL.md or workflow) carries a trait of Kluris's:
+/// the marker's opening or a v1/v2 description opening, anywhere. A file
+/// with one that [`is_generated_skill`] does not recognise is a near miss.
+pub fn has_kluris_trait(text: &str) -> bool {
+    text.contains(MARKER_OPENING) || DESCRIPTION_OPENINGS.iter().any(|o| text.contains(o))
+}
+
 /// Whether `skill_md`, the SKILL.md of the folder `dir_name` (its name as
 /// the folder listing gives it), was written by Kluris:
 ///
