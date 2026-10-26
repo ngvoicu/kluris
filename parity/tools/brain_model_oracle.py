@@ -85,7 +85,8 @@ def main() -> None:
         "skipped": skipped,
         "deprecation_plain": plain,
     }
-    sys.stdout.write(json.dumps(out, ensure_ascii=False, indent=1) + "\n")
+    # UTF-8 bytes whatever the console code page (cp1252 on Windows).
+    sys.stdout.buffer.write((json.dumps(out, ensure_ascii=False, indent=1) + "\n").encode("utf-8"))
 
 
 if __name__ == "__main__":
