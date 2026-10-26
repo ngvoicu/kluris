@@ -182,7 +182,9 @@ fn text(painter: Painter, brain: &str, query: &str, hits: &[Hit]) -> String {
             painter.paint(Style::Dim, &hit.file)
         ));
         if !hit.snippet.is_empty() {
-            out.push_str(&format!("        {}\n", hit.snippet));
+            for line in hit.snippet.lines() {
+                out.push_str(&format!("        {line}\n"));
+            }
         }
         out.push('\n');
     }

@@ -260,6 +260,43 @@ fn text_output_uses_v2s_wording() {
 }
 
 #[test]
+fn a_two_line_snippet_indents_its_continuation() {
+    let home = setup();
+    home.child("demo/k/two.md")
+        .write_str(
+            "---\nparent: map.md\nupdated: 2026-01-02\n---\n# Two lines\n\nfirst line about needles\nsecond line about needles\n",
+        )
+        .unwrap();
+    let (_, doc) = json(&home, &["search", "needles", "--json"]);
+    let hit = doc["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["file"] == "k/two.md")
+        .unwrap();
+    let snippet = hit["snippet"].as_str().unwrap();
+    assert!(
+        snippet.contains("first line about needles\nsecond line about needles"),
+        "the JSON snippet keeps the raw lines: {snippet:?}"
+    );
+    let out = kluris(home.path())
+        .args(["search", "needles"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(0));
+    let text = String::from_utf8(out.stdout).unwrap();
+    for line in snippet.trim_end_matches('\n').split('\n') {
+        if line.is_empty() {
+            continue;
+        }
+        assert!(
+            text.contains(&format!("        {line}\n")),
+            "snippet line {line:?} lost its indent:\n{text}"
+        );
+    }
+}
+
+#[test]
 fn skipped_files_are_reported_in_json_and_on_stderr() {
     // T-79 finding 2: a malformed neuron is skipped and reported.
     let home = setup();
