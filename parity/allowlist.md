@@ -159,3 +159,9 @@ One entry per difference, under its own heading:
 - Differs: a `search:` mapping whose `language` is a string is read (`en` or `ro`, any case, picks the search stemmer and stop words; another value means autodetect) and written back after `companions` as `search:\n  language: <value>\n`; v2's pydantic model ignores the key and drops it on rewrite. Any other `search` value (not a mapping, no string `language`) is ignored and dropped, as in v2, and never makes the file invalid. Without the key every byte is v2's.
 - Decision: chief's brief for T-77 ("a local override `search: {language: en|ro}` in the brain's `kluris.yml` ... check the config module keeps that key on rewrite"), research-05 question 2, 2026-10-26
 - Tests: `crates/kluris-core/tests/config.rs::the_search_language_key_is_read_and_kept_on_rewrite`, `parity/test_search.py::test_language_override_keeps_the_invariant`
+
+### PAR-023: a failing `git log` is an error, not a traceback
+- Command: `kluris status` (with and without `--json`)
+- Differs: when `git log` fails in a brain that has commits (a corrupt repo: HEAD's commit object missing, `fatal: bad object HEAD`), v3 stops with ``Error: `git log -10 --format=%H%x00%s%x00%aI%x00` failed (exit 128): fatal: bad object HEAD`` on stderr (the JSON envelope under `--json`), exit 1. v2 ends in a `CalledProcessError` traceback, exit 1, no JSON. A repo without commits is not a failure (PAR-015).
+- Decision: errors are values and never a traceback (chief's brief for T-80; T-78 return), 2026-10-26
+- Tests: `crates/kluris-core/tests/git.rs::log_of_a_corrupt_repo_is_an_error_naming_the_command`, `parity/test_list_status_help.py::test_status_of_a_corrupt_repo`

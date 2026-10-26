@@ -302,6 +302,30 @@ def test_status_of_a_repo_without_commits(sandbox: Sandbox):
     }]}
 
 
+def test_status_of_a_corrupt_repo(sandbox: Sandbox):
+    """PAR-023: a ``git log`` failure other than "no commits yet" is an error
+    naming the git command; v2 ends in a ``CalledProcessError`` traceback."""
+    brain = init(sandbox, sandbox.work / "brains" / "demo")
+    commit(sandbox, brain, "brain: initialize demo", brain_files())
+    head = git(sandbox, brain, "rev-parse", "HEAD").strip()
+    obj = brain / ".git" / "objects" / head[:2] / head[2:]
+    obj.chmod(0o644)  # git writes loose objects read-only (Windows will not remove them)
+    obj.unlink()
+    register(sandbox, [("demo", brain)])
+    sandbox.freeze()
+
+    error = "`git log -10 --format=%H%x00%s%x00%aI%x00` failed (exit 128): fatal: bad object HEAD"
+    r = run(sandbox, "status", "--json")
+    v2, v3 = r["v2"], r["v3"]
+    assert v2.code == 1 and v2.stdout == "" and "CalledProcessError" in v2.stderr
+    assert v3.code == 1, v3.stderr
+    assert v3.stdout == json.dumps({"ok": False, "error": error}) + "\n"
+    r = run(sandbox, "status")
+    v2, v3 = r["v2"], r["v3"]
+    assert v2.code == 1 and "CalledProcessError" in v2.stderr
+    assert (v3.code, v3.stdout, v3.stderr) == (1, "", f"Error: {error}\n")
+
+
 # --- human output: user text is never markup (PAR-016) ---------------------------
 
 

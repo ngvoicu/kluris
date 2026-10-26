@@ -713,3 +713,42 @@ fn git_errors_name_the_command() {
     assert!(text.contains("git add -A"), "{text}");
     assert!(text.contains("not a git repository"), "{text}");
 }
+
+/// Delete the object file of HEAD's commit: `rev-parse --verify HEAD` still
+/// names it, `log` and `status` fail with "bad object HEAD".
+fn drop_head_object(sb: &Sandbox, dir: &Path) {
+    let hash = sb.run(dir, &["rev-parse", "HEAD"]).trim().to_string();
+    let object = dir
+        .join(".git")
+        .join("objects")
+        .join(&hash[..2])
+        .join(&hash[2..]);
+    // git makes loose objects read-only (on Windows that blocks removal).
+    let mut perms = fs::metadata(&object).unwrap().permissions();
+    #[allow(clippy::permissions_set_readonly_false, reason = "removable")]
+    perms.set_readonly(false);
+    fs::set_permissions(&object, perms).unwrap();
+    fs::remove_file(&object).unwrap();
+}
+
+#[test]
+fn log_of_a_corrupt_repo_is_an_error_naming_the_command() {
+    // Only a missing HEAD reads as "no commits"; any other failure is an
+    // error value (v2: a CalledProcessError traceback).
+    let sb = Sandbox::new();
+    let brain = sb.repo("brain");
+    sb.commit(&brain, &[("a.md", "a")], "first", DATE);
+    drop_head_object(&sb, &brain);
+    let git = sb.git();
+    let repo = git.repo(&brain).expect("still a work tree");
+    let err = git.log(&repo, 10).unwrap_err();
+    assert_eq!(err.code, Some(128));
+    let text = err.to_string();
+    assert!(
+        text.starts_with("`git log -10 --format=%H%x00%s%x00%aI%x00` failed (exit 128): "),
+        "{text}"
+    );
+    assert!(text.contains("bad object HEAD"), "{text}");
+    assert!(git.status_short(&repo).is_err());
+    assert_eq!(git.file_dates(&repo), Default::default());
+}
