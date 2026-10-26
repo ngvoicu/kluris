@@ -391,6 +391,31 @@ fn a_refusal_is_printed_once_until_the_state_changes() {
 }
 
 #[test]
+fn a_brain_that_is_not_a_repository_is_refused_once() {
+    // Not offline: one sync runs, so its refusal is printed, once.
+    let git = FakeGit::new(vec![
+        Probe::NotARepo,
+        Probe::NotARepo,
+        Probe::NotARepo,
+        Probe::Heads(heads("L1", "R1")),
+    ]);
+    let log = run_loop(
+        &git,
+        4,
+        vec![Err("it is not a git repository".into()), Ok(up_to_date())],
+        |_| Some(heads("L1", "R1")),
+    );
+    assert_eq!(log.syncs, ["acme", "acme"]);
+    assert_eq!(
+        log.reports,
+        [
+            "acme: refused: it is not a git repository",
+            "acme: up to date"
+        ]
+    );
+}
+
+#[test]
 fn no_upstream_is_printed_once() {
     let git = FakeGit::new(vec![
         Probe::NoUpstream,
@@ -1271,6 +1296,8 @@ fn the_launchd_plist_byte_for_byte() {
 	</dict>
 	<key>ThrottleInterval</key>
 	<integer>30</integer>
+	<key>ExitTimeOut</key>
+	<integer>300</integer>
 	<key>ProcessType</key>
 	<string>Background</string>
 	<key>StandardOutPath</key>
@@ -1335,6 +1362,7 @@ Environment=\"PATH=/opt/homebrew/bin:/usr/bin:/bin\"
 Environment=\"KLURIS_CONFIG=/home/ana/50%% off/config.yml\"
 Restart=on-failure
 RestartSec=30
+TimeoutStopSec=300
 
 [Install]
 WantedBy=default.target

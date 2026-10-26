@@ -17,7 +17,8 @@
 //!   next tick tries again.
 //!
 //! Offline (the remote does not answer) is quiet: nothing is reported. A
-//! branch without an upstream is reported once. The first tick runs at
+//! branch without an upstream is reported once, and so is a brain that is
+//! not a git repository (one sync runs and says so). The first tick runs at
 //! once; then every [`WatchRequest::interval`], waited in short slices so a
 //! stop is seen at once. A stop ends the loop between two brains, never
 //! during a sync.
@@ -57,6 +58,8 @@ pub enum Probe {
     Heads(Heads),
     /// A detached `HEAD`, or a branch without an upstream on a remote.
     NoUpstream,
+    /// The brain is not in a git work tree: one sync says so.
+    NotARepo,
     /// The remote did not answer in time, or the brain could not be read.
     Offline,
 }
@@ -211,6 +214,12 @@ fn tick(
             return;
         }
         Probe::Heads(heads) => heads,
+        // No heads to compare: an empty pair stands for "not a repository",
+        // so the refusal is reported once and again only once it is one.
+        Probe::NotARepo => Heads {
+            local: String::new(),
+            remote: String::new(),
+        },
     };
     state.told_no_upstream = false;
     if state.left_at.as_ref() == Some(&probed) {
@@ -242,7 +251,7 @@ fn first_word(out: &[u8]) -> String {
 impl WatchGit for SystemGit {
     fn probe(&self, root: &Path, deadline: Instant) -> Probe {
         let Some(repo) = self.repo(root) else {
-            return Probe::Offline;
+            return Probe::NotARepo;
         };
         let tracking = match self.tracking(&repo) {
             Ok(Some(tracking)) => tracking,

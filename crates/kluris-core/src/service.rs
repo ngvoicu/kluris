@@ -8,6 +8,10 @@
 //!   bootstrap gui/<uid>` and removed with `bootout`; it logs to
 //!   `~/Library/Logs/kluris/sync-<brain>.log`. A clean exit (0, as after
 //!   SIGTERM) is not restarted; a failure is, every 30 s at most.
+//! - Stopping a launchd or systemd service waits 300 s (`ExitTimeOut`,
+//!   `TimeoutStopSec`; their defaults are 20 s and 90 s) before a kill, so
+//!   a sync in progress, whose fetch and push may each take a minute,
+//!   finishes.
 //! - Linux: a systemd user unit, `$XDG_CONFIG_HOME/systemd/user/
 //!   kluris-sync-<brain>.service` (`~/.config` without it), enabled and
 //!   started with `systemctl --user enable --now`, removed after `disable
@@ -398,6 +402,7 @@ impl ServiceEnv {
             "\t<key>RunAtLoad</key>\n\t<true/>\n\
              \t<key>KeepAlive</key>\n\t<dict>\n\t\t<key>SuccessfulExit</key>\n\t\t<false/>\n\t</dict>\n\
              \t<key>ThrottleInterval</key>\n\t<integer>30</integer>\n\
+             \t<key>ExitTimeOut</key>\n\t<integer>300</integer>\n\
              \t<key>ProcessType</key>\n\t<string>Background</string>\n",
         );
         for key in ["StandardOutPath", "StandardErrorPath"] {
@@ -425,7 +430,9 @@ impl ServiceEnv {
                 systemd_quoted(&format!("{key}={value}"), false)
             ));
         }
-        out.push_str("Restart=on-failure\nRestartSec=30\n\n[Install]\nWantedBy=default.target\n");
+        out.push_str(
+            "Restart=on-failure\nRestartSec=30\nTimeoutStopSec=300\n\n[Install]\nWantedBy=default.target\n",
+        );
         out
     }
 
