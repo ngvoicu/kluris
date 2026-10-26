@@ -212,9 +212,10 @@ def test_entries_that_only_look_like_kluris_are_kept(sandbox: Sandbox):
     changed = sorted(k for k in set(home3) | set(expected) if home3.get(k) != expected.get(k))
     assert not changed, changed
     kept = {d["path"]: d["kept"] for d in json.loads(v3.stdout)["skills"]["destinations"]}
+    # Near misses only: the user's plain `kluris-notes` is left alone, unlisted.
     assert kept[(home / ".agents/skills").as_posix()] == [
-        ".kluris-acme.old", ".kluris-acme.tmp", ".kluris-notes.old", "kluris-notes", "kluris-personal"]
-    assert kept[(home / ".cursor/skills").as_posix()] == ["kluris-acme", "kluris-notes"]
+        ".kluris-acme.old", ".kluris-acme.tmp", ".kluris-notes.old", "kluris-personal"]
+    assert kept[(home / ".cursor/skills").as_posix()] == ["kluris-acme"]
 
 
 @pytest.mark.skipif(IS_WINDOWS, reason="a folder symlink needs a privilege on Windows")

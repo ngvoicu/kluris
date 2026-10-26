@@ -883,3 +883,35 @@ fn doctor_is_listed_in_root_help() {
     .unwrap();
     assert!(line.eval(&r.stdout), "{}", r.stdout);
 }
+
+/// A same-named entry Kluris cannot prove it wrote (v2's copy with a file
+/// of the user's beside it) is not overwritten; the skills check fails and
+/// says how to fix it.
+#[test]
+fn a_same_named_entry_in_the_way_fails_the_skills_check() {
+    let mut s = Sandbox::new();
+    s.brain("acme", &["claude"], &[]);
+    put(
+        &s.h(".claude/skills/kluris-acme/SKILL.md"),
+        &v2_skill("acme"),
+    );
+    put(&s.h(".claude/skills/kluris-acme/mine.txt"), "mine");
+    let r = s.doctor(&["--json"]);
+    assert_eq!(r.code, 1, "{} {}", r.stdout, r.stderr);
+    let doc = r.json();
+    let skills = check(&doc, "skills");
+    assert_eq!(skills["passed"], false);
+    assert_eq!(
+        skills["detail"],
+        "1 files written for 1 agents across 1 brain(s) (failed: ~/.claude/skills)"
+    );
+    assert!(s.h(".claude/skills/kluris-acme/mine.txt").is_file());
+    let text = s.doctor(&[]);
+    assert_eq!(text.code, 1);
+    assert!(
+        text.stdout
+            .contains("move or delete it, then run `kluris doctor`"),
+        "{}",
+        text.stdout
+    );
+}

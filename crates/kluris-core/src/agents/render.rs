@@ -399,6 +399,21 @@ mod tests {
         assert_eq!(out, "{b} B {{b}} {a");
     }
 
+    /// Every v1/v2 description opens with one of the openings a near miss
+    /// is told by, so no era can slip past `kept`.
+    #[test]
+    fn every_era_opens_with_a_known_description_opening() {
+        for era in ERAS {
+            assert!(
+                DESCRIPTION_OPENINGS
+                    .iter()
+                    .any(|o| era.description.starts_with(o)),
+                "{}",
+                era.releases
+            );
+        }
+    }
+
     #[test]
     fn templates_are_lf_and_ascii_where_v2_is() {
         for t in [

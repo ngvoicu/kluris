@@ -533,6 +533,9 @@ fn a_users_own_kluris_skill_is_never_touched() {
         let text = fs::read_to_string(s.h(dir).join("kluris-notes/SKILL.md")).expect("kept");
         assert_eq!(text, FOREIGN);
         assert!(s.h(dir).join("kluris-empty/README.md").is_file());
+        // Nothing about them looks like Kluris: left alone, not listed.
+        let d = dest(&report, &s.h(dir));
+        assert!(d.kept.is_empty() && d.removed.is_empty(), "{d:?}");
     }
 }
 
@@ -717,6 +720,13 @@ fn staging_like_entries_that_are_not_kluris_are_kept() {
     #[cfg(unix)]
     assert!(fs::symlink_metadata(s.h(".agents/skills/.kluris-f.old")).is_ok());
     assert!(report.destinations[0].removed.is_empty(), "{report:?}");
+    // v2's fixed staging names are near misses; `.kluris-d` and
+    // `.kluris-e.tmpx` are not staging names at all.
+    let mut near = vec![".kluris-a.tmp", ".kluris-b.tmp", ".kluris-c.old"];
+    if cfg!(unix) {
+        near.push(".kluris-f.old");
+    }
+    assert_eq!(report.destinations[0].kept, near);
 }
 
 /// A destination that cannot be written keeps its old skill; the others are
@@ -1160,6 +1170,11 @@ fn a_case_variant_of_the_skill_folder_is_kept() {
     if case_insensitive(&s.home) {
         assert!(claude.written.is_empty(), "{claude:?}");
         assert_eq!(claude.failed.len(), 1, "{claude:?}");
+        assert!(
+            claude.failed[0].contains("move or delete it, then run `kluris doctor`"),
+            "{}",
+            claude.failed[0]
+        );
     } else {
         assert_eq!(claude.written, ["kluris-acme"]);
     }
@@ -1307,7 +1322,8 @@ fn a_linked_skill_entry_is_unlinked_never_followed() {
     assert!(fs::symlink_metadata(s.h(".codex/skills/kluris-dangling")).is_ok());
     let codex = dest(&report, &s.h(".codex/skills"));
     assert_eq!(codex.removed, ["kluris-gone"]);
-    assert_eq!(codex.kept, ["kluris-dangling", "kluris-mine"]);
+    // The dangling link carries nothing of Kluris's: not listed.
+    assert_eq!(codex.kept, ["kluris-mine"]);
 }
 
 /// In a folder Kluris writes, a `kluris-<brain>` link to a Kluris-written
@@ -1483,4 +1499,260 @@ fn a_quarantine_that_cannot_start_leaves_the_entry() {
         .expect("universal");
     assert!(universal.removed.is_empty());
     assert_eq!(universal.failed.len(), 1, "{universal:?}");
+}
+
+// --- T-105 follow-up (chief's decisions m-4606) -----------------------------
+
+/// Finder's `.DS_Store`, Explorer's `Thumbs.db` and `desktop.ini` (exact
+/// names, regular files) do not make a Kluris folder someone else's: it is
+/// replaced and removed with them.
+#[test]
+fn os_metadata_files_go_with_a_kluris_folder() {
+    let mut s = Sandbox::new();
+    s.brain("acme", Some(&["claude"]));
+    put(
+        &s.h(".claude/skills/kluris-acme/SKILL.md"),
+        &v2_skill("acme"),
+    );
+    put(&s.h(".claude/skills/kluris-acme/.DS_Store"), "finder");
+    put(
+        &s.h(".cursor/skills/kluris-acme/SKILL.md"),
+        &v2_skill("acme"),
+    );
+    put(&s.h(".cursor/skills/kluris-acme/Thumbs.db"), "explorer");
+    put(
+        &s.h(".cursor/skills/kluris-acme/desktop.ini"),
+        "[.ShellClassInfo]",
+    );
+    put(
+        &s.h(".agents/skills/kluris-gone/SKILL.md"),
+        &v2_skill("gone"),
+    );
+    put(&s.h(".agents/skills/kluris-gone/.DS_Store"), "finder");
+    let stale = staged("kluris-gone", 7, "old");
+    put(
+        &s.h(".agents/skills").join(&stale).join("SKILL.md"),
+        &v2_skill("gone"),
+    );
+    put(
+        &s.h(".agents/skills").join(&stale).join(".DS_Store"),
+        "finder",
+    );
+    let report = s.install();
+    assert!(report.ok(), "{report:?}");
+    // Replaced: the new folder holds the new SKILL.md only.
+    let names: Vec<String> = fs::read_dir(s.h(".claude/skills/kluris-acme"))
+        .expect("claude")
+        .map(|e| e.expect("entry").file_name().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(names, ["SKILL.md"]);
+    assert_eq!(
+        fs::read(s.h(".claude/skills/kluris-acme/SKILL.md")).expect("claude"),
+        fs::read(s.h(".agents/skills/kluris-acme/SKILL.md")).expect("universal")
+    );
+    assert_eq!(
+        dest(&report, &s.h(".claude/skills")).written,
+        ["kluris-acme"]
+    );
+    // Swept.
+    assert!(!s.h(".cursor/skills/kluris-acme").exists());
+    assert!(!s.h(".agents/skills/kluris-gone").exists());
+    assert!(!s.h(".agents/skills").join(&stale).exists());
+    assert_eq!(
+        dest(&report, &s.h(".cursor/skills")).removed,
+        ["kluris-acme"]
+    );
+    assert_eq!(
+        dest(&report, &s.h(".agents/skills")).removed,
+        sorted(&[&stale, &"kluris-gone".to_string()])
+    );
+}
+
+/// Only those exact names, as regular files, next to the one SKILL.md.
+#[test]
+fn other_files_beside_skill_md_still_keep_the_folder() {
+    let mut s = Sandbox::new();
+    s.brain("acme", Some(&["claude"]));
+    let skills = s.h(".cursor/skills");
+    put(&skills.join("kluris-a/SKILL.md"), &v2_skill("a"));
+    put(&skills.join("kluris-a/.DS_Store/inner"), "a folder");
+    put(&skills.join("kluris-b/SKILL.md"), &v2_skill("b"));
+    put(&skills.join("kluris-b/thumbs.db"), "wrong case");
+    put(&skills.join("kluris-c/SKILL.md"), &v2_skill("c"));
+    put(&skills.join("kluris-c/Thumbs.db"), "explorer");
+    put(&skills.join("kluris-c/notes.txt"), "mine");
+    put(&skills.join("kluris-d/.DS_Store"), "no SKILL.md");
+    let report = s.install();
+    assert!(report.ok(), "{report:?}");
+    for rel in [
+        "kluris-a/.DS_Store/inner",
+        "kluris-b/thumbs.db",
+        "kluris-c/notes.txt",
+        "kluris-d/.DS_Store",
+    ] {
+        assert!(skills.join(rel).is_file(), "{rel}");
+    }
+    let cursor = dest(&report, &skills);
+    assert!(cursor.removed.is_empty(), "{cursor:?}");
+    // kluris-d has no SKILL.md, so nothing of Kluris's: not listed.
+    assert_eq!(cursor.kept, ["kluris-a", "kluris-b", "kluris-c"]);
+}
+
+/// `kept` lists near misses only: a `kluris*` entry whose SKILL.md (or
+/// workflow) carries the marker's opening or a v1/v2 description opening.
+/// Entries with nothing of Kluris's are left alone and not listed.
+#[test]
+fn only_near_misses_are_listed_as_kept() {
+    let mut s = Sandbox::new();
+    s.brain("acme", Some(&["claude"]));
+    let skills = s.h(".cursor/skills");
+    put(
+        &skills.join("kluris-marked/SKILL.md"),
+        "---\nname: kluris-marked\ndescription: x\n---\n\n# Mine\n\n<!-- kluris:generated -->\n",
+    );
+    put(
+        &skills.join("kluris-v1/SKILL.md"),
+        "---\nname: kluris-v1\ndescription: Your team's shared AI brain, my way\n---\n",
+    );
+    put(
+        &skills.join("kluris-sme/SKILL.md"),
+        "---\nname: kluris-sme\ndescription: \"You are the team's subject matter expert on cats\"\n---\n",
+    );
+    put(&skills.join("kluris-plain/SKILL.md"), FOREIGN);
+    put(&skills.join("kluris-file"), "a file");
+    let workflows = s.h(".codeium/windsurf/global_workflows");
+    put(
+        &workflows.join("kluris-old.md"),
+        "---\ndescription: You are the team's subject matter expert, edited\n---\n",
+    );
+    put(&workflows.join("kluris-notes.md"), "# my own workflow\n");
+    let report = s.install();
+    assert!(report.ok(), "{report:?}");
+    assert_eq!(
+        dest(&report, &skills).kept,
+        ["kluris-marked", "kluris-sme", "kluris-v1"]
+    );
+    assert_eq!(dest(&report, &workflows).kept, ["kluris-old.md"]);
+    for rel in [
+        "kluris-marked",
+        "kluris-v1",
+        "kluris-sme",
+        "kluris-plain",
+        "kluris-file",
+    ] {
+        assert!(skills.join(rel).exists(), "{rel}");
+    }
+}
+
+/// A same-named entry that is not proven Kluris's (here v2's copy with a
+/// file of the user's beside it) is never overwritten and never passes
+/// silently: the folder reports the skill as not written, says how to fix
+/// it, and lists the entry as kept.
+#[test]
+fn a_same_named_entry_in_the_way_of_a_skill_is_not_overwritten() {
+    let mut s = Sandbox::new();
+    s.brain("acme", Some(&["claude"]));
+    for dir in [".agents/skills", ".claude/skills"] {
+        put(&s.h(dir).join("kluris-acme/SKILL.md"), &v2_skill("acme"));
+        put(&s.h(dir).join("kluris-acme/mine.txt"), "mine");
+    }
+    let report = s.install();
+    assert!(!report.ok());
+    for dir in [".agents/skills", ".claude/skills"] {
+        assert_eq!(
+            fs::read_to_string(s.h(dir).join("kluris-acme/SKILL.md")).expect(dir),
+            v2_skill("acme")
+        );
+        assert!(s.h(dir).join("kluris-acme/mine.txt").is_file());
+        let d = dest(&report, &s.h(dir));
+        assert!(d.written.is_empty(), "{d:?}");
+        assert_eq!(d.kept, ["kluris-acme"], "{dir}");
+        assert_eq!(d.failed.len(), 1, "{d:?}");
+        let path = s.h(dir).join("kluris-acme").display().to_string();
+        assert!(d.failed[0].contains(&path), "{}", d.failed[0]);
+        assert!(
+            d.failed[0].contains("move or delete it, then run `kluris doctor`"),
+            "{}",
+            d.failed[0]
+        );
+    }
+    assert_eq!(report.total_written(), 0);
+}
+
+/// A Windows junction made the way users make them (`mklink /J`, no admin
+/// rights), from a Sandbox path (`\\?\` dropped for `cmd`).
+#[cfg(windows)]
+fn junction(target: &Path, at: &Path) {
+    let plain = |p: &Path| {
+        p.display()
+            .to_string()
+            .trim_start_matches(r"\\?\")
+            .to_string()
+    };
+    fs::create_dir_all(at.parent().expect("parent")).expect("mkdir");
+    let out = std::process::Command::new("cmd")
+        .args(["/c", "mklink", "/J"])
+        .arg(plain(at))
+        .arg(plain(target))
+        .output()
+        .expect("cmd");
+    assert!(
+        out.status.success(),
+        "mklink /J: {} {}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+/// `~/.codex/skills` junctioned to `~/.agents/skills` is one folder: the
+/// migration skips it as an alias instead of removing the new skill.
+#[cfg(windows)]
+#[test]
+fn a_junctioned_v2_folder_is_an_alias_of_the_universal_one() {
+    let mut s = Sandbox::new();
+    s.brain("acme", Some(&[]));
+    fs::create_dir_all(s.h(".agents/skills")).expect("agents");
+    junction(&s.h(".agents/skills"), &s.h(".codex/skills"));
+    let report = s.install();
+    assert!(report.ok(), "{report:?}");
+    assert!(s.h(".agents/skills/kluris-acme/SKILL.md").is_file());
+    let codex = dest(&report, &s.h(".codex/skills"));
+    assert_eq!(
+        codex.alias_of.as_deref(),
+        Some(s.h(".agents/skills").as_path())
+    );
+    assert!(codex.removed.is_empty(), "{codex:?}");
+}
+
+/// A junctioned `kluris-<brain>` entry is removed as a junction only, and
+/// only when it points at a Kluris skill; its target stays.
+#[cfg(windows)]
+#[test]
+fn a_junctioned_skill_entry_is_unlinked_never_followed() {
+    let mut s = Sandbox::new();
+    s.brain("acme", Some(&["claude"]));
+    let elsewhere = s.root.join("elsewhere");
+    put(&elsewhere.join("kluris-gone/SKILL.md"), &v2_skill("gone"));
+    put(&elsewhere.join("kluris-mine/SKILL.md"), &v2_skill("mine"));
+    put(&elsewhere.join("kluris-mine/notes.txt"), "mine");
+    junction(
+        &elsewhere.join("kluris-gone"),
+        &s.h(".codex/skills/kluris-gone"),
+    );
+    junction(
+        &elsewhere.join("kluris-mine"),
+        &s.h(".codex/skills/kluris-mine"),
+    );
+    let report = s.install();
+    assert!(report.ok(), "{report:?}");
+    assert!(fs::symlink_metadata(s.h(".codex/skills/kluris-gone")).is_err());
+    assert!(
+        elsewhere.join("kluris-gone/SKILL.md").is_file(),
+        "the target stays"
+    );
+    assert!(fs::symlink_metadata(s.h(".codex/skills/kluris-mine")).is_ok());
+    assert!(elsewhere.join("kluris-mine/notes.txt").is_file());
+    let codex = dest(&report, &s.h(".codex/skills"));
+    assert_eq!(codex.removed, ["kluris-gone"]);
+    assert_eq!(codex.kept, ["kluris-mine"]);
 }
