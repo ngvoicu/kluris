@@ -81,7 +81,8 @@ pub struct ServiceEnv {
     pub local_app_data: Option<PathBuf>,
     /// The user id (launchd's `gui/<uid>` domain).
     pub uid: u32,
-    /// `DOMAIN\user` (Task Scheduler's logon trigger and principal).
+    /// The account (Task Scheduler's logon trigger and principal): its SID,
+    /// or `DOMAIN\user`.
     pub user: Option<String>,
     /// The kluris the service runs, absolute.
     pub kluris: PathBuf,

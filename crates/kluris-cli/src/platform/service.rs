@@ -56,15 +56,30 @@ fn absolute(path: PathBuf) -> PathBuf {
     }
 }
 
+/// The current account's SID (`whoami /user`), which a task's `UserId`
+/// takes: `USERDOMAIN` is not the account's domain in every session (over
+/// ssh a local account's is `WORKGROUP`, which no account maps from).
+fn account_sid() -> Option<String> {
+    let ran = SystemRunner
+        .run("whoami", &["/user", "/fo", "csv", "/nh"])
+        .ok()?;
+    if ran.code != Some(0) {
+        return None;
+    }
+    let line = ran.stdout.lines().next()?;
+    let sid = line.rsplit(',').next()?.trim().trim_matches('"');
+    sid.starts_with("S-1-").then(|| sid.to_string())
+}
+
 /// The service environment of this user and this kluris.
 pub fn env() -> Result<ServiceEnv, CliError> {
     let exe = std::env::current_exe()
         .map_err(|e| CliError::new(format!("Cannot tell where this kluris is: {e}")))?;
     let kluris = std::fs::canonicalize(&exe).unwrap_or(exe);
-    let user = match (var("USERDOMAIN"), var("USERNAME")) {
-        (Some(domain), Some(name)) => Some(format!("{domain}\\{name}")),
-        (None, Some(name)) => Some(name),
-        _ => None,
+    let user = if cfg!(windows) {
+        account_sid().or_else(|| var("USERNAME"))
+    } else {
+        None
     };
     Ok(ServiceEnv {
         manager: Manager::current(),
