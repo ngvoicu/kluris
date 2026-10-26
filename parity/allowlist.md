@@ -123,13 +123,13 @@ One entry per difference, under its own heading:
 ### PAR-016: user text in human output is never markup
 - Command: every command's human (non-JSON) output; today `kluris list`, `kluris status`, `kluris help`, `kluris wake-up`
 - Differs: v3 prints names, paths, descriptions, commit subjects and other user text as they are. v2 passed them to Rich as markup: `see [red]docs[/red]` printed `see docs`, and a stray closing tag (`ends [/oops]`) raised `MarkupError` (traceback, exit 1) in `list`.
-- Decision: the `MarkupError` crash: SPEC decision 2026-10-27 (tracebacks). Printing markup-like user text literally instead of rendering it: chief's brief for T-78 ("v2's markup-injection bug is not copied", research-03 §5 item 12); no SPEC Decision Log row yet (reported in T-82)
+- Decision: SPEC decision 2026-10-27 (no markup in user text); the `MarkupError` crash also falls under SPEC decision 2026-10-27 (tracebacks); research-03 §5 item 12
 - Tests: `crates/kluris-cli/src/output/human.rs::tests::user_text_is_never_markup`, `parity/test_list_status_help.py::{test_list_and_status_print_user_text_literally, test_list_with_a_closing_tag_that_crashed_v2}`
 
 ### PAR-017: `help --json COMMAND` describes that command
 - Command: `kluris help COMMAND --json`
 - Differs: v3 prints `{"ok": true, "commands": [{"name": ..., "description": ...}]}` with that one command, and for a name not in the table the envelope `{"ok": false, "error": "Unknown command: <name>"}` with exit 1 (as `help <name>` without `--json` fails in both). v2 ignored COMMAND under `--json`: the whole table, exit 0. `help --json` without COMMAND is v2's table (less `pack`, PAR-018).
-- Decision: chief's brief for T-78 ("Fix v2's bug that `help --json` ignores COMMAND", research-03 §5 item 20); no SPEC Decision Log row yet (reported in T-82)
+- Decision: SPEC decision 2026-10-27 (help --json COMMAND); research-03 §5 item 20
 - Tests: `parity/test_list_status_help.py::test_help_json_with_a_command`
 
 ### PAR-018: `pack` is gone
