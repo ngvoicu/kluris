@@ -5,6 +5,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::{Mutex, MutexGuard};
 use std::time::Duration;
 
 use kluris_core::brain::store::LocalGitStore;
@@ -49,7 +50,12 @@ fn neuron(extra: &str, body: &str) -> String {
     )
 }
 
+/// One world at a time: each runs several git processes per step, and the
+/// Windows runner caps a run at 64 processes.
+static SERIAL: Mutex<()> = Mutex::new(());
+
 struct World {
+    _serial: MutexGuard<'static, ()>,
     dir: TempDir,
     remote: PathBuf,
     ours: PathBuf,
@@ -58,9 +64,11 @@ struct World {
 
 impl World {
     fn new() -> World {
+        let serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         let dir = TempDir::new().unwrap();
         fs::write(dir.path().join("gitconfig"), "").unwrap();
         let w = World {
+            _serial: serial,
             remote: dir.path().join("remote.git"),
             ours: dir.path().join("ours"),
             theirs: dir.path().join("theirs"),

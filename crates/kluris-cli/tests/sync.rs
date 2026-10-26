@@ -5,6 +5,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command as StdCommand;
+use std::sync::{Mutex, MutexGuard};
 
 use assert_cmd::Command;
 use assert_fs::TempDir;
@@ -33,16 +34,23 @@ fn yaml_path(path: &Path) -> String {
     format!("'{}'", path.display().to_string().replace('\'', "''"))
 }
 
+/// One home at a time: each runs several git processes per step, and the
+/// Windows runner caps a run at 64 processes.
+static SERIAL: Mutex<()> = Mutex::new(());
+
 struct Home {
+    _serial: MutexGuard<'static, ()>,
     dir: TempDir,
     brains: Vec<(String, PathBuf)>,
 }
 
 impl Home {
     fn new() -> Home {
+        let serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         let dir = TempDir::new().unwrap();
         fs::write(dir.path().join("gitconfig"), "").unwrap();
         Home {
+            _serial: serial,
             dir,
             brains: Vec::new(),
         }
