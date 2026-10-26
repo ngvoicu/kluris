@@ -4,6 +4,7 @@ mod brain_dump;
 mod config_rewrite;
 mod float_repr;
 mod search_eval;
+mod skills_install;
 mod windows;
 mod yaml_emit;
 
@@ -21,11 +22,18 @@ Tasks:
   float-repr
       Read one f64 bit pattern (16 hex digits) per stdin line and answer each
       with Python's repr(x), a tab and json.dumps(x).
+  posix-path
+      Read one JSON string per stdin line and answer each with the JSON
+      string of its POSIX form, as SKILL.md writes brain paths.
   search-eval [--local] [--queries FILE] [--bin KLURIS] [--seed N] [--repeat N] [--report FILE]
       The search-quality eval through the real `kluris search`: the public
       fixture (parity/fixtures/search-eval/, gated at hit@5 0.90 and MRR
       0.74) or, with --local, the tuning queries against the registered
       brains. Writes a text-free JSON report under target/search-eval/.
+  skills-install --home <dir>
+      Install every registered brain's agent skills into <dir> as HOME (the
+      config at KLURIS_CONFIG, else <dir>/.kluris/config.yml; COPILOT_HOME
+      from the environment) and print the report as JSON.
   windows [--machine zeewin|zeewin2] [--parity] [-- <cargo test args>]
       Run cargo test (and with --parity the parity harness) on a household
       Windows machine over ssh. `cargo xtask windows --help` says more.
@@ -48,7 +56,9 @@ fn main() -> ExitCode {
         Some("brain-dump") => brain_dump::main(&args[1..]),
         Some("config-rewrite") => config_rewrite::main(&args[1..]),
         Some("float-repr") => float_repr::main(&args[1..]),
+        Some("posix-path") => skills_install::posix(&args[1..]),
         Some("search-eval") => search_eval::main(&args[1..]),
+        Some("skills-install") => skills_install::main(&args[1..]),
         Some("windows") => return windows::main(&args[1..]),
         Some("yaml-emit") => yaml_emit::emit(&args[1..]),
         Some("yaml-load") => yaml_emit::load(&args[1..]),

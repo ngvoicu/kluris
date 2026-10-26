@@ -115,7 +115,11 @@ impl Sandbox {
             for entry in fs::read_dir(&dir).expect("read_dir") {
                 let entry = entry.expect("entry");
                 if entry.file_type().expect("type").is_dir() {
-                    let rel = entry.path().strip_prefix(&self.home).expect("rel").to_path_buf();
+                    let rel = entry
+                        .path()
+                        .strip_prefix(&self.home)
+                        .expect("rel")
+                        .to_path_buf();
                     out.push(rel.to_string_lossy().replace('\\', "/"));
                     stack.push(entry.path());
                 }
@@ -148,7 +152,8 @@ fn put(path: &Path, text: &str) {
     fs::write(path, text).expect("write");
 }
 
-const FOREIGN: &str = "---\nname: kluris-notes\ndescription: My own notes about kluris\n---\n\n# Notes\n";
+const FOREIGN: &str =
+    "---\nname: kluris-notes\ndescription: My own notes about kluris\n---\n\n# Notes\n";
 
 fn skill_files(s: &Sandbox) -> Vec<String> {
     s.files()
@@ -233,7 +238,9 @@ fn agents_served_by_the_universal_folder_write_nothing_extra() {
     let mut s = Sandbox::new();
     s.brain(
         "acme",
-        Some(&["cursor", "codex", "gemini", "devin", "kilocode", "junie", "windsurf"]),
+        Some(&[
+            "cursor", "codex", "gemini", "devin", "kilocode", "junie", "windsurf",
+        ]),
     );
     let report = s.install();
     assert_eq!(skill_files(&s), [".agents/skills/kluris-acme/SKILL.md"]);
@@ -349,7 +356,7 @@ fn every_copy_is_byte_identical_and_only_a_skill_md() {
         let text = String::from_utf8(copies[0].clone()).expect("utf-8");
         assert!(text.starts_with(&format!("---\nname: kluris-{brain}\n")));
     }
-    for (k, _) in &files {
+    for k in files.keys() {
         assert!(k.ends_with("/SKILL.md"), "unexpected file {k}");
     }
 }
@@ -444,7 +451,10 @@ fn removed_brains_lose_their_skills_everywhere() {
     s.brain("beta", Some(&["claude"]));
     s.install();
     put(&s.h(".agents/skills/kluris-notes/SKILL.md"), FOREIGN);
-    put(&s.h(".agents/skills/other-skill/SKILL.md"), "---\nname: other-skill\n---\n");
+    put(
+        &s.h(".agents/skills/other-skill/SKILL.md"),
+        "---\nname: other-skill\n---\n",
+    );
     put(&s.h(".agents/skills/kluris-readme.txt"), "a file");
 
     s.config.brains.shift_remove("beta");
@@ -478,13 +488,23 @@ fn no_brains_left_clears_every_kluris_skill() {
 fn a_users_own_kluris_skill_is_never_touched() {
     let mut s = Sandbox::new();
     s.brain("acme", Some(&[]));
-    for dir in [".agents/skills", ".claude/skills", ".cursor/skills", ".codex/skills"] {
+    for dir in [
+        ".agents/skills",
+        ".claude/skills",
+        ".cursor/skills",
+        ".codex/skills",
+    ] {
         put(&s.h(dir).join("kluris-notes/SKILL.md"), FOREIGN);
         put(&s.h(dir).join("kluris-empty/README.md"), "no SKILL.md here");
     }
     let report = s.install();
     assert!(report.ok());
-    for dir in [".agents/skills", ".claude/skills", ".cursor/skills", ".codex/skills"] {
+    for dir in [
+        ".agents/skills",
+        ".claude/skills",
+        ".cursor/skills",
+        ".codex/skills",
+    ] {
         let text = fs::read_to_string(s.h(dir).join("kluris-notes/SKILL.md")).expect("kept");
         assert_eq!(text, FOREIGN);
         assert!(s.h(dir).join("kluris-empty/README.md").is_file());
@@ -509,7 +529,11 @@ fn a_foreign_folder_with_the_skill_name_is_kept_and_reported() {
         .expect("claude");
     assert!(claude.written.is_empty());
     assert_eq!(claude.failed.len(), 1, "{claude:?}");
-    assert!(claude.failed[0].contains("kluris-notes"), "{:?}", claude.failed);
+    assert!(
+        claude.failed[0].contains("kluris-notes"),
+        "{:?}",
+        claude.failed
+    );
     // Other destinations are unaffected.
     assert!(s.h(".agents/skills/kluris-notes/SKILL.md").is_file());
     assert!(!s.h(".claude/skills/.kluris-notes.tmp").exists());
@@ -519,13 +543,26 @@ fn a_foreign_folder_with_the_skill_name_is_kept_and_reported() {
 fn an_old_copy_is_replaced_in_place() {
     let mut s = Sandbox::new();
     s.brain("acme", Some(&["claude"]));
-    put(&s.h(".claude/skills/kluris-acme/SKILL.md"), &v2_skill("acme"));
-    put(&s.h(".claude/skills/kluris-acme/extra.txt"), "left by someone");
+    put(
+        &s.h(".claude/skills/kluris-acme/SKILL.md"),
+        &v2_skill("acme"),
+    );
+    put(
+        &s.h(".claude/skills/kluris-acme/extra.txt"),
+        "left by someone",
+    );
     s.install();
     let v3 = fs::read(s.h(".agents/skills/kluris-acme/SKILL.md")).expect("v3");
-    assert_eq!(fs::read(s.h(".claude/skills/kluris-acme/SKILL.md")).expect("claude"), v3);
+    assert_eq!(
+        fs::read(s.h(".claude/skills/kluris-acme/SKILL.md")).expect("claude"),
+        v3
+    );
     assert!(!s.h(".claude/skills/kluris-acme/extra.txt").exists());
-    let leftovers: Vec<String> = s.dirs().into_iter().filter(|d| d.contains("/.kluris")).collect();
+    let leftovers: Vec<String> = s
+        .dirs()
+        .into_iter()
+        .filter(|d| d.contains("/.kluris"))
+        .collect();
     assert!(leftovers.is_empty(), "{leftovers:?}");
 }
 
@@ -533,7 +570,10 @@ fn an_old_copy_is_replaced_in_place() {
 fn stale_staging_folders_from_a_crash_are_cleared() {
     let mut s = Sandbox::new();
     s.brain("acme", Some(&["claude"]));
-    put(&s.h(".claude/skills/.kluris-acme.tmp/SKILL.md"), "half written");
+    put(
+        &s.h(".claude/skills/.kluris-acme.tmp/SKILL.md"),
+        "half written",
+    );
     put(&s.h(".claude/skills/.kluris-acme.old/SKILL.md"), "old");
     let report = s.install();
     assert!(report.ok(), "{report:?}");
@@ -583,7 +623,10 @@ fn a_destination_that_is_a_file_fails_alone() {
     put(&s.h(".claude/skills"), "not a folder");
     let report = s.install();
     assert!(!report.ok());
-    assert_eq!(fs::read_to_string(s.h(".claude/skills")).expect("file"), "not a folder");
+    assert_eq!(
+        fs::read_to_string(s.h(".claude/skills")).expect("file"),
+        "not a folder"
+    );
     assert!(s.h(".agents/skills/kluris-acme/SKILL.md").is_file());
 }
 
@@ -634,10 +677,16 @@ fn v2_home(s: &Sandbox) {
         .collect();
     for dir in v2_dirs {
         for brain in ["acme", "gone"] {
-            put(&s.h(dir).join(format!("kluris-{brain}/SKILL.md")), &v2_skill(brain));
+            put(
+                &s.h(dir).join(format!("kluris-{brain}/SKILL.md")),
+                &v2_skill(brain),
+            );
         }
         put(&s.h(dir).join("kluris-notes/SKILL.md"), FOREIGN);
-        put(&s.h(dir).join("my-skill/SKILL.md"), "---\nname: my-skill\n---\n");
+        put(
+            &s.h(dir).join("my-skill/SKILL.md"),
+            "---\nname: my-skill\n---\n",
+        );
     }
     // v1's bare `kluris` skill.
     put(
@@ -649,13 +698,19 @@ fn v2_home(s: &Sandbox) {
         ".codeium/windsurf-next/global_workflows",
     ] {
         for brain in ["acme", "gone"] {
-            put(&s.h(wf).join(format!("kluris-{brain}.md")), &v2_workflow(brain));
+            put(
+                &s.h(wf).join(format!("kluris-{brain}.md")),
+                &v2_workflow(brain),
+            );
         }
         put(&s.h(wf).join("kluris-notes.md"), "# my own workflow\n");
         put(&s.h(wf).join("deploy.md"), "# deploy\n");
     }
     // Not a v2 folder: never looked at.
-    put(&s.h(".codeium/other/skills/kluris-acme/SKILL.md"), &v2_skill("acme"));
+    put(
+        &s.h(".codeium/other/skills/kluris-acme/SKILL.md"),
+        &v2_skill("acme"),
+    );
     put(&s.h(".claude/commands/kluris.md"), "# v1 command\n");
 }
 
@@ -716,7 +771,10 @@ fn v2_install_is_migrated_and_nothing_else_is_touched() {
 fn copilot_folder_is_kept_when_copilot_home_is_set() {
     let mut s = Sandbox::new();
     s.brain("acme", Some(&["claude"]));
-    put(&s.h(".copilot/skills/kluris-acme/SKILL.md"), &v2_skill("acme"));
+    put(
+        &s.h(".copilot/skills/kluris-acme/SKILL.md"),
+        &v2_skill("acme"),
+    );
     s.copilot_home = Some(s.h(".copilot-custom"));
     s.install();
     assert!(s.h(".copilot/skills/kluris-acme/SKILL.md").is_file());
@@ -732,7 +790,10 @@ fn copilot_folder_is_kept_when_copilot_home_is_set() {
 fn migration_waits_for_the_universal_copy() {
     let mut s = Sandbox::new();
     s.brain("acme", Some(&["cursor"]));
-    put(&s.h(".cursor/skills/kluris-acme/SKILL.md"), &v2_skill("acme"));
+    put(
+        &s.h(".cursor/skills/kluris-acme/SKILL.md"),
+        &v2_skill("acme"),
+    );
     put(&s.h(".agents/skills"), "not a folder");
     let report = s.install();
     assert!(!report.ok());
@@ -755,9 +816,11 @@ fn report_order_is_universal_agents_deselected_migration() {
         .iter()
         .position(|r| !matches!(r, DestinationRole::Universal | DestinationRole::Agent(_)))
         .expect("cleanup");
-    assert!(roles[first_cleanup..]
-        .iter()
-        .all(|r| !matches!(r, DestinationRole::Universal | DestinationRole::Agent(_))));
+    assert!(
+        roles[first_cleanup..]
+            .iter()
+            .all(|r| !matches!(r, DestinationRole::Universal | DestinationRole::Agent(_)))
+    );
     // Cleanup entries are listed only for folders that exist.
     assert!(report.destinations.iter().all(|d| d.path.is_dir()));
 }

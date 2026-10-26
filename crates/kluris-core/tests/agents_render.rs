@@ -54,7 +54,11 @@ impl Case {
     }
 
     fn v2_workflow(&self) -> String {
-        read(&fixtures().join("v2").join(format!("{}.workflow.md", self.name)))
+        read(
+            &fixtures()
+                .join("v2")
+                .join(format!("{}.workflow.md", self.name)),
+        )
     }
 }
 
@@ -201,7 +205,11 @@ fn rendered_skill_has_no_leaked_double_braces() {
         let got = render_skill(&case.input());
         assert!(!got.contains("{{"), "case {}", case.name);
         assert!(!got.contains("}}"), "case {}", case.name);
-        assert!(got.contains("`{brain, file, target}`"), "case {}", case.name);
+        assert!(
+            got.contains("`{brain, file, target}`"),
+            "case {}",
+            case.name
+        );
     }
 }
 
@@ -231,7 +239,10 @@ fn frontmatter_fits_every_agent() {
         let got = render_skill(&case.input());
         let mut lines = got.lines();
         assert_eq!(lines.next(), Some("---"));
-        let name = lines.next().and_then(|l| l.strip_prefix("name: ")).expect("name");
+        let name = lines
+            .next()
+            .and_then(|l| l.strip_prefix("name: "))
+            .expect("name");
         assert_eq!(name, skill_name(&case.brain_name));
         assert!(name.len() <= 64);
         assert!(
@@ -286,7 +297,9 @@ fn placeholders_inside_values_are_not_expanded() {
         "The brain lives at `/srv/{git_label}/{brain_name}` (git).\n\
          Description: Uses {brain_path}, {brain_flag_hint}, {specmint_block} and {skill_name}\n"
     ));
-    assert!(got.contains("read `/h/{brain_description}/.kluris/companions/specmint-core/SKILL.md`"));
+    assert!(
+        got.contains("read `/h/{brain_description}/.kluris/companions/specmint-core/SKILL.md`")
+    );
     // The description in the frontmatter is the fixed SKILL_DESCRIPTION.
     assert_eq!(got.matches("{brain_flag_hint}").count(), 1);
     assert_eq!(got.matches("{specmint_block}").count(), 1);
@@ -325,7 +338,10 @@ fn posix_path_matches_v2() {
 
 #[test]
 fn snapshot_basic() {
-    let case = cases().into_iter().find(|c| c.name == "basic").expect("basic");
+    let case = cases()
+        .into_iter()
+        .find(|c| c.name == "basic")
+        .expect("basic");
     insta::assert_snapshot!("basic", render_skill(&case.input()));
 }
 
@@ -349,7 +365,11 @@ fn snapshot_companions_all_windows() {
 fn v3_and_v2_skills_are_recognised() {
     for case in cases() {
         let name = skill_name(&case.brain_name);
-        assert!(is_generated_skill(&name, &render_skill(&case.input())), "v3 {}", case.name);
+        assert!(
+            is_generated_skill(&name, &render_skill(&case.input())),
+            "v3 {}",
+            case.name
+        );
         assert!(is_generated_skill(&name, &case.v2()), "v2 {}", case.name);
         assert!(
             is_generated_workflow(&format!("{name}.md"), &case.v2_workflow()),
@@ -367,7 +387,8 @@ fn v1_bare_kluris_skills_are_recognised() {
     let v1_5 = "---\nname: kluris\ndescription: \"You are the team's subject matter expert. Your knowledge comes from a brain\"\n---\n\nbody\n";
     assert!(is_generated_skill("kluris", v1_0));
     assert!(is_generated_skill("kluris", v1_5));
-    let wf = "---\ndescription: You are the team's subject matter expert. Your knowledge\n---\n\nbody\n";
+    let wf =
+        "---\ndescription: You are the team's subject matter expert. Your knowledge\n---\n\nbody\n";
     assert!(is_generated_workflow("kluris.md", wf));
 }
 
