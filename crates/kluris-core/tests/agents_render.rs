@@ -207,7 +207,11 @@ const V3_COMMIT_STEP: &str = "\
    with `KLURIS_AGENT` set to your agent's name (for example
    `KLURIS_AGENT=\"Claude Code\"`) so the commit credits you. It commits those
    files and the `map.md`/`brain.md` files they change, under the human's git
-   identity, and nothing else. Then run `kluris sync{flag} --json` and report
+   identity, and nothing else. If its `left_dirty` lists files that
+   `kluris dream` changed because of this write (a reverse `related:` link,
+   a refreshed date), show them to the human and, once they agree, commit
+   them the same way; leave every other uncommitted file alone. Then run
+   `kluris sync{flag} --json` and report
    the `commit` and whether it was `pushed`. If sync reports `conflicts[]` or
    `blocked[]`, handle them as in \"Sync before you write\". If a git hook
    stops the commit, show its output to the human and fix what it reports;
@@ -419,6 +423,7 @@ fn the_write_flow_syncs_commits_and_resolves() {
             "`KLURIS_NO_AUTO_SYNC=1`".to_string(),
             "never pass `--no-verify` unless the human asks for it".to_string(),
             "Brain files never contain conflict markers".to_string(),
+            "If its `left_dirty` lists files that\n   `kluris dream` changed".to_string(),
             "### Sync before you write".to_string(),
             "a `kluris sync --brain ".to_string(),
         ] {

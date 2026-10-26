@@ -577,7 +577,11 @@ For Learn, Remember, and Create flows:
    with `KLURIS_AGENT` set to your agent's name (for example
    `KLURIS_AGENT="Claude Code"`) so the commit credits you. It commits those
    files and the `map.md`/`brain.md` files they change, under the human's git
-   identity, and nothing else. Then run `kluris sync --brain all-four --json` and report
+   identity, and nothing else. If its `left_dirty` lists files that
+   `kluris dream` changed because of this write (a reverse `related:` link,
+   a refreshed date), show them to the human and, once they agree, commit
+   them the same way; leave every other uncommitted file alone. Then run
+   `kluris sync --brain all-four --json` and report
    the `commit` and whether it was `pushed`. If sync reports `conflicts[]` or
    `blocked[]`, handle them as in "Sync before you write". If a git hook
    stops the commit, show its output to the human and fix what it reports;
