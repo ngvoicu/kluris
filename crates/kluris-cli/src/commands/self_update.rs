@@ -163,8 +163,10 @@ fn is_http_loopback(url: &str) -> bool {
     })
 }
 
-/// The newest version in the release listing; `None` when there is no
-/// release.
+/// The newest version in the release listing, every page of it, leaving out
+/// prereleases (`3.1.0-rc.1`: those install only when named with
+/// `--version`); `None` when there is none. GitHub hides drafts from anyone
+/// without push access, and `self_update`'s release carries no draft flag.
 fn newest_release(api: &Api) -> Result<Option<String>, CliError> {
     let mut builder = github::ReleaseList::configure();
     builder.repo_owner(REPO_OWNER).repo_name(REPO_NAME);
@@ -184,6 +186,9 @@ fn newest_release(api: &Api) -> Result<Option<String>, CliError> {
     let mut newest: Option<String> = None;
     for release in releases.into_vec() {
         let v = release.version();
+        if is_prerelease(v) {
+            continue;
+        }
         let newer = match &newest {
             None => semver_ok(v),
             Some(n) => self_update::version::bump_is_greater(n, v).unwrap_or(false),
@@ -193,6 +198,11 @@ fn newest_release(api: &Api) -> Result<Option<String>, CliError> {
         }
     }
     Ok(newest)
+}
+
+/// A semver prerelease: a `-` part before any `+` build metadata.
+fn is_prerelease(v: &str) -> bool {
+    v.split('+').next().unwrap_or(v).contains('-')
 }
 
 fn semver_ok(v: &str) -> bool {
@@ -411,7 +421,17 @@ fn from_serde(value: &serde_json::Value) -> Json {
 
 #[cfg(test)]
 mod tests {
-    use super::is_http_loopback;
+    use super::{is_http_loopback, is_prerelease};
+
+    #[test]
+    fn prereleases_are_the_dash_before_build_metadata() {
+        for yes in ["3.1.0-rc.1", "3.0.0-dev", "3.0.0-alpha+build-7"] {
+            assert!(is_prerelease(yes), "{yes}");
+        }
+        for no in ["3.0.0", "3.0.1+build-7", "2.28.11"] {
+            assert!(!is_prerelease(no), "{no}");
+        }
+    }
 
     #[test]
     fn loopback_is_the_host_not_a_prefix() {
