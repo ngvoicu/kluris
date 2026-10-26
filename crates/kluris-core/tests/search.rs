@@ -1011,3 +1011,111 @@ fn a_backslash_in_a_posix_file_name_is_part_of_the_name() {
         ]
     );
 }
+
+// --- T-84 finding 2: `related` through directory symlinks ---------------------------
+
+#[cfg(unix)]
+fn dir_symlink(target: &str, link: &Path) -> std::io::Result<()> {
+    std::os::unix::fs::symlink(target, link)
+}
+
+#[cfg(windows)]
+fn dir_symlink(target: &str, link: &Path) -> std::io::Result<()> {
+    std::os::windows::fs::symlink_dir(target.replace('/', "\\"), link)
+}
+
+/// A brain with `k/alias -> real/deep`, `k/out -> ../../outside` (a
+/// directory outside the brain) and `k/loop -> loop`; `None` where this
+/// machine cannot make symlinks.
+fn symlinked_brain(related: &str) -> Option<Brain> {
+    let b = Brain::new();
+    b.file(
+        "k/a.md",
+        &format!("---\nupdated: 2026-01-01\nrelated: {related}\n---\n# A\n\nquokka\n"),
+    );
+    b.file("k/real/deep/c.md", &neuron("C", "other"));
+    b.file("k/real/b.md", &neuron("Real B", "other"));
+    b.file("k/b.md", &neuron("B", "other"));
+    let outside = b.root.parent().unwrap().join("outside");
+    fs::create_dir_all(&outside).unwrap();
+    fs::write(outside.join("x.md"), neuron("X", "other")).unwrap();
+    for (target, link) in [
+        ("real/deep", "k/alias"),
+        ("../../outside", "k/out"),
+        ("loop", "k/loop"),
+    ] {
+        if let Err(e) = dir_symlink(target, &b.root.join(link)) {
+            eprintln!("skipped: cannot make symlinks here ({e})");
+            return None;
+        }
+    }
+    Some(b)
+}
+
+fn related_of(b: &Brain, file: &str) -> Vec<String> {
+    let hits = b.search("quokka");
+    hits.into_iter()
+        .find(|h| h.file == file)
+        .map(|h| h.related)
+        .unwrap_or_default()
+}
+
+#[test]
+fn related_links_follow_directory_symlinks() {
+    let Some(b) = symlinked_brain("[./alias/c.md, ./alias/../b.md]") else {
+        return;
+    };
+    // `alias/..` is `k/real`, not `k`: the link is resolved, then `..`.
+    assert_eq!(
+        related_of(&b, "k/a.md"),
+        ["k/real/deep/c.md", "k/real/b.md"]
+    );
+}
+
+#[test]
+fn related_links_that_escape_or_loop_are_left_out() {
+    let Some(b) =
+        symlinked_brain("[./out/x.md, ../../outside/x.md, ./loop/y.md, /etc/passwd, ./b.md]")
+    else {
+        return;
+    };
+    assert_eq!(related_of(&b, "k/a.md"), ["k/b.md"]);
+}
+
+#[test]
+fn the_local_store_resolves_links_on_disk() {
+    use kluris_core::brain::store::BrainStore;
+    let Some(b) = symlinked_brain("[]") else {
+        return;
+    };
+    let store = b.store();
+    assert_eq!(
+        store.resolve_link("k/a.md", "./alias/c.md").as_deref(),
+        Some("k/real/deep/c.md")
+    );
+    assert_eq!(
+        store.resolve_link("k/a.md", "./alias/../b.md").as_deref(),
+        Some("k/real/b.md")
+    );
+    assert_eq!(
+        store.resolve_link("k/a.md", "b.md").as_deref(),
+        Some("k/b.md")
+    );
+    assert_eq!(store.resolve_link("k/a.md", "./out/x.md"), None);
+    assert_eq!(store.resolve_link("k/a.md", "./loop/y.md"), None);
+    assert_eq!(store.resolve_link("k/a.md", "../../outside/x.md"), None);
+}
+
+#[test]
+fn a_store_without_files_resolves_links_by_path() {
+    let store = MemStore::new(&[
+        (
+            "k/a.md",
+            "---\nrelated: [./b.md, ../k/c.md, ../../x.md, ./b.md]\n---\n# A\n\nquokka\n",
+        ),
+        ("k/b.md", "# B\n\nother\n"),
+        ("k/c.md", "# C\n\nother\n"),
+    ]);
+    let hits = search(&store, &SearchRequest::new("quokka")).hits;
+    assert_eq!(hits[0].related, ["k/b.md", "k/c.md"]);
+}

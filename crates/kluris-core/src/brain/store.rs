@@ -51,6 +51,33 @@ pub trait BrainStore {
     fn read_neuron(&self, neuron: &Neuron) -> Result<Frontmatter, ReadError> {
         self.read(&neuron.rel)
     }
+    /// Where a link `target` written in the file at `from` (both as the
+    /// walker gives paths: brain-relative, `/`-separated) leads: the
+    /// brain-relative `/`-separated path of the target, or `None` when it
+    /// leaves the brain or cannot be resolved. Whether anything is there is
+    /// the caller's question. This default works on the paths alone (`.` and
+    /// `..` dropped lexically, an absolute target outside the brain), for a
+    /// store without files behind it.
+    fn resolve_link(&self, from: &str, target: &str) -> Option<String> {
+        let separators: &[char] = if cfg!(windows) { &['/', '\\'] } else { &['/'] };
+        if target.starts_with(separators) {
+            return None;
+        }
+        let mut parts: Vec<&str> = match from.rsplit_once('/') {
+            Some((dir, _)) => dir.split('/').collect(),
+            None => Vec::new(),
+        };
+        for part in target.split(separators) {
+            match part {
+                "" | "." => {}
+                ".." => {
+                    parts.pop()?;
+                }
+                name => parts.push(name),
+            }
+        }
+        (!parts.is_empty()).then(|| parts.join("/"))
+    }
     /// The glossary entries of `glossary.md`: none when the file does not
     /// exist, an error when its frontmatter cannot be read.
     fn glossary(&self) -> Result<Vec<GlossaryEntry>, FrontmatterError> {
@@ -121,6 +148,28 @@ impl BrainStore for LocalGitStore {
         frontmatter::read_frontmatter(&neuron.path).map_err(ReadError::File)
     }
 
+    /// On disk, as v2's deprecation check resolves `related`: the target
+    /// joined to `from`'s directory and resolved like the walker
+    /// ([`sandbox::resolve`]: symlinks followed, then `..`), kept when it is
+    /// inside the resolved brain root; a symlink loop resolves to nothing.
+    fn resolve_link(&self, from: &str, target: &str) -> Option<String> {
+        let dir = match from.rsplit_once('/') {
+            Some((dir, _)) => self.join(dir),
+            None => self.root.clone(),
+        };
+        let resolved_root = sandbox::resolve(&self.root).ok()?;
+        let resolved = sandbox::resolve(&dir.join(target)).ok()?;
+        if !sandbox::is_within(&resolved, &resolved_root) {
+            return None;
+        }
+        let rel = resolved.strip_prefix(&resolved_root).ok()?;
+        let parts: Vec<String> = rel
+            .components()
+            .map(|c| c.as_os_str().to_string_lossy().into_owned())
+            .collect();
+        (!parts.is_empty()).then(|| parts.join("/"))
+    }
+
     fn lobe_names(&self) -> Vec<String> {
         let Ok(entries) = fs::read_dir(&self.root) else {
             return Vec::new();
@@ -154,7 +203,8 @@ impl BrainStore for LocalGitStore {
 }
 
 impl LocalGitStore {
-    /// The root joined with a `/`-separated relative path.
+    /// The root joined with a `/`-separated relative path (split at `/`
+    /// only, so a `\\` in a POSIX file name stays part of it).
     fn join(&self, rel: &str) -> PathBuf {
         rel.split('/')
             .filter(|part| !part.is_empty())

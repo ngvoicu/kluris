@@ -310,24 +310,20 @@ pub fn passes_filters(item: &Item, lobe: Option<&str>, tag: Option<&str>) -> boo
 }
 
 /// The neurons an item links to through `related:`, as v2 prints paths:
-/// each string entry joined to the item's directory and normalised (`.` and
-/// `..` dropped lexically; a link that climbs out of the brain is left out),
-/// kept when it names a neuron of the store other than the item itself, at
-/// most `limit`, in order. Only the store's neuron list is consulted.
+/// each string entry resolved by the store ([`BrainStore::resolve_link`]:
+/// on disk, symlinks followed, inside the brain only), kept when it lands on
+/// a neuron of the store other than the item itself, at most `limit`, in
+/// order.
 pub fn related(store: &impl BrainStore, item: &Item, limit: usize) -> Vec<String> {
     let Some(Value::Seq(links)) = item.meta.get("related") else {
         return Vec::new();
-    };
-    let dir: Vec<&str> = match item.source.rsplit_once('/') {
-        Some((dir, _)) => dir.split('/').collect(),
-        None => Vec::new(),
     };
     let mut out: Vec<String> = Vec::new();
     for link in links.iter().filter_map(Value::as_str) {
         if out.len() >= limit {
             break;
         }
-        let Some(rel) = join_lexically(&dir, link) else {
+        let Some(rel) = store.resolve_link(&item.source, link) else {
             continue;
         };
         let shown = rendered(&rel);
@@ -339,27 +335,6 @@ pub fn related(store: &impl BrainStore, item: &Item, limit: usize) -> Vec<String
         }
     }
     out
-}
-
-/// `dir` joined with `link` (`/`-separated; `\\` too on Windows), `.` and
-/// `..` resolved without the filesystem; `None` when it leaves the brain
-/// (an absolute link included).
-fn join_lexically(dir: &[&str], link: &str) -> Option<String> {
-    let separators: &[char] = if cfg!(windows) { &['/', '\\'] } else { &['/'] };
-    if link.starts_with(separators) {
-        return None;
-    }
-    let mut parts: Vec<&str> = dir.to_vec();
-    for part in link.split(separators) {
-        match part {
-            "" | "." => {}
-            ".." => {
-                parts.pop()?;
-            }
-            name => parts.push(name),
-        }
-    }
-    (!parts.is_empty()).then(|| parts.join("/"))
 }
 
 /// `str(updated)` when the frontmatter has a non-null `updated`.
