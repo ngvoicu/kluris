@@ -78,7 +78,13 @@ fn wakeup_fixture_payload_matches_v2() {
     let store = LocalGitStore::open(&b.root);
     let w = wake_up(&store, "wakeup", "/stored/path", "Fixture");
     assert_eq!(w.name, "wakeup");
-    assert_eq!(w.path, "/stored/path");
+    // Python's `str(Path(...))` of the stored path.
+    let stored = if cfg!(windows) {
+        "\\stored\\path"
+    } else {
+        "/stored/path"
+    };
+    assert_eq!(w.path, stored);
     assert_eq!(w.description, "Fixture");
     assert_eq!(
         w.brain_md,
