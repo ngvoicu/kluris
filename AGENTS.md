@@ -29,8 +29,8 @@ vendored/             # the four Specmint companion folders (unchanged from v2)
 parity/               # uv project: the v2.28.11 oracle vs the v3 binary
 dist-workspace.toml   # dist 0.33.1: targets, installers, archives (see Release)
 about.toml, about.hbs # cargo-about config and template of THIRD_PARTY_LICENSES.md
-scripts/release/      # release tooling: pinned tools, licence report, local build, installer smoke
-.github/workflows/    # ci.yml, parity.yml, release.yml (dist's own)
+scripts/release/      # release tooling: pinned tools, licence report, local build, installer smoke, release notes
+.github/workflows/    # ci.yml, parity.yml, release.yml (dist's own), release-notes.yml
 ```
 
 Rules: synchronous code, no async runtime; no `unwrap()`/`expect()` on user
@@ -244,6 +244,18 @@ package, hence the package `kluris`.
   only its own entry and cannot bring those back.
 - **release.yml is generated:** change `dist-workspace.toml`, then
   `dist generate`; `dist plan` fails while it is stale.
+- **The release page leads with the site's install commands**
+  (`post-announce-jobs = ["./release-notes"]` in `dist-workspace.toml`):
+  after dist announces the release, `release.yml` calls
+  `.github/workflows/release-notes.yml`, which runs
+  `scripts/release/release_notes.py` on dist's plan and puts the result on
+  the release with `gh release edit --notes-file`: dist's `## Install`
+  section is swapped for the site's two short commands (and their
+  `KLURIS_VERSION` forms), the download table and the attestation notes
+  staying as dist wrote them. A body not laid out as dist 0.33.1 writes it
+  makes the script exit 1 — the release then keeps dist's body. Tests:
+  `scripts/release/test_release_notes.py` (fixture
+  `fixtures/plan-3.0.0-rc.1.json`), run in ci.yml.
 - **LF checkouts everywhere** (`.gitattributes` `* text=auto eol=lf`, ahead of
   the `-text` rules for byte-exact fixtures, templates and MRI assets).
   GitHub's Windows runners check out with `core.autocrlf=true`; without the
