@@ -18,8 +18,8 @@
 //! (PAR-036), report paths are `/`-joined (PAR-037), and files are taken in
 //! path order (PAR-008). A file that cannot be read or written is skipped,
 //! reported and makes the brain unhealthy (PAR-038); odd `related` values
-//! never crash (PAR-039); link checking skips code, other schemes and titles
-//! and reads URL-encoded paths (PAR-041).
+//! never crash (PAR-047); link checking skips code, other schemes and titles
+//! and reads URL-encoded paths (PAR-049).
 
 mod linker;
 mod links;

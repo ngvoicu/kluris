@@ -267,7 +267,7 @@ fn py_suffix(name: &str) -> &str {
 /// not linking back, or another existing `.md` file whose list `related`
 /// does not link back. v2 raises on a non-string entry and on a target
 /// outside the brain; Kluris 3 ignores both here (they are a frontmatter
-/// issue and broken synapses, PAR-039).
+/// issue and broken synapses, PAR-047).
 fn one_way_synapses<S: BrainStore>(store: &S, read: &mut Reader<'_, S>) -> Vec<OneWaySynapse> {
     let root = sandbox::resolve(store.root()).ok();
     let mut related: IndexMap<PathBuf, Vec<PathBuf>> = IndexMap::new();
@@ -369,7 +369,7 @@ pub(crate) fn orphans<S: BrainStore>(
 /// `check_frontmatter`: the required fields (markdown: `parent`, `created`,
 /// `updated`; YAML neurons: `updated`), then `related` and `tags` that are not
 /// lists, a `related` list with an entry that is not a string (where v2
-/// raises, PAR-039) and a `replaced_by` that is not a string or null.
+/// raises, PAR-047) and a `replaced_by` that is not a string or null.
 fn frontmatter_issues<S: BrainStore>(store: &S, read: &mut Reader<'_, S>) -> Vec<FrontmatterIssue> {
     let mut issues = Vec::new();
     for neuron in store.neurons() {

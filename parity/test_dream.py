@@ -717,7 +717,7 @@ def test_crlf_file_stays_crlf(sandbox):
 
 
 def test_non_string_related_entry(sandbox):
-    """PAR-039: v2's one-way check raises ``TypeError``; v3 reports a
+    """PAR-047: v2's one-way check raises ``TypeError``; v3 reports a
     ``related`` type issue."""
     resilience_brain(sandbox, {"projects/odd.md": neuron("Odd", extra="related:\n- 1\n- ./alpha.md\n")})
     register(sandbox, [sandbox.work / "brains" / "calm"])
@@ -728,7 +728,7 @@ def test_non_string_related_entry(sandbox):
 
 
 def test_related_outside_the_brain(sandbox):
-    """PAR-039: v2's one-way check raises ``ValueError`` on a target outside
+    """PAR-047: v2's one-way check raises ``ValueError`` on a target outside
     the brain; v3 counts the links as broken, not one-way."""
     resilience_brain(sandbox, {"projects/out.md": neuron("Out", extra="related:\n- ../../../outside.md\n- /etc/hosts.md\n")})
     write(sandbox.work, {"outside.md": neuron("Outside")})
@@ -741,7 +741,7 @@ def test_related_outside_the_brain(sandbox):
 
 
 def test_missing_kluris_yml(sandbox):
-    """PAR-040: v2 ends in a ``FileNotFoundError`` traceback; v3 prints a
+    """PAR-048: v2 ends in a ``FileNotFoundError`` traceback; v3 prints a
     clean error naming the file and writes nothing."""
     brain = healthy_brain(sandbox)
     (brain / "kluris.yml").unlink()
@@ -758,7 +758,7 @@ def test_missing_kluris_yml(sandbox):
 
 
 def test_link_checking(sandbox):
-    """PAR-041: v2 reports links in code, ``mailto:`` and other schemes,
+    """PAR-049: v2 reports links in code, ``mailto:`` and other schemes,
     titled links and ``%20`` paths as broken; v3 reports only the links whose
     file is missing (a missing image too, as v2)."""
     body = ("# Links\n\n```\n[fenced](./nope1.md)\n```\n\n`[inline](./nope2.md)`\n\n"

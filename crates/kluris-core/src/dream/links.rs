@@ -1,5 +1,5 @@
 //! The links dream checks in a body: v2's `parse_markdown_links` with the
-//! decided fixes (research-03 §5 #32, interview-01 #5, PAR-041):
+//! decided fixes (research-03 §5 #32, interview-01 #5, PAR-049):
 //! - links inside fenced code blocks (```` ``` ````, `~~~`) and inline code
 //!   spans are not links;
 //! - a target with a URI scheme (`mailto:`, `ftp:`, `tel:`, `file:`, ...) is

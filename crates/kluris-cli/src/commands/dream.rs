@@ -80,7 +80,7 @@ pub fn run(brain: Option<&str>, as_json: bool, broken_only: bool) -> Result<(), 
     let today = today()?;
 
     // Every brain's kluris.yml first, so a missing one stops the run before
-    // any brain is written (v2 raises midway, after earlier brains, PAR-040).
+    // any brain is written (v2 raises midway, after earlier brains, PAR-048).
     let mut configs = Vec::new();
     for brain in &brains {
         let root = py_path_str(&brain.entry.path);
