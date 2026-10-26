@@ -101,3 +101,60 @@ pub fn binary_in_archive(target: &str) -> String {
 
 /// The release checksums asset (`<hex> *<name>` lines).
 pub const SUMS_ASSET: &str = "sha256.sum";
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // dist 0.33.1's real layouts: `tar -tzf kluris-aarch64-apple-darwin.tar.gz`
+    // lists `kluris-aarch64-apple-darwin/kluris` (its installer unpacks with
+    // `--strip-components 1`); the Windows zip is flat: kluris-installer.ps1
+    // copies `$tmp\kluris.exe` straight after `Expand-Archive`, and dist's own
+    // `cargo-dist-x86_64-pc-windows-msvc.zip` has `dist.exe` at its root.
+    #[test]
+    fn the_binary_is_where_dist_puts_it() {
+        for target in [
+            "aarch64-apple-darwin",
+            "x86_64-apple-darwin",
+            "x86_64-unknown-linux-gnu",
+            "aarch64-unknown-linux-musl",
+        ] {
+            assert_eq!(binary_in_archive(target), format!("kluris-{target}/kluris"));
+            assert_eq!(archive_name(target), format!("kluris-{target}.tar.gz"));
+        }
+        for target in ["x86_64-pc-windows-msvc", "aarch64-pc-windows-msvc"] {
+            assert_eq!(binary_in_archive(target), "kluris.exe");
+            assert_eq!(archive_name(target), format!("kluris-{target}.zip"));
+        }
+    }
+
+    #[test]
+    fn the_receipt_is_where_dist_writes_it() {
+        let unix = DistEnv {
+            home: Path::new("/home/u"),
+            xdg_config_home: None,
+            local_app_data: None,
+            zdotdir: None,
+            windows: false,
+        };
+        assert_eq!(
+            unix.receipt_path(),
+            Some(PathBuf::from("/home/u/.config/kluris/kluris-receipt.json"))
+        );
+        let windows = DistEnv {
+            home: Path::new(r"C:\Users\u"),
+            local_app_data: Some(Path::new(r"C:\Users\u\AppData\Local")),
+            windows: true,
+            ..unix
+        };
+        assert_eq!(
+            windows.receipt_path(),
+            Some(
+                PathBuf::from(r"C:\Users\u\AppData\Local")
+                    .join("kluris")
+                    .join("kluris-receipt.json")
+            )
+        );
+        assert_eq!(windows.binary_name(), "kluris.exe");
+    }
+}
