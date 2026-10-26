@@ -23,7 +23,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use super::frontmatter_merge::merge_meta;
 use super::plumbing::SyncGit;
-use super::{Conflict, ConflictKind};
+use super::{Conflict, ConflictKind, ResolvedChoice};
 use crate::brain::tree_store::{Node, TreeStore};
 use crate::dream::{DreamOptions, map_changes};
 use crate::frontmatter::{self, LineEnding, line_ending, write_markdown};
@@ -181,13 +181,15 @@ enum Decided {
     Removed,
 }
 
-/// Merge `theirs` into `ours` in memory (see the module docs).
+/// Merge `theirs` into `ours` in memory (see the module docs). A path in
+/// `resolutions` takes the person's choice instead of the rules.
 pub fn merge_commits<G: SyncGit>(
     git: &G,
     repo: &Repo,
     ours: &str,
     theirs: &str,
     maps: &DreamOptions,
+    resolutions: &BTreeMap<String, ResolvedChoice>,
 ) -> Result<MergeOutcome, GitError> {
     // A criss-cross history has several merge bases. merge-tree merges with
     // a virtual base of them all; the conflict rules here take the first one
@@ -230,6 +232,23 @@ pub fn merge_commits<G: SyncGit>(
         if is_generated(path) {
             // Rebuilt below; ours (or theirs) until then, never git's merge.
             decided.insert(path.clone(), take(o.or(t)));
+            continue;
+        }
+        if let Some(choice) = resolutions.get(path.as_str()) {
+            // A person's choice (`kluris resolve`): their version, or the
+            // side's, a deletion included.
+            let chosen = match choice {
+                ResolvedChoice::Ours => take(o),
+                ResolvedChoice::Theirs => take(t),
+                ResolvedChoice::Blob(oid) => Decided::Entry(TreeEntry {
+                    rel: path.clone(),
+                    mode: o
+                        .or(t)
+                        .map_or_else(|| "100644".to_string(), |e| e.mode.clone()),
+                    oid: oid.clone(),
+                }),
+            };
+            decided.insert(path.clone(), chosen);
             continue;
         }
         if same(o, t) || same(t, b) {

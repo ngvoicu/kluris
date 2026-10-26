@@ -273,6 +273,37 @@ enum Command {
         json: bool,
     },
     #[command(
+        args_override_self = true,
+        about = "Settle an open sync conflict path by path.",
+        long_about = RESOLVE_HELP,
+        override_usage = "kluris resolve [OPTIONS] [PATH]"
+    )]
+    Resolve {
+        #[arg(value_name = "PATH")]
+        path: Option<String>,
+        /// Brain name
+        #[arg(long = "brain", value_name = "BRAIN", allow_hyphen_values = true)]
+        brain: Option<String>,
+        /// Keep this brain's version (a deletion included)
+        #[arg(long)]
+        ours: bool,
+        /// Keep the remote's version (a deletion included)
+        #[arg(long)]
+        theirs: bool,
+        /// Keep this file's content (merged by hand)
+        #[arg(long = "file", value_name = "FILE", allow_hyphen_values = true)]
+        file: Option<String>,
+        /// Drop the open conflict and change nothing else
+        #[arg(long)]
+        abort: bool,
+        /// Skip the pre-merge-commit hook
+        #[arg(long = "no-verify")]
+        no_verify: bool,
+        /// JSON output
+        #[arg(long)]
+        json: bool,
+    },
+    #[command(
         name = "self-update",
         args_override_self = true,
         about = "Update kluris to the newest release.",
@@ -433,6 +464,22 @@ repository's pre-merge-commit, post-merge and pre-push hooks run \
 
   kluris sync --brain acme
   kluris sync --brain all --json";
+
+/// `resolve` (new in v3.1).
+const RESOLVE_HELP: &str = "Settle an open sync conflict path by path.
+
+When kluris sync leaves a conflict (kluris status lists it), choose for \
+each conflicted path: --ours keeps this brain's version, --theirs the \
+remote's (a deletion included), --file the content you merged by hand \
+(checked first: its frontmatter must read). With the last path, the merge \
+is committed under your git identity, the brain moves to it and the result \
+is pushed. A file with uncommitted changes in the way stops it until you \
+commit or stash it; the choices are kept. --abort drops the open conflict \
+and changes nothing else.
+
+  kluris resolve --brain acme knowledge/auth.md --theirs
+  kluris resolve --brain acme knowledge/auth.md --file merged.md
+  kluris resolve --brain acme --abort";
 
 /// `self-update` (new in v3).
 const SELF_UPDATE_HELP: &str = "Update kluris to the newest release.
@@ -899,6 +946,25 @@ fn run(cli: Cli) -> Result<(), CliError> {
             no_verify,
             json,
         } => commands::sync::run(brain.as_deref(), no_verify, json),
+        Command::Resolve {
+            path,
+            brain,
+            ours,
+            theirs,
+            file,
+            abort,
+            no_verify,
+            json,
+        } => commands::resolve::run(&commands::resolve::Options {
+            brain: brain.as_deref(),
+            path: path.as_deref(),
+            ours,
+            theirs,
+            file: file.as_deref(),
+            abort,
+            no_verify,
+            json,
+        }),
         Command::Help { command, json } => commands::help::run(command.as_deref(), json),
     }
 }

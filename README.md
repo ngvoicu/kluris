@@ -344,6 +344,31 @@ they are), `offline`, `blocked` (uncommitted files in the way) and `refused`
 (why the brain was left alone under `--brain all`, else `null`). The exit
 code is 1 when a brain has a conflict, is blocked or was refused.
 
+### Settle a conflict
+
+`kluris status` shows an open conflict and its paths. Choose for each path:
+
+```sh
+kluris resolve --brain acme knowledge/auth.md --ours            # keep this brain's version
+kluris resolve --brain acme knowledge/oauth.md --theirs         # keep the remote's
+kluris resolve --brain acme knowledge/jwt.md --file merged.md   # keep what you merged by hand
+```
+
+`--ours` and `--theirs` keep that side's version, a deletion included.
+`--file` content is checked first: its frontmatter must read, and a YAML
+neuron needs its `#---` block. Each call records one choice; with the last
+one the merge is committed under your git identity, the brain moves to it
+(uncommitted changes in the way stop it, and the choices are kept) and the
+result is pushed, merging again if the remote moved meanwhile. If you
+committed after the conflict was found, start over with
+`kluris resolve --brain acme --abort`, which drops the open conflict and
+changes nothing else, then `kluris sync`.
+
+With `--json`, a call prints `path`, `choice`, `remaining` (the paths still
+to settle), `committed`, `commit` and `pushed`; `--abort` prints `aborted`
+and `dropped`. While a conflict is open, `kluris status --json` adds
+`sync: {blocked: true, conflicts: [...]}` to that brain.
+
 ### How the agent starts a session
 
 The first time the skill is used in a session, the agent runs
@@ -589,6 +614,7 @@ from disk or send it to a colleague.
 | `kluris mri` | Write the brain's visual map and print its link (`--brain`, `--output`) |
 | `kluris commit` | Commit only the files you name and the maps they change (`--brain`, `--paths`, `--message`, `--no-verify`) |
 | `kluris sync` | Fetch, merge and push a brain, or every brain (`--brain`, `--no-verify`) |
+| `kluris resolve <path>` | Settle an open sync conflict path by path (`--ours`, `--theirs`, `--file`, `--abort`, `--no-verify`) |
 | `kluris companion list` | The companion playbooks, which are installed, and which brains use them (`--brain`) |
 | `kluris companion add <name>` | Turn a companion on for a brain (`--brain`) |
 | `kluris companion remove <name>` | Turn a companion off for a brain (`--brain`) |

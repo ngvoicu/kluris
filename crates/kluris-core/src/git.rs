@@ -539,6 +539,9 @@ pub trait Plumbing: Git {
         entries: &[(String, String, String)],
     ) -> Result<(), GitError>;
 
+    /// Store `bytes` as a blob (`git hash-object -w`); its id.
+    fn hash_blob(&self, repo: &Repo, bytes: &[u8]) -> Result<String, GitError>;
+
     /// `git write-tree` of `index`.
     fn write_tree(&self, repo: &Repo, index: &StagingIndex) -> Result<String, GitError>;
 
@@ -918,6 +921,16 @@ impl Plumbing for SystemGit {
             info,
         )
         .map(drop)
+    }
+
+    fn hash_blob(&self, repo: &Repo, bytes: &[u8]) -> Result<String, GitError> {
+        let out = self.run_input(
+            &repo.dir,
+            None,
+            &["hash-object", "-w", "--stdin"],
+            bytes.to_vec(),
+        )?;
+        Ok(hash_line(&out))
     }
 
     fn write_tree(&self, repo: &Repo, index: &StagingIndex) -> Result<String, GitError> {

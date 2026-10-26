@@ -1,6 +1,6 @@
 //! `kluris help`: v2's command table (`cli.py:2010-2024`) without `pack`,
 //! with `mri`'s description as fixed in v2.28.11, then the commands new in
-//! v3 (PAR-064, PAR-074, PAR-075). Commands Kluris 3 has not ported yet are listed as v2 lists
+//! v3 (PAR-064, PAR-074, PAR-075, PAR-077). Commands Kluris 3 has not ported yet are listed as v2 lists
 //! them.
 
 /// One row of the table.
@@ -16,7 +16,7 @@ const fn row(name: &'static str, description: &'static str) -> CommandHelp {
 
 /// Every command: v2's, in v2's order, then v3's own (`commit` first, the
 /// installer's `self-update` and `self-uninstall` last).
-pub const COMMANDS: [CommandHelp; 16] = [
+pub const COMMANDS: [CommandHelp; 17] = [
     row("create", "Create a new brain (--type, --remote, --no-git)"),
     row("register", "Register an existing brain directory on disk"),
     row("list", "List registered brains"),
@@ -54,6 +54,10 @@ pub const COMMANDS: [CommandHelp; 16] = [
     row(
         "sync",
         "Fetch, merge and push brains; conflicts go to a person (--brain all)",
+    ),
+    row(
+        "resolve",
+        "Settle an open sync conflict path by path (--ours, --theirs, --file)",
     ),
     row(
         "self-update",

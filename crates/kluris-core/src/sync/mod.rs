@@ -24,8 +24,9 @@ pub mod fresh;
 pub mod frontmatter_merge;
 pub mod merge;
 pub mod plumbing;
+pub mod resolve;
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -232,42 +233,215 @@ fn opt(value: &Option<String>) -> Json {
     value.clone().map_or(Json::Null, Json::Str)
 }
 
-/// Record an open conflict for `kluris resolve`, atomically.
-fn write_pending(
-    path: &Path,
-    base: &Option<String>,
-    ours: &str,
-    theirs: &str,
-    conflicts: &[Conflict],
-) -> Result<(), SyncError> {
-    let conflicts = conflicts
-        .iter()
-        .map(|c| {
-            Json::Object(vec![
-                ("path".into(), Json::Str(c.path.clone())),
-                ("kind".into(), Json::Str(c.kind.as_str().into())),
-                ("base".into(), opt(&c.base)),
-                ("ours".into(), opt(&c.ours)),
-                ("theirs".into(), opt(&c.theirs)),
-            ])
-        })
-        .collect();
-    let doc = Json::Object(vec![
-        ("base".into(), opt(base)),
-        ("ours".into(), Json::Str(ours.into())),
-        ("theirs".into(), Json::Str(theirs.into())),
-        ("conflicts".into(), Json::Array(conflicts)),
-        (
-            "created".into(),
-            Json::Str(jiff::Timestamp::now().to_string()),
-        ),
-    ]);
-    if let Some(dir) = path.parent() {
-        fs::create_dir_all(dir).map_err(|e| SyncError::Pending(e.to_string()))?;
+/// One conflict as JSON (`pending.json`, `sync --json`, `status --json`).
+pub fn conflict_json(c: &Conflict) -> Json {
+    Json::Object(vec![
+        ("path".into(), Json::Str(c.path.clone())),
+        ("kind".into(), Json::Str(c.kind.as_str().into())),
+        ("base".into(), opt(&c.base)),
+        ("ours".into(), opt(&c.ours)),
+        ("theirs".into(), opt(&c.theirs)),
+    ])
+}
+
+/// What a person chose for one conflicted path ([`resolve`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ResolvedChoice {
+    /// Our side's version, a deletion included.
+    Ours,
+    /// Their side's version, a deletion included.
+    Theirs,
+    /// The person's own content, stored as this blob.
+    Blob(String),
+}
+
+impl ResolvedChoice {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ResolvedChoice::Ours => "ours",
+            ResolvedChoice::Theirs => "theirs",
+            ResolvedChoice::Blob(_) => "file",
+        }
     }
-    let mut text = to_string(&doc);
-    text.push('\n');
-    atomic::write_atomic(path, text.as_bytes()).map_err(|e| SyncError::Pending(e.to_string()))
+}
+
+/// An open sync conflict, as [`PENDING`] records it: the two commits, their
+/// merge base, the conflicts, when it was opened, and the choices made so
+/// far.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Pending {
+    pub base: Option<String>,
+    pub ours: String,
+    pub theirs: String,
+    pub conflicts: Vec<Conflict>,
+    /// RFC 3339.
+    pub created: String,
+    /// In the order they were made; one per path.
+    pub resolved: Vec<(String, ResolvedChoice)>,
+}
+
+fn str_field(value: &serde_json::Value, key: &str) -> Option<String> {
+    value.get(key)?.as_str().map(str::to_string)
+}
+
+fn opt_field(value: &serde_json::Value, key: &str) -> Option<Option<String>> {
+    match value.get(key)? {
+        serde_json::Value::Null => Some(None),
+        serde_json::Value::String(s) => Some(Some(s.clone())),
+        _ => None,
+    }
+}
+
+impl Pending {
+    /// A new conflict between `ours` and `theirs`, opened now.
+    pub fn new(base: Option<String>, ours: &str, theirs: &str, conflicts: Vec<Conflict>) -> Self {
+        Pending {
+            base,
+            ours: ours.to_string(),
+            theirs: theirs.to_string(),
+            conflicts,
+            created: jiff::Timestamp::now().to_string(),
+            resolved: Vec::new(),
+        }
+    }
+
+    /// `{base, ours, theirs, conflicts, created}`, then `resolved` once a
+    /// choice was made (`[{path, choice, blob}]`).
+    pub fn to_json(&self) -> Json {
+        let mut doc = vec![
+            ("base".into(), opt(&self.base)),
+            ("ours".into(), Json::Str(self.ours.clone())),
+            ("theirs".into(), Json::Str(self.theirs.clone())),
+            (
+                "conflicts".into(),
+                Json::Array(self.conflicts.iter().map(conflict_json).collect()),
+            ),
+            ("created".into(), Json::Str(self.created.clone())),
+        ];
+        if !self.resolved.is_empty() {
+            let items = self
+                .resolved
+                .iter()
+                .map(|(path, choice)| {
+                    let blob = match choice {
+                        ResolvedChoice::Blob(oid) => Json::Str(oid.clone()),
+                        _ => Json::Null,
+                    };
+                    Json::Object(vec![
+                        ("path".into(), Json::Str(path.clone())),
+                        ("choice".into(), Json::Str(choice.as_str().into())),
+                        ("blob".into(), blob),
+                    ])
+                })
+                .collect();
+            doc.push(("resolved".into(), Json::Array(items)));
+        }
+        Json::Object(doc)
+    }
+
+    /// The pending state from its JSON; `None` when it is not one.
+    pub fn parse(text: &str) -> Option<Pending> {
+        let doc: serde_json::Value = serde_json::from_str(text).ok()?;
+        let kind = |k: &str| match k {
+            "content" => Some(ConflictKind::Content),
+            "delete_edit" => Some(ConflictKind::DeleteEdit),
+            "parent" => Some(ConflictKind::Parent),
+            "frontmatter" => Some(ConflictKind::Frontmatter),
+            _ => None,
+        };
+        let mut conflicts = Vec::new();
+        for c in doc.get("conflicts")?.as_array()? {
+            conflicts.push(Conflict {
+                path: str_field(c, "path")?,
+                kind: kind(c.get("kind")?.as_str()?)?,
+                base: opt_field(c, "base")?,
+                ours: opt_field(c, "ours")?,
+                theirs: opt_field(c, "theirs")?,
+            });
+        }
+        let mut resolved = Vec::new();
+        if let Some(items) = doc.get("resolved").and_then(|r| r.as_array()) {
+            for item in items {
+                let choice = match item.get("choice")?.as_str()? {
+                    "ours" => ResolvedChoice::Ours,
+                    "theirs" => ResolvedChoice::Theirs,
+                    "file" => ResolvedChoice::Blob(str_field(item, "blob")?),
+                    _ => return None,
+                };
+                resolved.push((str_field(item, "path")?, choice));
+            }
+        }
+        Some(Pending {
+            base: opt_field(&doc, "base")?,
+            ours: str_field(&doc, "ours")?,
+            theirs: str_field(&doc, "theirs")?,
+            conflicts,
+            created: str_field(&doc, "created").unwrap_or_default(),
+            resolved,
+        })
+    }
+
+    /// Write it to `path` atomically.
+    pub fn write(&self, path: &Path) -> Result<(), SyncError> {
+        if let Some(dir) = path.parent() {
+            fs::create_dir_all(dir).map_err(|e| SyncError::Pending(e.to_string()))?;
+        }
+        let mut text = to_string(&self.to_json());
+        text.push('\n');
+        atomic::write_atomic(path, text.as_bytes()).map_err(|e| SyncError::Pending(e.to_string()))
+    }
+}
+
+/// The uncommitted files (in `dirty`) that moving from `ours` to `target`
+/// would overwrite, and the untracked or ignored files a new file would
+/// land on.
+pub(crate) fn blocked_paths<G: SyncGit>(
+    git: &G,
+    repo: &crate::git::Repo,
+    root: &Path,
+    dirty: &[String],
+    ours: &str,
+    target: &str,
+) -> Result<Vec<String>, GitError> {
+    let dirty: BTreeSet<&String> = dirty.iter().collect();
+    let incoming = git.diff_names(repo, ours, target)?;
+    let tracked = git.tracked(repo, ours, &incoming)?;
+    Ok(incoming
+        .into_iter()
+        .filter(|path| {
+            dirty.contains(path) || (!tracked.contains(path) && exists_on_disk(root, path))
+        })
+        .collect())
+}
+
+/// The merge commit of the tree in `index` on `ours` and `theirs`, after
+/// the `pre-merge-commit` hook (unless `no_verify`), as git merge makes it.
+pub(crate) fn commit_merge<G: SyncGit>(
+    git: &G,
+    repo: &crate::git::Repo,
+    index: &crate::git::StagingIndex,
+    parents: [&str; 2],
+    message: &str,
+    no_verify: bool,
+) -> Result<String, SyncError> {
+    if !no_verify {
+        match git.run_hook(repo, Some(index), "pre-merge-commit", &[])? {
+            0 => {}
+            code => {
+                return Err(SyncError::Hook {
+                    name: "pre-merge-commit",
+                    code,
+                });
+            }
+        }
+    }
+    // The hook may have changed the index, as with git merge.
+    let tree = git.write_tree(repo, index)?;
+    let file = git.git_dir_path(repo, &format!("KLURIS_MERGE_MSG-{}", std::process::id()))?;
+    fs::write(&file, message).map_err(|e| SyncError::Pending(e.to_string()))?;
+    let commit = git.commit_tree(repo, &tree, &parents, &file);
+    let _ = fs::remove_file(&file);
+    Ok(commit?)
 }
 
 /// Sync the brain at `root` (see the module docs).
@@ -298,8 +472,6 @@ pub fn sync<G: SyncGit>(
         report.offline = true;
         return Ok(report);
     };
-    let dirty: BTreeSet<&String> = report.skipped_dirty.iter().collect();
-    let mut blocked = Vec::new();
 
     for _ in 0..PUSH_ATTEMPTS {
         let deadline = Instant::now() + request.network_time_limit;
@@ -319,9 +491,10 @@ pub fn sync<G: SyncGit>(
         if behind {
             // The tree the branch will hold: theirs, or the merge.
             let (target, merge) = if ahead {
-                match merge_commits(git, &repo, &ours, &theirs, &request.maps)? {
+                let none = BTreeMap::new();
+                match merge_commits(git, &repo, &ours, &theirs, &request.maps, &none)? {
                     MergeOutcome::Conflicts { base, conflicts } => {
-                        write_pending(&pending, &base, &ours, &theirs, &conflicts)?;
+                        Pending::new(base, &ours, &theirs, conflicts.clone()).write(&pending)?;
                         report.conflicts = conflicts;
                         return Ok(report);
                     }
@@ -334,13 +507,7 @@ pub fn sync<G: SyncGit>(
             } else {
                 (theirs.clone(), None)
             };
-            let incoming = git.diff_names(&repo, &ours, &target)?;
-            let tracked = git.tracked(&repo, &ours, &incoming)?;
-            for path in &incoming {
-                if dirty.contains(path) || (!tracked.contains(path) && exists_on_disk(root, path)) {
-                    blocked.push(path.clone());
-                }
-            }
+            let blocked = blocked_paths(git, &repo, root, &report.skipped_dirty, &ours, &target)?;
             if !blocked.is_empty() {
                 report.blocked = blocked;
                 return Ok(report);
@@ -348,24 +515,14 @@ pub fn sync<G: SyncGit>(
             let to = match merge {
                 None => theirs.clone(),
                 Some((index, auto_merged)) => {
-                    if !request.no_verify {
-                        match git.run_hook(&repo, Some(&index), "pre-merge-commit", &[])? {
-                            0 => {}
-                            code => {
-                                return Err(SyncError::Hook {
-                                    name: "pre-merge-commit",
-                                    code,
-                                });
-                            }
-                        }
-                    }
-                    // The hook may have changed the index, as with git merge.
-                    let tree = git.write_tree(&repo, &index)?;
-                    let file = git
-                        .git_dir_path(&repo, &format!("KLURIS_MERGE_MSG-{}", std::process::id()))?;
-                    fs::write(&file, MESSAGE).map_err(|e| SyncError::Pending(e.to_string()))?;
-                    let commit = git.commit_tree(&repo, &tree, &[&ours, &theirs], &file);
-                    let _ = fs::remove_file(&file);
+                    let commit = commit_merge(
+                        git,
+                        &repo,
+                        &index,
+                        [&ours, &theirs],
+                        MESSAGE,
+                        request.no_verify,
+                    );
                     for path in auto_merged {
                         if !report.auto_merged.contains(&path) {
                             report.auto_merged.push(path);

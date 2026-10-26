@@ -10,6 +10,7 @@ pub mod list;
 pub mod mri;
 pub mod register;
 pub mod remove;
+pub mod resolve;
 pub mod search;
 pub mod self_uninstall;
 pub mod self_update;

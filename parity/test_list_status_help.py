@@ -34,6 +34,8 @@ V3_ONLY = [
     ("commit", "Commit approved brain files and the maps they change (--paths)"),
     # PAR-074: v3.1's git auto-sync.
     ("sync", "Fetch, merge and push brains; conflicts go to a person (--brain all)"),
+    # PAR-077: v3.1's git auto-sync.
+    ("resolve", "Settle an open sync conflict path by path (--ours, --theirs, --file)"),
     ("self-update", "Update kluris to the newest release (--check only looks)"),
     ("self-uninstall", "Remove the installed kluris (--purge: also ~/.kluris and Kluris skills)"),
 ]
@@ -143,6 +145,30 @@ def test_status_json_matches_v2(sandbox, history_brain):
     assert status["lobes"] == 2 and status["neurons"] == 4, status
     assert status["recent_commits"] == [f"update {i}" for i in range(11, 1, -1)], "ten newest"
     assert status["uncommitted"] == "" and status["git_enabled"] is True
+
+
+def test_status_shows_an_open_sync_conflict(sandbox: Sandbox):
+    """PAR-076: with a sync conflict open (``.git/kluris-sync/pending.json``,
+    which v2 never reads), v3's entry ends with ``sync``; the rest is v2's."""
+    brain = init(sandbox, sandbox.work / "brains" / "demo")
+    commit(sandbox, brain, "brain: initialize demo", brain_files())
+    register(sandbox, [("demo", brain)])
+    pending = brain / ".git" / "kluris-sync" / "pending.json"
+    pending.parent.mkdir(parents=True)
+    conflict = {"path": "lobe/a.md", "kind": "content", "base": "1" * 40, "ours": "2" * 40,
+                "theirs": "3" * 40}
+    pending.write_text(json.dumps({"base": "a" * 40, "ours": "b" * 40, "theirs": "c" * 40,
+                                   "conflicts": [conflict], "created": "2026-01-01T00:00:00Z"}),
+                       encoding="utf-8")
+    r = run(sandbox, "status", "--json")
+    assert r["v2"].code == r["v3"].code == 0, (r["v2"].stderr, r["v3"].stderr)
+    j2, j3 = json.loads(r["v2"].stdout), json.loads(r["v3"].stdout)
+    entry = only_brain(j3)
+    assert list(entry)[-1] == "sync"
+    assert entry.pop("sync") == {"blocked": True, "conflicts": [conflict]}
+    assert j3 == j2
+    text = run(sandbox, "status")["v3"].stdout
+    assert "  Sync: blocked by 1 conflict; settle it with kluris resolve\n    content: lobe/a.md\n" in text
 
 
 def test_status_text_matches_v2(sandbox, history_brain):
