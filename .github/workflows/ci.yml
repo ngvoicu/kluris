@@ -29,7 +29,7 @@ jobs:
         with:
           persist-credentials: false
       # The toolchain rust-toolchain.toml pins, with rustfmt and clippy.
-      - run: rustup toolchain install
+      - run: rustup toolchain install --no-self-update
       - run: cargo fmt --all --check
 
   test:
@@ -43,7 +43,7 @@ jobs:
       - uses: actions/checkout@v6
         with:
           persist-credentials: false
-      - run: rustup toolchain install
+      - run: rustup toolchain install --no-self-update
       - uses: Swatinem/rust-cache@v2
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
@@ -54,7 +54,7 @@ jobs:
       - uses: actions/checkout@v6
         with:
           persist-credentials: false
-      - run: rustup toolchain install
+      - run: rustup toolchain install --no-self-update
       - run: rustup component add llvm-tools-preview
       - uses: taiki-e/install-action@v2
         with:
@@ -69,7 +69,7 @@ jobs:
       - uses: actions/checkout@v6
         with:
           persist-credentials: false
-      - run: rustup toolchain install
+      - run: rustup toolchain install --no-self-update
       # THIRD_PARTY_LICENSES.md matches the crates in Cargo.lock.
       - run: scripts/release/licenses.sh --check
 
@@ -79,7 +79,7 @@ jobs:
       - uses: actions/checkout@v6
         with:
           persist-credentials: false
-      - run: rustup toolchain install
+      - run: rustup toolchain install --no-self-update
       - name: dist plan (8 targets, installers, archives) and release.yml up to date
         run: |
           dist=$(scripts/release/tool.sh dist)
@@ -104,7 +104,7 @@ jobs:
           repository: ngvoicu/kluris-site
           path: site
           persist-credentials: false
-      - run: rustup toolchain install
+      - run: rustup toolchain install --no-self-update
       - uses: Swatinem/rust-cache@v2
       - name: build a local release and install it (macOS, Linux)
         if: runner.os != 'Windows'
