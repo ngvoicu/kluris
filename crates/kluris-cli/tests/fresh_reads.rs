@@ -372,7 +372,8 @@ fn the_brain_is_fetched_at_most_once_a_minute() {
     w.teammate_pushes("zebra", "zebras");
     assert_eq!(w.wake_up()["total_neurons"], 1, "fetched seconds ago");
     assert!(w.search_files("zebras").is_empty());
-    w.set_stamp_age(59);
+    // Well inside the minute: kluris's clock runs a little after the test's.
+    w.set_stamp_age(50);
     assert_eq!(w.wake_up()["total_neurons"], 1);
     w.set_stamp_age(61);
     assert_eq!(w.wake_up()["total_neurons"], 2);

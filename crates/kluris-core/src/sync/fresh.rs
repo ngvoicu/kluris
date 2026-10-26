@@ -301,9 +301,17 @@ pub fn prompt_env(
     env
 }
 
-/// Settings for every git run of the step: no automatic maintenance (it may
-/// outlive the step and would be killed with it).
-const NO_MAINTENANCE: [&str; 4] = ["-c", "maintenance.auto=false", "-c", "gc.auto=0"];
+/// Settings for the git runs that could start a background process (which
+/// would be killed with the step): no automatic maintenance, no fsmonitor
+/// daemon.
+const NO_BACKGROUND: [&str; 6] = [
+    "-c",
+    "maintenance.auto=false",
+    "-c",
+    "gc.auto=0",
+    "-c",
+    "core.fsmonitor=false",
+];
 
 impl SystemGit {
     fn bounded(
@@ -349,8 +357,8 @@ impl SystemGit {
         }
     }
 
-    fn with_no_maintenance<'a>(args: &[&'a str]) -> Vec<&'a str> {
-        NO_MAINTENANCE
+    fn with_no_background<'a>(args: &[&'a str]) -> Vec<&'a str> {
+        NO_BACKGROUND
             .iter()
             .copied()
             .chain(args.iter().copied())
@@ -442,12 +450,8 @@ impl FreshGit for SystemGit {
         let configured =
             ssh_command.status.success() && !ssh_command.stdout.trim_ascii().is_empty();
         let env = prompt_env(|key| self.env_var(key), configured);
-        let args = SystemGit::with_no_maintenance(&[
-            "fetch",
-            "--quiet",
-            "--no-recurse-submodules",
-            remote,
-        ]);
+        let args =
+            SystemGit::with_no_background(&["fetch", "--quiet", "--no-recurse-submodules", remote]);
         self.checked(dir, &args, &env, deadline).map(drop)
     }
 
@@ -472,7 +476,7 @@ impl FreshGit for SystemGit {
     }
 
     fn fast_forward(&self, dir: &Path, to: &str, deadline: Instant) -> Result<(), FreshError> {
-        let args = SystemGit::with_no_maintenance(&["merge", "--ff-only", "--quiet", to]);
+        let args = SystemGit::with_no_background(&["merge", "--ff-only", "--quiet", to]);
         self.checked(dir, &args, &[], deadline).map(drop)
     }
 }

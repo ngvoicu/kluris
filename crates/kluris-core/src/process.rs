@@ -262,6 +262,39 @@ mod tests {
         assert!(started.elapsed() < Duration::from_secs(5), "{result:?}");
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn past_the_deadline_the_whole_job_is_killed() {
+        // outer.bat starts inner.bat in the background and waits; inner.bat
+        // marks that it runs, then, 5 s later, that it survived.
+        let dir = tempfile::TempDir::new().unwrap();
+        std::fs::write(
+            dir.path().join("inner.bat"),
+            "@echo off\r\necho x> \"%~dp0started\"\r\nping -n 6 127.0.0.1 >nul\r\necho y> \"%~dp0survived\"\r\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("outer.bat"),
+            "@echo off\r\nstart \"\" /B cmd /C \"%~dp0inner.bat\"\r\nping -n 30 127.0.0.1 >nul\r\n",
+        )
+        .unwrap();
+        let mut cmd = Command::new("cmd");
+        cmd.arg("/C").arg(dir.path().join("outer.bat"));
+        let started = Instant::now();
+        let result = run_until(cmd, started + Duration::from_secs(2));
+        assert!(matches!(result, Err(RunError::TimedOut)), "{result:?}");
+        assert!(started.elapsed() < Duration::from_secs(4));
+        thread::sleep(Duration::from_secs(7));
+        assert!(
+            dir.path().join("started").exists(),
+            "inner.bat never ran: the test proves nothing"
+        );
+        assert!(
+            !dir.path().join("survived").exists(),
+            "the grandchild outlived the deadline"
+        );
+    }
+
     #[test]
     fn a_missing_program_is_a_spawn_error() {
         let result = run_until(
