@@ -45,6 +45,7 @@ fn spec<'a>(parity: bool, cargo_args: &'a [String]) -> Spec<'a> {
         channel: "1.99.0",
         jobs: 2,
         parity,
+        parity_files: &[],
         cargo_args,
     }
 }
@@ -68,6 +69,7 @@ mod words_of_the_command {
             Options {
                 machine: None,
                 parity: false,
+                parity_files: vec![],
                 cargo_args: vec![],
             }
         );
@@ -110,6 +112,72 @@ mod words_of_the_command {
         ] {
             let refused = options::parse(&words(line)).expect_err(line);
             assert!(refused.contains(says), "{line:?}: {refused}");
+        }
+    }
+
+    #[test]
+    fn parity_files_need_parity_and_take_paths() {
+        let options = run_of("--parity --parity-files parity/test_smoke.py");
+        assert_eq!(options.parity_files, words("parity/test_smoke.py"));
+        let options =
+            run_of("--parity-files parity/a.py,parity/b.py --parity --parity-files parity/c.py");
+        assert_eq!(
+            options.parity_files,
+            words("parity/a.py parity/b.py parity/c.py"),
+            "repeated and comma-separated both collect, in the order given"
+        );
+        assert_eq!(
+            run_of("--parity --parity-files=parity/test_dream.py").parity_files,
+            words("parity/test_dream.py"),
+            "the = spelling too"
+        );
+        let options = run_of("--parity --parity-files parity/a.py -- -p kluris-core");
+        assert_eq!(options.parity_files, words("parity/a.py"));
+        assert_eq!(options.cargo_args, words("-p kluris-core"));
+        for (line, says) in [
+            ("--parity-files parity/test_smoke.py", "--parity"),
+            ("--parity --parity-files", "takes"),
+            ("--parity --parity-files --machine zeewin", "takes"),
+            ("--parity --parity-files=", "takes"),
+            ("--parity --parity-files parity/a.py,", "takes"),
+        ] {
+            let refused = options::parse(&words(line)).expect_err(line);
+            assert!(refused.contains(says), "{line:?}: {refused}");
+        }
+    }
+
+    #[test]
+    fn parity_files_are_checked_against_the_tree() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        fs::create_dir_all(root.join("parity").join("sub")).unwrap();
+        fs::write(root.join("parity").join("test_x.py"), "x").unwrap();
+        fs::write(root.join("parity").join("sub").join("test_y.py"), "y").unwrap();
+        fs::write(root.join("parity").join("notes.txt"), "n").unwrap();
+        let given = |files: &str| -> Vec<String> { files.split(' ').map(str::to_owned).collect() };
+        assert_eq!(
+            options::checked_parity_files(root, &given("parity/test_x.py parity/sub/test_y.py"))
+                .unwrap(),
+            words("parity/test_x.py parity/sub/test_y.py"),
+            "files under parity/ in subfolders count too"
+        );
+        assert!(
+            options::checked_parity_files(root, &[]).unwrap().is_empty(),
+            "no --parity-files is no check"
+        );
+        for (file, says) in [
+            ("test_x.py", "under parity/"),
+            ("src/test_x.py", "under parity/"),
+            ("parity/../outside.py", "under parity/"),
+            ("parity/", "under parity/"),
+            ("/parity/test_x.py", "under parity/"),
+            ("parity/notes.txt", ".py"),
+            ("parity/missing.py", "not in this tree"),
+            ("parity", "under parity/"),
+        ] {
+            let refused = options::checked_parity_files(root, &given(file)).expect_err(file);
+            assert!(refused.contains(says), "{file}: {refused}");
+            assert!(refused.contains("--parity-files"), "{file}: {refused}");
         }
     }
 }
@@ -614,6 +682,33 @@ mod scripts {
     }
 
     #[test]
+    fn the_parity_step_runs_the_files_parity_files_named() {
+        let files = words("parity/test_smoke.py parity/test_dream.py");
+        let text = script::run_script(&Spec {
+            parity_files: &files,
+            ..spec(true, &[])
+        });
+        assert!(
+            text.contains(
+                "Invoke-Step 'parity' 90 $uv 'run --project parity --locked pytest parity/test_smoke.py parity/test_dream.py -q'"
+            ),
+            "{text}"
+        );
+        assert!(
+            !text.contains("pytest parity -q"),
+            "the named files replace the whole-suite argument: {text}"
+        );
+        // With none named the whole suite runs, as before.
+        let text = script::run_script(&spec(true, &[]));
+        assert!(
+            text.contains(
+                "Invoke-Step 'parity' 90 $uv 'run --project parity --locked pytest parity -q'"
+            ),
+            "{text}"
+        );
+    }
+
+    #[test]
     fn old_runs_are_swept_under_the_lock() {
         let text = script::run_script(&spec(false, &[]));
         assert!(text.contains("(Get-Date).AddDays(-1)"), "{text}");
@@ -758,16 +853,24 @@ mod runs {
         err: String,
         fake: Fake,
         packed: Vec<PathBuf>,
+        run_script: String,
     }
 
     fn ran(options: Options, answers: Vec<Answer>) -> Ran {
+        let dir = tempfile::tempdir().unwrap();
+        ran_rooted(dir.path(), options, answers)
+    }
+
+    fn ran_rooted(root: &Path, options: Options, answers: Vec<Answer>) -> Ran {
         let mut fake = Fake::new(answers);
         let mut out = Vec::new();
         let mut err = Vec::new();
         let mut packed = Vec::new();
+        let mut run_script = String::new();
         let code = {
-            let mut pack = |tarball: &Path, run_script: &str| -> Result<String, String> {
-                assert!(run_script.contains("Invoke-Step 'cargo-test'"));
+            let mut pack = |tarball: &Path, script: &str| -> Result<String, String> {
+                assert!(script.contains("Invoke-Step 'cargo-test'"));
+                run_script = script.to_owned();
                 packed.push(tarball.to_path_buf());
                 fs::write(tarball, b"tarball").map_err(|e| e.to_string())?;
                 Ok("5f54983aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into())
@@ -779,6 +882,7 @@ mod runs {
                 stop: &|| false,
                 channel: "1.99.0".into(),
                 pack: &mut pack,
+                root,
             };
             run::windows(&options, &mut ctx)
         };
@@ -788,6 +892,7 @@ mod runs {
             err: String::from_utf8(err).unwrap(),
             fake,
             packed,
+            run_script,
         }
     }
 
@@ -795,6 +900,7 @@ mod runs {
         Options {
             machine: Some(name),
             parity,
+            parity_files: vec![],
             cargo_args: vec![],
         }
     }
@@ -897,11 +1003,64 @@ mod runs {
     }
 
     #[test]
+    fn a_refused_parity_file_sends_nothing() {
+        let ran = ran(
+            Options {
+                machine: Some(Name::Zeewin),
+                parity: true,
+                parity_files: words("parity/not_there.py"),
+                cargo_args: vec![],
+            },
+            vec![],
+        );
+        assert_eq!(ran.code, 1);
+        assert!(
+            ran.err.contains("--parity-files") && ran.err.contains("parity/not_there.py"),
+            "{}",
+            ran.err
+        );
+        assert!(
+            ran.fake.calls.is_empty() && ran.packed.is_empty(),
+            "refused before the machine is even asked: {:?}",
+            ran.fake.called()
+        );
+    }
+
+    #[test]
+    fn the_parity_files_reach_the_remote_pytest_line() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        fs::create_dir_all(root.join("parity")).unwrap();
+        fs::write(root.join("parity").join("test_smoke.py"), "x").unwrap();
+        let ran = ran_rooted(
+            root,
+            Options {
+                machine: Some(Name::Zeewin),
+                parity: true,
+                parity_files: words("parity/test_smoke.py"),
+                cargo_args: vec![],
+            },
+            vec![
+                said(0, ""),
+                Answer::Stream(vec![(Stream::Out, PASSED)], Ok(Streamed::Exited(Some(0)))),
+            ],
+        );
+        assert_eq!(ran.code, 0, "{}", ran.err);
+        assert!(
+            ran.run_script
+                .contains("$uv 'run --project parity --locked pytest parity/test_smoke.py -q'"),
+            "{}",
+            ran.run_script
+        );
+    }
+
+    #[test]
     fn no_machine_takes_zeewin_when_zeewin2_is_held() {
         let ran = ran(
             Options {
                 machine: None,
                 parity: false,
+                parity_files: vec![],
                 cargo_args: vec![],
             },
             vec![

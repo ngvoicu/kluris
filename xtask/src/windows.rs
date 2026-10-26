@@ -3,7 +3,7 @@
 //! over ssh, the way ConsensFlow's `cargo xtask windows` runs its own.
 //!
 //! ```text
-//! cargo xtask windows --machine zeewin|zeewin2 [--parity] [-- <extra cargo test args>]
+//! cargo xtask windows --machine zeewin|zeewin2 [--parity [--parity-files f.py[,...]]] [-- <extra cargo test args>]
 //! ```
 //!
 //! A run, in order:
@@ -33,7 +33,9 @@
 //!    bound: the tree's Rust toolchain into Kluris's own `RUSTUP_HOME`,
 //!    `cargo test --workspace --no-fail-fast`, and with `--parity` uv (fetched once, its hash
 //!    checked), a release `kluris.exe` and the parity harness with
-//!    `KLURIS_V3_BIN` pointing at it. Tools and caches live under
+//!    `KLURIS_V3_BIN` pointing at it (`--parity-files` narrows the harness to
+//!    those `parity/*.py` files, checked against the worktree before anything
+//!    is sent). Tools and caches live under
 //!    `%USERPROFILE%\.kluris-ci\` (`tools\`, `cache\target` as
 //!    `CARGO_TARGET_DIR`, `cache\oracle`, ...); PATH changes for the run's own
 //!    process only.
@@ -97,6 +99,7 @@ pub fn main(args: &[String]) -> ExitCode {
         stop: &|| stopped.load(Ordering::SeqCst),
         channel,
         pack: &mut pack,
+        root,
     };
     let code = run::windows(&options, &mut ctx);
     ExitCode::from(u8::try_from(code).unwrap_or(1))

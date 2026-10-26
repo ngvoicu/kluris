@@ -96,6 +96,9 @@ pub struct Spec<'a> {
     /// `CARGO_BUILD_JOBS` on this machine.
     pub jobs: u32,
     pub parity: bool,
+    /// The `parity/*.py` files `--parity-files` named (already checked); empty:
+    /// the whole suite.
+    pub parity_files: &'a [String],
     /// Appended to `cargo test --workspace --no-fail-fast`.
     pub cargo_args: &'a [String],
 }
@@ -228,6 +231,19 @@ pub fn run_script(spec: &Spec) -> String {
         spec.channel
     );
     let parity = if spec.parity {
+        let mut pytest = vec![
+            "run".to_owned(),
+            "--project".to_owned(),
+            "parity".to_owned(),
+            "--locked".to_owned(),
+            "pytest".to_owned(),
+        ];
+        if spec.parity_files.is_empty() {
+            pytest.push("parity".to_owned());
+        } else {
+            pytest.extend(spec.parity_files.iter().cloned());
+        }
+        pytest.push("-q".to_owned());
         fill(
             PARITY_TEMPLATE,
             &[
@@ -236,6 +252,7 @@ pub fn run_script(spec: &Spec) -> String {
                 ("uv_sha256", UV_SHA256),
                 ("release", &RELEASE_BUILD.minutes.to_string()),
                 ("parity", &PARITY.minutes.to_string()),
+                ("pytest", &quoted(&command_line(&pytest))),
             ],
         )
     } else {
@@ -464,7 +481,7 @@ if (Test-Path -LiteralPath $uv -PathType Leaf) {
   $env:KLURIS_V3_BIN = Join-Path $env:CARGO_TARGET_DIR 'release\kluris.exe'
   $env:Path = "$uvdir;" + $env:Path
   Invoke-Step 'release-build' «release» $cargo 'build --release --package kluris-cli'
-  if ($state.last -eq 0) { Invoke-Step 'parity' «parity» $uv 'run --project parity --locked pytest parity -q' }
+  if ($state.last -eq 0) { Invoke-Step 'parity' «parity» $uv «pytest» }
 }
 "##;
 

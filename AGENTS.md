@@ -57,6 +57,7 @@ has the whole design):
 cargo xtask windows --machine zeewin --parity     # cargo test --workspace --no-fail-fast, then parity
 cargo xtask windows --machine zeewin2 -- -p kluris-core   # extra cargo test args after --
 cargo xtask windows --parity                      # zeewin2 if free and allowed, else zeewin
+cargo xtask windows --parity --parity-files parity/test_smoke.py   # only that parity file
 ```
 
 - **Machines.** `zeewin` (AGV-COMPUTE1, `ssh zeewin`, short of memory: builds
@@ -105,7 +106,10 @@ cargo xtask windows --parity                      # zeewin2 if free and allowed,
 - **Parity on Windows.** v2.28.11 runs there as the oracle (the hash-pinned
   `parity/oracle.lock` has the `win_amd64` wheels) against the release
   `kluris.exe` (`KLURIS_V3_BIN`). The harness reads CRLF in stdout/stderr as
-  LF (PAR-004).
+  LF (PAR-004). `--parity-files parity/test_x.py[,parity/test_y.py]`
+  (repeatable, needs `--parity`) runs `pytest` on those files alone instead
+  of the whole suite: each must be a `parity/*.py` file in this worktree,
+  checked before anything is sent.
 
 ## Parity rule
 

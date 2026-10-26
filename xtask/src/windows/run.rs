@@ -8,7 +8,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use super::machine::{self, Machine, Ready};
-use super::options::Options;
+use super::options::{self, Options};
 use super::remote::{Call, Runner, Stream, Streamed};
 use super::script::{self, EXIT_MARK, STEP_MARK, Spec, TREE_MARK};
 
@@ -43,6 +43,8 @@ pub struct Ctx<'a> {
     pub channel: String,
     /// Writes the tarball (with the run script in it) and answers the commit.
     pub pack: &'a mut dyn FnMut(&Path, &str) -> Result<String, String>,
+    /// The worktree, for the `--parity-files` check before anything is sent.
+    pub root: &'a Path,
 }
 
 /// Runs `options` and answers the status this command ends with.
@@ -57,6 +59,7 @@ pub fn windows(options: &Options, ctx: &mut Ctx) -> i32 {
 }
 
 fn go(options: &Options, ctx: &mut Ctx) -> Result<i32, String> {
+    let parity_files = options::checked_parity_files(ctx.root, &options.parity_files)?;
     let machine = match options.machine {
         Some(name) => Machine::named(name),
         None => {
@@ -83,6 +86,7 @@ fn go(options: &Options, ctx: &mut Ctx) -> Result<i32, String> {
         channel: &ctx.channel,
         jobs: machine.jobs,
         parity: options.parity,
+        parity_files: &parity_files,
         cargo_args: &options.cargo_args,
     };
     let bootstrap = script::powershell_line(&script::bootstrap(&id))?;
