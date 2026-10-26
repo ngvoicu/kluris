@@ -3,10 +3,8 @@
 
 use std::fs;
 
-use kluris_core::git::SystemGit;
 use kluris_core::sync::merge::merge_markdown;
-use kluris_core::sync::{ConflictKind, PENDING, SyncError, SyncRequest, check_git, sync};
-use tempfile::TempDir;
+use kluris_core::sync::{ConflictKind, PENDING, SyncError, SyncRequest, sync};
 
 mod common;
 
@@ -579,8 +577,10 @@ fn a_merge_in_progress_is_refused() {
 #[cfg(unix)]
 #[test]
 fn an_older_git_is_a_clean_error() {
+    use kluris_core::git::SystemGit;
+    use kluris_core::sync::check_git;
     use std::os::unix::fs::PermissionsExt;
-    let dir = TempDir::new().unwrap();
+    let dir = tempfile::TempDir::new().unwrap();
     let fake = dir.path().join("git");
     fs::write(&fake, "#!/bin/sh\necho 'git version 2.37.9'\n").unwrap();
     fs::set_permissions(&fake, fs::Permissions::from_mode(0o755)).unwrap();
