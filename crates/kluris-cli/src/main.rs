@@ -23,7 +23,7 @@ use crate::output::human;
 #[derive(Debug, Parser)]
 #[command(
     name = "kluris",
-    version = "3.0.0-dev",
+    version,
     about = "Kluris — Turn AI agents into team subject matter experts.",
     override_usage = ROOT_USAGE,
     arg_required_else_help = true
