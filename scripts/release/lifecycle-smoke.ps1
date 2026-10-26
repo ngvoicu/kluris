@@ -121,11 +121,17 @@ function Last-Json($run, [string]$what) {
     $last = @($run.Out -split "`r?`n" | Where-Object { $_.Trim() })[-1]
     try { return $last | ConvertFrom-Json } catch { throw "$what printed no JSON (exit $($run.Code)): stdout [$($run.Out)] stderr [$($run.Err)]" }
 }
-# Every file under the sandbox with its SHA-256.
+# Every file under the sandbox with its SHA-256, but Windows PowerShell's own
+# (it keeps a startup cache in LOCALAPPDATA\Microsoft\Windows\PowerShell when
+# the installer's powershell.exe runs; that is neither dist's nor kluris's).
 function Inventory() {
     $list = @{}
+    $own = 'AppData\Local\Microsoft\Windows\PowerShell\'
     Get-ChildItem -LiteralPath $sandbox -Recurse -Force -File | ForEach-Object {
-        $list[$_.FullName.Substring($sandbox.Length + 1)] = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash
+        $relative = $_.FullName.Substring($sandbox.Length + 1)
+        if (-not $relative.StartsWith($own, [StringComparison]::OrdinalIgnoreCase)) {
+            $list[$relative] = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash
+        }
     }
     return $list
 }
