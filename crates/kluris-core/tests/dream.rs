@@ -454,7 +454,13 @@ fn maps_brain() -> Brain {
 
 const SUB_MAP: &str = "---\nauto_generated: true\nparent: ../map.md\nsiblings: []\nupdated: '2026-10-26'\n---\n\n# Sub\n\nup [alpha-lobe](../map.md)\n\n## Contents\n\n- [deep.md](./deep.md) — Deep\n";
 
-const ALPHA_MAP: &str = "---\nauto_generated: true\ndescription: Alpha described here.\nparent: ../brain.md\nsiblings:\n- ../beta/map.md\nupdated: '2026-10-26'\n---\n\n# Alpha Lobe\n\nAlpha described here.\n\nup [brain.md](../brain.md)\nsideways [beta](../beta/map.md)\n\n## Contents\n\n- [sub/](./sub/map.md)\n- [Upper.MD](./Upper.MD) — Up\n- [one.md](./one.md) — One Title\n- [spec.yml](./spec.yml) — Spec T\n- [two-words.md](./two-words.md) — Two Words\n";
+/// `sorted(iterdir())` compares names by code point, and on Windows by
+/// `str.lower()`, so `Upper.MD` moves there.
+const ALPHA_MAP: &str = if cfg!(windows) {
+    "---\nauto_generated: true\ndescription: Alpha described here.\nparent: ../brain.md\nsiblings:\n- ../beta/map.md\nupdated: '2026-10-26'\n---\n\n# Alpha Lobe\n\nAlpha described here.\n\nup [brain.md](../brain.md)\nsideways [beta](../beta/map.md)\n\n## Contents\n\n- [sub/](./sub/map.md)\n- [one.md](./one.md) — One Title\n- [spec.yml](./spec.yml) — Spec T\n- [two-words.md](./two-words.md) — Two Words\n- [Upper.MD](./Upper.MD) — Up\n"
+} else {
+    "---\nauto_generated: true\ndescription: Alpha described here.\nparent: ../brain.md\nsiblings:\n- ../beta/map.md\nupdated: '2026-10-26'\n---\n\n# Alpha Lobe\n\nAlpha described here.\n\nup [brain.md](../brain.md)\nsideways [beta](../beta/map.md)\n\n## Contents\n\n- [sub/](./sub/map.md)\n- [Upper.MD](./Upper.MD) — Up\n- [one.md](./one.md) — One Title\n- [spec.yml](./spec.yml) — Spec T\n- [two-words.md](./two-words.md) — Two Words\n"
+};
 
 const BETA_MAP: &str = "---\nauto_generated: true\ndescription: Beta things\nparent: ../brain.md\nsiblings:\n- ../alpha-lobe/map.md\nupdated: '2026-10-26'\n---\n\n# Beta\n\nBeta things\n\nup [brain.md](../brain.md)\nsideways [alpha-lobe](../alpha-lobe/map.md)\n\n## Contents\n\n(empty)\n";
 

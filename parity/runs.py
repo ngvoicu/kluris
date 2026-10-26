@@ -213,7 +213,10 @@ def assert_wake_up_equal(
         assert j2["deprecation"] == [] and j2["deprecation_count"] == 0, "v2 no longer raises"
         assert j3["deprecation_count"] == len(j3["deprecation"])
         if v3_deprecation is not None:
-            assert sorted(map(issue_key, j3["deprecation"])) == sorted(map(issue_key, v3_deprecation))
+            # v2's rules give v2's native paths (PAR-037).
+            expected = [dict(entry) for entry in v3_deprecation]
+            slash_paths(expected, [])
+            assert sorted(map(issue_key, j3["deprecation"])) == sorted(map(issue_key, expected))
         for doc in (j2, j3):
             doc["deprecation"], doc["deprecation_count"], doc["parse_errors"] = [], 0, 0
     else:
