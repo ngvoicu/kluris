@@ -16,7 +16,7 @@ use std::process::{Command, Output, Stdio};
 use sha2::{Digest, Sha256};
 use tempfile::TempDir;
 use tokio::runtime::Runtime;
-use wiremock::matchers::{header, method, path};
+use wiremock::matchers::{header, method, path, query_param, query_param_is_missing};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 /// The target the binary under test was built for (`build.rs`).
@@ -797,4 +797,162 @@ fn a_plain_http_api_url_is_refused_unless_loopback() {
     );
     f.assert_untouched();
     assert_eq!(f.requests(), Vec::<String>::new());
+}
+
+/// Install the newest release and check what landed: the binary of
+/// `bytes` (that release's binary) and `version` in the receipt.
+fn assert_installed(f: &Fixture, args: &[&str], bytes: &[u8], version: &str) {
+    let expected_code = if windows() { doctor_code(f) } else { 0 };
+    let out = f.run(args);
+    assert_eq!(out.status.code(), Some(expected_code), "{}", stderr(&out));
+    assert!(fs::read(&f.exe).unwrap() == bytes, "{version} is in place");
+    assert!(
+        fs::read_to_string(&f.receipt)
+            .unwrap()
+            .contains(&format!("\"version\":\"{version}\"")),
+        "{version} in the receipt"
+    );
+}
+
+/// A new binary told apart from the others of the same fixture by `mark`.
+fn marked_binary(f: &Fixture, mark: &str) -> Vec<u8> {
+    let mut bytes = f.new_binary(0, mark);
+    bytes.extend_from_slice(format!("\0{mark}\0").as_bytes());
+    bytes
+}
+
+#[test]
+fn the_newest_release_is_never_a_prerelease() {
+    let f = Fixture::new();
+    let rc = marked_binary(&f, "rc");
+    let stable = marked_binary(&f, "stable");
+    // The candidate is the semver maximum and listed first.
+    f.serve(&[f.release("v3.1.0-rc.1", &rc), f.release("v3.0.1", &stable)]);
+    let out = f.run(&["self-update", "--check", "--json"]);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    assert_eq!(
+        stdout(&out),
+        format!(
+            "{{\"ok\": true, \"current\": \"{CURRENT}\", \"latest\": \"3.0.1\", \"update_available\": true}}\n"
+        )
+    );
+    assert_installed(&f, &["self-update"], &stable, "3.0.1");
+    assert!(
+        !f.requests()
+            .contains(&format!("GET {RELEASES}/tags/v3.1.0-rc.1"))
+    );
+}
+
+#[test]
+fn only_prereleases_newer_means_up_to_date() {
+    let f = Fixture::new();
+    let rc = marked_binary(&f, "rc");
+    f.serve(&[
+        f.release("v3.1.0-rc.1", &rc),
+        f.release(&format!("v{CURRENT}"), &rc),
+    ]);
+    let out = f.run(&["self-update", "--check", "--json"]);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    assert!(
+        stdout(&out).contains("\"update_available\": false"),
+        "{}",
+        stdout(&out)
+    );
+    let out = f.run(&["self-update", "--json"]);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    assert!(
+        stdout(&out).contains("\"updated\": false"),
+        "{}",
+        stdout(&out)
+    );
+    f.assert_untouched();
+}
+
+#[test]
+fn a_prerelease_installs_when_named() {
+    let f = Fixture::new();
+    let rc = marked_binary(&f, "rc");
+    let stable = marked_binary(&f, "stable");
+    f.serve(&[f.release("v3.1.0-rc.1", &rc), f.release("v3.0.1", &stable)]);
+    assert_installed(
+        &f,
+        &["self-update", "--version", "3.1.0-rc.1"],
+        &rc,
+        "3.1.0-rc.1",
+    );
+}
+
+#[test]
+fn a_v2_release_published_after_v3_never_wins() {
+    let f = Fixture::new();
+    let v3 = marked_binary(&f, "v3");
+    // Newest first, as GitHub lists them: v2.29.0 (no binaries) came later.
+    let v2 = Release {
+        tag: "v2.29.0".into(),
+        assets: Vec::new(),
+    };
+    f.serve(&[v2, f.release("v3.0.0", &v3)]);
+    let out = f.run(&["self-update", "--check", "--json"]);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    assert!(
+        stdout(&out).contains("\"latest\": \"3.0.0\""),
+        "{}",
+        stdout(&out)
+    );
+    assert_installed(&f, &["self-update"], &v3, "3.0.0");
+}
+
+#[test]
+fn every_page_of_the_listing_is_read() {
+    // GitHub pages the listing (100 a page here; the repo has many v2
+    // releases): the v3 release on page two must be found.
+    let f = Fixture::new();
+    let new = marked_binary(&f, "paged");
+    let v2: Vec<Release> = (0..3)
+        .map(|i| Release {
+            tag: format!("v2.28.{i}"),
+            assets: Vec::new(),
+        })
+        .collect();
+    let page1: Vec<serde_json::Value> = v2
+        .iter()
+        .enumerate()
+        .map(|(i, r)| f.release_json(i, r))
+        .collect();
+    let v3 = f.release("v3.99.0", &new);
+    let page2 = vec![f.release_json(5, &v3)];
+    let next = format!(
+        "<{}{RELEASES}?per_page=100&page=2>; rel=\"next\"",
+        f.server.uri()
+    );
+    f.mount(
+        Mock::given(method("GET"))
+            .and(path(RELEASES))
+            .and(query_param_is_missing("page"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("link", next.as_str())
+                    .set_body_json(&page1),
+            ),
+    );
+    f.mount(
+        Mock::given(method("GET"))
+            .and(path(RELEASES))
+            .and(query_param("page", "2"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(&page2)),
+    );
+    let out = f.run(&["self-update", "--check", "--json"]);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    assert!(
+        stdout(&out).contains("\"latest\": \"3.99.0\""),
+        "{}",
+        stdout(&out)
+    );
+    let pages =
+        f.rt.block_on(f.server.received_requests())
+            .unwrap()
+            .iter()
+            .filter(|r| r.url.path() == RELEASES)
+            .count();
+    assert_eq!(pages, 2);
 }
