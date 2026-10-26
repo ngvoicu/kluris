@@ -1,0 +1,15 @@
+# Symlinks the tests create in a copy of `links/` (git cannot carry them to
+# Windows). `_outside/` is copied beside it as `outside/`.
+# kind  link (in the brain)       target (as written, relative to the link)
+file    lobe/inlink.md            a.md
+dir     lobe/linkdir              real
+file    lobe/escape.md            ../../outside/secret.md
+file    lobe/escape.yml           ../../outside/spec.yml
+dir     lobe/escape-dir           ../../outside/dir
+file    lobe/broken.md            missing.md
+file    lobe/broken-out.md        ../../outside/missing.md
+file    lobe/loop1.md             loop2.md
+file    lobe/loop2.md             loop1.md
+file    lobe/self.md              self.md
+dir     lobe/up                   ..
+file    lobe/via-dir.md           real/r.md

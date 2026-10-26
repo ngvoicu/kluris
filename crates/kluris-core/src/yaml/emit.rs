@@ -267,14 +267,14 @@ fn represent_float(value: f64) -> String {
 }
 
 /// `date.isoformat()`.
-fn date_iso(date: &Date) -> String {
+pub(crate) fn date_iso(date: &Date) -> String {
     format!("{:04}-{:02}-{:02}", date.year(), date.month(), date.day())
 }
 
-/// `datetime.isoformat(' ')`.
-fn datetime_iso(dt: &DateTime) -> String {
+/// `datetime.isoformat(sep)`.
+pub(crate) fn datetime_iso(dt: &DateTime, sep: char) -> String {
     let mut out = format!(
-        "{} {:02}:{:02}:{:02}",
+        "{}{sep}{:02}:{:02}:{:02}",
         date_iso(&dt.date()),
         dt.hour(),
         dt.minute(),
@@ -303,7 +303,7 @@ fn represent(value: &Value) -> (Tag, String) {
         Value::Float(f) => (Tag::Float, represent_float(*f)),
         Value::Str(s) => (Tag::Str, s.clone()),
         Value::Date(d) => (Tag::Timestamp, date_iso(d)),
-        Value::DateTime(dt) => (Tag::Timestamp, datetime_iso(dt)),
+        Value::DateTime(dt) => (Tag::Timestamp, datetime_iso(dt, ' ')),
         // Collections never reach here.
         Value::Seq(_) | Value::Map(_) => (Tag::Str, String::new()),
     }

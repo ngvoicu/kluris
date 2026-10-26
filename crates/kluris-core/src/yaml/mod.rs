@@ -13,6 +13,7 @@ mod scanner;
 mod value;
 
 pub use emit::{Profile, emit};
+pub(crate) use emit::{date_iso, datetime_iso};
 pub use parse::{YamlError, load};
 pub(crate) use resolve::is_py_space;
 pub use value::{Date, DateTime, Map, Value};

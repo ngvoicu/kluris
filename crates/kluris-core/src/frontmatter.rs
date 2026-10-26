@@ -187,7 +187,7 @@ fn is_py_line_break(c: char) -> bool {
 }
 
 /// Python's `str.splitlines(keepends=True)`.
-fn py_splitlines(text: &str) -> Vec<&str> {
+pub(crate) fn py_splitlines(text: &str) -> Vec<&str> {
     let mut lines = Vec::new();
     let mut start = 0;
     let mut chars = text.char_indices().peekable();
@@ -262,6 +262,43 @@ pub fn parse_yaml_neuron(text: &str) -> Result<Frontmatter, YamlError> {
 pub fn read_yaml_neuron(path: &Path) -> Result<Frontmatter, FrontmatterError> {
     let bytes = fs::read(path).map_err(|e| error(path, Problem::Io(e.to_string())))?;
     parse_yaml_neuron(&String::from_utf8_lossy(&bytes)).map_err(|e| error(path, Problem::Yaml(e)))
+}
+
+/// A YAML neuron as v2's `_read_yaml_neuron` reads it, which never fails: a
+/// block that does not parse gives no metadata and the whole text (BOM
+/// removed) as the body; a file that cannot be read gives no metadata and an
+/// empty body.
+pub fn read_yaml_neuron_lenient(path: &Path) -> Frontmatter {
+    let empty = |body: &str| Frontmatter {
+        meta: Map::new(),
+        body: body.to_string(),
+        line_ending: line_ending(body),
+        had_bom: false,
+    };
+    let Ok(bytes) = fs::read(path) else {
+        return empty("");
+    };
+    let text = String::from_utf8_lossy(&bytes);
+    let content = text.strip_prefix('\u{feff}').unwrap_or(&text);
+    match parse_yaml_neuron(&text) {
+        Ok(fm) => fm,
+        Err(_) => Frontmatter {
+            had_bom: text.starts_with('\u{feff}'),
+            ..empty(content)
+        },
+    }
+}
+
+/// Any neuron as v2's `read_frontmatter` reads it: a `.yml`/`.yaml` suffix
+/// (any case) reads a YAML neuron leniently ([`read_yaml_neuron_lenient`]),
+/// everything else as markdown, which fails on unreadable files, invalid
+/// UTF-8 and frontmatter that does not parse.
+pub fn read_frontmatter(path: &Path) -> Result<Frontmatter, FrontmatterError> {
+    if has_yaml_suffix(path) {
+        Ok(read_yaml_neuron_lenient(path))
+    } else {
+        read(path)
+    }
 }
 
 fn has_yaml_suffix(path: &Path) -> bool {
