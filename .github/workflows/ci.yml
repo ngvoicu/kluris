@@ -80,6 +80,9 @@ jobs:
         with:
           persist-credentials: false
       - run: rustup toolchain install --no-self-update
+      # release.yml keeps dist's tag trigger: no workflow here may reach PyPI.
+      - name: no workflow publishes to PyPI (v2's publish.yml stays out)
+        run: scripts/release/check_workflows.sh
       - name: dist plan (8 targets, installers, archives) and release.yml up to date
         run: |
           dist=$(scripts/release/tool.sh dist)

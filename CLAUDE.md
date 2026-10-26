@@ -217,6 +217,17 @@ package, hence the package `kluris`.
   as REG_EXPAND_SZ and writes the receipt to `%LOCALAPPDATA%\kluris\`.
 - **release.yml is generated:** change `dist-workspace.toml`, then
   `dist generate`; `dist plan` fails while it is stale.
+- **Its tag trigger is dist's own** (`'**[0-9]+.[0-9]+.[0-9]+*'`, decided
+  2026-10-26), not `v3.*`: dist cannot generate `v3.*` (`tag-namespace =
+  "v3"` makes a glob that misses `v3.0.0`), and a hand edit would turn off
+  its drift check. v2 and v3 stay apart by tree instead, as GitHub runs the
+  workflows of the tagged commit: v2.29.0 is tagged on a Python commit
+  before `main` becomes Rust and later v2 fixes on branch `v2`, which has no
+  release.yml, so they run v2's publish.yml; this tree has no publish.yml,
+  so a v3 tag can never reach PyPI; a v2 tag pushed onto a v3 commit makes
+  `dist plan` fail ("nothing to release"), never a release.
+  `scripts/release/check_workflows.sh` (ci.yml) fails if publish.yml, or any
+  workflow publishing to PyPI, comes back.
 - **Tools** (`scripts/release/tool.sh dist|cargo-about|actionlint`): the
   pinned prebuilt binary, its SHA-256 checked, in `target/tools/`; nothing is
   installed globally.
