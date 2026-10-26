@@ -64,16 +64,16 @@ fn tar_gz(target: &str, exe: &[u8]) -> Vec<u8> {
     tar.into_inner().unwrap().finish().unwrap()
 }
 
-/// A `.zip` holding `kluris-<target>/kluris.exe` and a README.
-fn zip(target: &str, exe: &[u8]) -> Vec<u8> {
+/// A `.zip` as dist 0.33.1 builds it for Windows: flat, `kluris.exe` and the
+/// other files at its root, no `kluris-<target>/` folder (that is the tar.gz
+/// layout only).
+fn zip(_target: &str, exe: &[u8]) -> Vec<u8> {
     let mut w = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
     let opts = zip::write::SimpleFileOptions::default()
         .compression_method(zip::CompressionMethod::Deflated);
-    w.start_file(format!("kluris-{target}/kluris.exe"), opts)
-        .unwrap();
+    w.start_file("kluris.exe", opts).unwrap();
     w.write_all(exe).unwrap();
-    w.start_file(format!("kluris-{target}/README.md"), opts)
-        .unwrap();
+    w.start_file("README.md", opts).unwrap();
     w.write_all(b"# kluris\n").unwrap();
     w.finish().unwrap().into_inner()
 }

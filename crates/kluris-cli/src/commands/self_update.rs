@@ -7,7 +7,8 @@
 //!    here); `--version` names one instead.
 //! 3. The archive is the asset named exactly `kluris-<target>.tar.gz` /
 //!    `.zip` for the target this binary was built for (`KLURIS_TARGET`), the
-//!    binary at `kluris-<target>/kluris(.exe)` in it; its SHA-256 must match
+//!    binary at `kluris-<target>/kluris` in a tar.gz and `kluris.exe` at the
+//!    root of a (flat) zip, as dist builds them; its SHA-256 must match
 //!    the release's `sha256.sum` and GitHub's digest when there is one, or
 //!    nothing is replaced.
 //! 4. The binary is replaced in place (`self_replace`, Windows included),

@@ -88,15 +88,15 @@ pub fn archive_name(target: &str) -> String {
     }
 }
 
-/// The binary inside that archive: dist puts everything in a top-level
-/// `kluris-<target>/` folder.
+/// The binary inside that archive, as dist 0.33.1 lays it out: a `.tar.gz`
+/// holds everything in a top-level `kluris-<target>/` folder, a Windows
+/// `.zip` is flat (`kluris.exe` at its root).
 pub fn binary_in_archive(target: &str) -> String {
-    let exe = if target.contains("windows") {
+    if target.contains("windows") {
         format!("{APP_NAME}.exe")
     } else {
-        APP_NAME.to_string()
-    };
-    format!("{APP_NAME}-{target}/{exe}")
+        format!("{APP_NAME}-{target}/{APP_NAME}")
+    }
 }
 
 /// The release checksums asset (`<hex> *<name>` lines).
