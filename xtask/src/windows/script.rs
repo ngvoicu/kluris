@@ -18,12 +18,14 @@
 //! ([`EXIT_MARK`]): ssh to a PowerShell answers 1 for any failure, so the
 //! status is read from the line.
 
-use std::collections::hash_map::RandomState;
-use std::hash::{BuildHasher, Hasher};
 use std::time::Duration;
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
+
+pub use crate::ssh_ci::outcome::{EXIT_MARK, STEP_MARK, TREE_MARK, exit_said};
+use crate::ssh_ci::plan::{self, CARGO_TEST, PARITY, RELEASE_BUILD, TOOLCHAIN, fill};
+pub use crate::ssh_ci::plan::{CI_DIR, TREE_FILE, UV_VERSION, run_id, tarball_name};
 
 /// ConsensFlow's copy folder under the profile, whose lock Kluris shares: one
 /// run of either project per machine at a time.
@@ -35,16 +37,8 @@ pub const RUNNING: &str = ".windows-run.pid";
 /// The holder's run id and process, two lines.
 pub const OWNER: &str = ".windows-run.id";
 
-/// Kluris's own folder under the profile: `runs\<id>`, `cache\`, `tools\`.
-pub const CI_DIR: &str = ".kluris-ci";
 /// The run script, at the root of the tarball.
 pub const RUN_FILE: &str = ".kluris-run.ps1";
-/// The commit the tarball was made from, at the root of the tarball.
-pub const TREE_FILE: &str = ".kluris-tree";
-
-pub const EXIT_MARK: &str = "== exit ";
-pub const TREE_MARK: &str = "== tree ";
-pub const STEP_MARK: &str = "== step ";
 
 /// What cmd.exe reads of a command line (8191), less ssh's `powershell
 /// -NoProfile -NonInteractive -EncodedCommand ` and a margin.
@@ -54,38 +48,11 @@ pub const ENCODED_LIMIT: usize = 8000;
 /// test binaries, git, Python and the two kluris binaries fit well within it.
 pub const PROCESS_LIMIT: u32 = 64;
 
-/// uv, fetched into Kluris's tools folder when the machine has none there.
-pub const UV_VERSION: &str = "0.12.8";
+/// uv's Windows zip ([`UV_VERSION`]), fetched into Kluris's tools folder when
+/// the machine has none there.
 pub const UV_SHA256: &str = "e07acf3f8a29fe41f9e04b799c3325cb0e0893836bb222bf102829b45c679ad6";
 const UV_URL: &str =
     "https://github.com/astral-sh/uv/releases/download/0.12.8/uv-x86_64-pc-windows-msvc.zip";
-
-/// One program a run starts, with its bound.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Step {
-    pub name: &'static str,
-    pub minutes: u32,
-}
-
-const TOOLCHAIN: Step = Step {
-    name: "toolchain",
-    minutes: 30,
-};
-const CARGO_TEST: Step = Step {
-    name: "cargo-test",
-    minutes: 90,
-};
-const RELEASE_BUILD: Step = Step {
-    name: "release-build",
-    minutes: 60,
-};
-const PARITY: Step = Step {
-    name: "parity",
-    minutes: 90,
-};
-
-/// What the unpack, the sweep and uv's download may take besides the steps.
-const MARGIN_MINUTES: u32 = 20;
 
 /// What a run is asked for.
 #[derive(Debug, Clone, Copy)]
@@ -103,35 +70,14 @@ pub struct Spec<'a> {
     pub cargo_args: &'a [String],
 }
 
-pub fn steps(spec: &Spec) -> Vec<Step> {
-    let mut steps = vec![TOOLCHAIN, CARGO_TEST];
-    if spec.parity {
-        steps.extend([RELEASE_BUILD, PARITY]);
-    }
-    steps
+#[cfg(test)]
+pub fn steps(spec: &Spec) -> Vec<plan::Step> {
+    plan::steps(spec.parity)
 }
 
 /// How long the whole run may take, as this side waits for it.
 pub fn bound(spec: &Spec) -> Duration {
-    let minutes: u32 = steps(spec).iter().map(|step| step.minutes).sum::<u32>() + MARGIN_MINUTES;
-    Duration::from_secs(u64::from(minutes) * 60)
-}
-
-/// A run's name: `kluris-`, this process's id and a random part, each as eight
-/// hex digits. ConsensFlow's ids are the same without the prefix, so a lock
-/// record says whose run holds it.
-pub fn run_id() -> String {
-    let random = RandomState::new().build_hasher().finish();
-    format!(
-        "kluris-{:08x}-{:08x}",
-        std::process::id(),
-        random & 0xffff_ffff
-    )
-}
-
-/// The tarball's name in the profile there.
-pub fn tarball_name(id: &str) -> String {
-    format!("{id}.tgz")
+    plan::bound(spec.parity)
 }
 
 /// The line ssh hands the machine's shell for `script`, or why it does not fit.
@@ -147,16 +93,6 @@ pub fn powershell_line(script: &str) -> Result<String, String> {
     Ok(format!(
         "powershell -NoProfile -NonInteractive -EncodedCommand {encoded}"
     ))
-}
-
-/// The status a line says the run ended with: `== exit N`, nothing else.
-pub fn exit_said(line: &str) -> Option<i32> {
-    let number = line.trim_end().strip_prefix(EXIT_MARK)?;
-    let digits = number.strip_prefix('-').unwrap_or(number);
-    if digits.is_empty() || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
-        return None;
-    }
-    number.parse().ok()
 }
 
 /// `args` as one Windows command line, quoted the way the C runtime (and Rust's
@@ -299,32 +235,6 @@ pub fn cleanup_script(id: &str) -> String {
 /// holds the shared lock, `held <id> <process>` from its record.
 pub fn state_script() -> String {
     fill(STATE, &[("lock_dir", LOCK_DIR), ("owner", OWNER)])
-}
-
-/// `template` with each `«name»` replaced by its part, in one pass, so that a
-/// part holding a mark is only text.
-fn fill(template: &str, parts: &[(&str, &str)]) -> String {
-    let mut text = String::with_capacity(template.len() + 256);
-    let mut rest = template;
-    while let Some((before, after)) = rest.split_once('«') {
-        text.push_str(before);
-        let Some((name, tail)) = after.split_once('»') else {
-            text.push('«');
-            rest = after;
-            continue;
-        };
-        match parts.iter().find(|(part, _)| *part == name) {
-            Some((_, value)) => text.push_str(value),
-            None => {
-                text.push('«');
-                text.push_str(name);
-                text.push('»');
-            }
-        }
-        rest = tail;
-    }
-    text.push_str(rest);
-    text
 }
 
 /// The bootstrap. The lock is ConsensFlow's, taken the way its runner takes it

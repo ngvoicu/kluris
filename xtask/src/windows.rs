@@ -47,7 +47,6 @@
 mod machine;
 mod options;
 mod pack;
-mod remote;
 mod run;
 mod script;
 #[cfg(test)]
@@ -59,6 +58,7 @@ use std::process::ExitCode;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use crate::ssh_ci::runner as remote;
 use options::Parsed;
 
 /// `cargo xtask windows <args>`.

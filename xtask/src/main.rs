@@ -5,6 +5,7 @@ mod config_rewrite;
 mod float_repr;
 mod search_eval;
 mod skills_install;
+mod ssh_ci;
 mod sync_specmint;
 mod windows;
 mod yaml_emit;
