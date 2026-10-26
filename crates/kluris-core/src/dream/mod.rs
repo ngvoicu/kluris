@@ -16,9 +16,13 @@
 //! (PAR-034), each file keeps its line endings and new files are LF
 //! (PAR-035), pruned directories get no `map.md` and are not listed
 //! (PAR-036), report paths are `/`-joined (PAR-037), and files are taken in
-//! path order (PAR-008). A file that cannot be read is skipped and reported.
+//! path order (PAR-008). A file that cannot be read or written is skipped,
+//! reported and makes the brain unhealthy (PAR-038); odd `related` values
+//! never crash (PAR-039); link checking skips code, other schemes and titles
+//! and reads URL-encoded paths (PAR-041).
 
 mod linker;
+mod links;
 mod maps;
 mod sync_dates;
 mod workspace;
@@ -107,10 +111,12 @@ pub struct DreamReport {
 }
 
 impl DreamReport {
-    /// No broken or one-way synapses, orphans or frontmatter issues;
-    /// deprecation issues are warnings only.
+    /// No broken or one-way synapses, orphans, frontmatter issues or skipped
+    /// files (v2 exits 1 on every file Kluris 3 skips, PAR-038); deprecation
+    /// issues are warnings only.
     pub fn healthy(&self) -> bool {
-        self.broken.is_empty()
+        self.skipped.is_empty()
+            && self.broken.is_empty()
             && self.one_way.is_empty()
             && self.orphans.is_empty()
             && self.frontmatter_issues.is_empty()

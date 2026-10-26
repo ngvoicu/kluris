@@ -4,7 +4,7 @@
 use std::path::Path;
 
 use kluris_core::brain::store::LocalGitStore;
-use kluris_core::config::read_brain_config;
+use kluris_core::config::{ConfigErrorKind, read_brain_config};
 use kluris_core::dream::{DreamOptions, DreamReport, Fixes, dream};
 use kluris_core::git::SystemGit;
 use kluris_core::pyrepr::py_path_str;
@@ -79,16 +79,32 @@ pub fn run(brain: Option<&str>, as_json: bool, broken_only: bool) -> Result<(), 
     let painter = Painter::stdout();
     let today = today()?;
 
+    // Every brain's kluris.yml first, so a missing one stops the run before
+    // any brain is written (v2 raises midway, after earlier brains, PAR-040).
+    let mut configs = Vec::new();
+    for brain in &brains {
+        let root = py_path_str(&brain.entry.path);
+        let config = read_brain_config(Path::new(&root)).map_err(|e| match e.kind {
+            ConfigErrorKind::NotFound => CliError::new(format!(
+                "Brain {} has no kluris.yml: {}",
+                brain.name,
+                e.path.display()
+            )),
+            _ => CliError::new(e.to_string()),
+        })?;
+        configs.push((root, config));
+    }
+    // Under `--brain all` a skipped line names its brain.
+    let name_brains = brains.len() > 1 || brain == Some("all");
+
     let mut healthy = true;
     let mut fixes = Fixes::default();
     let (mut broken, mut one_way, mut orphans, mut fm_issues) = (0, 0, 0, 0);
     let mut deprecation = Vec::new();
     let mut broken_detail = Vec::new();
-    for brain in &brains {
-        let root = py_path_str(&brain.entry.path);
-        let config =
-            read_brain_config(Path::new(&root)).map_err(|e| CliError::new(e.to_string()))?;
-        let mut store = LocalGitStore::open(Path::new(&root));
+    let mut skipped = Vec::new();
+    for (brain, (root, config)) in brains.iter().zip(&configs) {
+        let mut store = LocalGitStore::open(Path::new(root));
         let report = dream(
             &mut store,
             &git,
@@ -116,21 +132,38 @@ pub fn run(brain: Option<&str>, as_json: bool, broken_only: bool) -> Result<(), 
                 ("target".into(), str(&b.target)),
             ])
         }));
+        skipped.extend(report.skipped.iter().map(|s| {
+            Json::Object(vec![
+                ("brain".into(), str(&brain.name)),
+                ("file".into(), str(&s.rel)),
+                ("error".into(), str(&s.reason)),
+            ])
+        }));
         healthy &= report.healthy();
         if !as_json {
             human::print(&text(painter, &brain.name, &report));
+            let mut lines = String::new();
+            for s in &report.skipped {
+                let who = if name_brains {
+                    format!("{}: ", brain.name)
+                } else {
+                    String::new()
+                };
+                lines.push_str(&format!("Skipped {who}{}: {}\n", s.rel, s.reason));
+            }
+            let _ = std::io::Write::write_all(&mut std::io::stderr(), lines.as_bytes());
         }
     }
 
     if as_json {
-        let doc = if broken_only {
-            Json::Object(vec![
+        let mut doc = if broken_only {
+            vec![
                 ("ok".into(), Json::Bool(true)),
                 ("broken_synapses_count".into(), count(broken_detail.len())),
                 ("broken_synapses".into(), Json::Array(broken_detail)),
-            ])
+            ]
         } else {
-            Json::Object(vec![
+            vec![
                 ("ok".into(), Json::Bool(true)),
                 ("healthy".into(), Json::Bool(healthy)),
                 ("broken_synapses".into(), count(broken)),
@@ -142,9 +175,13 @@ pub fn run(brain: Option<&str>, as_json: bool, broken_only: bool) -> Result<(), 
                 ("deprecation".into(), Json::Array(deprecation)),
                 ("broken_synapses_detail".into(), Json::Array(broken_detail)),
                 ("fixes".into(), fixes_json(&fixes)),
-            ])
+            ]
         };
-        human::print(&json::to_line(&doc));
+        // After v2's keys, only when a file was skipped (PAR-038).
+        if !skipped.is_empty() {
+            doc.push(("skipped".into(), Json::Array(skipped)));
+        }
+        human::print(&json::to_line(&Json::Object(doc)));
     } else {
         let mut out = String::new();
         if fixes.total > 0 {

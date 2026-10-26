@@ -33,7 +33,7 @@ One entry per difference, under its own heading:
 - Command: every command that rewrites a markdown neuron's frontmatter (`dream`'s date, parent and synapse fixes)
 - Differs: when the body's first non-blank line is indented (`    code first`), v3 writes it with its indentation; v2 writes it without (python-frontmatter strips the whole body on read). Leading whitespace-only lines and all trailing whitespace are still removed, as in v2.
 - Decision: Kluris 3 decision (T-52 brief, Phase 1, IMPL-K3-06; research-01 §1 "Body handling")
-- Tests: `crates/kluris-core/tests/yaml_emit.rs::markdown_framing_matches_python_frontmatter` (rows "indented first line", "blank lines then indented line"; no parity scenario yet)
+- Tests: `crates/kluris-core/tests/yaml_emit.rs::markdown_framing_matches_python_frontmatter` (rows "indented first line", "blank lines then indented line"); dream: `crates/kluris-cli/tests/dream_resilience.rs::the_first_body_line_keeps_its_indentation`, `parity/test_dream.py::test_first_body_line_keeps_its_indentation` (v2 writes `let x = 1;` without its indentation)
 
 ### PAR-003: `windsurf` agent is `devin`; `antigravity` joins the default
 - Command: every command that reads a brain's `kluris.yml` and every command that rewrites it (`create`, `register`, `companion add`, `companion remove`, `doctor`)
@@ -87,8 +87,8 @@ One entry per difference, under its own heading:
 ### PAR-010: markdown frontmatter behind a UTF-8 BOM is read
 - Command: every command that reads markdown frontmatter; today `kluris wake-up --json` (`recent`, `brain_md`, lobe descriptions, deprecation) and `kluris mri` (a node's frontmatter fields, body, title, excerpt and edges)
 - Differs: a markdown file that starts with a UTF-8 BOM and then a `---` block is read with its frontmatter, the BOM dropped. v2 (python-frontmatter) sees no frontmatter there: empty metadata, and the whole text, BOM and `---` lines included, as the body. So in wake-up such a neuron's `updated` puts it in v3's `recent` and not in v2's, brain.md's `brain_md` is its body without the BOM and frontmatter in v3 (v2: `"\ufeff---\n..."`), and a map.md `description` in that frontmatter is used by v3 (v2 falls back to the body).
-- Decision: SPEC TEST-K3-03 ("UTF-8 BOM (read correctly)"), research-01 §1 (the BOM bug); the dream side is TEST-K3-21
-- Tests: `crates/kluris-core/tests/frontmatter_read.rs::{parse_bom_is_detected_and_frontmatter_still_read, read_bom_file}`, `parity/test_wake_up.py::test_bom_frontmatter_is_read`
+- Decision: SPEC TEST-K3-03 ("UTF-8 BOM (read correctly)"), research-01 §1 (the BOM bug); the dream side (one block, BOM kept) is PAR-038
+- Tests: `crates/kluris-core/tests/frontmatter_read.rs::{parse_bom_is_detected_and_frontmatter_still_read, read_bom_file}`, `parity/test_wake_up.py::test_bom_frontmatter_is_read`; dream: `crates/kluris-cli/tests/dream_resilience.rs::a_bom_file_keeps_its_bom_and_gets_one_block`, `parity/test_dream.py::test_bom_file_keeps_one_block`
 
 ### PAR-011: a lobe `map.md` that is not UTF-8 gives an empty description
 - Command: `kluris wake-up` (with and without `--json`)
@@ -244,7 +244,7 @@ One entry per difference, under its own heading:
   - macOS/Linux: v2 writes markdown LF, so a CRLF neuron or map becomes LF. A CRLF YAML neuron gets v2's LF `#---` block before its CRLF body; v3 writes the block CRLF.
   - Windows: v2 writes markdown in text mode, so every markdown file it writes is CRLF, new files and LF files included. v3 keeps LF files LF and creates LF files.
 - Decision: interview-01 #3 (keep each file's line endings; new files LF); SPEC decision log 2026-10-24 and 2026-10-25 (Windows text mode)
-- Tests: `crates/kluris-core/tests/dream.rs::files_keep_their_line_endings_and_new_files_are_lf`, `parity/test_dream.py` (`knowledge/crlf.md` in `test_three_runs_converge_like_v2`; the expected bytes use the file's endings before the run, or LF for a new file, so Windows runs compare against the same rule)
+- Tests: `crates/kluris-core/tests/dream.rs::files_keep_their_line_endings_and_new_files_are_lf`, `crates/kluris-cli/tests/dream_resilience.rs::crlf_files_stay_crlf_and_new_files_are_lf`, `parity/test_dream.py::test_crlf_file_stays_crlf` and `knowledge/crlf.md` in `test_three_runs_converge_like_v2` ( the expected bytes use the file's endings before the run, or LF for a new file, so Windows runs compare against the same rule)
 
 ### PAR-036: no `map.md` in pruned directories, and none listed
 - Command: `kluris dream` and `kluris mri`'s preflight
@@ -258,11 +258,20 @@ One entry per difference, under its own heading:
 - Decision: interview-01 #7 (JSON paths always use forward slashes, Windows included); chief's answer in T-89 (m-4496: apply #7 at the source, one Windows-only entry for dream and wake-up)
 - Tests: `parity/test_dream.py::test_windows_paths_in_json_use_forward_slashes`, `parity/runs.py::slash_paths` (v3 has no backslash on any OS; on Windows v2's paths are compared in `/` form), used by `parity/test_dream.py` and `parity/test_wake_up.py`; `crates/kluris-core/tests/{brain_walk,wake_up,dream}.rs` (the report types hold `/`-joined strings)
 
-### PAR-038: dream skips a neuron it cannot read (until TEST-K3-21 completes it)
-- Command: `kluris dream`
-- Differs: a neuron whose frontmatter does not parse (markdown or a YAML neuron's `#---` block), is not UTF-8 or cannot be read is not rewritten, and the other files are processed. The report holds it (`DreamReport::skipped`). The validators and the deprecation check skip it too (PAR-007). v2's date pass swallows the error, but its parent fix raises (traceback, exit 1, no JSON, the date writes already on disk). For a YAML neuron whose block does not parse, v2 writes a second `#---` block above the old one. A markdown neuron behind a UTF-8 BOM is read with its frontmatter (PAR-010) and rewritten with its BOM and one frontmatter block; v2 sees no frontmatter there and prepends a second block. How the skipped files are printed, and the tests of the other resilience cases (the BOM, `related: [1]`, a missing `kluris.yml`), come with TEST-K3-21 / IMPL-K3-22.
-- Decision: SPEC decision log 2026-10-25 (a neuron whose frontmatter does not parse is skipped and reported by `dream`) and 2026-10-26 (dream uses a parse-failed flag for YAML neurons)
-- Tests: `crates/kluris-core/tests/dream.rs::every_write_is_listed_once_and_a_neuron_that_does_not_parse_is_skipped` (no parity scenario yet: v2 crashes there)
+### PAR-038: dream skips and reports a file it cannot read
+- Command: `kluris dream` (with and without `--json`, `--broken-only`, `--brain all`)
+- Differs:
+  - Dream does not rewrite a neuron whose frontmatter does not parse: invalid YAML, a non-string key, a YAML neuron's `#---` block. It also leaves one that is not UTF-8, cannot be read or cannot be written. The other files are processed.
+  - The validators and the deprecation check skip that file too, so it gets no other report (PAR-007).
+  - A skipped file makes the brain unhealthy: `healthy: false` and exit 1, like v2's exit 1.
+  - With `--json`, both the full and the `--broken-only` output end, after v2's keys, with `"skipped": [{"brain", "file", "error"}]`. The key is there only when a file was skipped. `file` is `/`-joined; `error` is the reason with no absolute path (`invalid frontmatter: ...`, `the file is not valid UTF-8`).
+  - Without `--json`, each brain's report is followed by one line on stderr per skipped file: `Skipped <file>: <reason>`, or under `--brain all` `Skipped <brain>: <file>: <reason>`.
+  - v2's date pass swallows the error, but its parent fix raises: a traceback, exit 1, no JSON, the date writes already on disk. Invalid YAML is a `yaml` error, a non-string key `TypeError: keywords must be strings`, invalid UTF-8 `UnicodeDecodeError`.
+  - For a YAML neuron whose block does not parse, v2 exits 0 and writes a second `#---` block above the old one.
+  - A markdown neuron behind a UTF-8 BOM is read with its frontmatter (PAR-010) and rewritten with its BOM and one frontmatter block. v2 sees no frontmatter there and prepends a second block.
+- Decision: SPEC decision log 2026-10-25 (a neuron whose frontmatter does not parse is skipped and reported by `dream`) and 2026-10-26 (dream uses a parse-failed flag for YAML neurons); interview-01 #4 (BOM duplicate frontmatter; one bad neuron crashing dream); SPEC decision 2026-10-27 (tracebacks); the chief's answer in T-94 (m-4524: `{brain, file, error}`, the stderr lines, unhealthy)
+- Tests: `crates/kluris-cli/tests/dream_resilience.rs::{malformed_files_are_skipped_reported_and_left_alone, broken_only_lists_the_skipped_files_too, text_mode_prints_one_skipped_line_per_file_on_stderr, skipped_lines_name_the_brain_under_brain_all, no_skipped_key_when_nothing_was_skipped, a_bom_file_keeps_its_bom_and_gets_one_block}`, `crates/kluris-core/tests/dream.rs::every_write_is_listed_once_and_a_neuron_that_does_not_parse_is_skipped`, `parity/test_dream.py::{test_malformed_neuron_v2_crashes_v3_skips_and_reports, test_yaml_neuron_whose_block_does_not_parse, test_bom_file_keeps_one_block}`
+
 ### PAR-039: `companion remove` rewrites only the brains that had the companion
 - Command: `kluris companion remove [NAME] [--brain NAME|all] [--json]`
 - Differs: v3 rewrites the `kluris.yml` of a resolved brain only when its `companions` list holds one of the removed names, and reports only those brains (`"brains"` in the JSON, the brain list in `Removed companion(s) <names> from: <brains>`); a brain without them keeps its file byte for byte (comments, unknown keys and v2's agent names included). v2 rewrites every resolved brain (dropping comments and unknown keys, normalizing its list) and reports all of them. When no resolved brain had any of them, the JSON has `"brains": []` and the text reads `Removed companion(s) <names> from: (none)`; the skill install still runs, as in v2. `companion add` is unchanged (every resolved brain is rewritten and reported, as in v2).
@@ -314,3 +323,30 @@ One entry per difference, under its own heading:
   The preflight skips a neuron it cannot read, as dream does (PAR-038), where v2's preflight raises; the graph then shows that file as v2's `build_graph` would: a node with its stem title and no fields or edges.
 - Decision: SPEC decision log 2026-10-27 (every v2 traceback becomes a correct result or a clean error, each allowlisted); interview-01 #4
 - Tests: `crates/kluris-core/tests/mri.rs::{edges_follow_v2, neuron_fields_follow_v2, missing_fields_are_empty_and_non_strings_are_python_str, a_file_that_does_not_read_is_a_node_without_fields_or_edges, indented_json_matches_python}` (no parity scenario: v2 raises)
+
+### PAR-047: odd `related` values never crash dream
+- Command: `kluris dream` (with and without `--json`)
+- Differs:
+  - A `related` list with an entry that is not a string (`related: [1]`) is v2's existing type issue `{file, field: "related", kind: "type"}`. It is counted in `frontmatter_issues`, so the brain is unhealthy. The one-way check ignores that entry; the reverse-link fix and the broken-link check already did, as in v2.
+  - A `related` target outside the brain (`../../outside.md`, `/etc/hosts.md`) counts as a broken synapse, as in v2, and never as a one-way synapse.
+  - v2's `validate_bidirectional` raises on both: `TypeError: unsupported operand type(s) for /`, and `ValueError ... is not in the subpath` for an outside `.md` file that exists. A traceback, exit 1, no JSON.
+- Decision: interview-01 #4 (one bad neuron crashing dream); SPEC decision 2026-10-27 (tracebacks); the chief's answer in T-94 (m-4524 #2: v2's type issue)
+- Tests: `crates/kluris-cli/tests/dream_resilience.rs::{a_non_string_related_entry_is_a_type_issue, related_paths_outside_the_brain_are_broken_not_one_way}`, `parity/test_dream.py::{test_non_string_related_entry, test_related_outside_the_brain}`
+
+### PAR-048: a missing `kluris.yml` is a clean error
+- Command: `kluris dream` (with and without `--json`, `--brain all`)
+- Differs: v3 reads every resolved brain's `kluris.yml` before dreaming any of them. When one does not exist, it stops with `Error: Brain <name> has no kluris.yml: <path>` on stderr, or `{"ok": false, "error": "Brain <name> has no kluris.yml: <path>"}` under `--json`, exit 1, and writes nothing in any brain. A `kluris.yml` that does not read or validate stops it the same way, with the config error. v2 raises `FileNotFoundError` (a traceback, exit 1, no JSON) when it reaches that brain, after dreaming the brains before it. v2's dream has no path that runs without the file (it needs `name` and `description` for brain.md).
+- Decision: interview-01 #4 ("missing `kluris.yml` crashes"); SPEC decision 2026-10-27 (tracebacks)
+- Tests: `crates/kluris-cli/tests/dream_resilience.rs::a_missing_kluris_yml_is_a_clean_error_and_nothing_is_written`, `parity/test_dream.py::test_missing_kluris_yml`
+
+### PAR-049: link checking skips code, other schemes and titles, and reads URL-encoded paths
+- Command: `kluris dream` (`broken_synapses`, `broken_synapses_detail`, `--broken-only`, `healthy`; and the orphan check, which reads map.md/brain.md links the same way)
+- Differs: v3 does not report these as broken links, where v2 does:
+  - links inside fenced code blocks (```` ``` ```` or `~~~`, up to 3 spaces of indentation) and inside inline code spans;
+  - targets with a URI scheme of two or more characters (`mailto:`, `ftp:`, `tel:`, `file:`; v2 skipped only `http://` and `https://`). A one-letter "scheme" (`C:/x.md`) stays a path.
+  - A link title is not part of the path (`[a](b.md "t")`, `'t'`, `(t)`), and a broken titled link reports the path alone.
+  - A body link is fine when its target names a file either as written or URL-decoded (`my%20note.md` is `my note.md`); `related` entries are not decoded.
+  - Image links are checked as v2 checks them: `![x](y.png)` is broken when `y.png` is missing.
+  - On the seven local brains this changes no count (`test_registered_brains`).
+- Decision: interview-01 #5 ("link checking flagging code blocks, `mailto:` and titled links"); research-03 §5 #32; the chief's brief for T-94 (URL-decoded paths; image links keep v2's behaviour, m-4524)
+- Tests: `crates/kluris-core/src/dream/links.rs` (unit tests), `crates/kluris-cli/tests/dream_resilience.rs::link_checking_ignores_code_other_schemes_and_titles_and_decodes_paths`, `parity/test_dream.py::test_link_checking`

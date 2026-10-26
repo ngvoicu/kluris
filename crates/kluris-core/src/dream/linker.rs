@@ -2,16 +2,16 @@
 //! validators it runs on the written brain.
 //!
 //! Every path a report holds is brain-relative and `/`-joined
-//! (interview-01 #7). A file that cannot be read is skipped and reported
-//! where v2 raises.
+//! (interview-01 #7). A file that cannot be read (strictly: a YAML neuron
+//! whose block does not parse too) is skipped and reported where v2 raises,
+//! and gets no other report. Links are found by [`super::links`].
 
 use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::LazyLock;
 
 use indexmap::IndexMap;
-use regex::Regex;
 
+use super::links::{decoded, markdown_links};
 use super::workspace::{Workspace, converged};
 use super::{BrokenSynapse, FieldProblem, FrontmatterIssue, OneWaySynapse};
 use crate::brain::neuron_index::{Neuron, NeuronKind};
@@ -19,24 +19,6 @@ use crate::brain::sandbox;
 use crate::brain::store::BrainStore;
 use crate::brain::walk::WalkedFile;
 use crate::yaml::{Map, Value};
-
-/// v2's `LINK_PATTERN`.
-static LINK: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"\[([^\]]*)\]\(([^)]+)\)").unwrap_or_else(|e| panic!("LINK is valid: {e}"))
-});
-
-/// v2's `parse_markdown_links`: every `[text](target)` target that is not
-/// `http://`/`https://`, cut at `#` and then `?`, when something is left.
-pub(crate) fn markdown_links(body: &str) -> Vec<&str> {
-    LINK.captures_iter(body)
-        .filter_map(|c| c.get(2))
-        .map(|m| m.as_str())
-        .filter(|t| !t.starts_with("http://") && !t.starts_with("https://"))
-        .map(|t| t.split('#').next().unwrap_or(t))
-        .map(|t| t.split('?').next().unwrap_or(t))
-        .filter(|t| !t.is_empty())
-        .collect()
-}
 
 fn parent(path: &Path) -> &Path {
     path.parent().unwrap_or(Path::new(""))
@@ -148,8 +130,8 @@ pub(crate) fn fix_reverse_links<S: BrainStore>(
 
 // --- validators ------------------------------------------------------------------
 
-/// Reads for the validators: v2's `read_frontmatter`, a file that does not
-/// read skipped and reported.
+/// Reads for the validators: as dream reads a file it may rewrite, a file
+/// that does not read skipped and reported (PAR-038).
 struct Reader<'a, S: BrainStore> {
     store: &'a S,
     skipped: &'a mut BTreeMap<String, String>,
@@ -163,7 +145,7 @@ impl<S: BrainStore> Reader<'_, S> {
                 .or_insert_with(|| "cannot read the file".into());
             return None;
         };
-        match super::workspace::parse(rel, &bytes, super::workspace::Read::Lenient) {
+        match super::workspace::parse(rel, &bytes, super::workspace::Read::Strict) {
             Ok(fm) => Some((fm.meta, fm.body)),
             Err(e) => {
                 self.skipped.entry(rel.into()).or_insert(e);
@@ -228,13 +210,17 @@ fn broken_synapses<S: BrainStore>(store: &S, read: &mut Reader<'_, S>) -> Vec<Br
         .iter()
         .filter_map(|n| sandbox::resolve(&n.path).ok())
         .collect();
-    let ok = |from: &Path, link: &str| {
+    let exists = |from: &Path, link: &str| {
         resolve_from(from, link).is_some_and(|t| {
             t.exists()
                 && root
                     .as_deref()
                     .is_some_and(|root| sandbox::is_within(&t, root))
         })
+    };
+    // A body link may be URL-encoded: either reading may name the file.
+    let link_ok = |from: &Path, link: &str| {
+        exists(from, link) || decoded(link).is_some_and(|d| exists(from, &d))
     };
     let mut broken = Vec::new();
     for (rel, path) in all_md_files(store) {
@@ -245,10 +231,10 @@ fn broken_synapses<S: BrainStore>(store: &S, read: &mut Reader<'_, S>) -> Vec<Br
             continue;
         };
         for link in markdown_links(&body) {
-            if !ok(&path, link) {
+            if !link_ok(&path, &link) {
                 broken.push(BrokenSynapse {
                     file: rel.clone(),
-                    target: link.to_string(),
+                    target: link,
                 });
             }
         }
@@ -256,7 +242,7 @@ fn broken_synapses<S: BrainStore>(store: &S, read: &mut Reader<'_, S>) -> Vec<Br
             continue;
         }
         for link in strings(meta.get("related")).unwrap_or_default() {
-            if !ok(&path, link) {
+            if !exists(&path, link) {
                 broken.push(BrokenSynapse {
                     file: rel.clone(),
                     target: link.to_string(),
@@ -277,8 +263,9 @@ fn py_suffix(name: &str) -> &str {
 
 /// `validate_bidirectional`: a neuron's `related` target that is a neuron
 /// not linking back, or another existing `.md` file whose list `related`
-/// does not link back. (v2 raises on a non-string entry; Kluris 3 ignores
-/// it.)
+/// does not link back. v2 raises on a non-string entry and on a target
+/// outside the brain; Kluris 3 ignores both here (they are a frontmatter
+/// issue and broken synapses, PAR-039).
 fn one_way_synapses<S: BrainStore>(store: &S, read: &mut Reader<'_, S>) -> Vec<OneWaySynapse> {
     let root = sandbox::resolve(store.root()).ok();
     let mut related: IndexMap<PathBuf, Vec<PathBuf>> = IndexMap::new();
@@ -300,9 +287,13 @@ fn one_way_synapses<S: BrainStore>(store: &S, read: &mut Reader<'_, S>) -> Vec<O
             .collect();
         related.insert(file, targets);
     }
+    let inside = |path: &Path| {
+        root.as_deref()
+            .is_some_and(|root| sandbox::is_within(path, root))
+    };
     let mut one_way = Vec::new();
     for (source, targets) in &related {
-        for target in targets {
+        for target in targets.iter().filter(|t| inside(t)) {
             let back = match related.get(target) {
                 Some(back) => back.contains(source),
                 None => {
@@ -358,11 +349,12 @@ pub(crate) fn orphans<S: BrainStore>(
         let Some((_, body)) = read.walked(&rel) else {
             continue;
         };
-        referenced.extend(
-            markdown_links(&body)
-                .into_iter()
-                .filter_map(|l| resolve_from(&path, l)),
-        );
+        for link in markdown_links(&body) {
+            referenced.extend(resolve_from(&path, &link));
+            if let Some(decoded) = decoded(&link) {
+                referenced.extend(resolve_from(&path, &decoded));
+            }
+        }
     }
     store
         .neurons()
@@ -374,7 +366,8 @@ pub(crate) fn orphans<S: BrainStore>(
 
 /// `check_frontmatter`: the required fields (markdown: `parent`, `created`,
 /// `updated`; YAML neurons: `updated`), then `related` and `tags` that are not
-/// lists and a `replaced_by` that is not a string or null.
+/// lists, a `related` list with an entry that is not a string (where v2
+/// raises, PAR-039) and a `replaced_by` that is not a string or null.
 fn frontmatter_issues<S: BrainStore>(store: &S, read: &mut Reader<'_, S>) -> Vec<FrontmatterIssue> {
     let mut issues = Vec::new();
     for neuron in store.neurons() {
@@ -399,8 +392,15 @@ fn frontmatter_issues<S: BrainStore>(store: &S, read: &mut Reader<'_, S>) -> Vec
         if !meta.contains_key("updated") {
             issue("updated", FieldProblem::Missing);
         }
+        let wrong = |field: &str| match meta.get(field) {
+            None => false,
+            Some(Value::Seq(items)) => {
+                field == "related" && items.iter().any(|v| v.as_str().is_none())
+            }
+            Some(_) => true,
+        };
         for field in ["related", "tags"] {
-            if meta.get(field).is_some_and(|v| !matches!(v, Value::Seq(_))) {
+            if wrong(field) {
                 issue(field, FieldProblem::Type);
             }
         }
@@ -439,14 +439,6 @@ pub(crate) fn validate<S: BrainStore>(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn links_are_cut_at_anchor_and_query() {
-        assert_eq!(
-            markdown_links("[a](x.md#h) [b](https://e.com) [c](y.md?q) [d](#top) [e](z.md)"),
-            ["x.md", "y.md", "z.md"]
-        );
-    }
 
     #[test]
     fn relpath_is_relative_to_the_target_directory() {

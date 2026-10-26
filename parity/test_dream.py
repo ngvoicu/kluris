@@ -27,7 +27,7 @@ from pathlib import Path
 import pytest
 
 from harness import IS_WINDOWS, PARITY_DIR, Result, Sandbox, _decode, normalize, oracle_kluris, snapshot_tree
-from runs import _env, _exe, issue_key, parse_exact, same_words, slash_paths, write_config
+from runs import _env, _exe, clear_runs, issue_key, parse_exact, same_words, slash_paths, write_config
 
 DREAM_ORACLE = PARITY_DIR / "tools" / "dream_oracle.py"
 D1 = "2026-01-01T12:00:00+00:00"
@@ -608,6 +608,169 @@ def test_dream_help_wording(sandbox):
         assert text in v3.stdout, text
     same_words(v2.stdout.replace("TEXT", "<BRAIN>").replace("Usage: kluris dream [OPTIONS]", ""),
                v3.stdout.replace("Usage: kluris dream [OPTIONS]", ""), sandbox.root)
+
+
+# --- resilience: where v2 crashes or damages a file (TEST-K3-21) --------------------
+
+
+def resilience_brain(sb: Sandbox, files: dict[str, str | bytes]) -> Path:
+    """The healthy brain plus ``files``, all committed."""
+    brain = healthy_brain(sb)
+    write(brain, files)
+    commit(sb, brain, "resilience case", D2)
+    return brain
+
+
+def both(sb: Sandbox, args: list[str] | None = None) -> tuple[Outcome, Outcome]:
+    out = run_steps(sb, ["brains/calm"], [Step(args or ["dream", "--json"])])
+    return out["v2"][0], out["v3"][0]
+
+
+def assert_v2_traceback(outcome: Outcome, error: str) -> None:
+    r = outcome.result
+    assert r.code == 1 and r.stdout == "", (r.code, r.stdout)
+    assert "Traceback" in r.stderr and error in r.stderr.strip().splitlines()[-1], r.stderr
+
+
+NO_PARENT = "---\ncreated: '2026-01-01'\nupdated: '2026-01-01'\n---\n\n# Needs a parent\n"
+
+
+@pytest.mark.parametrize("bad,error", [
+    ("---\ntitle: Foo: bar\n---\n\n# Invalid\n", "yaml"),
+    ("---\n1: x\n---\n\n# Key\n", "TypeError: keywords must be strings"),
+    (b"---\ncreated: '2026-01-01'\n---\n\n# Caf\xe9\n", "UnicodeDecodeError"),
+], ids=["invalid-yaml", "non-string-key", "not-utf8"])
+def test_malformed_neuron_v2_crashes_v3_skips_and_reports(sandbox, bad, error):
+    """PAR-038: v2 ends in a traceback (no JSON); v3 leaves the file alone,
+    reports it in ``skipped`` and processes the rest, exit 1."""
+    resilience_brain(sandbox, {"projects/bad.md": bad, "projects/fix-me.md": NO_PARENT})
+    register(sandbox, [sandbox.work / "brains" / "calm"])
+    before = frozen(sandbox)
+    v2, v3 = both(sandbox)
+    if error == "yaml":
+        error = "line 2, column 11"
+    assert_v2_traceback(v2, error)
+    doc = parse_exact(v3.result.stdout, sandbox.root, "v3")
+    assert v3.result.code == 1 and doc["healthy"] is False
+    assert list(doc)[-1] == "skipped" and [s["file"] for s in doc["skipped"]] == ["projects/bad.md"]
+    assert list(doc["skipped"][0]) == ["brain", "file", "error"]
+    tree = v3.result.tree
+    assert tree["brains/calm/projects/bad.md"] == before["brains/calm/projects/bad.md"]
+    assert b"parent: ./map.md" in tree["brains/calm/projects/fix-me.md"]
+
+
+def test_yaml_neuron_whose_block_does_not_parse(sandbox):
+    """PAR-038: v2 writes a second ``#---`` block above the one it cannot
+    read; v3 leaves the file alone and reports it."""
+    bad = "#---\n# title: Foo: bar\n#---\nk: 1\n"
+    resilience_brain(sandbox, {"projects/bad.yml": bad})
+    register(sandbox, [sandbox.work / "brains" / "calm"])
+    v2, v3 = both(sandbox)
+    assert v2.result.code == 0
+    assert v2.result.tree["brains/calm/projects/bad.yml"].count(b"#---") == 4
+    assert v3.result.tree["brains/calm/projects/bad.yml"] == bad.encode()
+    doc = json.loads(v3.result.stdout)
+    assert v3.result.code == 1 and doc["skipped"][0]["file"] == "projects/bad.yml"
+    assert doc["frontmatter_issues"] == 0
+
+
+def test_bom_file_keeps_one_block(sandbox):
+    """PAR-038 (with PAR-010): v2 does not see frontmatter behind a BOM and
+    prepends a second block; v3 keeps the BOM and writes one."""
+    resilience_brain(sandbox, {"projects/bom.md": "\ufeff" + NO_PARENT})
+    register(sandbox, [sandbox.work / "brains" / "calm"])
+    v2, v3 = both(sandbox)
+    assert v2.result.code == v3.result.code == 0
+    assert v2.result.tree["brains/calm/projects/bom.md"].count(b"---\n") == 4
+    assert v3.result.tree["brains/calm/projects/bom.md"] == (
+        "\ufeff---\ncreated: '2026-01-01'\nparent: ./map.md\nupdated: '2026-02-03'\n---\n\n# Needs a parent\n"
+    ).encode()
+
+
+def test_first_body_line_keeps_its_indentation(sandbox):
+    """PAR-002: v2 strips the first body line's indentation."""
+    body = "    let x = 1;\n    let y = 2;\n\nAfter.\n"
+    resilience_brain(sandbox, {"projects/code.md": "---\ncreated: '2026-01-01'\nupdated: '2026-01-01'\n---\n\n" + body})
+    register(sandbox, [sandbox.work / "brains" / "calm"])
+    v2, v3 = both(sandbox)
+    assert v2.result.tree["brains/calm/projects/code.md"].endswith(b"\n\nlet x = 1;\n    let y = 2;\n\nAfter.\n")
+    assert v3.result.tree["brains/calm/projects/code.md"].endswith(("\n\n" + body).encode())
+
+
+def test_crlf_file_stays_crlf(sandbox):
+    """PAR-035: v2 writes a CRLF neuron back LF (macOS/Linux; CRLF everywhere
+    on Windows); v3 keeps CRLF, and new files are LF."""
+    resilience_brain(sandbox, {"projects/crlf.md": NO_PARENT.replace("\n", "\r\n").encode()})
+    register(sandbox, [sandbox.work / "brains" / "calm"])
+    v2, v3 = both(sandbox)
+    got = v3.result.tree["brains/calm/projects/crlf.md"]
+    assert b"parent: ./map.md\r\n" in got and got.count(b"\n") == got.count(b"\r\n")
+    if not IS_WINDOWS:
+        assert b"\r" not in v2.result.tree["brains/calm/projects/crlf.md"]
+    assert b"\r" not in v3.result.tree["brains/calm/brain.md"]
+
+
+def test_non_string_related_entry(sandbox):
+    """PAR-039: v2's one-way check raises ``TypeError``; v3 reports a
+    ``related`` type issue."""
+    resilience_brain(sandbox, {"projects/odd.md": neuron("Odd", extra="related:\n- 1\n- ./alpha.md\n")})
+    register(sandbox, [sandbox.work / "brains" / "calm"])
+    v2, v3 = both(sandbox)
+    assert_v2_traceback(v2, "TypeError: unsupported operand type(s) for /")
+    doc = json.loads(v3.result.stdout)
+    assert v3.result.code == 1 and doc["frontmatter_issues"] == 1 and doc["one_way_synapses"] == 0
+
+
+def test_related_outside_the_brain(sandbox):
+    """PAR-039: v2's one-way check raises ``ValueError`` on a target outside
+    the brain; v3 counts the links as broken, not one-way."""
+    resilience_brain(sandbox, {"projects/out.md": neuron("Out", extra="related:\n- ../../../outside.md\n- /etc/hosts.md\n")})
+    write(sandbox.work, {"outside.md": neuron("Outside")})
+    register(sandbox, [sandbox.work / "brains" / "calm"])
+    v2, v3 = both(sandbox)
+    assert_v2_traceback(v2, "ValueError")
+    doc = json.loads(v3.result.stdout)
+    assert [b["target"] for b in doc["broken_synapses_detail"]] == ["../../../outside.md", "/etc/hosts.md"]
+    assert doc["one_way_synapses"] == 0
+
+
+def test_missing_kluris_yml(sandbox):
+    """PAR-040: v2 ends in a ``FileNotFoundError`` traceback; v3 prints a
+    clean error naming the file and writes nothing."""
+    brain = healthy_brain(sandbox)
+    (brain / "kluris.yml").unlink()
+    register(sandbox, [brain])
+    before = frozen(sandbox)
+    for args in (["dream"], ["dream", "--json"]):
+        v2, v3 = both(sandbox, args)
+        assert_v2_traceback(v2, "FileNotFoundError")
+        assert v3.result.code == 1 and v3.result.tree == before
+        message = json.loads(v3.result.stdout)["error"] if "--json" in args else v3.result.stderr
+        expected = f"Brain calm has no kluris.yml: {brain / 'kluris.yml'}"
+        assert message == (expected if "--json" in args else f"Error: {expected}\n"), message
+        clear_runs(sandbox)
+
+
+def test_link_checking(sandbox):
+    """PAR-041: v2 reports links in code, ``mailto:`` and other schemes,
+    titled links and ``%20`` paths as broken; v3 reports only the links whose
+    file is missing (a missing image too, as v2)."""
+    body = ("# Links\n\n```\n[fenced](./nope1.md)\n```\n\n`[inline](./nope2.md)`\n\n"
+            "[mail](mailto:a@b.c) [ftp](ftp://x/y)\n\n[titled](./alpha.md \"Alpha\")\n\n"
+            "[encoded](./my%20note.md)\n\n![img](./pic.png) ![gone](./nopic.png)\n\n[missing](./missing.md)\n")
+    resilience_brain(sandbox, {"projects/links.md": neuron("Links", body=body), "projects/my note.md": neuron("Note"),
+                               "projects/pic.png": "png"})
+    register(sandbox, [sandbox.work / "brains" / "calm"])
+    v2, v3 = both(sandbox)
+    targets = lambda o: [b["target"] for b in json.loads(o.result.stdout)["broken_synapses_detail"]]  # noqa: E731
+    assert targets(v2) == ["./nope1.md", "./nope2.md", "mailto:a@b.c", "ftp://x/y", './alpha.md "Alpha"',
+                           "./my%20note.md", "./nopic.png", "./missing.md"]
+    assert targets(v3) == ["./nopic.png", "./missing.md"]
+    j2, j3 = json.loads(v2.result.stdout), json.loads(v3.result.stdout)
+    for doc in (j2, j3):
+        del doc["broken_synapses"], doc["broken_synapses_detail"]
+    assert j3 == j2
+    assert v3.result.tree == v2.result.tree
 
 
 # --- the brains registered on this machine -----------------------------------------
