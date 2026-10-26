@@ -7,7 +7,7 @@ uses makes of it: ``{"safe": <outcome>, "c": <outcome>}`` for
 ``yaml.safe_load`` and ``yaml.load(Loader=CSafeLoader)``, where an outcome is
 ``{"value": <tagged JSON>}`` or ``{"error": <message>}``. A value outside the
 Kluris 3 value model (a non-string key, bytes, a set, ...) is an error: v3
-refuses it. So is a merge key (``<<``) where PyYAML would merge: v3 refuses
+refuses it, as is a string with a lone surrogate. So is a merge key (``<<``) where PyYAML would merge: v3 refuses
 merge keys (decided in the Phase 1 brief), so both loaders run with a
 ``flatten_mapping`` that raises on one and is otherwise PyYAML's.
 
@@ -54,9 +54,24 @@ def outcome(text: str, loader: type) -> dict[str, object]:
     except Exception as exc:  # noqa: BLE001 -- any failure is the answer
         return {"error": f"{type(exc).__name__}: {exc}"}
     try:
-        return {"value": encode(value)}
+        encoded = encode(value)
     except (TypeError, RecursionError) as exc:
         return {"error": f"outside the value model: {exc}"}
+    if has_surrogate(value):
+        return {"error": "outside the value model: a lone surrogate"}
+    return {"value": encoded}
+
+
+def has_surrogate(value: object) -> bool:
+    """A string holding a lone surrogate (from a `\\ud800` escape): a Rust
+    string cannot hold one."""
+    if isinstance(value, str):
+        return any(0xD800 <= ord(ch) <= 0xDFFF for ch in value)
+    if isinstance(value, list):
+        return any(has_surrogate(v) for v in value)
+    if isinstance(value, dict):
+        return any(has_surrogate(k) or has_surrogate(v) for k, v in value.items())
+    return False
 
 
 def main() -> int:

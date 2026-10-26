@@ -5,8 +5,10 @@ value of ``v: <case>`` and printed as a Rust row for
 ``crates/kluris-core/tests/yaml_read.rs``: ``scalars()`` by default, ``tagged()``
 (explicit tags) with ``--tagged``. With ``--documents`` each case is a whole
 YAML text (``documents()``), loaded as it is. A case PyYAML rejects, or one
-outside the v3 value model, prints ``err()``. Every case must load the same
-with ``SafeLoader`` and libyaml's ``CSafeLoader``.
+outside the v3 value model, prints ``err()``. The oracle is the pure-Python
+``SafeLoader`` (v3 reads every YAML the way it does); a case where libyaml's
+``CSafeLoader`` reads otherwise is still printed, with a ``// CSafeLoader:``
+comment.
 
 Run it with the oracle venv (PyYAML 6.0.3):
 
@@ -191,7 +193,7 @@ DOCUMENTS = BLOCKS + [
     "&a: &b: 1", "!!int &a: 1", "{&a: 1}", "{&a:1}", "[&a: 1]", "x: &a:\n  b: 1",
     "!!str &a:\n", "&a:", "x: !!str &k: v", "&a?x", "&a? x", "&a%", "&a@", "&a`", "&a,", "[&a, 1]",
     "[&a]", "{&a}", "&a :x", "&a : x", "a: &x 1\nb: *x: 2", "a: &x 1\n*x: 2",
-    "a: &x 1\nb: [*x:]", "a: &x 1\nb: {*x: 2}", "a: &x 1\nb: {*x:2}", "a: &x 1\nb: [*x, *x:]",
+    "a: &x 1\nb: [*x:]", "a: &x 1\nb: {*x: 2}", "a: &x 1\nb: {*x:2}", "a: &x 1\nb: [*x, *x:]", "! &a: []", "! &a:", "[! &a]", "{! &a}",
     "a: &x 1\nb: [*x?]", "a: &x 1\nb: *x?", "!!str &a: !!str &b: x", "- !!str &a: a\n  !!str &b: b",
     "!!str &a: x\n!!str &b: y", "!!str &a: x\n!!str &a: y", "!!str &a: &n x\nb: *a",
     "!!str &a-b_9: x", "!!str &a: |\n  abc", "!!str &a: |\n  \u00e9", "  !!str &a: x\n  b: c",
@@ -201,6 +203,28 @@ DOCUMENTS = BLOCKS + [
     "&n0\n!!str &n1: []", "&n0\n!!str &n1: *n0", "&n0 !!str &n1: x", "- &n0 a\n- *n0:",
     "&n0\n!!str &n1: *n0\n*n1:\n  - []", "a: &n0 k\nb: {*n0:1, *n0: 2}",
     "!!map &n0\n!!str &n1: []", "!!map &n0\n# c &n9:\n!!str &n1: []", "- !!seq &n0\n  - !!str &n1: x",
+    # flow indicators glued to what follows: PyYAML's scanner, not YAML 1.2
+    "v: {a:[]}", "{a:{}}", "{a:[b]}", "[a:[]]", "{a:b}", "{a: b}", "{a:,b}", "{\"a\":1}", "{'a':1}",
+    "[?x]", "{?x: y}", "[? x]", "{? x}", "[?]", "{?}", "[a?b]", "{a?b: c}", "[-a]", "[- a]", "{-a: b}",
+    "[&a?x]", "[&a ?x]", "{!!str &a: |}", "{!!str &a: >}", "[|]", "[>]", "{a: |}", "[!!str |]",
+    "[a,]", "[,a]", "[a,,b]", "{a: 1,}", "{,}", "[]]", "[[]", "{a: [}]}", "[a:b]", "[a: b]", "[a :b]",
+    "[a: [b]]", "{a: {b: [c, {d:e}]}}", "[{a: b}, c]", "[*a]", "&a [*a]", "[&a [*a]]", "{a:#c\n b}",
+    "{a: b #c\n}", "[a #c\n, b]", "[a\n,b]", "{a\n: b}", "[\"a\"b]", "['a'b]", "[\"a\":b]",
+    "[!!str a:b]", "{!!str : x}", "{: x}", "[: x]", "{a: !!str}", "[!!str]", "{!!str}", "[!a]",
+    "[!<!>a]", "!<tag:yaml.org,2002:str>a", "[!!str,]", "{a: !!str,}", "-[a]", "-  [a]", "- [a]",
+    "? [a]: b", "[a]: b", "{a}: b", "a: [b]: c", "[a, b]: c\nd: e",
+    # line breaks PyYAML also breaks at (U+0085, U+2028, U+2029) and characters
+    # its reader refuses
+    "a: b\u0085c: d", "a: b\u2028c: d", "a: b\u2029c: d", "a: 'b\u2028c'", 'a: "b\u0085c"',
+    "a: |\n  b\u2028  c", "a: |\n  b\u0085  c\n", "a: >\n  b\u2029  c", "- a\u2028- b",
+    "a: b\u2028\u2028c: d", "a: b \u0085 c", "# c\u0085a: 1", "a: \u0085", "a:\u2028  b: 1",
+    "a: \x07", "a: \x00", "a: \x7f", "a: \x80", "a: \x9f", "a: \ufffe", "a: \uffff", "a: \x1b[0m",
+    "a: \x0b", "a: \x0c", "a: \x1c", "a: \x1e", "a: \x1f", "a: b\x0c", 'a: "\\x07"', 'a: "\\x00"',
+    'a: "\\ud800"', 'a: "\\U0010ffff"', 'a: "\\U00110000"', "a: \ufeffb", "\ufeffa: b",
+    "a: b\n\ufeffc: d", "a: \ue000", "a: \U0001f680", "a: \t", "a:\tb", "a: b\tc", "\ta: b",
+    "a:\n\tb: c", "a: |\n\tb", "a: |\n  b\n\tc",
+    # nesting depth
+    "[" * 50 + "]" * 50, "a:\n" + "".join("  " * i + "- \n" for i in range(1, 40)) + "  " * 40 + "x",
     # anchor names PyYAML does not accept
     "a: &\u00e9 1", "a: &x\u00e9 1", "a: &x. 1", "a: &x: 1", "&x: 1",
 ]
@@ -231,6 +255,8 @@ def rust_value(value: object) -> str:
     if isinstance(value, float):
         return f'flt("{value!r}")'
     if isinstance(value, str):
+        if any(0xD800 <= ord(ch) <= 0xDFFF for ch in value):
+            raise OutsideModel("a lone surrogate")  # a Rust string cannot hold one
         return f"s({rust_str(value)})"
     if isinstance(value, datetime.datetime):
         offset = value.utcoffset()
@@ -249,8 +275,11 @@ def rust_value(value: object) -> str:
     raise OutsideModel(repr(value))
 
 
+DISAGREE: list[str] = []
+
+
 def load_both(text: str) -> object:
-    """``text`` loaded by both PyYAML loaders, which must agree."""
+    """``text`` loaded by ``SafeLoader``; a different libyaml reading is noted."""
     results = []
     for loader in (yaml.SafeLoader, yaml.CSafeLoader):
         try:
@@ -258,7 +287,7 @@ def load_both(text: str) -> object:
         except Exception:  # noqa: BLE001 -- any PyYAML failure is an error value
             results.append(("error", None))
     if repr(results[0]) != repr(results[1]):
-        raise SystemExit(f"the loaders disagree on {text!r}: {results}")
+        DISAGREE.append("error" if results[1][0] == "error" else repr(results[1][1]))
     kind, value = results[0]
     if kind == "error":
         raise ValueError(text)
@@ -278,7 +307,8 @@ def main() -> int:
                 expected = rust_value(value)
             except (OutsideModel, RecursionError):  # a cycle is outside the model too
                 expected = "err()"
-        print(f"    ({rust_str(case)}, {expected}),")
+        note = f"  // CSafeLoader: {DISAGREE.pop()}" if DISAGREE else ""
+        print(f"    ({rust_str(case)}, {expected}),{note}")
     return 0
 
 

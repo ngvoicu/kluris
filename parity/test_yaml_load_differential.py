@@ -2,23 +2,23 @@
 YAML text.
 
 Hypothesis builds YAML documents from fragments: block mappings and sequences,
-flow collections, plain, quoted and block scalars (every chomping indicator,
-indentation indicators, with and without a final line break), YAML 1.1
-look-alikes, `=`, anchors (repeated and with names PyYAML refuses), aliases,
-core and unsupported tags, comments, non-ASCII text, CRLF. Each text goes to
+flow collections (also glued: no blanks around `?`, `:`, `,`, brackets,
+anchors, tags and block-scalar indicators), plain, quoted and block scalars
+(every chomping indicator, indentation indicators, with and without a final
+line break), YAML 1.1 look-alikes, `=`, anchors (repeated and with names
+PyYAML refuses), aliases, core and unsupported tags, comments, non-ASCII text,
+CRLF, and characters PyYAML's reader treats specially (U+0085, U+2028 and
+U+2029 break lines; tabs, controls, BOMs). Each text goes to
 ``cargo xtask yaml-load`` (the Rust reader) and to ``tools/yaml_load_oracle.py``
-(``yaml.safe_load`` and ``CSafeLoader`` in the oracle venv, both refusing merge
-keys as v3 does). The Rust reader must agree with both: the same value (exact
-types, key order), or an error where they fail. Error messages are not
-compared. Where the two PyYAML loaders disagree with each other (libyaml's
-scanner accepts a few anchors and indentations the pure-Python one refuses),
-the Rust reader must agree with ``SafeLoader``, whose scanner it follows;
-``KLURIS_YAML_LOAD_DISAGREEMENTS=<file>`` appends those texts to a file.
+in the oracle venv.
 
-The one accepted difference (decided 2026-10-25,
-``crates/kluris-core/src/frontmatter.rs``): PyYAML breaks lines at U+0085,
-U+2028 and U+2029, the Rust reader does not; texts holding them are not
-compared.
+The oracle is ``yaml.safe_load`` (merge keys refused, as v3 does): v3 reads
+every YAML the way PyYAML's pure-Python ``SafeLoader`` does. The Rust reader
+must give the same value (exact types, key order), or an error where it
+fails; error messages are not compared. Texts where libyaml's ``CSafeLoader``
+(which v2 used for markdown frontmatter) reads otherwise are counted, not
+failed: the count is printed at the end, and
+``KLURIS_YAML_LOAD_DISAGREEMENTS=<file>`` appends those texts to a file.
 
 Cases: ``KLURIS_YAML_LOAD_FUZZ_EXAMPLES`` (default 5000).
 """
@@ -39,7 +39,6 @@ from tools.tagged_json import decode, same
 
 WORKSPACE = PARITY_DIR.parent
 MAX_EXAMPLES = int(os.environ.get("KLURIS_YAML_LOAD_FUZZ_EXAMPLES", "5000"))
-LINE_BREAK_GAP = ("\x85", " ", " ")
 
 
 @pytest.fixture(scope="module")
@@ -234,13 +233,60 @@ def document(root, comment: bool, final_break: bool, crlf: bool) -> str:
     return text.replace("\n", "\r\n") if crlf else text
 
 
+# Flow collections with nothing between the indicators and what follows them.
+GLUED_ATOMS = [
+    "a", "b", "x y", "é", "1", "~", "?x", "?", "-a", "- a", ":", ":x", "a:b", "a?b", "'q'", '"q"', "[]", "{}",
+    "!!str", "!!str a", "!!int 1", "!", "!a", FRESH, FRESH + " a", FRESH + "?x", FRESH + ":", "\x00L0",
+    "\x00L1:", "|", ">", "|-", "#c", "a #c", "a#b", "=", "<<", "",
+]
+glued_flow = st.recursive(
+    st.sampled_from(GLUED_ATOMS),
+    lambda inner: st.one_of(
+        st.lists(inner, max_size=3).map(lambda xs: "[" + ",".join(xs) + "]"),
+        st.lists(
+            st.tuples(inner, st.sampled_from([":", ":", ": ", " :", ""]), inner), max_size=3
+        ).map(lambda kvs: "{" + ",".join(f"{k}{sep}{v}" for k, sep, v in kvs) + "}"),
+        st.tuples(st.sampled_from(["[", "{", "[?", "{?", "[-"]), inner, st.sampled_from(["]", "}", ",]", ",}"])).map(
+            "".join
+        ),
+    ),
+    max_leaves=6,
+)
+glued_texts = st.builds(
+    lambda prefix, flow, rest: number_anchors(prefix + flow + rest),
+    st.sampled_from(["", "v: ", "- ", "k:\n  ", "&a ", "!!map ", "? "]),
+    glued_flow,
+    st.sampled_from(["", "\n", "\nw: 1", ": x", "\n- b"]),
+)
+# Characters PyYAML's reader breaks lines at, refuses, or skips.
+SPECIAL_CHARS = ["\x85", "\u2028", "\u2029", "\t", "\x07", "\x00", "\x0b", "\ufeff", "\ufffe", "\x1c", "\r"]
+special = st.builds(
+    lambda text, at, ch: text[: at % (len(text) + 1)] + ch + text[at % (len(text) + 1) :],
+    st.builds(document, nodes, st.booleans(), st.booleans(), st.just(False)),
+    st.integers(0, 10_000),
+    st.sampled_from(SPECIAL_CHARS),
+)
 texts = st.one_of(
     st.builds(document, nodes, st.booleans(), st.booleans(), st.just(False)),
     st.builds(document, nodes, st.booleans(), st.booleans(), st.just(True)),
+    glued_texts,
+    glued_texts,
+    special,
 )
 
 
 DISAGREEMENTS = os.environ.get("KLURIS_YAML_LOAD_DISAGREEMENTS")
+
+
+@pytest.fixture(scope="module")
+def libyaml_disagreements(request):
+    """Texts where CSafeLoader reads otherwise than SafeLoader; their count is
+    printed when the module ends."""
+    texts: list[str] = []
+    yield texts
+    reporter = request.config.pluginmanager.get_plugin("terminalreporter")
+    if reporter is not None:
+        reporter.write_line(f"yaml-load differential: {len(texts)} texts where CSafeLoader reads otherwise")
 
 
 def agree(a: dict, b: dict) -> bool:
@@ -257,26 +303,19 @@ def agree(a: dict, b: dict) -> bool:
     suppress_health_check=[HealthCheck.too_slow, HealthCheck.data_too_large],
 )
 @given(text=texts)
-def test_yaml_reader_matches_pyyaml_on_raw_text(text, loaders):
-    if any(ch in text for ch in LINE_BREAK_GAP):
-        return
+def test_yaml_reader_matches_pyyaml_on_raw_text(text, loaders, libyaml_disagreements):
     pyyaml, rust = loaders
     pyyaml.send(text)
     rust.send(text)
     oracle = pyyaml.receive()
     got = rust.receive()
-    loaders = ("safe", "c")
     if not agree(oracle["safe"], oracle["c"]):
-        loaders = ("safe",)
+        libyaml_disagreements.append(text)
         if DISAGREEMENTS:
             with open(DISAGREEMENTS, "a", encoding="utf-8") as out:
                 out.write(json.dumps({"text": text, **oracle}) + "\n")
-    problems = []
-    for loader in loaders:
-        want = oracle[loader]
-        if agree(want, got):
-            continue
+    want = oracle["safe"]
+    if not agree(want, got):
         reads = f"reads {want['value']!r}" if "value" in want else f"fails ({want['error']})"
         rust = f"reads {got['value']!r}" if "value" in got else f"fails ({got['error']})"
-        problems.append(f"[{loader}] PyYAML {reads}, Rust {rust}")
-    assert not problems, f"text {text!r}:\n" + "\n".join(problems)
+        pytest.fail(f"text {text!r}:\nSafeLoader {reads}, Rust {rust}")

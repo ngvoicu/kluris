@@ -1,8 +1,8 @@
-//! YAML text read the way PyYAML's `SafeLoader` reads it, in its two steps:
-//! `saphyr-parser` events are composed into a node graph (anchors shared,
-//! tags resolved), then the graph is constructed into a [`Value`] in the
-//! order `BaseConstructor.construct_document` uses. Everything outside the
-//! value model is an error.
+//! YAML text read the way PyYAML's `SafeLoader` reads it: the ported
+//! reader, scanner, parser and composer build the node graph, and the graph
+//! is constructed into a [`Value`] in the order
+//! `BaseConstructor.construct_document` uses. Everything outside the value
+//! model is an error.
 
 use std::collections::{HashMap, HashSet};
 use std::fmt;
@@ -10,13 +10,14 @@ use std::rc::Rc;
 
 use indexmap::IndexMap;
 
-use saphyr_parser::{Event, Marker, Parser, ScalarStyle, Span, Tag};
-
-use super::resolve::{self, ImplicitTag, ScalarTag};
+use super::composer::{Body, Composer, Node, NodeTag};
+use super::parser::Parser;
+use super::reader::{Mark, Reader};
+use super::resolve::{self, ScalarTag};
+use super::scanner::Scanner;
 use super::value::{Map, Value};
 
-/// Deeper nesting is refused (PyYAML's recursive composer fails well before
-/// Python's recursion limit anyway).
+/// The deepest `=` chain `construct_scalar` follows.
 const MAX_DEPTH: usize = 128;
 
 /// The most nodes one document may hold once aliases are expanded into
@@ -36,12 +37,61 @@ pub struct YamlError {
 }
 
 impl YamlError {
-    fn at(mark: Marker, message: impl Into<String>) -> YamlError {
+    /// An error at PyYAML's `mark` (0-based; stored 1-based).
+    pub(super) fn new(message: String, mark: Mark) -> YamlError {
         YamlError {
-            message: message.into(),
-            line: mark.line(),
-            column: mark.col() + 1,
+            message,
+            line: mark.line + 1,
+            column: mark.column + 1,
         }
+    }
+
+    /// A `ConstructorError` at a node's start.
+    fn at(mark: Mark, message: impl Into<String>) -> YamlError {
+        YamlError::new(format!("ConstructorError: {}", message.into()), mark)
+    }
+}
+
+/// A `MarkedYAMLError` of PyYAML: the class, the context and the problem in
+/// the message, at the problem's mark. The context's mark is named when it is
+/// elsewhere.
+pub(super) fn marked(
+    class: &str,
+    context: Option<&str>,
+    context_mark: Option<Mark>,
+    problem: &str,
+    mark: Mark,
+) -> YamlError {
+    let mut message = format!("{class}: ");
+    if let Some(context) = context {
+        message.push_str(context);
+        if let Some(at) = context_mark
+            && at != mark
+        {
+            message.push_str(&format!(
+                " (line {}, column {})",
+                at.line + 1,
+                at.column + 1
+            ));
+        }
+        message.push_str(": ");
+    }
+    message.push_str(problem);
+    YamlError::new(message, mark)
+}
+
+/// Python's `repr()` of one character, as PyYAML's messages quote them.
+pub(super) fn py_repr(c: char) -> String {
+    match c {
+        '\\' => "'\\\\'".to_string(),
+        '\'' => "\"'\"".to_string(),
+        '\t' => "'\\t'".to_string(),
+        '\n' => "'\\n'".to_string(),
+        '\r' => "'\\r'".to_string(),
+        c if (c as u32) < 0x20 || (0x7F..0xA0).contains(&(c as u32)) => {
+            format!("'\\x{:02x}'", c as u32)
+        }
+        c => format!("'{c}'"),
     }
 }
 
@@ -60,471 +110,11 @@ impl std::error::Error for YamlError {}
 /// Load a single YAML document like `yaml.safe_load`: an empty stream is
 /// `Null`; more than one document is an error.
 pub fn load(source: &str) -> Result<Value, YamlError> {
-    // saphyr-parser reads `&a:` as the anchor `a:`; PyYAML ends the name at
-    // the `:` and goes on from there. Whitespace between tokens changes
-    // nothing for PyYAML, so the text is composed again with a space where
-    // PyYAML's name ends, until no name needs one. Error columns are given
-    // back in the original text.
-    let mut text = source.to_string();
-    let mut inserted: Vec<usize> = Vec::new();
-    let result = loop {
-        let mut names = AnchorNames::new(&text);
-        let composed = compose(&text, &mut names);
-        let Some(mut spaces) = names.split.take() else {
-            break composed.and_then(|root| match root {
-                None => Ok(Value::Null),
-                Some(root) => Constructor::default().document(&root),
-            });
-        };
-        if inserted.len() >= MAX_DEPTH * 8 {
-            break composed.map(|_| Value::Null);
-        }
-        spaces.sort_unstable_by(|a, b| b.cmp(a));
-        for split in spaces {
-            let byte = text
-                .char_indices()
-                .nth(split)
-                .map_or(text.len(), |(i, _)| i);
-            text.insert(byte, ' ');
-            for at in &mut inserted {
-                if *at >= split {
-                    *at += 1;
-                }
-            }
-            inserted.push(split);
-        }
-    };
-    result.map_err(|e| original_position(e, &text, &inserted))
-}
-
-/// An error position in `text` moved back to where it is in the text
-/// before the spaces at the character indexes `inserted` were added.
-fn original_position(mut error: YamlError, text: &str, inserted: &[usize]) -> YamlError {
-    if inserted.is_empty() {
-        return error;
-    }
-    let (mut line, mut col) = (1, 0);
-    let mut shift = 0;
-    for (i, c) in text.chars().enumerate() {
-        if line == error.line && col + 1 >= error.column {
-            break;
-        }
-        if line == error.line && inserted.contains(&i) {
-            shift += 1;
-        }
-        if c == '\n' {
-            line += 1;
-            col = 0;
-        } else {
-            col += 1;
-        }
-    }
-    error.column -= shift.min(error.column - 1);
-    error
-}
-
-// --- composing ---------------------------------------------------------------
-
-/// A node's tag after resolution (`Composer` + `Resolver`).
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum NodeTag {
-    Scalar(ScalarTag),
-    Seq,
-    Map,
-    /// `tag:yaml.org,2002:value`, what `=` resolves to.
-    Value,
-    /// `tag:yaml.org,2002:merge`, what `<<` resolves to.
-    Merge,
-    /// Core tags PyYAML constructs into values outside the value model
-    /// (bytes, a set, lists of pairs).
-    Binary,
-    Set,
-    Omap,
-    Pairs,
-    /// Any other tag; no constructor in the value model.
-    Other(String),
-}
-
-enum Body {
-    Scalar(String),
-    Seq(Vec<Rc<Node>>),
-    Map(Vec<(Rc<Node>, Rc<Node>)>),
-    /// An alias to a collection still being composed (the node with this
-    /// id). PyYAML builds a cycle; the value model cannot hold one, so it is
-    /// an error if it is still there once the value is built.
-    Recursive(usize),
-}
-
-struct Node {
-    id: usize,
-    tag: NodeTag,
-    mark: Marker,
-    body: Body,
-}
-
-const CORE: &str = "tag:yaml.org,2002:";
-
-/// The tag PyYAML gives a node: an explicit tag (`!!` expanded, verbatim as
-/// written), the implicit resolvers for a plain scalar or one tagged `!`,
-/// `!!str` for any other untagged scalar, `!!seq`/`!!map` for collections.
-fn resolve_tag(
-    tag: Option<&Tag>,
-    collection: Option<NodeTag>,
-    scalar: Option<(&str, ScalarStyle)>,
-) -> NodeTag {
-    let full = tag.map(|t| format!("{}{}", t.handle, t.suffix));
-    match (full.as_deref(), collection, scalar) {
-        (None | Some("!"), Some(default), _) => default,
-        (Some("!"), None, Some((text, _))) => implicit(text),
-        (None, None, Some((text, ScalarStyle::Plain))) => implicit(text),
-        (None, _, _) => NodeTag::Scalar(ScalarTag::Str),
-        (Some(full), _, _) => match full.strip_prefix(CORE) {
-            Some("str") => NodeTag::Scalar(ScalarTag::Str),
-            Some("int") => NodeTag::Scalar(ScalarTag::Int),
-            Some("float") => NodeTag::Scalar(ScalarTag::Float),
-            Some("bool") => NodeTag::Scalar(ScalarTag::Bool),
-            Some("null") => NodeTag::Scalar(ScalarTag::Null),
-            Some("timestamp") => NodeTag::Scalar(ScalarTag::Timestamp),
-            Some("seq") => NodeTag::Seq,
-            Some("map") => NodeTag::Map,
-            Some("value") => NodeTag::Value,
-            Some("merge") => NodeTag::Merge,
-            Some("binary") => NodeTag::Binary,
-            Some("set") => NodeTag::Set,
-            Some("omap") => NodeTag::Omap,
-            Some("pairs") => NodeTag::Pairs,
-            Some(other) => NodeTag::Other(format!("!!{other}")),
-            None => NodeTag::Other(full.to_string()),
-        },
-    }
-}
-
-fn implicit(text: &str) -> NodeTag {
-    match resolve::implicit_tag(text) {
-        ImplicitTag::Bool => NodeTag::Scalar(ScalarTag::Bool),
-        ImplicitTag::Float => NodeTag::Scalar(ScalarTag::Float),
-        ImplicitTag::Int => NodeTag::Scalar(ScalarTag::Int),
-        ImplicitTag::Null => NodeTag::Scalar(ScalarTag::Null),
-        ImplicitTag::Timestamp => NodeTag::Scalar(ScalarTag::Timestamp),
-        ImplicitTag::Str => NodeTag::Scalar(ScalarTag::Str),
-        ImplicitTag::Merge => NodeTag::Merge,
-        ImplicitTag::Value => NodeTag::Value,
-    }
-}
-
-/// A collection still being composed.
-struct Open {
-    id: usize,
-    /// A flow collection (`[` or `{`).
-    flow: bool,
-    tag: NodeTag,
-    mark: Marker,
-    anchor: usize,
-    map: bool,
-    items: Vec<Rc<Node>>,
-}
-
-/// Compose the single document of `source` into a node graph (`None` for an
-/// empty stream).
-///
-/// When an anchor or alias name runs past where PyYAML ends it, the text
-/// cannot be composed as it is: `anchor_names.split` is set to the character
-/// index where PyYAML's name ends and an error is returned.
-fn compose(source: &str, anchor_names: &mut AnchorNames) -> Result<Option<Rc<Node>>, YamlError> {
-    let mut documents = 0;
-    // saphyr-parser's marker indexes count characters, not bytes.
-    let source_chars = source.chars().count();
-    let mut anchors: HashMap<usize, Rc<Node>> = HashMap::new();
-    let mut stack: Vec<Open> = Vec::new();
-    let mut root = None;
-    let mut next_id = 0;
-    for item in Parser::new_from_str(source) {
-        let in_flow = stack.last().is_some_and(|open| open.flow);
-        let (event, span) = item.map_err(|e| {
-            // An alias named past PyYAML's end of the name is unknown; an
-            // anchor named past it can stop saphyr-parser before the anchored
-            // node's event.
-            anchor_names.split = if e.info().contains("unknown anchor") {
-                pyyaml_spaces(&anchor_names.chars, e.marker().index(), in_flow)
-            } else {
-                // The error can come before the anchor (saphyr-parser stops at
-                // the line of the node); the scan stops at content anyway.
-                anchor_names
-                    .next_split_anchor(anchor_names.chars.len())
-                    .and_then(|at| pyyaml_spaces(&anchor_names.chars, at, in_flow))
-            };
-            YamlError::at(*e.marker(), e.info().to_string())
-        })?;
-        let mark = span.start;
-        // A block scalar's header, and the indentation of the block
-        // collection around it (PyYAML's `Scanner.indent`): a mapping's
-        // column, or the column of the item's `-` (an indentless sequence
-        // keeps its mapping's indentation, which is that column too).
-        let header = match &event {
-            Event::Scalar(_, ScalarStyle::Literal | ScalarStyle::Folded, ..) => {
-                anchor_names.block_header(span.start.index()).map(|header| {
-                    let parent = match stack.last() {
-                        None => -1,
-                        Some(open) if open.map => open.mark.col() as isize,
-                        Some(open) => {
-                            anchor_names.entry_dash(header).unwrap_or(open.mark.col()) as isize
-                        }
-                    };
-                    (header, parent)
-                })
-            }
-            _ => None,
-        };
-        anchor_names.event(&event, span, in_flow)?;
-        let opens_map = matches!(event, Event::MappingStart(..));
-        let (node, anchor) = match event {
-            Event::DocumentStart(_) => {
-                documents += 1;
-                if documents > 1 {
-                    return Err(YamlError::at(
-                        mark,
-                        "expected a single document in the stream, but found another document",
-                    ));
-                }
-                continue;
-            }
-            Event::Scalar(mut text, style, anchor, tag) => {
-                // saphyr-parser chomps a block scalar that runs to the end of
-                // the input differently from PyYAML; such a scalar is read
-                // again the way PyYAML reads it.
-                if let Some((header, parent)) = header
-                    && span.end.index() == source_chars
-                {
-                    let folded = style == ScalarStyle::Folded;
-                    if let Some(read) =
-                        block_scalar_to_end(&anchor_names.chars, header, parent, folded)
-                    {
-                        text = read.into();
-                    }
-                }
-                let tag = resolve_tag(tag.as_deref(), None, Some((&text, style)));
-                let body = Body::Scalar(text.into_owned());
-                next_id += 1;
-                (
-                    Node {
-                        id: next_id,
-                        tag,
-                        mark,
-                        body,
-                    },
-                    anchor,
-                )
-            }
-            Event::SequenceStart(anchor, tag) | Event::MappingStart(anchor, tag) => {
-                if stack.len() >= MAX_DEPTH {
-                    return Err(YamlError::at(
-                        mark,
-                        format!("collections nested more than {MAX_DEPTH} deep"),
-                    ));
-                }
-                let map = opens_map;
-                let default = if map { NodeTag::Map } else { NodeTag::Seq };
-                let tag = resolve_tag(tag.as_deref(), Some(default), None);
-                next_id += 1;
-                let flow = matches!(anchor_names.chars.get(mark.index()), Some('[' | '{'));
-                stack.push(Open {
-                    id: next_id,
-                    flow,
-                    tag,
-                    mark,
-                    anchor,
-                    map,
-                    items: Vec::new(),
-                });
-                continue;
-            }
-            Event::SequenceEnd | Event::MappingEnd => {
-                let Some(open) = stack.pop() else {
-                    return Err(YamlError::at(mark, "unexpected end of a collection"));
-                };
-                let body = if open.map {
-                    if open.items.len() % 2 != 0 {
-                        return Err(YamlError::at(mark, "mapping key without a value"));
-                    }
-                    let mut items = open.items.into_iter();
-                    let mut pairs = Vec::new();
-                    while let (Some(key), Some(value)) = (items.next(), items.next()) {
-                        pairs.push((key, value));
-                    }
-                    Body::Map(pairs)
-                } else {
-                    Body::Seq(open.items)
-                };
-                (
-                    Node {
-                        id: open.id,
-                        tag: open.tag,
-                        mark: open.mark,
-                        body,
-                    },
-                    open.anchor,
-                )
-            }
-            Event::Alias(id) => {
-                let node = match anchors.get(&id) {
-                    Some(node) => Rc::clone(node),
-                    None => match stack.iter().find(|open| open.anchor == id) {
-                        Some(open) => {
-                            next_id += 1;
-                            Rc::new(Node {
-                                id: next_id,
-                                tag: open.tag.clone(),
-                                mark,
-                                body: Body::Recursive(open.id),
-                            })
-                        }
-                        None => return Err(YamlError::at(mark, "found undefined alias")),
-                    },
-                };
-                attach(&mut stack, &mut root, node);
-                continue;
-            }
-            Event::Nothing | Event::StreamStart | Event::StreamEnd | Event::DocumentEnd => {
-                continue;
-            }
-        };
-        let node = Rc::new(node);
-        if next_id > MAX_NODES {
-            return Err(YamlError::at(
-                mark,
-                format!("the document has more than {MAX_NODES} nodes"),
-            ));
-        }
-        if anchor != 0 {
-            anchors.insert(anchor, Rc::clone(&node));
-        }
-        attach(&mut stack, &mut root, node);
-    }
-    Ok(root)
-}
-
-/// `Scanner.scan_block_scalar` of PyYAML for a block scalar whose header
-/// (`|` or `>`) is at character `start` and which runs to the end of `chars`;
-/// `parent` is the indentation of the enclosing block collection (-1 at the
-/// top). `None` when the header is not followed by a line break.
-///
-/// Only `\n`, `\r\n` and `\r` break lines here, as in saphyr-parser; PyYAML
-/// also breaks at U+0085, U+2028 and U+2029 (the known gap, see
-/// `frontmatter::universal_newlines`).
-fn block_scalar_to_end(
-    chars: &[char],
-    start: usize,
-    parent: isize,
-    folded: bool,
-) -> Option<String> {
-    let at = |i: usize| chars.get(i).copied().unwrap_or('\0');
-    let mut i = start + 1;
-    let (mut chomping, mut increment) = (None, None);
-    for _ in 0..2 {
-        match at(i) {
-            '+' if chomping.is_none() => chomping = Some(true),
-            '-' if chomping.is_none() => chomping = Some(false),
-            c @ '1'..='9' if increment.is_none() => increment = c.to_digit(10),
-            _ => break,
-        }
-        i += 1;
-    }
-    // The rest of the header line (blanks, a comment) and its line break.
-    while !matches!(at(i), '\n' | '\r' | '\0') {
-        i += 1;
-    }
-    if at(i) == '\0' {
-        return None;
-    }
-    let line_break = |i: &mut usize| -> bool {
-        match at(*i) {
-            '\r' if at(*i + 1) == '\n' => *i += 2,
-            '\n' | '\r' => *i += 1,
-            _ => return false,
-        }
-        true
-    };
-    line_break(&mut i);
-    let mut column = 0usize;
-    let min_indent = usize::try_from(parent + 1).unwrap_or(0).max(1);
-    let mut breaks = 0usize;
-    // `scan_block_scalar_breaks`: the line breaks of the lines that end
-    // before the indentation.
-    let scan_breaks = |i: &mut usize, column: &mut usize, indent: usize| -> usize {
-        let mut breaks = 0;
-        loop {
-            while *column < indent && at(*i) == ' ' {
-                *i += 1;
-                *column += 1;
-            }
-            if !line_break(i) {
-                return breaks;
-            }
-            breaks += 1;
-            *column = 0;
-        }
-    };
-    let indent = match increment {
-        Some(increment) => {
-            let indent = min_indent + increment as usize - 1;
-            breaks = scan_breaks(&mut i, &mut column, indent);
-            indent
-        }
-        // `scan_block_scalar_indentation`.
-        None => {
-            let mut max_indent = 0;
-            loop {
-                if at(i) == ' ' {
-                    i += 1;
-                    column += 1;
-                    max_indent = max_indent.max(column);
-                } else if line_break(&mut i) {
-                    breaks += 1;
-                    column = 0;
-                } else {
-                    break;
-                }
-            }
-            min_indent.max(max_indent)
-        }
-    };
-    let mut chunks = String::new();
-    let mut last_break = false;
-    while column == indent && at(i) != '\0' {
-        chunks.extend(std::iter::repeat_n('\n', breaks));
-        let leading_non_space = !matches!(at(i), ' ' | '\t');
-        while !matches!(at(i), '\0' | '\r' | '\n') {
-            chunks.push(at(i));
-            i += 1;
-        }
-        last_break = line_break(&mut i);
-        column = 0;
-        breaks = scan_breaks(&mut i, &mut column, indent);
-        if column == indent && at(i) != '\0' {
-            if folded && last_break && leading_non_space && !matches!(at(i), ' ' | '\t') {
-                if breaks == 0 {
-                    chunks.push(' ');
-                }
-            } else if last_break {
-                chunks.push('\n');
-            }
-        } else {
-            break;
-        }
-    }
-    if chomping != Some(false) && last_break {
-        chunks.push('\n');
-    }
-    if chomping == Some(true) {
-        chunks.extend(std::iter::repeat_n('\n', breaks));
-    }
-    Some(chunks)
-}
-
-fn attach(stack: &mut [Open], root: &mut Option<Rc<Node>>, node: Rc<Node>) {
-    match stack.last_mut() {
-        Some(open) => open.items.push(node),
-        None => *root = Some(node),
+    let reader = Reader::new(source)?;
+    let mut composer = Composer::new(Parser::new(Scanner::new(reader)));
+    match composer.get_single_node()? {
+        None => Ok(Value::Null),
+        Some(root) => Constructor::default().document(&root),
     }
 }
 
@@ -632,7 +222,7 @@ impl Constructor {
                     kind(node)
                 ));
             }
-            (NodeTag::Map | NodeTag::Set, Body::Scalar(_) | Body::Seq(_)) => {
+            (NodeTag::Map | NodeTag::Set, Body::Scalar { .. } | Body::Seq(_)) => {
                 return fail(format!("expected a mapping node, but found {}", kind(node)));
             }
             (NodeTag::Set, _) => {
@@ -650,13 +240,20 @@ impl Constructor {
                 return fail("a timestamp cannot be built from a mapping".into());
             }
             (NodeTag::Scalar(tag), _) => {
-                let text = self.scalar(node, 0)?;
-                Item::Value(
-                    resolve::tagged_scalar(tag, &text).map_err(|e| YamlError::at(node.mark, e))?,
-                )
+                let (text, surrogate) = self.scalar(node, 0)?;
+                match tag {
+                    // Python builds the string; a Rust one cannot hold it.
+                    ScalarTag::Str if surrogate => outside(node, "a lone surrogate", true),
+                    // U+FFFD in its place fails `int()`, `float()`, the
+                    // booleans and the timestamp pattern as the surrogate does.
+                    _ => Item::Value(
+                        resolve::tagged_scalar(tag, &text)
+                            .map_err(|e| YamlError::at(node.mark, e))?,
+                    ),
+                }
             }
             (NodeTag::Binary, _) => {
-                let text = self.scalar(node, 0)?;
+                let (text, _) = self.scalar(node, 0)?;
                 check_base64(&text).map_err(|e| YamlError::at(node.mark, e))?;
                 outside(node, "binary data", true)
             }
@@ -673,11 +270,12 @@ impl Constructor {
         Ok(item)
     }
 
-    /// `SafeConstructor.construct_scalar`: a scalar's text, or for a mapping
-    /// the text of the value of its first `=` key.
-    fn scalar(&self, node: &Node, depth: usize) -> Result<String, YamlError> {
+    /// `SafeConstructor.construct_scalar`: a scalar's text (and whether it
+    /// holds a lone surrogate), or for a mapping the text of the value of its
+    /// first `=` key.
+    fn scalar(&self, node: &Node, depth: usize) -> Result<(String, bool), YamlError> {
         match &node.body {
-            Body::Scalar(text) => Ok(text.clone()),
+            Body::Scalar { text, surrogate } => Ok((text.clone(), *surrogate)),
             Body::Map(pairs) if depth < MAX_DEPTH => {
                 match pairs
                     .iter()
@@ -796,7 +394,7 @@ impl Constructor {
 
     /// The owned value of an item, expanding shared collections into copies
     /// within the node budget.
-    fn assemble(&mut self, item: &Item, mark: Marker, depth: usize) -> Result<Value, YamlError> {
+    fn assemble(&mut self, item: &Item, mark: Mark, depth: usize) -> Result<Value, YamlError> {
         self.nodes += 1;
         if self.nodes > MAX_NODES {
             return Err(YamlError::at(
@@ -885,282 +483,8 @@ fn check_base64(text: &str) -> Result<(), String> {
 
 fn kind(node: &Node) -> &'static str {
     match node.body {
-        Body::Scalar(_) => "scalar",
+        Body::Scalar { .. } => "scalar",
         Body::Seq(_) | Body::Recursive(_) => "sequence",
         Body::Map(_) => "mapping",
-    }
-}
-
-// --- anchor names --------------------------------------------------------------
-
-/// The anchor names of a document, checked the way PyYAML checks them:
-/// `[0-9A-Za-z_-]` only, and each defined once.
-///
-/// saphyr-parser reports an anchor only as a number, so the name is read from
-/// the source between the previous event and the anchored one, where only
-/// indicators, whitespace, comments, directives, the tag and the anchor can
-/// be. Marker indexes count characters.
-struct AnchorNames {
-    chars: Vec<char>,
-    /// Where the text not yet covered by an event starts.
-    gap: Marker,
-    seen: HashMap<String, Marker>,
-    /// Set when PyYAML ends a name before saphyr-parser does (see
-    /// [`pyyaml_name_end`]).
-    split: Option<Vec<usize>>,
-}
-
-impl AnchorNames {
-    fn new(source: &str) -> AnchorNames {
-        AnchorNames {
-            chars: source.chars().collect(),
-            gap: Marker::new(0, 1, 0),
-            seen: HashMap::new(),
-            split: None,
-        }
-    }
-
-    fn event(&mut self, event: &Event, span: Span, in_flow: bool) -> Result<(), YamlError> {
-        let anchor = match event {
-            // An implicit document start spans the document's first token,
-            // which can be the anchor itself.
-            Event::DocumentStart(false) => return Ok(()),
-            Event::Scalar(_, _, anchor, _)
-            | Event::SequenceStart(anchor, _)
-            | Event::MappingStart(anchor, _) => *anchor,
-            _ => 0,
-        };
-        // Any anchor before this node that PyYAML ends earlier (saphyr-parser
-        // can fold more than one anchor's text into one node's properties).
-        // The scan stops at the node's content; an empty scalar's span can be
-        // the anchor token itself.
-        if let Some(at) = self.next_split_anchor(span.end.index())
-            && let Some(spaces) = pyyaml_spaces(&self.chars, at, in_flow)
-        {
-            self.split = Some(spaces);
-            return Err(YamlError::at(span.start, "an anchor name ends earlier"));
-        }
-        if anchor != 0
-            && let Some((name, at)) = self.find(span.start.index())
-        {
-            if let Some(spaces) = pyyaml_spaces(&self.chars, at.index(), in_flow) {
-                self.split = Some(spaces);
-                return Err(YamlError::at(at, "the anchor name ends earlier"));
-            }
-            check_anchor_name(&name, self.chars.get(at.index() + name.chars().count() + 1))
-                .map_err(|e| YamlError::at(at, e))?;
-            if let Some(first) = self.seen.get(&name) {
-                return Err(YamlError::at(
-                    at,
-                    format!(
-                        "found duplicate anchor '{name}'; first occurrence at line {}, column {}",
-                        first.line(),
-                        first.col() + 1
-                    ),
-                ));
-            }
-            self.seen.insert(name, at);
-        }
-        if span.end.index() > self.gap.index() {
-            self.gap = span.end;
-        }
-        Ok(())
-    }
-
-    /// The anchor token (`&name`) in the gap before `end`, and where it is.
-    fn find(&self, end: usize) -> Option<(String, Marker)> {
-        let at = self.token(end, |c| c == '&')?;
-        let name = self.chars[at.index() + 1..end]
-            .iter()
-            .take_while(|&&c| saphyr_anchor_char(c))
-            .collect();
-        Some((name, at))
-    }
-
-    /// Where the header (`|` or `>`) of the block scalar whose span starts at
-    /// `start` is: saphyr-parser's span of a block scalar with content starts
-    /// at the content.
-    fn block_header(&self, start: usize) -> Option<usize> {
-        let header = |c: char| c == '|' || c == '>';
-        if self.chars.get(start).copied().is_some_and(header) {
-            // An empty block scalar's span starts at its header.
-            return Some(start);
-        }
-        self.token(start, header).map(|at| at.index())
-    }
-
-    /// The column of the last `-` entry indicator on the line of the block
-    /// scalar header at `header`, before it (props and blanks between).
-    fn entry_dash(&self, header: usize) -> Option<usize> {
-        let line_start = self.chars[..header]
-            .iter()
-            .rposition(|&c| c == '\n' || c == '\r')
-            .map_or(0, |i| i + 1);
-        let at = |i: usize| self.chars.get(i).copied().filter(|_| i < header);
-        let (mut i, mut dash) = (line_start, None);
-        while let Some(c) = at(i) {
-            match c {
-                ' ' | '\t' => i += 1,
-                '-' if at(i + 1).is_none_or(is_break_or_blank) => {
-                    dash = Some(i - line_start);
-                    i += 1;
-                }
-                '!' | '&' => {
-                    while at(i).is_some_and(|c| !is_break_or_blank(c)) {
-                        i += 1;
-                    }
-                }
-                _ => break,
-            }
-        }
-        dash
-    }
-
-    /// The `&` or `*` of an anchor or alias that PyYAML ends earlier than
-    /// saphyr-parser, among the properties that follow the last event, before
-    /// the next node's content (and before `end`): only blanks, comments,
-    /// directives, tags, other anchors and indicators can come first.
-    fn next_split_anchor(&self, end: usize) -> Option<usize> {
-        let mut i = self.gap.index();
-        let at = |i: usize| self.chars.get(i).copied().filter(|_| i < end);
-        while let Some(c) = at(i) {
-            i += 1;
-            match c {
-                '&' | '*' if pyyaml_name_end(&self.chars, i - 1).is_some() => return Some(i - 1),
-                '&' | '*' => {
-                    while at(i).is_some_and(saphyr_anchor_char) {
-                        i += 1;
-                    }
-                }
-                ' ' | '\t' | '\n' | '\r' => {}
-                '#' | '%' => {
-                    while at(i).is_some_and(|c| c != '\n' && c != '\r') {
-                        i += 1;
-                    }
-                }
-                '!' => {
-                    while at(i).is_some_and(|c| !is_break_or_blank(c)) {
-                        i += 1;
-                    }
-                }
-                // An indicator, when a blank (or the end) follows.
-                '-' | '?' | ':' if at(i).is_none_or(is_break_or_blank) => {}
-                '[' | '{' | ',' => {}
-                _ => return None,
-            }
-        }
-        None
-    }
-
-    /// The first token in the gap before `end` that starts with a character
-    /// `wanted` accepts, skipping blanks, comments, directives, tags,
-    /// anchors and indicators.
-    fn token(&self, end: usize, wanted: impl Fn(char) -> bool) -> Option<Marker> {
-        let (mut i, mut line, mut col) = (self.gap.index(), self.gap.line(), self.gap.col());
-        let at = |i: usize| self.chars.get(i).copied().filter(|_| i < end);
-        while let Some(c) = at(i) {
-            if wanted(c) {
-                return Some(Marker::new(i, line, col));
-            }
-            let start = i;
-            i += 1;
-            match c {
-                // A comment or a directive runs to the end of the line.
-                '#' | '%' => {
-                    while at(i).is_some_and(|c| c != '\n' && c != '\r') {
-                        i += 1;
-                    }
-                }
-                // A verbatim tag runs to its closing `>`.
-                '!' if at(i) == Some('<') => {
-                    while at(i).is_some_and(|c| c != '>') {
-                        i += 1;
-                    }
-                    i += 1;
-                }
-                '!' => {
-                    while at(i).is_some_and(|c| !is_break_or_blank(c)) {
-                        i += 1;
-                    }
-                }
-                '&' => {
-                    while at(i).is_some_and(saphyr_anchor_char) {
-                        i += 1;
-                    }
-                }
-                _ => {}
-            }
-            for c in &self.chars[start..i] {
-                if *c == '\n' {
-                    line += 1;
-                    col = 0;
-                } else {
-                    col += 1;
-                }
-            }
-        }
-        None
-    }
-}
-
-fn is_break_or_blank(c: char) -> bool {
-    matches!(c, ' ' | '\t' | '\n' | '\r')
-}
-
-/// saphyr-parser's `is_anchor_char`: the characters it reads into a name.
-fn saphyr_anchor_char(c: char) -> bool {
-    !is_break_or_blank(c) && !matches!(c, ',' | '[' | ']' | '{' | '}' | '\u{feff}' | '\0')
-}
-
-/// PyYAML's `scan_anchor`: a name of `[0-9A-Za-z_-]`, followed by a blank, a
-/// line break, the end, or one of `?:,]}%@` and the backquote.
-/// Where PyYAML ends the name of the anchor or alias whose indicator (`&` or
-/// `*`) is at `indicator`, when saphyr-parser's name runs past it: PyYAML's
-/// name is `[0-9A-Za-z_-]+`, and one of `?:%@` and the backquote may follow
-/// at once (saphyr-parser already stops at `,`, `]` and `}`).
-fn pyyaml_name_end(chars: &[char], indicator: usize) -> Option<usize> {
-    if !matches!(chars.get(indicator), Some('&' | '*')) {
-        return None;
-    }
-    let start = indicator + 1;
-    let name = chars[start..]
-        .iter()
-        .take_while(|&&c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
-        .count();
-    let end = start + name;
-    match chars.get(end) {
-        Some('?' | ':' | '%' | '@' | '`') if name > 0 => Some(end),
-        _ => None,
-    }
-}
-
-/// The spaces that make saphyr-parser end the name of the anchor or alias at
-/// `indicator` where PyYAML does: one at PyYAML's end of the name, and in a
-/// flow collection one after a `:` that follows it (PyYAML reads that `:` as
-/// a value indicator even when no blank follows).
-fn pyyaml_spaces(chars: &[char], indicator: usize, in_flow: bool) -> Option<Vec<usize>> {
-    let end = pyyaml_name_end(chars, indicator)?;
-    let mut spaces = vec![end];
-    if in_flow
-        && chars.get(end) == Some(&':')
-        && chars.get(end + 1).is_some_and(|&c| !is_break_or_blank(c))
-    {
-        spaces.push(end + 1);
-    }
-    Some(spaces)
-}
-
-fn check_anchor_name(name: &str, next: Option<&char>) -> Result<(), String> {
-    let valid = !name.is_empty()
-        && name
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
-        && next.is_none_or(|&c| {
-            is_break_or_blank(c) || matches!(c, '?' | ':' | ',' | ']' | '}' | '%' | '@' | '`')
-        });
-    if valid {
-        Ok(())
-    } else {
-        Err("while scanning an anchor, expected alphabetic or numeric character".into())
     }
 }

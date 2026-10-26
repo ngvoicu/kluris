@@ -102,11 +102,9 @@ fn line_ending(text: &str) -> LineEnding {
     }
 }
 
-/// The YAML text as v2's text-mode read hands it to PyYAML.
-///
-/// Known gap, left as is (decided 2026-10-25): PyYAML (YAML 1.1) also breaks
-/// lines at `\u{85}`, `\u{2028}` and `\u{2029}`; saphyr-parser (YAML 1.2)
-/// reads them as ordinary characters, and they are not converted here.
+/// The YAML text as v2's text-mode read hands it to PyYAML: only `\r\n`
+/// and `\r` become `\n` here; `\u{85}`, `\u{2028}` and `\u{2029}` stay, and
+/// the YAML reader breaks lines at them as PyYAML's does.
 fn universal_newlines(text: &str) -> String {
     text.replace("\r\n", "\n").replace('\r', "\n")
 }
