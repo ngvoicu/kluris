@@ -262,6 +262,32 @@ fn py_int(text: &str, radix: u32, original: &str) -> Result<BigInt, String> {
     Ok(if negative { -magnitude } else { magnitude })
 }
 
+/// Python's `int(text)` on a `str` (base 10, what Click's `IntRange` runs on
+/// typed input): surrounding whitespace, one sign, any Unicode decimal digit,
+/// single `_` between digits, at most [`MAX_STR_DIGITS`] digits. `None` where
+/// Python raises `ValueError`.
+pub(crate) fn py_int_from_str(text: &str) -> Option<BigInt> {
+    let ascii = py_ascii_number(text)?;
+    let (negative, digits) = sign(ascii.trim_matches(is_number_space));
+    let mut cleaned = String::with_capacity(digits.len());
+    let mut previous_digit = false;
+    for c in digits.chars() {
+        match c {
+            '0'..='9' => {
+                cleaned.push(c);
+                previous_digit = true;
+            }
+            '_' if previous_digit => previous_digit = false,
+            _ => return None,
+        }
+    }
+    if cleaned.is_empty() || !previous_digit || cleaned.len() > MAX_STR_DIGITS {
+        return None;
+    }
+    let magnitude = BigInt::parse_bytes(cleaned.as_bytes(), 10)?;
+    Some(if negative { -magnitude } else { magnitude })
+}
+
 /// `SafeConstructor.construct_yaml_int`.
 fn construct_int(text: &str) -> Result<Value, String> {
     let cleaned = text.replace('_', "");

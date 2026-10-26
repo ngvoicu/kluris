@@ -1,12 +1,13 @@
 //! `BrainStore`: how every command reads a brain. Only the read side exists so
 //! far; write methods come with the commands that write.
 
+use std::fs;
 use std::path::{Path, PathBuf};
 
 use super::glossary::{GlossaryEntry, parse_glossary_entries};
 use super::neuron_index::{Neuron, neuron_files};
 use super::sandbox::{self, SandboxError};
-use super::walk::{WalkedFile, walk};
+use super::walk::{WalkedFile, is_pruned_dir, walk};
 use crate::frontmatter::{self, Frontmatter, FrontmatterError};
 
 /// Why a file could not be read.
@@ -45,7 +46,28 @@ pub trait BrainStore {
     fn read(&self, rel: &str) -> Result<Frontmatter, ReadError>;
     /// The glossary entries of `glossary.md`: none when the file does not
     /// exist, an error when its frontmatter cannot be read.
-    fn glossary(&self) -> Result<Vec<GlossaryEntry>, FrontmatterError>;
+    fn glossary(&self) -> Result<Vec<GlossaryEntry>, FrontmatterError> {
+        match self.structure_file("glossary.md") {
+            None => Ok(Vec::new()),
+            Some(fm) => Ok(parse_glossary_entries(&fm?.body)),
+        }
+    }
+    /// The lobes: the top-level directories (a symlink to a directory is
+    /// one) that the walker does not prune, sorted as Python's
+    /// `sorted(Path)` sorts them: by code point, and on Windows by
+    /// `str.lower()`.
+    fn lobe_names(&self) -> Vec<String>;
+    /// The neurons of one lobe walked with the lobe as the root, as v2's
+    /// `neuron_files(lobe_dir)` does (a symlink is checked against the lobe,
+    /// a symlinked lobe is walked).
+    fn lobe_neurons(&self, lobe: &str) -> Vec<Neuron>;
+    /// One of the brain's own structure files (`brain.md`, `glossary.md`,
+    /// `<lobe>/map.md`) read as markdown, as v2 reads them: `None` when it
+    /// does not exist (`Path.exists()`, links followed), no path sandbox.
+    fn structure_file(&self, rel: &str) -> Option<Result<Frontmatter, FrontmatterError>>;
+    /// A structure file's text; `None` when it cannot be read or is not
+    /// UTF-8.
+    fn structure_text(&self, rel: &str) -> Option<String>;
 }
 
 /// A brain in a local directory (a git checkout or not), walked once when
@@ -85,20 +107,46 @@ impl BrainStore for LocalGitStore {
 
     fn read(&self, rel: &str) -> Result<Frontmatter, ReadError> {
         sandbox::resolve_in_brain(&self.root, rel).map_err(ReadError::Sandbox)?;
-        let path = rel
-            .replace('\\', "/")
-            .split('/')
-            .filter(|part| !part.is_empty())
-            .fold(self.root.clone(), |path, part| path.join(part));
-        frontmatter::read_frontmatter(&path).map_err(ReadError::File)
+        frontmatter::read_frontmatter(&self.join(&rel.replace('\\', "/"))).map_err(ReadError::File)
     }
 
-    fn glossary(&self) -> Result<Vec<GlossaryEntry>, FrontmatterError> {
-        let path = self.root.join("glossary.md");
-        if !path.exists() {
-            return Ok(Vec::new());
+    fn lobe_names(&self) -> Vec<String> {
+        let Ok(entries) = fs::read_dir(&self.root) else {
+            return Vec::new();
+        };
+        let mut names: Vec<String> = entries
+            .flatten()
+            .filter(|entry| fs::metadata(entry.path()).is_ok_and(|m| m.is_dir()))
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .filter(|name| !is_pruned_dir(name))
+            .collect();
+        if cfg!(windows) {
+            names.sort_by_cached_key(|name| (name.to_lowercase(), name.clone()));
+        } else {
+            names.sort();
         }
-        let fm = frontmatter::read(&path)?;
-        Ok(parse_glossary_entries(&fm.body))
+        names
+    }
+
+    fn lobe_neurons(&self, lobe: &str) -> Vec<Neuron> {
+        neuron_files(&walk(&self.root.join(lobe)))
+    }
+
+    fn structure_file(&self, rel: &str) -> Option<Result<Frontmatter, FrontmatterError>> {
+        let path = self.join(rel);
+        path.exists().then(|| frontmatter::read(&path))
+    }
+
+    fn structure_text(&self, rel: &str) -> Option<String> {
+        fs::read_to_string(self.join(rel)).ok()
+    }
+}
+
+impl LocalGitStore {
+    /// The root joined with a `/`-separated relative path.
+    fn join(&self, rel: &str) -> PathBuf {
+        rel.split('/')
+            .filter(|part| !part.is_empty())
+            .fold(self.root.clone(), |path, part| path.join(part))
     }
 }

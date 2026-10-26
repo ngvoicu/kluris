@@ -7,4 +7,6 @@ pub mod config;
 pub mod frontmatter;
 pub mod list;
 pub mod pyrepr;
+pub mod resolve;
+pub mod wake_up;
 pub mod yaml;
