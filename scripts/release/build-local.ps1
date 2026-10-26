@@ -35,7 +35,9 @@ if (-not (Test-Path -LiteralPath $dist -PathType Leaf)) {
         if ($sha -ne $distSha256) { throw "the dist zip hashes to $sha, not $distSha256" }
         Remove-Item -LiteralPath $part -Recurse -Force -ErrorAction SilentlyContinue
         Expand-Archive -LiteralPath $zip -DestinationPath $part -Force
+        Remove-Item -LiteralPath $distDir -Recurse -Force -ErrorAction SilentlyContinue
         Move-Item -LiteralPath $part -Destination $distDir
+        if (-not (Test-Path -LiteralPath $dist -PathType Leaf)) { throw "the unpacked dist.exe is not at $dist" }
     } finally {
         Remove-Item -LiteralPath $zip -Force -ErrorAction SilentlyContinue
         Remove-Item -LiteralPath $part -Recurse -Force -ErrorAction SilentlyContinue
