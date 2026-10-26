@@ -5,8 +5,9 @@
 //! Each test copies the built `kluris` into `<home>/.kluris/bin` (the
 //! installer's flat layout: the receipt's `install_prefix` is that folder)
 //! and runs the copy, so the running binary is the installed one. The
-//! release's new binary is a script that records its arguments (Unix), or a
-//! copy of `kluris` with bytes appended (Windows, where an exe must be one).
+//! release's new binary is `common::Fake`: it answers `--version` as that
+//! release would and records how `doctor` was started (a shell script on
+//! Unix, the `fake_kluris` example on Windows: build the examples there).
 
 use std::fs;
 use std::io::Write;
@@ -18,6 +19,8 @@ use tempfile::TempDir;
 use tokio::runtime::Runtime;
 use wiremock::matchers::{header, method, path, query_param, query_param_is_missing};
 use wiremock::{Mock, MockServer, ResponseTemplate};
+
+mod common;
 
 /// The target the binary under test was built for (`build.rs`).
 const TARGET: &str = env!("KLURIS_TARGET");
@@ -164,21 +167,11 @@ impl Fixture {
         }
     }
 
-    /// The new binary a release carries: a script that records how it was
-    /// started and prints `doctor_out`, exiting with `code` (Unix); a copy of
-    /// `kluris` with bytes appended (Windows).
-    fn new_binary(&self, code: i32, doctor_out: &str) -> Vec<u8> {
-        if windows() {
-            let mut bytes = self.old_exe.clone();
-            bytes.extend_from_slice(b"\0KLURIS-TEST-NEW-BINARY\0");
-            bytes
-        } else {
-            format!(
-                "#!/bin/sh\nprintf '%s\\n' \"$0\" \"$@\" > '{}'\nprintf '%s\\n' '{doctor_out}'\nexit {code}\n",
-                self.args_file.display()
-            )
-            .into_bytes()
-        }
+    /// Release `version`'s new binary: `--version` prints `kluris
+    /// <version>`; `doctor` records how it was started, prints `doctor_out`
+    /// and exits with `code`.
+    fn new_binary(&self, version: &str, code: i32, doctor_out: &str) -> Vec<u8> {
+        common::fake_for(version, code, doctor_out, &self.args_file)
     }
 
     /// A release `tag` whose archive for this target holds `exe`, with a
@@ -338,6 +331,16 @@ impl Fixture {
         assert!(!self.args_file.exists(), "doctor ran");
     }
 
+    /// The names in the install folder, sorted.
+    fn prefix_names(&self) -> Vec<String> {
+        let mut names: Vec<String> = fs::read_dir(&self.prefix)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        names
+    }
+
     fn asset_requests(&self) -> Vec<String> {
         self.requests()
             .into_iter()
@@ -357,7 +360,7 @@ fn stderr(o: &Output) -> String {
 #[test]
 fn check_json_prints_current_and_latest_and_changes_nothing() {
     let f = Fixture::new();
-    let new = f.new_binary(0, "");
+    let new = f.new_binary("3.99.0", 0, "");
     f.serve(&[f.release("v3.99.0", &new), f.release("v3.98.0", &new)]);
     let out = f.run(&["self-update", "--check", "--json"]);
     assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
@@ -374,7 +377,7 @@ fn check_json_prints_current_and_latest_and_changes_nothing() {
 #[test]
 fn check_human_names_both_versions() {
     let f = Fixture::new();
-    let new = f.new_binary(0, "");
+    let new = f.new_binary("3.99.0", 0, "");
     f.serve(&[f.release("v3.99.0", &new)]);
     let out = f.run(&["self-update", "--check"]);
     assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
@@ -386,7 +389,7 @@ fn check_human_names_both_versions() {
 #[test]
 fn check_when_up_to_date() {
     let f = Fixture::new();
-    let new = f.new_binary(0, "");
+    let new = f.new_binary("3.99.0", 0, "");
     f.serve(&[f.release(&format!("v{CURRENT}"), &new)]);
     let out = f.run(&["self-update", "--check", "--json"]);
     assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
@@ -402,7 +405,7 @@ fn check_when_up_to_date() {
 #[test]
 fn up_to_date_installs_nothing_and_runs_no_doctor() {
     let f = Fixture::new();
-    let new = f.new_binary(0, "");
+    let new = f.new_binary("3.99.0", 0, "");
     f.serve(&[f.release(&format!("v{CURRENT}"), &new)]);
     let out = f.run(&["self-update", "--json"]);
     assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
@@ -419,24 +422,12 @@ fn up_to_date_installs_nothing_and_runs_no_doctor() {
     f.assert_untouched();
 }
 
-/// What `kluris doctor` exits with in this fixture's HOME (Windows, where
-/// the new binary is a real kluris).
-fn doctor_code(f: &Fixture) -> i32 {
-    f.cmd(&f.exe)
-        .arg("doctor")
-        .output()
-        .unwrap()
-        .status
-        .code()
-        .unwrap()
-}
-
 #[test]
 fn update_installs_the_exact_asset_updates_the_receipt_and_runs_doctor() {
     let f = Fixture::new();
-    let new = f.new_binary(7, "doctor ran");
+    let new = f.new_binary("3.99.0", 7, "doctor ran");
     f.serve(&[f.release("v3.99.0", &new), f.release("v3.98.0", b"older")]);
-    let expected_code = if windows() { doctor_code(&f) } else { 7 };
+    let expected_code = 7;
     let out = f.run(&["self-update"]);
     assert_eq!(out.status.code(), Some(expected_code), "{}", stderr(&out));
     assert!(
@@ -452,14 +443,12 @@ fn update_installs_the_exact_asset_updates_the_receipt_and_runs_doctor() {
     );
     let text = stdout(&out);
     assert!(text.contains(CURRENT) && text.contains("3.99.0"), "{text}");
-    if !windows() {
-        assert!(text.contains("doctor ran"), "{text}");
-        // A fresh process of the new binary, at the install path.
-        assert_eq!(
-            fs::read_to_string(&f.args_file).unwrap(),
-            format!("{}\ndoctor\n", f.exe.display())
-        );
-    }
+    assert!(text.contains("doctor ran"), "{text}");
+    // A fresh process of the new binary, at the install path.
+    assert_eq!(
+        fs::read_to_string(&f.args_file).unwrap(),
+        format!("{}\ndoctor\n", f.exe.display())
+    );
     // Only this target's archive and the sums were downloaded.
     let mut assets = f.asset_requests();
     assets.sort();
@@ -476,20 +465,15 @@ fn update_installs_the_exact_asset_updates_the_receipt_and_runs_doctor() {
         let mode = fs::metadata(&f.exe).unwrap().permissions().mode();
         assert_eq!(mode & 0o111, 0o111, "executable");
     }
-    // No leftovers beside the binary.
-    let mut names: Vec<String> = fs::read_dir(&f.prefix)
-        .unwrap()
-        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
-        .collect();
-    names.retain(|n| !n.ends_with(".__relocated__.exe") && !n.ends_with(".__selfdelete__.exe"));
-    assert_eq!(names, vec![exe_name().to_string()]);
+    // No leftovers beside the binary: no staged copy, and on Windows the
+    // old exe has been moved out to be deleted once the update exits.
+    assert_eq!(f.prefix_names(), vec![exe_name().to_string()]);
 }
 
-#[cfg(unix)]
 #[test]
 fn update_json_carries_doctors_json_and_exit_code() {
     let f = Fixture::new();
-    let new = f.new_binary(1, r#"{"ok": false, "checks": []}"#);
+    let new = f.new_binary("3.99.0", 1, r#"{"ok": false, "checks": []}"#);
     f.serve(&[f.release("v3.99.0", &new)]);
     let out = f.run(&["self-update", "--json"]);
     assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
@@ -509,17 +493,13 @@ fn update_json_carries_doctors_json_and_exit_code() {
 #[test]
 fn version_flag_installs_that_release() {
     let f = Fixture::new();
-    let newest = f.new_binary(0, "newest");
-    let wanted = {
-        let mut b = f.new_binary(0, "wanted");
-        b.extend_from_slice(if windows() { b"\0wanted\0" } else { b"\n" });
-        b
-    };
+    let newest = f.new_binary("3.99.0", 0, "newest");
+    let wanted = f.new_binary("3.98.0", 0, "wanted");
     f.serve(&[f.release("v3.99.0", &newest), f.release("v3.98.0", &wanted)]);
     for given in ["3.98.0", "v3.98.0"] {
         fs::write(&f.exe, &f.old_exe).unwrap();
         fs::write(&f.receipt, &f.receipt_text).unwrap();
-        let expected_code = if windows() { doctor_code(&f) } else { 0 };
+        let expected_code = 0;
         let out = f.run(&["self-update", "--version", given]);
         assert_eq!(out.status.code(), Some(expected_code), "{}", stderr(&out));
         assert!(fs::read(&f.exe).unwrap() == wanted, "{given}");
@@ -538,7 +518,7 @@ fn version_flag_installs_that_release() {
 #[test]
 fn a_sha256_sum_mismatch_replaces_nothing() {
     let f = Fixture::new();
-    let new = f.new_binary(0, "");
+    let new = f.new_binary("3.99.0", 0, "");
     let mut release = f.release("v3.99.0", &new);
     let want = archive_name(TARGET);
     let sums = release
@@ -572,7 +552,7 @@ fn a_sha256_sum_mismatch_replaces_nothing() {
 #[test]
 fn a_github_digest_mismatch_replaces_nothing() {
     let f = Fixture::new();
-    let new = f.new_binary(0, "");
+    let new = f.new_binary("3.99.0", 0, "");
     let mut release = f.release("v3.99.0", &new);
     let want = archive_name(TARGET);
     let asset = release.assets.iter_mut().find(|a| a.name == want).unwrap();
@@ -591,7 +571,7 @@ fn a_github_digest_mismatch_replaces_nothing() {
 #[test]
 fn a_release_without_sha256_sum_is_refused() {
     let f = Fixture::new();
-    let new = f.new_binary(0, "");
+    let new = f.new_binary("3.99.0", 0, "");
     let mut release = f.release("v3.99.0", &new);
     release.assets.retain(|a| a.name != "sha256.sum");
     f.serve(&[release]);
@@ -604,7 +584,7 @@ fn a_release_without_sha256_sum_is_refused() {
 #[test]
 fn a_release_without_this_targets_archive_is_refused() {
     let f = Fixture::new();
-    let new = f.new_binary(0, "");
+    let new = f.new_binary("3.99.0", 0, "");
     let mut release = f.release("v3.99.0", &new);
     let want = archive_name(TARGET);
     release.assets.retain(|a| a.name != want);
@@ -618,7 +598,7 @@ fn a_release_without_this_targets_archive_is_refused() {
 #[test]
 fn kluris_github_token_is_sent_when_set_and_only_then() {
     let f = Fixture::new();
-    let new = f.new_binary(0, "");
+    let new = f.new_binary("3.99.0", 0, "");
     // With the token: only a request carrying it is answered.
     f.mount(
         Mock::given(method("GET"))
@@ -717,7 +697,7 @@ fn refuses_without_a_receipt() {
 #[test]
 fn refuses_when_the_running_binary_is_outside_the_install_prefix() {
     let f = Fixture::new();
-    let new = f.new_binary(0, "");
+    let new = f.new_binary("3.99.0", 0, "");
     f.serve(&[f.release("v3.99.0", &new)]);
     // The cargo build, not the installed copy.
     let out = f
@@ -802,7 +782,7 @@ fn a_plain_http_api_url_is_refused_unless_loopback() {
 /// Install the newest release and check what landed: the binary of
 /// `bytes` (that release's binary) and `version` in the receipt.
 fn assert_installed(f: &Fixture, args: &[&str], bytes: &[u8], version: &str) {
-    let expected_code = if windows() { doctor_code(f) } else { 0 };
+    let expected_code = 0;
     let out = f.run(args);
     assert_eq!(out.status.code(), Some(expected_code), "{}", stderr(&out));
     assert!(fs::read(&f.exe).unwrap() == bytes, "{version} is in place");
@@ -814,18 +794,16 @@ fn assert_installed(f: &Fixture, args: &[&str], bytes: &[u8], version: &str) {
     );
 }
 
-/// A new binary told apart from the others of the same fixture by `mark`.
-fn marked_binary(f: &Fixture, mark: &str) -> Vec<u8> {
-    let mut bytes = f.new_binary(0, mark);
-    bytes.extend_from_slice(format!("\0{mark}\0").as_bytes());
-    bytes
+/// Release `version`'s binary, told apart from the others by `mark`.
+fn marked_binary(f: &Fixture, version: &str, mark: &str) -> Vec<u8> {
+    f.new_binary(version, 0, mark)
 }
 
 #[test]
 fn the_newest_release_is_never_a_prerelease() {
     let f = Fixture::new();
-    let rc = marked_binary(&f, "rc");
-    let stable = marked_binary(&f, "stable");
+    let rc = marked_binary(&f, "3.1.0-rc.1", "rc");
+    let stable = marked_binary(&f, "3.0.1", "stable");
     // The candidate is the semver maximum and listed first.
     f.serve(&[f.release("v3.1.0-rc.1", &rc), f.release("v3.0.1", &stable)]);
     let out = f.run(&["self-update", "--check", "--json"]);
@@ -846,7 +824,7 @@ fn the_newest_release_is_never_a_prerelease() {
 #[test]
 fn only_prereleases_newer_means_up_to_date() {
     let f = Fixture::new();
-    let rc = marked_binary(&f, "rc");
+    let rc = marked_binary(&f, "3.1.0-rc.1", "rc");
     f.serve(&[
         f.release("v3.1.0-rc.1", &rc),
         f.release(&format!("v{CURRENT}"), &rc),
@@ -871,8 +849,8 @@ fn only_prereleases_newer_means_up_to_date() {
 #[test]
 fn a_prerelease_installs_when_named() {
     let f = Fixture::new();
-    let rc = marked_binary(&f, "rc");
-    let stable = marked_binary(&f, "stable");
+    let rc = marked_binary(&f, "3.1.0-rc.1", "rc");
+    let stable = marked_binary(&f, "3.0.1", "stable");
     f.serve(&[f.release("v3.1.0-rc.1", &rc), f.release("v3.0.1", &stable)]);
     assert_installed(
         &f,
@@ -885,7 +863,7 @@ fn a_prerelease_installs_when_named() {
 #[test]
 fn a_v2_release_published_after_v3_never_wins() {
     let f = Fixture::new();
-    let v3 = marked_binary(&f, "v3");
+    let v3 = marked_binary(&f, "3.0.0", "v3");
     // Newest first, as GitHub lists them: v2.29.0 (no binaries) came later.
     let v2 = Release {
         tag: "v2.29.0".into(),
@@ -907,7 +885,7 @@ fn every_page_of_the_listing_is_read() {
     // GitHub pages the listing (100 a page here; the repo has many v2
     // releases): the v3 release on page two must be found.
     let f = Fixture::new();
-    let new = marked_binary(&f, "paged");
+    let new = marked_binary(&f, "3.99.0", "paged");
     let v2: Vec<Release> = (0..3)
         .map(|i| Release {
             tag: format!("v2.28.{i}"),
@@ -955,4 +933,99 @@ fn every_page_of_the_listing_is_read() {
             .filter(|r| r.url.path() == RELEASES)
             .count();
     assert_eq!(pages, 2);
+}
+
+/// A release that passes the checksums but whose binary does not run here,
+/// exits non-zero for `--version`, or names another version: the installed
+/// binary, the receipt and the install folder stay as they were, and no
+/// doctor runs.
+#[test]
+fn an_unusable_release_replaces_nothing() {
+    let cases: Vec<(&str, Box<dyn Fn(&Fixture) -> Vec<u8>>)> = vec![
+        ("wrong format", Box::new(|_| common::wrong_format())),
+        (
+            "--version exits 1",
+            Box::new(|f| {
+                common::Fake {
+                    version_line: "kluris 3.99.0",
+                    version_code: 1,
+                    code: 0,
+                    out: "",
+                    args_file: &f.args_file,
+                }
+                .bytes()
+            }),
+        ),
+        (
+            "another version",
+            Box::new(|f| {
+                common::Fake {
+                    version_line: "kluris 9.9.9",
+                    version_code: 0,
+                    code: 0,
+                    out: "",
+                    args_file: &f.args_file,
+                }
+                .bytes()
+            }),
+        ),
+    ];
+    for (case, bytes) in cases {
+        let f = Fixture::new();
+        f.serve(&[f.release("v3.99.0", &bytes(&f))]);
+        for json in [false, true] {
+            let mut args = vec!["self-update"];
+            if json {
+                args.push("--json");
+            }
+            let out = f.run(&args);
+            assert_eq!(out.status.code(), Some(1), "{case}: {}", stdout(&out));
+            let message = if json {
+                let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+                assert_eq!(v["ok"], false, "{case}");
+                v["error"].as_str().unwrap().to_string()
+            } else {
+                stderr(&out)
+            };
+            assert!(
+                message.contains("3.99.0") && message.contains("nothing was replaced"),
+                "{case}: {message}"
+            );
+            f.assert_untouched();
+            assert_eq!(f.prefix_names(), vec![exe_name().to_string()], "{case}");
+        }
+    }
+}
+
+/// The old binary a Windows swap leaves (`.kluris.exe.old-<pid>-<n>`) goes
+/// at the start of the next `self-update` and `doctor`; nothing else does.
+#[test]
+fn stale_old_binaries_are_swept_by_self_update_and_doctor() {
+    let stale = [
+        format!(".{}.old-123-0", exe_name()),
+        format!(".{}.old-9-12", exe_name()),
+    ];
+    let kept = [
+        format!(".{}.old-x-1", exe_name()),
+        format!("{}.old-1-2", exe_name()),
+        format!(".{}.old-1-2.bak", exe_name()),
+        ".notes.old-1-2".to_string(),
+    ];
+    for args in [
+        vec!["self-update", "--check", "--json"],
+        vec!["doctor", "--no-refresh", "--json"],
+    ] {
+        let f = Fixture::new();
+        let new = f.new_binary("3.99.0", 0, "");
+        f.serve(&[f.release("v3.99.0", &new)]);
+        for name in stale.iter().chain(&kept) {
+            fs::write(f.prefix.join(name), b"old").unwrap();
+        }
+        let out = f.run(&args);
+        assert!(out.status.code().is_some(), "{args:?}");
+        let mut expected: Vec<String> = kept.to_vec();
+        expected.push(exe_name().to_string());
+        expected.sort();
+        assert_eq!(f.prefix_names(), expected, "{args:?}: {}", stderr(&out));
+    }
 }
