@@ -297,7 +297,14 @@ mod scripts {
         let steps: Vec<_> = script::steps(&spec).iter().map(|step| step.name).collect();
         assert_eq!(
             steps,
-            ["toolchain", "python", "release-dist", "installer-smoke"]
+            [
+                "toolchain",
+                "python",
+                "release-dist",
+                "installer-smoke",
+                "release-versions",
+                "lifecycle"
+            ]
         );
         let text = script::run_script(&spec);
         for step in script::steps(&spec) {
@@ -315,6 +322,8 @@ mod scripts {
             "python=$(\"$uv\" python find 3.11)",
             "step release-dist 60 bash 'scripts/release/build-local.sh'",
             "step installer-smoke 20 env KLURIS_SMOKE_PYTHON=\"$python\" sh 'scripts/release/installer-smoke.sh' 'target/distrib'",
+            "step release-versions 60 bash 'scripts/release/build-versions.sh' 'target/releases' '3.0.0' '3.0.1'",
+            "step lifecycle 20 env KLURIS_SMOKE_PYTHON=\"$python\" sh 'scripts/release/lifecycle-smoke.sh' 'target/releases' '3.0.0' '3.0.1'",
         ] {
             assert!(text.contains(line), "no {line:?} in\n{text}");
         }

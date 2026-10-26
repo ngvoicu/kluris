@@ -631,7 +631,14 @@ mod scripts {
             .collect();
         assert_eq!(
             smoke,
-            ["toolchain", "python", "release-dist", "installer-smoke"]
+            [
+                "toolchain",
+                "python",
+                "release-dist",
+                "installer-smoke",
+                "release-versions",
+                "lifecycle"
+            ]
         );
     }
 
@@ -690,6 +697,36 @@ mod scripts {
         assert!(
             with.contains("-Wrapper .kluris-site\\install.ps1"),
             "{with}"
+        );
+    }
+
+    #[test]
+    fn an_installer_smoke_runs_the_life_cycle_on_two_built_releases() {
+        let text = script::run_script(&smoke_spec(false));
+        for line in [
+            "Invoke-Step 'release-versions' 60 $powershell '-NoProfile -ExecutionPolicy Bypass -File scripts\\release\\build-versions.ps1 -Out target\\releases -Versions 3.0.0,3.0.1'",
+            "Invoke-Step 'lifecycle' 20 $powershell \"-NoProfile -ExecutionPolicy Bypass -File scripts\\release\\lifecycle-smoke.ps1 -Releases target\\releases -Old 3.0.0 -New 3.0.1 -Python `\"$python`\" -Record `\"$record`\"\"",
+        ] {
+            assert!(text.contains(line), "no {line:?} in\n{text}");
+        }
+        // The life cycle runs whatever the installer smoke's end, after its
+        // PATH record is written back, and its own record is written back too.
+        let smoke = text.find("Invoke-Step 'installer-smoke'").unwrap();
+        let versions = text.find("Invoke-Step 'release-versions'").unwrap();
+        let lifecycle = text.find("Invoke-Step 'lifecycle'").unwrap();
+        assert!(smoke < versions && versions < lifecycle, "{text}");
+        let restores: Vec<usize> = text
+            .match_indices("scripts\\release\\user-path.ps1 -Restore")
+            .map(|(at, _)| at)
+            .collect();
+        assert!(
+            restores.iter().any(|at| *at > smoke && *at < versions),
+            "{text}"
+        );
+        assert!(restores.iter().any(|at| *at > lifecycle), "{text}");
+        assert!(
+            !text[smoke..versions].contains("if ($python -and $state.last -eq 0) { Invoke-Step 'release-versions'"),
+            "the life cycle does not wait on the installer smoke's result: {text}"
         );
     }
 
