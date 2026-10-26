@@ -252,7 +252,7 @@ mod scripts {
             "step cargo-test 90 \"$cargo\" 'test' '--workspace' '--no-fail-fast' '-p' 'it'\\''s here'"
         ));
         assert!(text.contains(
-            "step release-build 60 \"$cargo\" 'build' '--release' '--package' 'kluris-cli'"
+            "step release-build 60 \"$cargo\" 'build' '--release' '--package' 'kluris'\n"
         ));
         assert!(text.contains(
             "step parity 90 \"$uv\" 'run' '--project' 'parity' '--locked' 'pytest' 'parity/test_smoke.py' 'parity/test_dream.py' '-q'"
@@ -657,7 +657,7 @@ mod scripts_run {
             "== step toolchain exit 0 ",
             "cargo test --workspace --no-fail-fast it's",
             "== step cargo-test exit 101 ",
-            "cargo build --release --package kluris-cli",
+            "cargo build --release --package kluris\n",
             "== step release-build exit 0 ",
             "uv run --project parity --locked pytest parity/test_smoke.py -q",
             "== step parity exit 0 ",

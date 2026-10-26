@@ -444,7 +444,7 @@ if [ -x "$uv" ]; then
   export KLURIS_PARITY_ORACLE_DIR="$cache/oracle"
   export KLURIS_V3_BIN="$CARGO_TARGET_DIR/release/kluris"
   export PATH="$uvdir:$PATH"
-  step release-build «release» "$cargo" 'build' '--release' '--package' 'kluris-cli'
+  step release-build «release» "$cargo" 'build' '--release' '--package' 'kluris'
   if [ "$last" -eq 0 ]; then step parity «parity» "$uv" «pytest»; fi
 fi
 "#;
