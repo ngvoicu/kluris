@@ -8,6 +8,7 @@ pub use crate::ssh_ci::words::checked_parity_files;
 pub const USAGE: &str =
     "usage: cargo xtask windows [--machine zeewin|zeewin2] [--parity [--parity-files parity/test.py[,...]]] [-- <cargo test args>]
        cargo xtask windows [--machine zeewin|zeewin2] --installer-smoke [--wrapper <site install.ps1>]
+       cargo xtask windows [--machine zeewin|zeewin2] --clippy
 
 Runs `cargo test --workspace` (and with --parity the parity harness against a
 release kluris.exe) on a household Windows machine over ssh, on this worktree
@@ -16,6 +17,9 @@ the parity step to the parity/*.py files it names; each must be in this tree.
 With no --machine the run goes to zeewin2 while it is free and allowed, else
 to zeewin. A machine whose one-run lock is held, and a refused zeewin2, end
 the command with 75.
+
+--clippy runs no tests: `cargo clippy --workspace --all-targets -- -D
+warnings`, ci.yml's gate, on Windows.
 
 --installer-smoke runs no tests: it builds this tree's release with dist and
 runs scripts\\release\\installer-smoke.ps1 against it (with --wrapper, through
@@ -43,6 +47,8 @@ pub struct Options {
     pub installer_smoke: bool,
     /// The site's install.ps1, sent beside the tree for the smoke.
     pub wrapper: Option<String>,
+    /// Clippy on every target (`-D warnings`) instead of the tests.
+    pub clippy: bool,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -67,6 +73,7 @@ pub fn parse(args: &[String]) -> Result<Parsed, String> {
         cargo_args: words.cargo_args,
         installer_smoke: words.installer_smoke,
         wrapper: words.wrapper,
+        clippy: words.clippy,
     }))
 }
 

@@ -25,9 +25,9 @@ use crate::ssh_ci::outcome::{EXIT_MARK, STEP_MARK, TREE_MARK};
 use std::time::Duration;
 
 use crate::ssh_ci::plan::{
-    self, CARGO_TEST, CI_DIR, INSTALLER_SMOKE, LIFECYCLE, LIFECYCLE_NEW, LIFECYCLE_OLD, PARITY,
-    PYTHON, RELEASE_BUILD, RELEASE_DIST, RELEASE_VERSIONS, SMOKE_PYTHON, TOOLCHAIN, TREE_FILE,
-    UV_VERSION, WRAPPER_DIR, fill, tarball_name,
+    self, CARGO_TEST, CI_DIR, CLIPPY, INSTALLER_SMOKE, LIFECYCLE, LIFECYCLE_NEW, LIFECYCLE_OLD,
+    PARITY, PYTHON, RELEASE_BUILD, RELEASE_DIST, RELEASE_VERSIONS, SMOKE_PYTHON, TOOLCHAIN,
+    TREE_FILE, UV_VERSION, WRAPPER_DIR, fill, tarball_name,
 };
 
 /// The ssh host: the laptop's Ubuntu under WSL2.
@@ -97,11 +97,15 @@ pub struct Spec<'a> {
     pub installer_smoke: bool,
     /// The site's install.sh is in the tarball, for the smoke to go through.
     pub wrapper: bool,
+    /// Clippy on every target instead of the tests.
+    pub clippy: bool,
 }
 
 #[cfg(test)]
 pub fn steps(spec: &Spec) -> Vec<plan::Step> {
-    if spec.installer_smoke {
+    if spec.clippy {
+        plan::clippy_steps()
+    } else if spec.installer_smoke {
         plan::smoke_steps()
     } else {
         plan::steps(spec.parity)
@@ -110,7 +114,9 @@ pub fn steps(spec: &Spec) -> Vec<plan::Step> {
 
 /// How long the whole run may take, as this side waits for it.
 pub fn bound(spec: &Spec) -> Duration {
-    if spec.installer_smoke {
+    if spec.clippy {
+        plan::clippy_bound()
+    } else if spec.installer_smoke {
         plan::smoke_bound()
     } else {
         plan::bound(spec.parity)
@@ -233,7 +239,14 @@ pub fn run_script(spec: &Spec) -> String {
             ("uv_sha256", UV_SHA256),
         ],
     );
-    let (test_step, after) = if spec.installer_smoke {
+    let (test_step, after) = if spec.clippy {
+        let line = format!(
+            "step clippy {} \"$cargo\" {}\n",
+            CLIPPY.minutes,
+            quote_all(&plan::clippy_args())
+        );
+        (line, String::new())
+    } else if spec.installer_smoke {
         let wrapper = if spec.wrapper {
             format!(
                 " '--wrapper' {}",

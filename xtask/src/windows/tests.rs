@@ -84,7 +84,7 @@ mod words_of_the_command {
                 cargo_args: vec![],
                 installer_smoke: false,
                 wrapper: None,
-            clippy: false,
+                clippy: false,
             }
         );
     }
@@ -1066,7 +1066,7 @@ mod runs {
             cargo_args: vec![],
             installer_smoke: false,
             wrapper: None,
-        clippy: false,
+            clippy: false,
         }
     }
 
@@ -1248,7 +1248,7 @@ mod runs {
                 cargo_args: vec![],
                 installer_smoke: false,
                 wrapper: None,
-            clippy: false,
+                clippy: false,
             },
             vec![],
         );
@@ -1280,7 +1280,7 @@ mod runs {
                 cargo_args: vec![],
                 installer_smoke: false,
                 wrapper: None,
-            clippy: false,
+                clippy: false,
             },
             vec![
                 said(0, ""),
@@ -1306,7 +1306,7 @@ mod runs {
                 cargo_args: vec![],
                 installer_smoke: false,
                 wrapper: None,
-            clippy: false,
+                clippy: false,
             },
             vec![
                 said(0, "held\n"),

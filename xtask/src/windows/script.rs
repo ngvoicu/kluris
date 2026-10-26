@@ -27,8 +27,9 @@ use base64::engine::general_purpose::STANDARD;
 pub use crate::ssh_ci::outcome::exit_said;
 pub use crate::ssh_ci::outcome::{EXIT_MARK, STEP_MARK, TREE_MARK};
 use crate::ssh_ci::plan::{
-    self, CARGO_TEST, INSTALLER_SMOKE, LIFECYCLE, LIFECYCLE_NEW, LIFECYCLE_OLD, PARITY, PYTHON,
-    RELEASE_BUILD, RELEASE_DIST, RELEASE_VERSIONS, SMOKE_PYTHON, TOOLCHAIN, WRAPPER_DIR, fill,
+    self, CARGO_TEST, CLIPPY, INSTALLER_SMOKE, LIFECYCLE, LIFECYCLE_NEW, LIFECYCLE_OLD, PARITY,
+    PYTHON, RELEASE_BUILD, RELEASE_DIST, RELEASE_VERSIONS, SMOKE_PYTHON, TOOLCHAIN, WRAPPER_DIR,
+    fill,
 };
 pub use crate::ssh_ci::plan::{CI_DIR, TREE_FILE, UV_VERSION, run_id, tarball_name};
 
@@ -77,11 +78,15 @@ pub struct Spec<'a> {
     pub installer_smoke: bool,
     /// The site's install.ps1 is in the tarball, for the smoke to go through.
     pub wrapper: bool,
+    /// Clippy on every target instead of the tests.
+    pub clippy: bool,
 }
 
 #[cfg(test)]
 pub fn steps(spec: &Spec) -> Vec<plan::Step> {
-    if spec.installer_smoke {
+    if spec.clippy {
+        plan::clippy_steps()
+    } else if spec.installer_smoke {
         plan::smoke_steps()
     } else {
         plan::steps(spec.parity)
@@ -90,7 +95,9 @@ pub fn steps(spec: &Spec) -> Vec<plan::Step> {
 
 /// How long the whole run may take, as this side waits for it.
 pub fn bound(spec: &Spec) -> Duration {
-    if spec.installer_smoke {
+    if spec.clippy {
+        plan::clippy_bound()
+    } else if spec.installer_smoke {
         plan::smoke_bound()
     } else {
         plan::bound(spec.parity)
@@ -191,7 +198,14 @@ pub fn run_script(spec: &Spec) -> String {
             ("uv_sha256", UV_SHA256),
         ],
     );
-    let (test_step, after) = if spec.installer_smoke {
+    let (test_step, after) = if spec.clippy {
+        let line = format!(
+            "Invoke-Step 'clippy' {} $cargo {}\n",
+            CLIPPY.minutes,
+            quoted(&command_line(&plan::clippy_args()))
+        );
+        (line, String::new())
+    } else if spec.installer_smoke {
         let wrapper = if spec.wrapper {
             format!(" -Wrapper {WRAPPER_DIR}\\install.ps1")
         } else {

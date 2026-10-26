@@ -64,7 +64,7 @@ mod words_of_the_command {
                 cargo_args: vec![],
                 installer_smoke: false,
                 wrapper: None,
-            clippy: false,
+                clippy: false,
             }
         );
     }
@@ -322,7 +322,10 @@ mod scripts {
             ),
             "{text}"
         );
-        assert!(!text.contains("step cargo-test") && !text.contains("pytest"), "{text}");
+        assert!(
+            !text.contains("step cargo-test") && !text.contains("pytest"),
+            "{text}"
+        );
         assert!(script::bound(&spec) < script::bound(&super::spec(true, &[], &[])));
     }
 
@@ -945,7 +948,7 @@ mod runs {
             cargo_args: vec![],
             installer_smoke: false,
             wrapper: None,
-        clippy: false,
+            clippy: false,
         }
     }
 
@@ -1161,7 +1164,7 @@ mod runs {
             cargo_args: vec![],
             installer_smoke: false,
             wrapper: None,
-        clippy: false,
+            clippy: false,
         };
         let ran = ran_in(dir.path(), options, vec![]);
         assert_eq!(ran.code, 1);
@@ -1174,7 +1177,7 @@ mod runs {
             cargo_args: words("-p kluris-core"),
             installer_smoke: false,
             wrapper: None,
-        clippy: false,
+            clippy: false,
         };
         let ran = ran_in(
             dir.path(),

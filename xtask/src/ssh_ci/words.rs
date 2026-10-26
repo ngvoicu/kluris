@@ -23,6 +23,8 @@ pub struct Words {
     pub installer_smoke: bool,
     /// The site wrapper `--wrapper` names, sent beside the tree for the smoke.
     pub wrapper: Option<String>,
+    /// `cargo clippy --workspace --all-targets -- -D warnings` instead of the tests.
+    pub clippy: bool,
 }
 
 /// `args` as [`Words`], or none for `--help`. `machines` are the values
@@ -48,6 +50,8 @@ pub fn parse(args: &[String], machines: &[&str]) -> Result<Option<Words>, String
                 return Err("--installer-smoke takes no value".into());
             }
             "--installer-smoke" => words.installer_smoke = true,
+            "--clippy" if inline.is_some() => return Err("--clippy takes no value".into()),
+            "--clippy" => words.clippy = true,
             "--wrapper" => {
                 if words.wrapper.is_some() {
                     return Err("--wrapper is given once".into());
@@ -123,6 +127,12 @@ pub fn parse(args: &[String], machines: &[&str]) -> Result<Option<Words>, String
         return Err(
             "--installer-smoke runs the installers, not the tests: not with --parity".into(),
         );
+    }
+    if words.clippy && (words.parity || words.installer_smoke) {
+        return Err("--clippy runs clippy alone: not with --parity or --installer-smoke".into());
+    }
+    if words.clippy && !words.cargo_args.is_empty() {
+        return Err("--clippy runs no cargo test: nothing goes after --".into());
     }
     if words.installer_smoke && !words.cargo_args.is_empty() {
         return Err("--installer-smoke runs no cargo test: nothing goes after --".into());

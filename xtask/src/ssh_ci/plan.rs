@@ -56,6 +56,11 @@ pub const INSTALLER_SMOKE: Step = Step {
     name: "installer-smoke",
     minutes: 20,
 };
+/// `cargo clippy --workspace --all-targets -- -D warnings`, as ci.yml runs it.
+pub const CLIPPY: Step = Step {
+    name: "clippy",
+    minutes: 60,
+};
 /// The tree built as the two life-cycle releases (scripts/release/build-versions).
 pub const RELEASE_VERSIONS: Step = Step {
     name: "release-versions",
@@ -93,6 +98,30 @@ pub fn smoke_steps() -> Vec<Step> {
         RELEASE_VERSIONS,
         LIFECYCLE,
     ]
+}
+
+/// The steps of a clippy run, which runs no tests.
+pub fn clippy_steps() -> Vec<Step> {
+    vec![TOOLCHAIN, CLIPPY]
+}
+
+/// How long a clippy run may take.
+pub fn clippy_bound() -> Duration {
+    bound_of(&clippy_steps())
+}
+
+/// `cargo clippy`'s arguments, ci.yml's gate.
+pub fn clippy_args() -> Vec<String> {
+    [
+        "clippy",
+        "--workspace",
+        "--all-targets",
+        "--",
+        "-D",
+        "warnings",
+    ]
+    .map(str::to_owned)
+    .to_vec()
 }
 
 /// How long the whole run may take, as this side waits for it.

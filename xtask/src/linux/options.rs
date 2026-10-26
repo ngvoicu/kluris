@@ -7,6 +7,7 @@ use crate::ssh_ci::words;
 
 pub const USAGE: &str = "usage: cargo xtask linux [--parity [--parity-files parity/test.py[,...]]] [-- <cargo test args>]
        cargo xtask linux --installer-smoke [--wrapper <site install.sh>]
+       cargo xtask linux --clippy
 
 Runs `cargo test --workspace` (and with --parity the parity harness against a
 release kluris) on zeelin, the household laptop's Ubuntu (WSL2), over ssh, on
@@ -15,6 +16,9 @@ this worktree as it is now (HEAD plus uncommitted tracked changes).
 must be in this tree. The command ends with 75, having run nothing, while
 zeelin is not running, while poker-lab's lock or a run on zeewin2 (the same
 laptop) holds it, and while another run holds its one-run lock.
+
+--clippy runs no tests: `cargo clippy --workspace --all-targets -- -D
+warnings`, ci.yml's gate, on zeelin.
 
 --installer-smoke runs no tests: it builds this tree's release with dist and
 runs scripts/release/installer-smoke.sh against it in a HOME of its own (with
@@ -31,6 +35,8 @@ pub struct Options {
     pub installer_smoke: bool,
     /// The site's install.sh, sent beside the tree for the smoke.
     pub wrapper: Option<String>,
+    /// Clippy on every target (`-D warnings`) instead of the tests.
+    pub clippy: bool,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -49,6 +55,7 @@ pub fn parse(args: &[String]) -> Result<Parsed, String> {
         cargo_args: words.cargo_args,
         installer_smoke: words.installer_smoke,
         wrapper: words.wrapper,
+        clippy: words.clippy,
     }))
 }
 

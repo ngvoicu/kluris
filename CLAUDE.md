@@ -63,6 +63,7 @@ cargo xtask windows --machine zeewin2 -- -p kluris-core   # extra cargo test arg
 cargo xtask windows --parity                      # zeewin2 if free and allowed, else zeewin
 cargo xtask windows --parity --parity-files parity/test_smoke.py   # only that parity file
 cargo xtask windows --machine zeewin --installer-smoke --wrapper ../sites/kluris-site/install.ps1
+cargo xtask windows --clippy                      # cargo clippy --workspace --all-targets -- -D warnings, no tests
 ```
 
 - **Machines.** `zeewin` (AGV-COMPUTE1, `ssh zeewin`, short of memory: builds
@@ -134,6 +135,7 @@ cargo xtask linux --parity                        # cargo test --workspace --no-
 cargo xtask linux -- -p kluris-core               # extra cargo test args after --
 cargo xtask linux --parity --parity-files parity/test_smoke.py   # only that parity file
 cargo xtask linux --installer-smoke --wrapper ../sites/kluris-site/install.sh
+cargo xtask linux --clippy                        # clippy -D warnings on every target, no tests
 ```
 
 - **The machine.** `ssh zeelin` (10.6.0.6:22, user `zee`, bash; 16 threads,
