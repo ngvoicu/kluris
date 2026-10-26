@@ -14,13 +14,27 @@ use clap::error::{ContextKind, ContextValue, ErrorKind};
 use crate::output::json::{self, Json};
 
 /// An error a command returns: printed as `Error: <message>` (exit 1), or as
-/// the JSON envelope under `--json`.
+/// the JSON envelope under `--json`; or Click's `Abort` at a prompt.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CliError(pub String);
+pub struct CliError {
+    message: String,
+    aborted: bool,
+}
 
 impl CliError {
     pub fn new(message: impl Into<String>) -> Self {
-        Self(message.into())
+        Self {
+            message: message.into(),
+            aborted: false,
+        }
+    }
+
+    /// End of input or Ctrl-C at a prompt: `Aborted!` on stderr, exit 1.
+    pub fn aborted() -> Self {
+        Self {
+            message: "Aborted!".into(),
+            aborted: true,
+        }
     }
 }
 
@@ -36,10 +50,14 @@ fn print_envelope(message: &str) -> ExitCode {
 
 /// Report a command's error.
 pub fn report(err: &CliError, json: bool) -> ExitCode {
-    if json {
-        return print_envelope(&err.0);
+    if err.aborted {
+        let _ = writeln!(io::stderr(), "{}", err.message);
+        return ExitCode::from(1);
     }
-    let _ = writeln!(io::stderr(), "Error: {}", err.0);
+    if json {
+        return print_envelope(&err.message);
+    }
+    let _ = writeln!(io::stderr(), "Error: {}", err.message);
     ExitCode::from(1)
 }
 
@@ -104,6 +122,15 @@ fn usage_message(err: &clap::Error) -> String {
         ErrorKind::InvalidSubcommand => {
             if let Some(name) = context(ContextKind::InvalidSubcommand) {
                 return format!("No such command '{name}'.");
+            }
+        }
+        ErrorKind::InvalidValue | ErrorKind::NoEquals => {
+            // An option at the end of the line with no value.
+            if context(ContextKind::InvalidValue).is_some_and(|v| v.is_empty())
+                && let Some(arg) = context(ContextKind::InvalidArg)
+            {
+                let option = arg.split([' ', '=']).next().unwrap_or(&arg);
+                return format!("Option '{option}' requires an argument.");
             }
         }
         ErrorKind::UnknownArgument => {

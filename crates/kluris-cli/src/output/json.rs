@@ -6,7 +6,6 @@
 pub enum Json {
     Null,
     Bool(bool),
-    #[allow(dead_code, reason = "no command emits numbers yet")]
     Int(i64),
     #[allow(dead_code, reason = "no command emits numbers yet")]
     Float(f64),

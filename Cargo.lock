@@ -333,6 +333,7 @@ dependencies = [
  "clap",
  "kluris-core",
  "predicates",
+ "signal-hook",
 ]
 
 [[package]]
