@@ -791,3 +791,76 @@ fn ssh_runs_in_batch_mode_unless_the_user_chose_an_ssh_command() {
     assert!(logged.contains("User=cfg"), "{logged}");
     assert!(!logged.contains("BatchMode"), "{logged}");
 }
+
+#[test]
+fn a_brain_nested_in_a_larger_repo_is_never_moved() {
+    // A brain inside a project repo: a read never moves a repository the
+    // user did not ask Kluris to manage, however clean it is.
+    let w = World::new();
+    let root = w.root();
+    w.git(root, &["init", "-q", "--bare", "-b", "main", "outer.git"]);
+    w.git(root, &["clone", "-q", "outer.git", "project"]);
+    let theirs = root.join("project");
+    w.write(&theirs, "README.md", "# project\n");
+    w.write(&theirs, ".gitignore", "kluris.yml\n");
+    w.write(
+        &theirs,
+        "kb/brain.md",
+        "# team\n\n## Lobes\n\n- [k](k/map.md)\n",
+    );
+    w.write(&theirs, "kb/k/map.md", "# k\n");
+    w.write(
+        &theirs,
+        "kb/k/jwt.md",
+        "---\nparent: map.md\nupdated: 2026-02-03\n---\n# JWT tokens\n\nWe sign every JWT.\n",
+    );
+    w.commit(&theirs, "seed");
+    w.git(&theirs, &["push", "-q", "-u", "origin", "main"]);
+    w.git(root, &["clone", "-q", "outer.git", "project-mine"]);
+    let mine = root.join("project-mine");
+    let brain = mine.join("kb");
+    w.write(&brain, "kluris.yml", "name: team\n");
+    fs::write(
+        w.home().join(".kluris").join("config.yml"),
+        format!(
+            "brains:\n  team:\n    path: '{}'\n    description: ''\n",
+            brain.display().to_string().replace('\'', "''")
+        ),
+    )
+    .unwrap();
+    // The outer repo's upstream moves, in the brain and outside it.
+    w.write(&theirs, "README.md", "# project, changed\n");
+    w.write(
+        &theirs,
+        "kb/k/zebra.md",
+        "---\nparent: map.md\nupdated: 2026-03-01\n---\n# zebra\n\nAll about zebras.\n",
+    );
+    w.commit(&theirs, "move");
+    w.git(&theirs, &["push", "-q"]);
+
+    let state = || {
+        (
+            w.git(&mine, &["rev-parse", "HEAD"]),
+            w.git(&mine, &["rev-parse", "refs/remotes/origin/main"]),
+            w.git(&mine, &["status", "--porcelain", "--untracked-files=all"]),
+            fs::read(mine.join("README.md")).unwrap(),
+            brain.join("k").join("zebra.md").exists(),
+        )
+    };
+    let before = state();
+    assert!(!before.4);
+    for args in [
+        &["wake-up", "--json"][..],
+        &["wake-up"],
+        &["search", "zebras", "--json"],
+        &["search", "jwt"],
+    ] {
+        let out = w.run(args);
+        assert_eq!(out.stdout, w.baseline(args).stdout, "{args:?}");
+    }
+    assert_eq!(state(), before, "nothing fetched, nothing moved");
+    assert!(
+        !mine.join(".git").join("kluris-sync").exists(),
+        "no stamp in the outer repo"
+    );
+}

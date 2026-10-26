@@ -8,6 +8,9 @@
 //!   time limit once a minute, not on every read.
 //! - Within [`TIME_LIMIT`] overall: a git still running then is killed with
 //!   every process it started ([`crate::process`]), and the read goes on.
+//! - Only a brain at the root of its own work tree: a brain nested in a
+//!   larger repo (a project's) is never fetched or moved, as a read must not
+//!   move a repository the user did not ask Kluris to manage.
 //! - Nothing but a clean fast-forward ever changes, and nothing fails the
 //!   read: no work tree, no upstream (or a detached HEAD), a tracked change,
 //!   a merge, rebase, cherry-pick or revert in progress, a fetch that fails
@@ -60,6 +63,8 @@ pub enum Fresh {
     Disabled,
     /// The brain is not in a git work tree.
     NotARepo,
+    /// The brain is below the root of a larger work tree.
+    Nested,
     /// Fetched less than [`THROTTLE`] ago.
     Throttled,
     /// A merge, rebase, cherry-pick or revert is in progress.
@@ -91,6 +96,16 @@ pub struct Upstream {
     pub refname: String,
 }
 
+/// Where the brain sits in its work tree.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkTree {
+    /// The brain's folder relative to the work tree root, `/`-separated
+    /// with a trailing `/` (`git rev-parse --show-prefix`); empty at the root.
+    pub prefix: String,
+    /// The paths asked for, inside the git directory.
+    pub paths: Vec<PathBuf>,
+}
+
 /// A git step that did not finish.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FreshError {
@@ -102,14 +117,15 @@ pub enum FreshError {
 
 /// The git steps of a fresh read, each bounded by `deadline`.
 pub trait FreshGit {
-    /// Each of `names` inside the git directory of the work tree `dir` is in
-    /// (`git rev-parse --git-path`); `None` outside a work tree.
+    /// Where `dir` sits in its work tree, and each of `names` inside its git
+    /// directory (`git rev-parse --show-prefix --git-path`); `None` outside a
+    /// work tree.
     fn git_paths(
         &self,
         dir: &Path,
         names: &[&str],
         deadline: Instant,
-    ) -> Result<Option<Vec<PathBuf>>, FreshError>;
+    ) -> Result<Option<WorkTree>, FreshError>;
 
     /// The current branch's upstream; `None` on a detached HEAD, without an
     /// upstream, or with a local branch as upstream.
@@ -196,10 +212,13 @@ fn step(git: &impl FreshGit, req: &FreshRequest, deadline: Instant) -> Result<Fr
     let dir = req.brain;
     let mut names = vec![STAMP];
     names.extend(IN_PROGRESS);
-    let Some(paths) = git.git_paths(dir, &names, deadline).map_err(ended)? else {
+    let Some(tree) = git.git_paths(dir, &names, deadline).map_err(ended)? else {
         return Ok(Fresh::NotARepo);
     };
-    let Some((stamp, markers)) = paths.split_first() else {
+    if !tree.prefix.is_empty() {
+        return Ok(Fresh::Nested);
+    }
+    let Some((stamp, markers)) = tree.paths.split_first() else {
         return Ok(Fresh::Failed);
     };
     let now = unix_seconds(req.now);
@@ -383,8 +402,8 @@ impl FreshGit for SystemGit {
         dir: &Path,
         names: &[&str],
         deadline: Instant,
-    ) -> Result<Option<Vec<PathBuf>>, FreshError> {
-        let mut args = vec!["rev-parse", "--is-inside-work-tree"];
+    ) -> Result<Option<WorkTree>, FreshError> {
+        let mut args = vec!["rev-parse", "--is-inside-work-tree", "--show-prefix"];
         for name in names {
             args.extend(["--git-path", name]);
         }
@@ -397,11 +416,12 @@ impl FreshGit for SystemGit {
         if lines.next() != Some("true") {
             return Ok(None);
         }
+        let prefix = lines.next().unwrap_or_default().to_string();
         let paths: Vec<PathBuf> = lines.map(|line| dir.join(line)).collect();
         if paths.len() != names.len() {
             return Err(unreadable(&args, "not one path per name"));
         }
-        Ok(Some(paths))
+        Ok(Some(WorkTree { prefix, paths }))
     }
 
     fn upstream(&self, dir: &Path, deadline: Instant) -> Result<Option<Upstream>, FreshError> {

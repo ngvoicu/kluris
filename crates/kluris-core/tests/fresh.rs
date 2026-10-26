@@ -10,7 +10,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use kluris_core::git::GitError;
 use kluris_core::sync::fresh::{
-    Fresh, FreshError, FreshGit, FreshRequest, STAMP, Upstream, fresh_read, prompt_env,
+    Fresh, FreshError, FreshGit, FreshRequest, STAMP, Upstream, WorkTree, fresh_read, prompt_env,
 };
 use tempfile::TempDir;
 
@@ -18,6 +18,8 @@ use tempfile::TempDir;
 /// answer is set by the test. Every call is logged by name.
 struct FakeGit {
     git_dir: Option<PathBuf>,
+    /// The brain's folder relative to the work tree root (`sub/`).
+    prefix: String,
     upstream: Option<Upstream>,
     dirty: bool,
     fetch: Result<(), FreshError>,
@@ -34,6 +36,7 @@ impl FakeGit {
         fs::create_dir_all(&git_dir).unwrap();
         FakeGit {
             git_dir: Some(git_dir),
+            prefix: String::new(),
             upstream: Some(Upstream {
                 remote: "origin".into(),
                 refname: "refs/remotes/origin/main".into(),
@@ -67,12 +70,12 @@ impl FreshGit for FakeGit {
         _dir: &Path,
         names: &[&str],
         deadline: Instant,
-    ) -> Result<Option<Vec<PathBuf>>, FreshError> {
+    ) -> Result<Option<WorkTree>, FreshError> {
         self.log("git_paths", deadline);
-        Ok(self
-            .git_dir
-            .as_ref()
-            .map(|dir| names.iter().map(|n| dir.join(n)).collect()))
+        Ok(self.git_dir.as_ref().map(|dir| WorkTree {
+            prefix: self.prefix.clone(),
+            paths: names.iter().map(|n| dir.join(n)).collect(),
+        }))
     }
 
     fn upstream(&self, _dir: &Path, deadline: Instant) -> Result<Option<Upstream>, FreshError> {
@@ -223,6 +226,17 @@ fn outside_a_work_tree_nothing_runs() {
     git.git_dir = None;
     assert_eq!(fresh_read(&git, &request(&brain(&tmp))), Fresh::NotARepo);
     assert_eq!(git.calls(), ["git_paths"]);
+}
+
+#[test]
+fn a_brain_below_its_work_tree_root_is_never_touched() {
+    // A brain nested in a larger repo: no fetch, no fast-forward, no stamp.
+    let tmp = TempDir::new().unwrap();
+    let mut git = FakeGit::behind(&tmp);
+    git.prefix = "docs/brain/".into();
+    assert_eq!(fresh_read(&git, &request(&brain(&tmp))), Fresh::Nested);
+    assert_eq!(git.calls(), ["git_paths"]);
+    assert!(!git.stamp().exists());
 }
 
 #[test]
