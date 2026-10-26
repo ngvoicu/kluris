@@ -6,6 +6,8 @@ edition.workspace = true
 rust-version.workspace = true
 license-file.workspace = true
 repository.workspace = true
+# Kluris 3 ships from GitHub Releases, never crates.io
+publish = false
 
 [dependencies]
 include_dir.workspace = true

@@ -1,0 +1,42 @@
+# cargo-about's config for THIRD_PARTY_LICENSES.md: the licenses of the crates
+# built into the `kluris` binary on the eight release targets. Regenerate it
+# with scripts/release/licenses.sh after a dependency change (CI checks it);
+# a crate under a license not listed here fails the run until it is reviewed
+# and added.
+accepted = [
+    "Apache-2.0",
+    "BSD-3-Clause",
+    "MIT",
+    "Unicode-3.0",
+]
+targets = [
+    "aarch64-apple-darwin",
+    "x86_64-apple-darwin",
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+    "x86_64-unknown-linux-musl",
+    "aarch64-unknown-linux-musl",
+    "x86_64-pc-windows-msvc",
+    "aarch64-pc-windows-msvc",
+]
+ignore-build-dependencies = false
+ignore-dev-dependencies = true
+# Kluris's own crates (publish = false): LICENSE and THIRD_PARTY_NOTICES.md
+# cover them
+private = { ignore = true }
+
+# include_dir's crates ship no license file; its LICENSE is at the root of
+# the repository, at the commit the crates were published from
+[include_dir.clarify]
+license = "MIT"
+
+[[include_dir.clarify.git]]
+path = "LICENSE"
+checksum = "9369f62987b3a116111f2edfdc4cc72633e44ddc94d5d0c68659cf537b76a31f"
+
+[include_dir_macros.clarify]
+license = "MIT"
+
+[[include_dir_macros.clarify.git]]
+path = "LICENSE"
+checksum = "9369f62987b3a116111f2edfdc4cc72633e44ddc94d5d0c68659cf537b76a31f"
