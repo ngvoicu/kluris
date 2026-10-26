@@ -482,11 +482,12 @@ fn a_write_cut_short_leaves_the_original_whole() {
     let before = home.bytes("demo", "notes/large.md");
     assert!(before.len() > 20_000);
     let bin = assert_cmd::cargo::cargo_bin!("kluris");
-    // `ulimit -f` counts 512-byte blocks; SIGXFSZ ignored, so the write
-    // fails with EFBIG instead of killing the process.
+    // `ulimit -f` counts 512-byte blocks; SIGXFSZ (25 on Linux and macOS,
+    // by number for dash) ignored, so the write fails with EFBIG instead of
+    // killing the process.
     let out = std::process::Command::new("/bin/sh")
         .arg("-c")
-        .arg("trap '' XFSZ; ulimit -f 2; exec \"$KLURIS_BIN\" dream --json")
+        .arg("trap '' 25; ulimit -f 2; exec \"$KLURIS_BIN\" dream --json")
         .env("KLURIS_BIN", bin)
         .env("HOME", home.dir.path())
         .env(

@@ -11,9 +11,10 @@
 //!   for writing (read-only) is refused, as an in-place write is;
 //! - the temp file is `.<name>.kluris-tmp-<pid>-<n>`, a dot file with no
 //!   `.md`/`.yml`/`.yaml` suffix, so no walker reads it as a neuron;
-//! - on Windows a rename refused by a sharing violation (an editor, an
-//!   indexer or antivirus holding the file) is retried a few times, then
-//!   fails: there is no fallback to an in-place write;
+//! - on Windows a sharing violation (an editor, an indexer or antivirus
+//!   holding the file) is retried a few times, opening the target and
+//!   renaming over it alike, then fails: there is no fallback to an
+//!   in-place write;
 //! - on every failure the temp file is removed and the original is left
 //!   byte-identical.
 //!
@@ -31,7 +32,7 @@ use std::time::Duration;
 /// How many symlinks [`resolve_link_target`] follows (Linux's `MAXSYMLINKS`).
 const MAX_SYMLINKS: usize = 40;
 
-/// How many times a retryable rename is tried in all.
+/// How many times a retryable probe or rename is tried in all.
 const RENAME_ATTEMPTS: u32 = 6;
 
 static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -39,6 +40,11 @@ static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 /// The file-system steps of [`write_atomic`] that can fail, so tests can
 /// make each one fail. The shipped binary uses [`RealFs`] only.
 pub(crate) trait AtomicFs {
+    /// Open an existing target for writing (nothing is written): refused
+    /// where an in-place write would be, a read-only file say.
+    fn probe(&self, path: &Path) -> io::Result<()> {
+        OpenOptions::new().write(true).open(path).map(drop)
+    }
     fn write(&self, file: &mut File, bytes: &[u8]) -> io::Result<()> {
         file.write_all(bytes)?;
         file.sync_all()
@@ -46,8 +52,9 @@ pub(crate) trait AtomicFs {
     fn rename(&self, from: &Path, to: &Path) -> io::Result<()> {
         fs::rename(from, to)
     }
-    /// A rename error worth retrying: on Windows a sharing violation (32)
-    /// or the access denied (5) a file held open with delete sharing gives.
+    /// A probe or rename error worth retrying: on Windows a sharing
+    /// violation (32) or the access denied (5) a file held open by another
+    /// process gives.
     fn retryable(&self, e: &io::Error) -> bool {
         cfg!(windows) && matches!(e.raw_os_error(), Some(5 | 32))
     }
@@ -93,6 +100,21 @@ pub fn resolve_link_target(path: &Path) -> io::Result<PathBuf> {
     )))
 }
 
+/// `step`, tried again while it fails with a retryable error, at most
+/// [`RENAME_ATTEMPTS`] times in all.
+fn retrying(fs_ops: &dyn AtomicFs, mut step: impl FnMut() -> io::Result<()>) -> io::Result<()> {
+    let mut attempt = 1;
+    loop {
+        match step() {
+            Err(e) if attempt < RENAME_ATTEMPTS && fs_ops.retryable(&e) => {
+                fs_ops.pause(attempt);
+                attempt += 1;
+            }
+            result => return result,
+        }
+    }
+}
+
 pub(crate) fn write_atomic_with(
     path: &Path,
     bytes: &[u8],
@@ -101,8 +123,7 @@ pub(crate) fn write_atomic_with(
     let target = resolve_link_target(path)?;
     let existing = match fs::metadata(&target) {
         Ok(meta) => {
-            // Refused where an in-place write would be (a read-only file).
-            OpenOptions::new().write(true).open(&target)?;
+            retrying(fs_ops, || fs_ops.probe(&target))?;
             Some(meta.permissions())
         }
         Err(e) if e.kind() == io::ErrorKind::NotFound => None,
@@ -134,16 +155,7 @@ pub(crate) fn write_atomic_with(
         if let Some(perms) = existing {
             fs::set_permissions(&tmp, perms)?;
         }
-        let mut attempt = 1;
-        loop {
-            match fs_ops.rename(&tmp, &target) {
-                Err(e) if attempt < RENAME_ATTEMPTS && fs_ops.retryable(&e) => {
-                    fs_ops.pause(attempt);
-                    attempt += 1;
-                }
-                result => return result,
-            }
-        }
+        retrying(fs_ops, || fs_ops.rename(&tmp, &target))
     })();
     if result.is_err() {
         let _ = fs::remove_file(&tmp);
@@ -274,6 +286,49 @@ mod tests {
         assert_eq!(stuck.calls.get(), RENAME_ATTEMPTS);
         assert_eq!(fs::read(&path).unwrap(), b"new");
         assert_eq!(names(d.path()), ["c.yml"]);
+    }
+
+    /// The first `fails` writability probes fail with a retryable error
+    /// (on Windows a sharing violation opening the target).
+    struct BusyProbe {
+        fails: u32,
+        calls: Cell<u32>,
+    }
+    impl AtomicFs for BusyProbe {
+        fn probe(&self, path: &Path) -> io::Result<()> {
+            self.calls.set(self.calls.get() + 1);
+            if self.calls.get() <= self.fails {
+                return Err(io::Error::other("sharing violation"));
+            }
+            RealFs.probe(path)
+        }
+        fn retryable(&self, _: &io::Error) -> bool {
+            true
+        }
+        fn pause(&self, _: u32) {}
+    }
+
+    #[test]
+    fn a_retryable_probe_is_retried_then_given_up() {
+        let d = dir();
+        let path = d.path().join("p.md");
+        fs::write(&path, "old").unwrap();
+        let busy = BusyProbe {
+            fails: 2,
+            calls: Cell::new(0),
+        };
+        write_atomic_with(&path, b"new", &busy).unwrap();
+        assert_eq!(busy.calls.get(), 3);
+        assert_eq!(fs::read(&path).unwrap(), b"new");
+
+        let stuck = BusyProbe {
+            fails: u32::MAX,
+            calls: Cell::new(0),
+        };
+        assert!(write_atomic_with(&path, b"newer", &stuck).is_err());
+        assert_eq!(stuck.calls.get(), RENAME_ATTEMPTS);
+        assert_eq!(fs::read(&path).unwrap(), b"new");
+        assert_eq!(names(d.path()), ["p.md"]);
     }
 
     #[test]
