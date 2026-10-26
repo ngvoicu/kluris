@@ -379,17 +379,179 @@ fn v3_and_v2_skills_are_recognised() {
     }
 }
 
-/// The skill shape of Kluris v1 (`name: kluris`, the description unquoted
-/// before v1.5) is recognised too, so `doctor` clears the oldest installs.
+/// Every SKILL.md and Windsurf workflow v1.0.0 to v2.28.11 wrote, as each
+/// release's own `agents.py` renders it (`fixtures/skills/legacy/`, from
+/// `parity/tools/gen_legacy_skills.py`): `<first release>.md` is
+/// `kluris-acme` (v2) or `kluris` (v1), `-bare` is v2.0's single-brain
+/// `kluris`.
+fn legacy_renderings() -> Vec<(String, String, String)> {
+    let dir = fixtures().join("legacy");
+    let mut out = Vec::new();
+    for entry in fs::read_dir(&dir).expect("legacy fixtures") {
+        let path = entry.expect("entry").path();
+        let file = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .expect("name")
+            .to_string();
+        let stem = file.trim_end_matches(".md").trim_end_matches(".workflow");
+        let bare = stem.ends_with("-bare") || stem.starts_with("v1.");
+        let skill = if bare { "kluris" } else { "kluris-acme" };
+        let entry_name = if file.ends_with(".workflow.md") {
+            format!("{skill}.md")
+        } else {
+            skill.to_string()
+        };
+        out.push((file, entry_name, read(&path)));
+    }
+    out.sort();
+    assert!(out.len() >= 30, "{}", out.len());
+    out
+}
+
 #[test]
-fn v1_bare_kluris_skills_are_recognised() {
-    let v1_0 = "---\nname: kluris\ndescription: You are the team's subject matter expert. Internalize the brain\n---\n\n# Kluris\n";
-    let v1_5 = "---\nname: kluris\ndescription: \"You are the team's subject matter expert. Your knowledge comes from a brain\"\n---\n\nbody\n";
-    assert!(is_generated_skill("kluris", v1_0));
-    assert!(is_generated_skill("kluris", v1_5));
+fn every_v1_and_v2_rendering_is_recognised() {
+    for (file, name, text) in legacy_renderings() {
+        let ok = if file.ends_with(".workflow.md") {
+            is_generated_workflow(&name, &text)
+        } else {
+            is_generated_skill(&name, &text)
+        };
+        assert!(ok, "{file} as {name}");
+        let crlf = text.replace('\n', "\r\n");
+        let ok = if file.ends_with(".workflow.md") {
+            is_generated_workflow(&name, &crlf)
+        } else {
+            is_generated_skill(&name, &crlf)
+        };
+        assert!(ok, "{file} as {name}, CRLF");
+    }
+}
+
+/// A rendering is Kluris's only under its own name: a bare v1/v2.0 `kluris`
+/// under `kluris-acme`, or a `kluris-acme` under another name, is not.
+#[test]
+fn renderings_are_recognised_only_under_their_own_name() {
+    for (file, name, text) in legacy_renderings() {
+        if file.ends_with(".workflow.md") {
+            assert!(!is_generated_workflow("kluris-other.md", &text), "{file}");
+        } else {
+            assert!(!is_generated_skill("kluris-other", &text), "{file}");
+            let swapped = if name == "kluris" {
+                "kluris-acme"
+            } else {
+                "kluris"
+            };
+            assert!(!is_generated_skill(swapped, &text), "{file} as {swapped}");
+        }
+    }
+}
+
+/// The frontmatter must be the template's byte for byte: changing any one
+/// character of it, quotes and the brain name included, makes the file
+/// someone else's.
+#[test]
+fn any_change_to_the_frontmatter_is_not_recognised() {
+    let mut texts: Vec<(String, String, String)> = legacy_renderings();
+    let case = &cases()[0];
+    texts.push(("v2.28.11".into(), skill_name(&case.brain_name), case.v2()));
+    for (file, name, text) in texts {
+        let end = text.find("\n---\n").expect("frontmatter end") + 1;
+        let workflow = file.ends_with(".workflow.md");
+        for (i, c) in text[..end].char_indices() {
+            if c == '\n' && i + 1 == end {
+                continue;
+            }
+            let other = if c == 'x' { 'y' } else { 'x' };
+            let changed = format!("{}{other}{}", &text[..i], &text[i + c.len_utf8()..]);
+            let ok = if workflow {
+                is_generated_workflow(&name, &changed)
+            } else {
+                is_generated_skill(&name, &changed)
+            };
+            assert!(!ok, "{file}: byte {i} ({c:?}) changed is still recognised");
+        }
+    }
+}
+
+/// The body must carry the release's fixed headings in order: a missing or
+/// reordered heading makes the file someone else's.
+#[test]
+fn a_missing_or_reordered_heading_is_not_recognised() {
+    let case = &cases()[0];
+    let name = skill_name(&case.brain_name);
+    let v2 = case.v2();
+    assert!(is_generated_skill(&name, &v2));
+    for heading in ["## Bootstrap", "## Writing rules", "## CLI commands"] {
+        let line = format!("\n{heading}\n");
+        assert_eq!(v2.matches(&line).count(), 1, "{heading}");
+        let dropped = v2.replace(&line, "\n");
+        assert!(!is_generated_skill(&name, &dropped), "without {heading}");
+    }
+    let swapped = v2
+        .replace("\n## Bootstrap\n", "\n## @@\n")
+        .replace("\n## CLI commands\n", "\n## Bootstrap\n")
+        .replace("\n## @@\n", "\n## CLI commands\n");
+    assert!(!is_generated_skill(&name, &swapped), "reordered");
+    let brain = v2.replace("\n# Brain: acme\n", "\n# Brain: other\n");
+    assert!(
+        !is_generated_skill(&name, &brain),
+        "another brain's heading"
+    );
+}
+
+/// v3's marker counts only on its own line right after the frontmatter
+/// and its blank line.
+#[test]
+fn the_marker_counts_only_at_its_place() {
+    let case = &cases()[0];
+    let name = skill_name(&case.brain_name);
+    let v3 = render_skill(&case.input());
+    assert!(is_generated_skill(&name, &v3));
+    let block = format!("\n---\n\n{MARKER_LINE}\n\n");
+    assert_eq!(v3.matches(&block).count(), 1);
+    for moved in [
+        v3.replace(&block, &format!("\n---\n\n\n{MARKER_LINE}\n\n")),
+        v3.replace(&block, &format!("\n---\n{MARKER_LINE}\n\n")),
+        v3.replace(&block, &format!("\n---\n\n {MARKER_LINE}\n\n")),
+        v3.replace(&block, &format!("\n---\n\n{MARKER_LINE} extra\n\n")),
+        v3.replace(&block, "\n---\n\n<!-- kluris:generated -->\n\n"),
+    ] {
+        assert!(
+            !is_generated_skill(&name, &moved),
+            "{}",
+            &moved[..400.min(moved.len())]
+        );
+    }
+    // A user's skill that copies the marker below its own frontmatter is
+    // marked: the marker is the promise.
+    let own = format!("---\nname: kluris-notes\ndescription: x\n---\n\n{MARKER_LINE}\n\n# Notes\n");
+    assert!(is_generated_skill("kluris-notes", &own));
+    let two_lines =
+        format!("---\nname: kluris-notes\ndescription: x\nmetadata: y\n---\n\n{MARKER_LINE}\n");
+    assert!(!is_generated_skill("kluris-notes", &two_lines));
+}
+
+/// T-103 `description-prefix`: a user's own `kluris-notes` whose
+/// description merely opens like Kluris's is not Kluris's.
+#[test]
+fn a_description_that_only_opens_like_kluris_is_not_recognised() {
+    for text in [
+        "---\nname: kluris-notes\ndescription: \"You are the team's subject matter expert on my personal notes\"\n---\n\n# Notes\n",
+        "---\nname: kluris-notes\ndescription: You are the team's subject matter expert on my personal notes\n---\n\n# Notes\n",
+        "---\nname: kluris\ndescription: You are the team's subject matter expert. Internalize the brain\n---\n\n# Kluris\n",
+        "---\nname: kluris\ndescription: \"You are the team's subject matter expert. Your knowledge comes from a brain\"\n---\n\nbody\n",
+    ] {
+        let name = if text.contains("name: kluris\n") {
+            "kluris"
+        } else {
+            "kluris-notes"
+        };
+        assert!(!is_generated_skill(name, text), "{text}");
+    }
     let wf =
         "---\ndescription: You are the team's subject matter expert. Your knowledge\n---\n\nbody\n";
-    assert!(is_generated_workflow("kluris.md", wf));
+    assert!(!is_generated_workflow("kluris.md", wf));
 }
 
 #[test]

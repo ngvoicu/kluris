@@ -12,7 +12,12 @@ Expected (parity/allowlist.md, the doctor entries):
   counts; `skills` (the per-folder report) is a new key;
 - the text output keeps v2's `  PASS|FAIL <name>: <detail>` lines;
 - `--no-refresh` writes nothing, on either side;
-- a failed check exits 1 on both sides.
+- a failed check exits 1 on both sides;
+- where v2 deletes what is not its own (a user's `kluris-*` skill whose
+  description opens like Kluris's, v2's own staging names) or deletes the
+  skill it just wrote (a v2 folder linked to `~/.agents/skills`), v3 keeps
+  them (PAR-031, PAR-055: only entries proven Kluris's are removed, and a
+  folder is handled once whatever its names).
 """
 
 from __future__ import annotations
@@ -20,11 +25,12 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 from pathlib import Path
 
 import pytest
 
-from harness import V3_BIN, Sandbox, run_v2, run_v3
+from harness import IS_WINDOWS, V3_BIN, Sandbox, run_v2, run_v3
 from runs import same_words
 from test_skill_install import BRAINS, V2_ONLY, V3_WRITES, _tree, _v2_home, _v2_to_v3
 
@@ -160,3 +166,75 @@ def test_a_failed_check_exits_1_on_both_sides(sandbox: Sandbox):
     assert d3["ok"] is d2["ok"] is False
     assert _checks(d3)["git"] == _checks(d2)["git"] == {
         "name": "git", "passed": False, "detail": "git not found. Install: https://git-scm.com/downloads"}
+
+
+# A user's own skill whose description opens like Kluris's (T-103
+# `description-prefix`).
+PERSONAL_SKILL = (
+    "---\nname: kluris-personal\ndescription: \"You are the team's subject matter expert on my "
+    "personal notes\"\n---\n\n# Notes\n"
+)
+
+
+def test_entries_that_only_look_like_kluris_are_kept(sandbox: Sandbox):
+    _v2_home(sandbox)
+    home = sandbox.home
+    v2_skill = (home / ".claude/skills/kluris-acme/SKILL.md").read_bytes()
+    mine = {
+        ".agents/skills/kluris-personal/SKILL.md": PERSONAL_SKILL.encode(),
+        ".agents/skills/kluris-personal/private.md": b"my notes",
+        ".codex/skills/kluris-personal/SKILL.md": PERSONAL_SKILL.encode(),
+        # v2's own staging names (T-103 `foreign-staging`).
+        ".agents/skills/.kluris-acme.tmp/SKILL.md": v2_skill,
+        ".agents/skills/.kluris-acme.old/SKILL.md": b"my draft",
+        ".agents/skills/.kluris-notes.old/SKILL.md": v2_skill,
+        # A skill folder with more than its SKILL.md.
+        ".cursor/skills/kluris-acme/extra.txt": b"left by someone",
+    }
+    for rel, data in mine.items():
+        (home / rel).parent.mkdir(parents=True, exist_ok=True)
+        (home / rel).write_bytes(data)
+    before = _tree(home)
+    sandbox.freeze()
+
+    v2, (home2, _) = _run(sandbox, "v2", ["doctor", "--json"])
+    v3, (home3, _) = _run(sandbox, "v3", ["doctor", "--json"])
+    assert v2.code == v3.code == 0, (v2.stdout, v3.stdout, v3.stderr)
+    # v2 deletes them: the difference PAR-031/PAR-055 allow.
+    for rel in (".agents/skills/kluris-personal/SKILL.md", ".codex/skills/kluris-personal/SKILL.md",
+                ".cursor/skills/kluris-acme/extra.txt"):
+        assert rel not in home2, rel
+    for rel, data in mine.items():
+        assert home3.get(rel) == data, rel
+
+    expected = _expected_migration(before)
+    expected[".cursor/skills/kluris-acme/SKILL.md"] = before[".cursor/skills/kluris-acme/SKILL.md"]
+    changed = sorted(k for k in set(home3) | set(expected) if home3.get(k) != expected.get(k))
+    assert not changed, changed
+    kept = {d["path"]: d["kept"] for d in json.loads(v3.stdout)["skills"]["destinations"]}
+    assert kept[(home / ".agents/skills").as_posix()] == [
+        ".kluris-acme.old", ".kluris-acme.tmp", ".kluris-notes.old", "kluris-notes", "kluris-personal"]
+    assert kept[(home / ".cursor/skills").as_posix()] == ["kluris-acme", "kluris-notes"]
+
+
+@pytest.mark.skipif(IS_WINDOWS, reason="a folder symlink needs a privilege on Windows")
+def test_a_v2_folder_linked_to_the_universal_one(sandbox: Sandbox):
+    """T-103 `aliased-skill-dir`: `~/.codex/skills -> ../.agents/skills`.
+    v2 writes its copies through the link; v3 skips the link as an alias of
+    the folder it just wrote, so the skills stay on both sides."""
+    _v2_home(sandbox)
+    codex = sandbox.home / ".codex/skills"
+    shutil.rmtree(codex)
+    os.symlink("../.agents/skills", codex)
+    sandbox.freeze()
+
+    v2, (home2, _) = _run(sandbox, "v2", ["doctor", "--json"])
+    v3, (home3, _) = _run(sandbox, "v3", ["doctor", "--json"])
+    assert v2.code == v3.code == 0, (v2.stdout, v3.stdout, v3.stderr)
+    for brain in BRAINS:
+        rel = f".agents/skills/kluris-{brain}/SKILL.md"
+        assert rel in home2 and rel in home3, rel
+    codex_report = [d for d in json.loads(v3.stdout)["skills"]["destinations"]
+                    if d["path"] == codex.as_posix()]
+    assert codex_report and codex_report[0]["alias_of"] == (sandbox.home / ".agents/skills").as_posix()
+    assert codex_report[0]["removed"] == []

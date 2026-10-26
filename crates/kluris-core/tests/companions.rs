@@ -8,10 +8,12 @@ use std::path::{Path, PathBuf};
 
 use indexmap::IndexMap;
 use kluris_core::companions::{
-    self, CompanionTree, KNOWN, enabled, install, install_tree, installed, installed_dir,
-    is_installed, load_brains, referenced, refresh, verify_runtime_dir,
+    self, CompanionTree, KNOWN, enabled, install, install_tree, install_tree_with, installed,
+    installed_dir, is_installed, load_brains, pending_backups, referenced, refresh,
+    verify_runtime_dir,
 };
 use kluris_core::config::{BrainEntry, GlobalConfig};
+use kluris_core::fileops::{FileOps, RealFs};
 use kluris_core::resolve::ResolvedBrain;
 use tempfile::TempDir;
 
@@ -732,4 +734,132 @@ fn referenced_reads_known_companions_from_brain_configs() {
         referenced(&GlobalConfig { brains }),
         ["specmint-core", "specmint-tdd-html"]
     );
+}
+
+// --- the backup survives every failure (T-103 #8) ---------------------------
+
+/// File operations whose renames out of the named entries of the
+/// companions folder fail.
+struct FailRenamesFrom(&'static [&'static str]);
+
+impl FileOps for FailRenamesFrom {
+    fn rename(&self, from: &Path, to: &Path) -> std::io::Result<()> {
+        let name = from.file_name().and_then(|n| n.to_str()).unwrap_or("");
+        if self.0.contains(&name) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "injected rename failure",
+            ));
+        }
+        RealFs.rename(from, to)
+    }
+}
+
+fn old_install(home: &Path) -> PathBuf {
+    let dest = installed_dir("specmint-core", home);
+    fs::create_dir_all(&dest).unwrap();
+    fs::write(dest.join("SKILL.md"), "the old copy").unwrap();
+    dest
+}
+
+/// T-103 `rollback`: both the move in and the move back fail. The old
+/// copy stays in the backup, which the error names; nothing is deleted.
+#[test]
+fn a_failed_restore_keeps_the_backup_and_names_it() {
+    let home = TempDir::new().unwrap();
+    let dest = old_install(home.path());
+    let backup = companions_dir(home.path()).join(".specmint-core.old");
+    let ops = FailRenamesFrom(&[".specmint-core.tmp", ".specmint-core.old"]);
+
+    let err =
+        install_tree_with("specmint-core", &fake("specmint-core"), home.path(), &ops).unwrap_err();
+
+    assert!(!dest.exists());
+    assert_eq!(
+        fs::read_to_string(backup.join("SKILL.md")).unwrap(),
+        "the old copy"
+    );
+    assert!(
+        err.to_string().contains(&backup.display().to_string()),
+        "{err}"
+    );
+    assert_eq!(pending_backups(home.path()), ["specmint-core"]);
+}
+
+/// When only the move in fails, the old copy is moved back and no backup
+/// is left.
+#[test]
+fn a_failed_move_in_puts_the_old_copy_back() {
+    let home = TempDir::new().unwrap();
+    let dest = old_install(home.path());
+    let ops = FailRenamesFrom(&[".specmint-core.tmp"]);
+
+    assert!(install_tree_with("specmint-core", &fake("specmint-core"), home.path(), &ops).is_err());
+
+    assert_eq!(
+        fs::read_to_string(dest.join("SKILL.md")).unwrap(),
+        "the old copy"
+    );
+    assert_eq!(names_in(&companions_dir(home.path())), ["specmint-core"]);
+    assert!(pending_backups(home.path()).is_empty());
+}
+
+/// The next install first puts an outstanding backup back, then
+/// refreshes, and says it did.
+#[test]
+fn the_next_install_restores_an_outstanding_backup_first() {
+    let home = TempDir::new().unwrap();
+    old_install(home.path());
+    let ops = FailRenamesFrom(&[".specmint-core.tmp", ".specmint-core.old"]);
+    assert!(install_tree_with("specmint-core", &fake("specmint-core"), home.path(), &ops).is_err());
+    let backup = companions_dir(home.path()).join(".specmint-core.old");
+
+    let done = install_tree_with(
+        "specmint-core",
+        &fake("specmint-core"),
+        home.path(),
+        &RealFs,
+    )
+    .unwrap();
+
+    assert_eq!(done.restored.as_deref(), Some(backup.as_path()));
+    assert_eq!(tree(&installed_dir("specmint-core", home.path())), FOLDER);
+    assert_eq!(names_in(&companions_dir(home.path())), ["specmint-core"]);
+    assert!(pending_backups(home.path()).is_empty());
+}
+
+/// An outstanding backup whose restore then fails again is kept, and the
+/// failure is the install's error.
+#[test]
+fn a_backup_that_cannot_be_restored_stops_the_install() {
+    let home = TempDir::new().unwrap();
+    let parent = companions_dir(home.path());
+    fs::create_dir_all(parent.join(".specmint-core.old")).unwrap();
+    fs::write(parent.join(".specmint-core.old/SKILL.md"), "kept").unwrap();
+    let ops = FailRenamesFrom(&[".specmint-core.old"]);
+
+    let err =
+        install_tree_with("specmint-core", &fake("specmint-core"), home.path(), &ops).unwrap_err();
+
+    assert!(err.to_string().contains(".specmint-core.old"), "{err}");
+    assert_eq!(
+        fs::read_to_string(parent.join(".specmint-core.old/SKILL.md")).unwrap(),
+        "kept"
+    );
+    assert!(!installed_dir("specmint-core", home.path()).exists());
+}
+
+/// `refresh` (doctor's path) reports the restore too.
+#[test]
+fn refresh_reports_a_restored_backup() {
+    let home = TempDir::new().unwrap();
+    let parent = companions_dir(home.path());
+    fs::create_dir_all(parent.join(".specmint-core.old")).unwrap();
+    fs::write(parent.join(".specmint-core.old/SKILL.md"), "kept").unwrap();
+
+    let done = refresh("specmint-core", home.path()).unwrap();
+
+    assert_eq!(done.restored, Some(parent.join(".specmint-core.old")));
+    assert!(is_installed("specmint-core", home.path()));
+    assert_eq!(names_in(&parent), ["specmint-core"]);
 }

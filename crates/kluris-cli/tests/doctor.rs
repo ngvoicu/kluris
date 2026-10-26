@@ -272,8 +272,10 @@ fn healthy_setup_passes_with_v2s_shape_and_no_python_check() {
         serde_json::json!({
             "path": slash(&s.h(".agents/skills")),
             "role": "universal",
+            "alias_of": null,
             "written": ["kluris-acme"],
             "removed": [],
+            "kept": [],
             "failed": [],
         })
     );
@@ -741,27 +743,97 @@ fn removed_entries_are_listed_under_the_skills_line() {
     );
 }
 
+/// An earlier run's staging folder holding a Kluris-written skill is
+/// removed; one holding anything else is kept and listed under `kept`.
 #[test]
 fn stale_staging_folders_are_removed() {
     let mut s = Sandbox::new();
     s.brain("acme", &["claude"], &[]);
+    let half = ".kluris-gone.4242-0000000000000001.tmp";
+    let old = ".kluris-gone.4242-0000000000000002.old";
     put(
-        &s.h(".agents/skills/.kluris-gone.tmp/SKILL.md"),
+        &s.h(".agents/skills").join(half).join("SKILL.md"),
         "half written",
     );
     put(
-        &s.h(".claude/skills/.kluris-gone.old/SKILL.md"),
+        &s.h(".claude/skills").join(old).join("SKILL.md"),
         &v2_skill("gone"),
     );
     let r = s.doctor(&["--json"]);
     assert_eq!(r.code, 0, "{} {}", r.stdout, r.stderr);
     let doc = r.json();
-    assert!(!s.h(".agents/skills/.kluris-gone.tmp").exists());
-    assert!(!s.h(".claude/skills/.kluris-gone.old").exists());
+    assert!(s.h(".agents/skills").join(half).join("SKILL.md").is_file());
+    assert!(!s.h(".claude/skills").join(old).exists());
+    let universal = &doc["skills"]["destinations"][0];
+    assert_eq!(universal["kept"], serde_json::json!([half]));
+    assert_eq!(universal["removed"], serde_json::json!([]));
     assert_eq!(
-        doc["skills"]["destinations"][0]["removed"],
-        serde_json::json!([".kluris-gone.tmp"])
+        doc["skills"]["destinations"][1]["removed"],
+        serde_json::json!([old])
     );
+    let text = s.doctor(&[]);
+    assert!(
+        text.stdout.contains(&format!(
+            "    ~/.agents/skills: written kluris-acme; kept {half}\n"
+        )),
+        "{}",
+        text.stdout
+    );
+}
+
+/// A folder that is another name for one already handled is skipped and
+/// reported as its alias, in JSON and in text.
+#[cfg(unix)]
+#[test]
+fn an_aliased_folder_is_reported_as_such() {
+    let mut s = Sandbox::new();
+    s.brain("acme", &["claude"], &[]);
+    fs::create_dir_all(s.h(".agents/skills")).expect("agents");
+    fs::create_dir_all(s.h(".codex")).expect("codex");
+    std::os::unix::fs::symlink("../.agents/skills", s.h(".codex/skills")).expect("link");
+    let r = s.doctor(&["--json"]);
+    assert_eq!(r.code, 0, "{} {}", r.stdout, r.stderr);
+    let doc = r.json();
+    let codex = doc["skills"]["destinations"]
+        .as_array()
+        .expect("destinations")
+        .iter()
+        .find(|d| d["path"] == slash(&s.h(".codex/skills")).as_str())
+        .expect("codex destination")
+        .clone();
+    assert_eq!(codex["role"], "migration");
+    assert_eq!(codex["alias_of"], slash(&s.h(".agents/skills")).as_str());
+    assert!(s.h(".agents/skills/kluris-acme/SKILL.md").is_file());
+    let text = s.doctor(&[]);
+    assert!(
+        text.stdout
+            .contains("    ~/.codex/skills: same folder as ~/.agents/skills\n"),
+        "{}",
+        text.stdout
+    );
+}
+
+/// A companion backup a failed refresh left (T-103 #8) is restored, then
+/// refreshed, and the check says so.
+#[test]
+fn an_outstanding_companion_backup_is_restored_and_reported() {
+    let mut s = Sandbox::new();
+    s.brain("acme", &["claude"], &[]);
+    put(
+        &s.h(".kluris/companions/.specmint-core.old/SKILL.md"),
+        "the copy a failed refresh kept",
+    );
+    let r = s.doctor(&["--json"]);
+    assert_eq!(r.code, 0, "{} {}", r.stdout, r.stderr);
+    let doc = r.json();
+    let detail = check(&doc, "companion:specmint-core")["detail"]
+        .as_str()
+        .expect("detail")
+        .to_string();
+    assert!(detail.starts_with("refreshed specmint-core"), "{detail}");
+    assert!(detail.contains(".specmint-core.old"), "{detail}");
+    assert!(s.h(".kluris/companions/specmint-core/SKILL.md").is_file());
+    assert!(!s.h(".kluris/companions/.specmint-core.old").exists());
 }
 
 #[test]
