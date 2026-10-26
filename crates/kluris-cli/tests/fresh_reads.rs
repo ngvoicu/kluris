@@ -7,6 +7,7 @@ use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::Output;
+use std::sync::{Mutex, MutexGuard};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use std::{fs, thread};
 
@@ -31,16 +32,25 @@ const WAKE_UP_KEYS: [&str; 13] = [
     "parse_errors",
 ];
 
+/// One world at a time: each runs several git processes per step, and the
+/// Windows runner caps a run at 64 processes.
+static SERIAL: Mutex<()> = Mutex::new(());
+
 /// A bare `remote.git`, the teammate's clone and mine (registered as the
 /// brain `team`), with a hermetic git config and HOME.
 struct World {
     tmp: TempDir,
+    _serial: MutexGuard<'static, ()>,
 }
 
 impl World {
     fn new() -> World {
+        let serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         let tmp = TempDir::new().unwrap();
-        let world = World { tmp };
+        let world = World {
+            tmp,
+            _serial: serial,
+        };
         fs::create_dir_all(world.home()).unwrap();
         fs::write(world.gitconfig(), "").unwrap();
         world.git(
