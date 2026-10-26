@@ -739,7 +739,50 @@ fn self_update_is_in_help() {
     let out = f.run(&["self-update", "--help"]);
     assert_eq!(out.status.code(), Some(0));
     let text = stdout(&out);
-    for flag in ["--check", "--version", "--json"] {
+    for flag in ["--check", "--version", "--json", "KLURIS_GITHUB_TOKEN", "KLURIS_GITHUB_API_URL"] {
         assert!(text.contains(flag), "{text}");
     }
+}
+
+#[test]
+fn a_plain_http_api_url_is_refused_unless_loopback() {
+    // KLURIS_GITHUB_API_URL is for a GitHub API mirror or GitHub Enterprise:
+    // https, or plain http only on this machine (the fake above is
+    // http://127.0.0.1), with or without a token.
+    let f = Fixture::new();
+    for token in [None, Some("kt-123")] {
+        for json in [false, true] {
+            let mut cmd = f.cmd(&f.exe);
+            cmd.args(["self-update", "--check"])
+                .env("KLURIS_GITHUB_API_URL", "http://github.example.invalid/api/v3");
+            if json {
+                cmd.arg("--json");
+            }
+            if let Some(token) = token {
+                cmd.env("KLURIS_GITHUB_TOKEN", token);
+            }
+            let out = cmd.output().unwrap();
+            assert_eq!(out.status.code(), Some(1));
+            let message = if json {
+                let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+                v["error"].as_str().unwrap().to_string()
+            } else {
+                stderr(&out)
+            };
+            assert!(
+                message.contains("KLURIS_GITHUB_API_URL") && message.contains("https"),
+                "{message}"
+            );
+        }
+    }
+    let out = f
+        .cmd(&f.exe)
+        .args(["self-update"])
+        .env("KLURIS_GITHUB_API_URL", "http://github.example.invalid")
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    assert!(stderr(&out).contains("KLURIS_GITHUB_API_URL"), "{}", stderr(&out));
+    f.assert_untouched();
+    assert_eq!(f.requests(), Vec::<String>::new());
 }

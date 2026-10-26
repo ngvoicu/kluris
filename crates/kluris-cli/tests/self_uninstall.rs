@@ -7,9 +7,9 @@
 //! into a temp HOME on 2026-10-26: the env scripts go to the receipt's folder
 //! (`~/.config/kluris/env.sh`, `env.fish`), every rc file gets an empty line
 //! then `. "$HOME/.config/kluris/env.sh"`, and the fish conf.d file the same
-//! with `source`. Older dist installers put the env scripts beside the binary
-//! (`~/.kluris/bin/env`, `env.fish`, the "legacy" paths 0.33.1 migrates);
-//! those are removed too.
+//! with `source`. Only what that installer writes is removed: env scripts
+//! beside the binary (`~/.kluris/bin/env`, where older dist versions put
+//! them) were never written for Kluris and are left alone.
 //!
 //! The opt-in test `real_windows_user_path_round_trip` changes the real
 //! HKCU PATH of the machine it runs on and restores it; it runs only with
@@ -165,8 +165,9 @@ impl Home {
         }
     }
 
-    /// Older dist installers: env scripts beside the binary, rc lines to them.
-    fn with_legacy_env_scripts(self) -> Home {
+    /// Env scripts beside the binary and an rc line to them, as dist before
+    /// 0.33 wrote for other apps; no Kluris installer ever wrote these.
+    fn with_files_dist_never_wrote(self) -> Home {
         fs::write(self.prefix.join("env"), ENV_SH).unwrap();
         fs::write(self.prefix.join("env.fish"), ENV_FISH).unwrap();
         let bash_profile = self.home.join(".bash_profile");
@@ -380,17 +381,18 @@ fn zsh_files_follow_zdotdir_and_home_without_it() {
 }
 
 #[test]
-fn legacy_env_scripts_and_lines_are_removed_too() {
-    let h = Home::installed().with_legacy_env_scripts();
+fn files_the_installer_never_wrote_are_kept() {
+    let h = Home::installed().with_files_dist_never_wrote();
+    let bash_profile = fs::read(h.home.join(".bash_profile")).unwrap();
     let receipt = h.receipt();
-    uninstall(&request(&h, &receipt, false), None, &mut remove_file).unwrap();
-    assert!(!h.prefix.join("env").exists());
-    assert!(!h.prefix.join("env.fish").exists());
-    assert_eq!(
-        fs::read_to_string(h.home.join(".bash_profile")).unwrap(),
-        "PS1='$ '\n"
-    );
-    h.assert_installer_files_gone();
+    let report = uninstall(&request(&h, &receipt, false), None, &mut remove_file).unwrap();
+    assert!(report.failed.is_empty(), "{:?}", report.failed);
+    assert_eq!(fs::read_to_string(h.prefix.join("env")).unwrap(), ENV_SH);
+    assert_eq!(fs::read_to_string(h.prefix.join("env.fish")).unwrap(), ENV_FISH);
+    assert_eq!(fs::read(h.home.join(".bash_profile")).unwrap(), bash_profile);
+    assert!(!h.prefix.join(exe_name()).exists());
+    assert!(!h.receipt.exists());
+    h.assert_rc_files_restored();
 }
 
 #[test]
