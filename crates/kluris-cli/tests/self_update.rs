@@ -1030,3 +1030,69 @@ fn stale_old_binaries_are_swept_by_self_update_and_doctor() {
         assert_eq!(f.prefix_names(), expected, "{args:?}: {}", stderr(&out));
     }
 }
+
+/// An interrupted update's staged copy (`.kluris(.exe).new-<pid>-<n>`) goes
+/// at the start of `self-update` and `doctor` once it is over an hour old:
+/// a fresh one may be another update's, running now. Look-alike names and
+/// symlinks are never touched.
+#[test]
+fn interrupted_staging_files_are_swept_once_an_hour_old() {
+    let two_hours_ago = std::time::SystemTime::now() - std::time::Duration::from_secs(2 * 3600);
+    let old_staged = format!(".{}.new-123-0", exe_name());
+    let fresh_staged = format!(".{}.new-456-1", exe_name());
+    let look_alikes = [
+        format!(".{}.new-x-1", exe_name()),
+        format!("{}.new-1-2", exe_name()),
+        format!(".{}.new-1-2.part", exe_name()),
+        ".notes.new-1-2".to_string(),
+    ];
+    for args in [
+        vec!["self-update", "--check", "--json"],
+        vec!["doctor", "--no-refresh", "--json"],
+    ] {
+        let f = Fixture::new();
+        let new = f.new_binary("3.99.0", 0, "");
+        f.serve(&[f.release("v3.99.0", &new)]);
+        let write = |name: &str, old: bool| {
+            let path = f.prefix.join(name);
+            fs::write(&path, b"half a binary").unwrap();
+            if old {
+                fs::File::options()
+                    .write(true)
+                    .open(&path)
+                    .unwrap()
+                    .set_modified(two_hours_ago)
+                    .unwrap();
+            }
+        };
+        write(&old_staged, true);
+        write(&fresh_staged, false);
+        for name in &look_alikes {
+            write(name, true);
+        }
+        let mut kept: Vec<String> = look_alikes.to_vec();
+        kept.push(fresh_staged.clone());
+        // A symlink with the staged name, to an hour-old file outside.
+        #[cfg(unix)]
+        {
+            let target = f.home.join("target-of-link");
+            fs::write(&target, b"not ours").unwrap();
+            fs::File::options()
+                .write(true)
+                .open(&target)
+                .unwrap()
+                .set_modified(two_hours_ago)
+                .unwrap();
+            let link = format!(".{}.new-789-2", exe_name());
+            std::os::unix::fs::symlink(&target, f.prefix.join(&link)).unwrap();
+            kept.push(link);
+        }
+        let out = f.run(&args);
+        assert!(out.status.code().is_some(), "{args:?}");
+        kept.push(exe_name().to_string());
+        kept.sort();
+        assert_eq!(f.prefix_names(), kept, "{args:?}: {}", stderr(&out));
+        #[cfg(unix)]
+        assert_eq!(fs::read(f.home.join("target-of-link")).unwrap(), b"not ours");
+    }
+}

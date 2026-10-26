@@ -441,6 +441,24 @@ mod tests {
         }
     }
 
+    #[test]
+    fn staging_names_are_exact() {
+        for yes in [".kluris.new-1-0", ".kluris.exe.new-123-45"] {
+            assert!(is_staging_name(yes), "{yes}");
+        }
+        for no in [
+            "kluris.new-1-0",
+            ".kluris.new-1-0.part",
+            ".kluris.new-x-0",
+            ".kluris.new-1-",
+            ".kluris.old-1-0",
+            ".klurisx.new-1-0",
+            ".kluris.new-1-2-3",
+        ] {
+            assert!(!is_staging_name(no), "{no}");
+        }
+    }
+
     #[cfg(unix)]
     #[test]
     fn a_probe_that_hangs_is_stopped_at_the_timeout() {
