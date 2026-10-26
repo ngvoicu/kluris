@@ -4,6 +4,9 @@
 //! `pycase_tables.rs` holds (generated from the oracle by
 //! `parity/tools/gen_pycase.py`).
 //!
+//! Translated from CPython 3.11 `Objects/unicodeobject.c` (`do_title`,
+//! `do_lower`, `lower_ucs4`, `handle_capital_sigma`); see LICENSE-PSF.
+//!
 //! - `title`: a character after a cased one is lowercased, any other is
 //!   titlecased with its full titlecase mapping (not its uppercase: `ǆ` is
 //!   `ǅ`, `ᾀ` is `ᾈ`, Georgian Mkhedruli stays as it is).

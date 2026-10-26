@@ -289,7 +289,8 @@ fn weekday(days: i64) -> i64 {
 }
 
 /// CPython 3.11's `parse_isoformat_date` and the date checks after it; the
-/// resulting year when it is a valid date.
+/// resulting year when it is a valid date. Translated from CPython 3.11
+/// `Modules/_datetimemodule.c` (`parse_isoformat_date`); see LICENSE-PSF.
 fn iso_date(bytes: &[u8]) -> Option<i64> {
     if ![7, 8, 10].contains(&bytes.len()) {
         return None;

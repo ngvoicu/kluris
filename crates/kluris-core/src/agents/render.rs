@@ -7,6 +7,9 @@
 //! Also here: recognising the skills and Windsurf workflows Kluris wrote
 //! (v3's marker, or the shape of every v1/v2 rendering), so installs remove
 //! only those and never a user's own `kluris-*` folder.
+//!
+//! `windows_splitroot` below is translated from CPython 3.11
+//! `Lib/pathlib.py` (`_WindowsFlavour.splitroot`); see LICENSE-PSF.
 
 use crate::companions;
 

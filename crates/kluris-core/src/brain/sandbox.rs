@@ -8,6 +8,10 @@
 //! on POSIX, `..` is applied after the symlinks before it are followed (not
 //! lexically), a missing tail is kept as written, a broken link resolves to
 //! its target's path, and a symlink loop is an error.
+//!
+//! Translated from CPython 3.11 `Lib/posixpath.py` (`realpath`,
+//! `_joinrealpath`) and `Lib/ntpath.py` (`realpath`, `normpath`,
+//! `_readlink_deep`); see LICENSE-PSF.
 
 use std::path::{Path, PathBuf};
 

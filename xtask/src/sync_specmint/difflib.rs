@@ -3,8 +3,9 @@
 //! `SequenceMatcher(None, a, b)` with its `autojunk` heuristic (in a `b` of
 //! 200 or more lines, a line seen more than `len(b) // 100 + 1` times is
 //! "popular" and never starts a match), `get_matching_blocks`,
-//! `get_opcodes` and `get_grouped_opcodes`. The algorithm follows CPython's
-//! `Lib/difflib.py` (PSF License 2.0; THIRD_PARTY_NOTICES.md).
+//! `get_opcodes` and `get_grouped_opcodes`. Translated from CPython 3.11
+//! `Lib/difflib.py` (`SequenceMatcher`, `unified_diff`,
+//! `_format_range_unified`); see LICENSE-PSF.
 
 use std::collections::HashMap;
 
