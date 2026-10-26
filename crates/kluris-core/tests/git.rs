@@ -611,29 +611,22 @@ fn file_dates_keep_non_ascii_and_odd_names_as_written() {
     // (`"lobe/\303\251.md"`) and never matched a neuron.
     let sb = Sandbox::new();
     let brain = sb.repo("brain");
-    sb.commit(
-        &brain,
-        &[
-            ("lobe/é.md", "e"),
-            ("sp ace.md", "s"),
-            ("quo\"te.md", "q"),
-            ("2026-01-01T00:00:00Z", "a name that looks like a date"),
-        ],
-        "one",
-        DATE,
-    );
+    let mut files = vec![
+        ("lobe/é.md", "e"),
+        ("sp ace.md", "s"),
+        ("2026-01-01", "a name that looks like a date"),
+    ];
+    if !cfg!(windows) {
+        // Names Windows cannot create.
+        files.extend([("quo\"te.md", "q"), ("2026-01-01T00:00:00Z", "a date")]);
+    }
+    sb.commit(&brain, &files, "one", DATE);
     let git = sb.git();
     let dates = git.file_dates(&git.repo(&brain).unwrap());
     let names: Vec<&str> = dates.latest.keys().map(String::as_str).collect();
-    assert_eq!(
-        names,
-        [
-            "2026-01-01T00:00:00Z",
-            "lobe/é.md",
-            "quo\"te.md",
-            "sp ace.md"
-        ]
-    );
+    let mut expected: Vec<&str> = files.iter().map(|(name, _)| *name).collect();
+    expected.sort();
+    assert_eq!(names, expected);
     assert!(dates.latest.values().all(|d| d == "2026-01-01T12:00:00Z"));
 }
 

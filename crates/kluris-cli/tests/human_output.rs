@@ -93,3 +93,27 @@ fn json_is_never_styled() {
          \"uncommitted\": \"\", \"git_enabled\": false, \"recent_commits\": []}]}\n"
     );
 }
+
+#[test]
+fn usage_names_kluris_whatever_the_binary_file_is_called() {
+    // clap takes the name from argv[0] (`kluris.exe` on Windows); Click's
+    // usage, like v2's, says `kluris`.
+    let dir = TempDir::new().unwrap();
+    let copy = dir.path().join("kluris-renamed.exe");
+    std::fs::copy(assert_cmd::cargo::cargo_bin!("kluris"), &copy).unwrap();
+    let out = std::process::Command::new(&copy)
+        .args(["status", "--help"])
+        .output()
+        .unwrap();
+    let text = String::from_utf8(out.stdout).unwrap();
+    assert!(text.contains("Usage: kluris status [OPTIONS]"), "{text}");
+    let out = std::process::Command::new(&copy)
+        .args(["status", "-h"])
+        .output()
+        .unwrap();
+    let text = String::from_utf8(out.stderr).unwrap();
+    assert!(
+        text.contains("Try 'kluris status --help' for help."),
+        "{text}"
+    );
+}

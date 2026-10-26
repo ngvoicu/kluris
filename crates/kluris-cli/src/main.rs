@@ -94,6 +94,8 @@ fn help_flag() -> Arg {
 /// The root command with Click's surface (see [`Cli`]).
 fn command() -> clap::Command {
     Cli::command()
+        // Usage says `kluris` whatever argv[0] is (`kluris.exe` on Windows).
+        .bin_name("kluris")
         .disable_help_subcommand(true)
         .disable_help_flag(true)
         .disable_version_flag(true)
