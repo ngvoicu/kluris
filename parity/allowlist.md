@@ -95,3 +95,51 @@ One entry per difference, under its own heading:
 - Differs: when a lobe's `map.md` is not valid UTF-8, v3 gives that lobe `description: ""` and prints the payload. v2 falls back to `map_file.read_text()`, whose `UnicodeDecodeError` its `except OSError` does not catch: a traceback on stderr, exit 1, no output.
 - Decision: a malformed file never crashes `wake-up` (SPEC acceptance; chief's brief for T-76, 2026-10-26)
 - Tests: `crates/kluris-core/tests/wake_up.rs::lobe_description_rules`, `parity/test_wake_up.py::test_map_md_that_is_not_utf8`
+
+### PAR-012: a commit subject containing `|` is kept whole
+- Command: `kluris status` (with and without `--json`, `recent_commits` and the dated lines); the git layer's `log`
+- Differs: v3 reads `git log` with NUL-separated fields (`--format=%H%x00%s%x00%aI%x00`), so the subject `has | pipe | char` is listed as it is. v2 split `%H|%s|%aI` on `|`: its `recent_commits` has `"has "`, and its text line is `   pipe | ch has ` (the subject's tail standing in for `date[:10]`).
+- Decision: fix v2's `|` split (research-03 §5 item 29; chief's brief for T-78, Kluris 3 Phase 2, TEST-K3-17 / IMPL-K3-18), 2026-10-26
+- Tests: `crates/kluris-core/tests/git.rs::{log_keeps_a_subject_with_pipes, file_dates_latest_and_created_per_path}`, `parity/test_list_status_help.py::test_status_subject_with_pipes`
+
+### PAR-013: non-ASCII file names are not C-quoted
+- Command: `kluris status` (`uncommitted`, with and without `--json`); the git layer's `status_short` and `file_dates` (dream's dates, once ported)
+- Differs: v3 runs git with `-c core.quotePath=false`, so `uncommitted` has `?? projects/é.md` where v2 has `?? "projects/\303\251.md"` (git's octal C-quoting of every byte over 0x7f). A name git quotes for another reason (a space, `"`, `\`, a control character) is quoted in both. The file-dates log reads NUL-separated names (`-z`), never quoted: v2's quoted names never matched a neuron, so their dates were not refreshed.
+- Decision: fix v2's quoted non-ASCII names (research-03 §5 item 26; chief's brief for T-78), 2026-10-26
+- Tests: `crates/kluris-core/tests/git.rs::{status_shows_non_ascii_names_unquoted, file_dates_keep_non_ascii_and_odd_names_as_written}`, `parity/test_list_status_help.py::test_status_non_ascii_names`
+
+### PAR-014: a brain nested in a larger repo sees only itself
+- Command: `kluris status` (`recent_commits`, `uncommitted`, the text); the git layer's `file_dates` (dream's dates, once ported)
+- Differs: when the brain directory is a subdirectory of the work tree (`git rev-parse --show-prefix` is not empty), v3 runs `git log -10 ... -- .` and `git status --short -- .` in the brain, so `recent_commits` lists only commits that touched the brain and `uncommitted` only its own changes, brain-relative (`M projects/alpha.md`). v2 listed the whole outer repo (`outer: code`, `M ../../README.md`). The file-dates log runs with `--relative`, so its paths are brain-relative (`a.md`, v2: `brain/a.md`, which never matched a neuron). A brain at the repo root runs v2's exact commands (no pathspec, which would drop empty commits).
+- Decision: scope git to the brain when nested (research-03 §5 item 26; chief's brief for T-78), 2026-10-26
+- Tests: `crates/kluris-core/tests/git.rs::{log_of_a_nested_brain_lists_only_its_own_commits, status_of_a_nested_brain_is_scoped_and_brain_relative, file_dates_of_a_nested_brain_are_brain_relative, log_keeps_empty_commits_at_the_repo_root}`, `parity/test_list_status_help.py::test_status_nested_brain_is_scoped_to_the_brain`
+
+### PAR-015: `status` of a repo without commits
+- Command: `kluris status` (with and without `--json`)
+- Differs: in a git repo with no commit yet, v3 reports the brain with `git_enabled: true`, `recent_commits: []` and its `uncommitted` text, and exits 0. v2's `git log` fails there (no `HEAD`): a `CalledProcessError` traceback, exit 1, no JSON.
+- Decision: a v2 crash the brief did not name; fixed as an empty log so `status` never crashes on a fresh repo (T-78, reported to the chief), 2026-10-26
+- Tests: `crates/kluris-core/tests/git.rs::log_of_a_repo_without_commits_is_empty`, `parity/test_list_status_help.py::test_status_of_a_repo_without_commits`
+
+### PAR-016: user text in human output is never markup
+- Command: every command's human (non-JSON) output; today `kluris list`, `kluris status`, `kluris help`, `kluris wake-up`
+- Differs: v3 prints names, paths, descriptions, commit subjects and other user text as they are. v2 passed them to Rich as markup: `see [red]docs[/red]` printed `see docs`, and a stray closing tag (`ends [/oops]`) raised `MarkupError` (traceback, exit 1) in `list`.
+- Decision: v2's markup-injection bug is not copied (research-03 §5 item 12; decided, chief's brief for T-78), 2026-10-26
+- Tests: `crates/kluris-cli/src/output/human.rs::tests::user_text_is_never_markup`, `parity/test_list_status_help.py::{test_list_and_status_print_user_text_literally, test_list_with_a_closing_tag_that_crashed_v2}`
+
+### PAR-017: `help --json COMMAND` describes that command
+- Command: `kluris help COMMAND --json`
+- Differs: v3 prints `{"ok": true, "commands": [{"name": ..., "description": ...}]}` with that one command, and for a name not in the table the envelope `{"ok": false, "error": "Unknown command: <name>"}` with exit 1 (as `help <name>` without `--json` fails in both). v2 ignored COMMAND under `--json`: the whole table, exit 0. `help --json` without COMMAND is v2's table (less `pack`, PAR-018).
+- Decision: fix v2's ignored argument (research-03 §5 item 20; chief's brief for T-78), 2026-10-26
+- Tests: `parity/test_list_status_help.py::test_help_json_with_a_command`
+
+### PAR-018: `pack` is gone
+- Command: `kluris help` (with and without `--json`), `kluris help pack`, `kluris pack`, `kluris --help`
+- Differs: the help table has v2's 12 other rows in v2's order, without `pack` (the JSON `commands` array likewise); `help pack` is `Unknown command: pack` (exit 1); `kluris pack` is `No such command 'pack'.` (exit 2, or the envelope with exit 1 under `--json`).
+- Decision: Kluris 3 drops `pack` (SPEC; research-03 §1.14 "Rust drops `pack`")
+- Tests: `parity/test_list_status_help.py::{test_help_text_matches_v2_without_pack, test_help_json_lists_v2s_commands_without_pack, test_help_for_an_unknown_command, test_help_json_with_a_command, test_usage_errors_with_json, test_root_help_flag}`
+
+### PAR-019: `help` with a config that does not read
+- Command: `kluris help` (with and without `--json`, with or without COMMAND)
+- Differs: both read `~/.kluris/config.yml` first and fail on one that does not parse, with exit 1; v3 prints `Error: Invalid config file <path>: ...` (the envelope under `--json`), as its `list` does, where v2 ends in a traceback (no JSON).
+- Decision: no traceback for a bad config (research-03 §5 item 20; chief's brief for T-78), 2026-10-26
+- Tests: `parity/test_list_status_help.py::test_help_with_a_corrupt_config`
