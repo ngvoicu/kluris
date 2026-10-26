@@ -617,7 +617,7 @@ mod scripts_run {
         executable(
             &home.path(".cargo/bin/cargo"),
             &format!(
-                "#!/bin/sh\necho \"cargo $*\"\necho \"tasks $(ulimit -u)\"\ncase \"$1\" in test) exit {cargo_test_status};; esac\nexit 0\n"
+                "#!/bin/bash\necho \"cargo $*\"\necho \"tasks $(ulimit -u)\"\ncase \"$1\" in test) exit {cargo_test_status};; esac\nexit 0\n"
             ),
         );
         executable(
