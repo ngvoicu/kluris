@@ -33,6 +33,12 @@
 #    read-only dotfiles folder, T-111 finding 5): self-uninstall fails and
 #    keeps the binary, the receipt and the env scripts; once the folder is
 #    writable again a rerun finishes, the profile byte-identical to before.
+# 8. `self-uninstall --purge` with a read-only folder in
+#    ~/.kluris/companions (T-114): it fails and keeps the binary and the
+#    receipt; once the folder is writable a rerun purges and finishes.
+# 9. A read-only ~/.config/fish/conf.d (T-114): the uninstall fails, keeping
+#    conf.d/kluris.env.fish and the env.fish it sources, the binary and the
+#    receipt; a rerun finishes.
 #
 # The local server and the JSON checks run on KLURIS_SMOKE_PYTHON (default
 # python3). Exits 0 when every check passes, 1 at the first failure.
@@ -306,4 +312,61 @@ cmp -s "$sandbox/dotfiles/profile" "$work/failed-rc-profile" || fail "the profil
 [ -L "$sandbox/.profile" ] || fail "the rerun replaced the ~/.profile link"
 step "the rerun finished: the installer's files gone, the profile byte-identical and still a link"
 
-step "ok ($(uname -s) $(uname -m), v$old -> v$new -> uninstalled; no-modify-path and failed-rc)"
+
+# A fresh install of the old release into $sandbox.
+fresh_install() {
+    mkdir -p "$sandbox"
+    in_sandbox KLURIS_DOWNLOAD_URL="$api/ngvoicu/kluris/releases/download/v$old" \
+        sh "$releases_dir/v$old/kluris-installer.sh" > "$work/$1-install.out" 2>&1 \
+        || { cat "$work/$1-install.out"; fail "the install for the $1 case failed"; }
+}
+# A failed uninstall kept what a retry needs.
+assert_retry_possible() {
+    for kept in .kluris/bin/kluris .config/kluris/kluris-receipt.json "$@"; do
+        [ -e "$sandbox/$kept" ] || { cat "$work/$case-1.json"; fail "$case: a failed uninstall removed ~/$kept, which a retry needs"; }
+    done
+}
+
+# 8. A purge that cannot clear ~/.kluris, then a rerun.
+case=failed-purge
+sandbox="$work/home-$case"
+fresh_install "$case"
+mkdir -p "$sandbox/.kluris/companions/protected"
+printf 'remaining data\n' > "$sandbox/.kluris/companions/protected/notes.txt"
+chmod 500 "$sandbox/.kluris/companions/protected"
+if in_sandbox "$sandbox/.kluris/bin/kluris" self-uninstall --purge --yes --json > "$work/$case-1.json" 2>&1; then
+    chmod 700 "$sandbox/.kluris/companions/protected"
+    cat "$work/$case-1.json"
+    fail "a purge succeeded though ~/.kluris could not be cleared"
+fi
+chmod 700 "$sandbox/.kluris/companions/protected"
+assert_retry_possible
+step "a purge that cannot clear ~/.kluris: exit 1, the binary and receipt kept: $(tail -n 1 "$work/$case-1.json" | sed 's/.*"failed": //' | cut -c1-140)"
+in_sandbox "$sandbox/.kluris/bin/kluris" self-uninstall --purge --yes --json > "$work/$case-2.json" 2>&1 \
+    || { cat "$work/$case-2.json"; fail "the rerun of the purge failed"; }
+for gone in .kluris .config/kluris/kluris-receipt.json .config/kluris/env.sh .config/fish/conf.d/kluris.env.fish; do
+    [ ! -e "$sandbox/$gone" ] || fail "the purge rerun left ~/$gone"
+done
+step "the purge rerun finished: ~/.kluris and the installer's files gone"
+
+# 9. A fish conf.d that cannot be cleaned, then a rerun.
+case=failed-fish
+sandbox="$work/home-$case"
+fresh_install "$case"
+chmod 500 "$sandbox/.config/fish/conf.d"
+if in_sandbox "$sandbox/.kluris/bin/kluris" self-uninstall --yes --json > "$work/$case-1.json" 2>&1; then
+    chmod 700 "$sandbox/.config/fish/conf.d"
+    cat "$work/$case-1.json"
+    fail "self-uninstall succeeded though fish's conf.d could not be cleaned"
+fi
+chmod 700 "$sandbox/.config/fish/conf.d"
+assert_retry_possible .config/fish/conf.d/kluris.env.fish .config/kluris/env.fish
+step "a fish conf.d that cannot be cleaned: exit 1, conf.d/kluris.env.fish, the env.fish it sources, the binary and receipt kept"
+in_sandbox "$sandbox/.kluris/bin/kluris" self-uninstall --yes --json > "$work/$case-2.json" 2>&1 \
+    || { cat "$work/$case-2.json"; fail "the rerun after the fish failure failed"; }
+for gone in .kluris/bin/kluris .config/kluris/kluris-receipt.json .config/kluris/env.sh .config/kluris/env.fish .config/fish/conf.d/kluris.env.fish; do
+    [ ! -e "$sandbox/$gone" ] || fail "the rerun after the fish failure left ~/$gone"
+done
+step "the rerun after the fish failure finished"
+
+step "ok ($(uname -s) $(uname -m), v$old -> v$new -> uninstalled; no-modify-path, failed-rc, failed-purge and failed-fish)"

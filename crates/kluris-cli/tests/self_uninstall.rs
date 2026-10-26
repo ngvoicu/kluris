@@ -1192,3 +1192,92 @@ fn real_windows_user_path_round_trip() {
     assert_eq!(real_registry::text(&after).unwrap_or_default(), rest);
     assert_eq!(after.map(|(kind, _)| kind), Some(real_registry::EXPAND));
 }
+
+// Late failures (T-114): the binary and the receipt are the last two things
+// removed, after every other step has succeeded, a purge included. Any
+// earlier failure stops with nothing a retry needs gone, and the rerun,
+// once the obstacle is cleared, finishes.
+
+/// What a failed run must have kept for a retry, and nothing it still
+/// references gone.
+#[cfg(unix)]
+fn assert_retry_possible(h: &Home, report: &kluris_core::dist::UninstallReport) {
+    assert!(!report.ok(), "the run should have failed");
+    assert!(
+        h.prefix.join(exe_name()).exists(),
+        "the binary a retry runs went"
+    );
+    assert!(h.receipt.exists(), "the receipt a retry reads went");
+}
+
+#[cfg(unix)]
+#[test]
+fn a_purge_that_cannot_clear_dot_kluris_keeps_the_binary_and_receipt() {
+    // A read-only folder in ~/.kluris/companions: ~/.kluris cannot be removed.
+    let h = Home::installed();
+    let protected = h.home.join(".kluris/companions/protected");
+    fs::create_dir_all(&protected).unwrap();
+    fs::write(protected.join("notes.txt"), "remaining data\n").unwrap();
+    read_only(&protected, true);
+    let receipt = h.receipt();
+    let report = uninstall(&request(&h, &receipt, true), None, &mut remove_file).unwrap();
+    read_only(&protected, false);
+    assert_retry_possible(&h, &report);
+    assert!(!report.purged);
+
+    let receipt = h.receipt();
+    let report = uninstall(&request(&h, &receipt, true), None, &mut remove_file).unwrap();
+    assert!(report.ok(), "{:?}", report.failed);
+    assert!(report.purged);
+    assert!(!h.home.join(".kluris").exists());
+    h.assert_installer_files_gone();
+    h.assert_rc_files_restored();
+}
+
+#[cfg(unix)]
+#[test]
+fn a_receipt_folder_that_cannot_lose_the_receipt_keeps_the_binary() {
+    // The KLURIS_NO_MODIFY_PATH=1 install of the probe: no env scripts to
+    // go, and the receipt's folder read-only.
+    let h = Home::installed();
+    without_modify_path(&h);
+    let folder = h.config_home.join("kluris");
+    read_only(&folder, true);
+    let receipt = h.receipt();
+    let report = uninstall(&request(&h, &receipt, false), None, &mut remove_file).unwrap();
+    read_only(&folder, false);
+    assert_retry_possible(&h, &report);
+    assert!(report.removed.is_empty(), "{:?}", report.removed);
+
+    let receipt = h.receipt();
+    let report = uninstall(&request(&h, &receipt, false), None, &mut remove_file).unwrap();
+    assert!(report.ok(), "{:?}", report.failed);
+    assert!(!h.prefix.join(exe_name()).exists());
+    assert!(!h.receipt.exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn a_fish_conf_d_that_cannot_be_cleaned_keeps_the_env_scripts() {
+    // conf.d read-only: its kluris.env.fish, which sources env.fish, stays,
+    // so env.fish (and everything after it) must stay too.
+    let h = Home::installed();
+    let conf_d = h.home.join(".config/fish/conf.d");
+    read_only(&conf_d, true);
+    let receipt = h.receipt();
+    let report = uninstall(&request(&h, &receipt, false), None, &mut remove_file).unwrap();
+    read_only(&conf_d, false);
+    assert_retry_possible(&h, &report);
+    assert!(conf_d.join("kluris.env.fish").exists());
+    assert!(
+        h.config_home.join("kluris/env.fish").exists(),
+        "env.fish went while conf.d/kluris.env.fish still sources it"
+    );
+    assert!(h.config_home.join("kluris/env.sh").exists());
+
+    let receipt = h.receipt();
+    let report = uninstall(&request(&h, &receipt, false), None, &mut remove_file).unwrap();
+    assert!(report.ok(), "{:?}", report.failed);
+    h.assert_installer_files_gone();
+    h.assert_rc_files_restored();
+}

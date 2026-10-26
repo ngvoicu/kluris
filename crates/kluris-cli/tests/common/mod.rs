@@ -5,9 +5,10 @@
 //!
 //! Unix: a shell script. Windows: the `fake_kluris` example (an exe must be
 //! one) with its settings appended as a trailer. `cargo test --workspace`
-//! (and `cargo xtask windows`) builds the examples; `cargo test -p
-//! kluris-cli --test self_update` alone does not, so on Windows pass
-//! `--examples` too.
+//! (and `cargo xtask windows`) builds the examples; a filtered `cargo test
+//! -p kluris --test self_update` does not, and `--examples` does not help
+//! (it builds a test-harness copy, `fake_kluris-<hash>`), so on Windows run
+//! `cargo build -p kluris --examples` first.
 
 #![allow(dead_code)]
 
@@ -27,7 +28,7 @@ impl Fake<'_> {
         if cfg!(windows) {
             let mut bytes = std::fs::read(fake_exe()).unwrap_or_else(|e| {
                 panic!(
-                    "{}: {e}; build the examples (cargo test --workspace, or add --examples)",
+                    "{}: {e}; build the example first: cargo build -p kluris --examples (cargo test --examples builds only a test-harness copy, not this binary)",
                     fake_exe().display()
                 )
             });
