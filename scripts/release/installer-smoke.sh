@@ -24,7 +24,11 @@
 # with KLURIS_VERSION=<v> (and v<v>) it must fetch
 # releases/download/v<v>/kluris-installer.sh, without it
 # releases/latest/download/kluris-installer.sh, and it must refuse a
-# malformed KLURIS_VERSION before fetching anything.
+# malformed KLURIS_VERSION before fetching anything. Without `sha256sum` on
+# PATH (macOS 14 and older; dist's installer then skips its archive check)
+# the archive must still be verified through `shasum -a 256`, a corrupted
+# archive refused, and with neither tool the wrapper must stop before it
+# downloads anything.
 #
 # The local server and the JSON checks run on KLURIS_SMOKE_PYTHON (default
 # python3). Exits 0 when every check passes, 1 at the first failure.
@@ -145,6 +149,86 @@ if [ -n "$wrapper" ]; then
         step "wrapper with KLURIS_VERSION=$pin fetched $first"
     done
     rm -rf "${work:?}/pinned" "${sandbox:?}/.config"
+
+    # A PATH like the sandbox's without the commands named: each system
+    # folder that has one is replaced by links to everything else in it.
+    path_without() {
+        new=""
+        n=0
+        for dir in $(echo "$base_path" | tr ':' ' '); do
+            n=$((n + 1))
+            hit=""
+            for cmd in "$@"; do [ -e "$dir/$cmd" ] && hit=1; done
+            if [ -n "$hit" ]; then
+                farm="$work/path-$n-$(echo "$*" | tr ' ' '-')"
+                rm -rf "${farm:?}"
+                mkdir -p "$farm"
+                for entry in "$dir"/*; do
+                    name=$(basename "$entry")
+                    skip=""
+                    for cmd in "$@"; do [ "$name" = "$cmd" ] && skip=1; done
+                    [ -n "$skip" ] || ln -s "$entry" "$farm/$name"
+                done
+                dir=$farm
+            fi
+            new="${new:+$new:}$dir"
+        done
+        echo "$new"
+    }
+    nosum_path=$(path_without sha256sum)
+    # This Mac's sha256sum is /sbin's: the reviewer's way is /sbin off PATH.
+    if [ "$(uname -s)" = Darwin ] && [ -e /sbin/sha256sum ] && [ ! -e /usr/bin/sha256sum ]; then
+        nosum_path=/usr/bin:/bin:/usr/sbin
+    fi
+    env -i PATH="$nosum_path" sh -c 'command -v sha256sum' >/dev/null 2>&1 && fail "sha256sum is still on $nosum_path"
+    env -i PATH="$nosum_path" sh -c 'command -v shasum' >/dev/null 2>&1 || fail "no shasum on $nosum_path"
+
+    : > "$work/requests.log"
+    in_sandbox PATH="$nosum_path" KLURIS_RELEASES_URL="$releases" KLURIS_VERSION="$version" KLURIS_DOWNLOAD_URL="$download" \
+        KLURIS_NO_MODIFY_PATH=1 KLURIS_INSTALL_DIR="$work/nosum" sh -c 'curl -fsSL "$0" | sh' "$site" > "$work/nosum.out" 2>&1 \
+        || { cat "$work/nosum.out"; fail "the wrapper failed without sha256sum on PATH"; }
+    grep -q "skipping sha256\|no checksums to verify" "$work/nosum.out" \
+        && { cat "$work/nosum.out"; fail "without sha256sum on PATH the archive was not verified"; }
+    [ -x "$work/nosum/kluris" ] || fail "nothing installed without sha256sum on PATH"
+    step "wrapper without sha256sum on PATH ($nosum_path): the archive verified through shasum"
+
+    # The same with the archive corrupted: refused, nothing installed.
+    mkdir -p "$work/corrupt"
+    for f in "$work/served"/*; do [ -f "$f" ] && cp "$f" "$work/corrupt/"; done
+    for f in "$work/corrupt"/kluris-*.tar.gz; do printf 'corrupt' >> "$f"; done
+    (cd "$work" && exec "$python" -I "$here/serve.py" "$work/corrupt" "$work/port2" "$work/requests2.log") &
+    corrupt_pid=$!
+    tries=0
+    while [ ! -s "$work/port2" ]; do
+        tries=$((tries + 1))
+        [ "$tries" -le 100 ] || fail "the second local server did not start"
+        sleep 0.1
+    done
+    bad="http://127.0.0.1:$(cat "$work/port2")"
+    if in_sandbox PATH="$nosum_path" KLURIS_RELEASES_URL="$bad/ngvoicu/kluris/releases" KLURIS_VERSION="$version" \
+        KLURIS_DOWNLOAD_URL="$bad/ngvoicu/kluris/releases/download/v$version" KLURIS_NO_MODIFY_PATH=1 \
+        KLURIS_INSTALL_DIR="$work/corrupted" sh -c 'curl -fsSL "$0" | sh' "$site" > "$work/corrupt.out" 2>&1; then
+        kill "$corrupt_pid" 2>/dev/null || true
+        cat "$work/corrupt.out"
+        fail "a corrupted archive installed without sha256sum on PATH"
+    fi
+    kill "$corrupt_pid" 2>/dev/null || true
+    grep -q "checksum mismatch" "$work/corrupt.out" || { cat "$work/corrupt.out"; fail "the corrupted archive was not refused by its checksum"; }
+    [ ! -e "$work/corrupted/kluris" ] || fail "a corrupted archive left a kluris"
+    step "wrapper without sha256sum on PATH refuses a corrupted archive: $(grep -m 1 'checksum mismatch' "$work/corrupt.out")"
+
+    # Neither sha256sum nor shasum: a clear refusal, nothing downloaded.
+    nothing_path=$(path_without sha256sum shasum)
+    : > "$work/requests.log"
+    if in_sandbox PATH="$nothing_path" KLURIS_RELEASES_URL="$releases" KLURIS_VERSION="$version" \
+        KLURIS_DOWNLOAD_URL="$download" KLURIS_NO_MODIFY_PATH=1 KLURIS_INSTALL_DIR="$work/nothing" \
+        sh -c 'curl -fsSL "$0" | sh' "$site" > "$work/nothing.out" 2>&1; then
+        fail "the wrapper installed with neither sha256sum nor shasum"
+    fi
+    [ -z "$(after_wrapper)" ] || fail "with neither sha256sum nor shasum the wrapper fetched $(after_wrapper)"
+    [ ! -e "$work/nothing" ] || fail "with neither sha256sum nor shasum something was installed"
+    step "wrapper with neither sha256sum nor shasum: $(head -n 1 "$work/nothing.out")"
+    rm -rf "${sandbox:?}/.config"
     : > "$work/requests.log"
 fi
 
