@@ -43,7 +43,7 @@
 
 mod options;
 mod run;
-mod script;
+pub(crate) mod script;
 #[cfg(test)]
 mod tests;
 

@@ -373,6 +373,32 @@ mod machines {
     }
 
     #[test]
+    fn zeewin2_is_refused_while_a_kluris_linux_run_holds_zeelin() {
+        // zeelin is the same laptop's Ubuntu: a Kluris Linux run there and a
+        // run on zeewin2 would share its CPU, memory and disk.
+        for (answer, holder) in [
+            (
+                "kluris kluris-0000abcd-12345678 4242\n",
+                "a Kluris run (kluris-0000abcd-12345678, process 4242)",
+            ),
+            ("kluris\n", "a run that left no record"),
+        ] {
+            let mut fake = Fake::new(vec![said(0, answer)]);
+            let Ready::Refused(why) = machine::ready(&zeewin2(), &mut fake).unwrap() else {
+                panic!("not refused for {answer:?}")
+            };
+            assert!(
+                why.contains("zeewin2 is busy")
+                    && why.contains("~/.kluris-ci/.linux-run.lock")
+                    && why.contains("zeelin")
+                    && why.contains(holder),
+                "{why}"
+            );
+            assert_eq!(fake.calls.len(), 1, "nothing is asked of Windows then");
+        }
+    }
+
+    #[test]
     fn the_poker_lab_check_is_bounded_and_only_looks() {
         let mut fake = Fake::new(vec![said(0, "free\n"), said(0, "free 600\n")]);
         machine::ready(&zeewin2(), &mut fake).unwrap();
@@ -392,8 +418,23 @@ mod machines {
         let asked = zeelin.args.last().unwrap();
         assert_eq!(
             asked,
-            "if [ -e ~/.compile-lock/owner ]; then echo held; else echo free; fi"
+            "if [ -e ~/.compile-lock/owner ]; then echo held; \
+             elif [ -e ~/.kluris-ci/.linux-run.lock ] && ! flock -n ~/.kluris-ci/.linux-run.lock true; \
+             then echo \"kluris $(sed -n 1p ~/.kluris-ci/.linux-run.id 2>/dev/null) $(sed -n 2p ~/.kluris-ci/.linux-run.id 2>/dev/null)\"; \
+             else echo free; fi"
         );
+        #[cfg(unix)]
+        {
+            let out = std::process::Command::new("bash")
+                .args(["-n", "-c", asked])
+                .output()
+                .unwrap();
+            assert!(
+                out.status.success(),
+                "{}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        }
         let state = &fake.calls[1];
         assert!(state.bound <= Duration::from_secs(60), "{:?}", state.bound);
         assert!(state.args.contains(&"zeewin2".to_owned()));
@@ -479,6 +520,10 @@ mod machines {
     fn the_default_is_zeewin_when_zeewin2_is_not() {
         for (answers, says) in [
             (vec![said(0, "held\n")], "poker-lab"),
+            (
+                vec![said(0, "kluris kluris-0000abcd-12345678 4242\n")],
+                "a Kluris run (kluris-0000abcd-12345678, process 4242)",
+            ),
             (vec![said(0, "free\n"), said(0, "free 10\n")], "50 GiB"),
             (
                 vec![
