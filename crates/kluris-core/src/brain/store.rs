@@ -44,6 +44,13 @@ pub trait BrainStore {
     /// ([`sandbox::resolve_in_brain`]). A malformed neuron is an error value
     /// for this file alone.
     fn read(&self, rel: &str) -> Result<Frontmatter, ReadError>;
+    /// One of [`BrainStore::neurons`] read by its own path, as v2's
+    /// `read_frontmatter(path)` reads the walked file: its name is never
+    /// re-parsed from the `/`-separated `rel` (on POSIX a `\` is part of a
+    /// file name).
+    fn read_neuron(&self, neuron: &Neuron) -> Result<Frontmatter, ReadError> {
+        self.read(&neuron.rel)
+    }
     /// The glossary entries of `glossary.md`: none when the file does not
     /// exist, an error when its frontmatter cannot be read.
     fn glossary(&self) -> Result<Vec<GlossaryEntry>, FrontmatterError> {
@@ -108,6 +115,10 @@ impl BrainStore for LocalGitStore {
     fn read(&self, rel: &str) -> Result<Frontmatter, ReadError> {
         sandbox::resolve_in_brain(&self.root, rel).map_err(ReadError::Sandbox)?;
         frontmatter::read_frontmatter(&self.join(&rel.replace('\\', "/"))).map_err(ReadError::File)
+    }
+
+    fn read_neuron(&self, neuron: &Neuron) -> Result<Frontmatter, ReadError> {
+        frontmatter::read_frontmatter(&neuron.path).map_err(ReadError::File)
     }
 
     fn lobe_names(&self) -> Vec<String> {

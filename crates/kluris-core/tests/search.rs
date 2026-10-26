@@ -731,3 +731,283 @@ fn walk_names(root: &Path) -> Vec<String> {
     out.sort();
     out
 }
+
+// --- T-79 review findings ----------------------------------------------------------
+
+#[test]
+fn malformed_neurons_are_skipped_and_reported() {
+    // T-79 finding 2: `related: [` never closes, so the frontmatter does
+    // not parse; the neuron is left out of the results and reported.
+    use kluris_core::brain::store::ReadError;
+    use kluris_core::frontmatter::Problem;
+    let b = Brain::new();
+    b.file("k/bad.md", "---\nrelated: [\n---\n# Bad\n\nzebra\n");
+    b.file("k/good.md", &neuron("Good", "zebra"));
+    b.file("glossary.md", "---\na: [\n---\n**Zebra** - an animal\n");
+    let outcome = search(&b.store(), &SearchRequest::new("zebra"));
+    assert_eq!(files(&outcome.hits), ["k/good.md"]);
+    let skipped: Vec<&str> = outcome.skipped.iter().map(|s| s.rel.as_str()).collect();
+    assert_eq!(skipped, ["k/bad.md", "glossary.md"]);
+    for s in &outcome.skipped {
+        assert!(
+            matches!(&s.error, ReadError::File(e) if matches!(e.problem, Problem::Yaml(_))),
+            "{s:?}"
+        );
+    }
+    // Reported even when nothing is searched for.
+    let mut req = SearchRequest::new("zebra");
+    req.limit = 0;
+    assert_eq!(search(&b.store(), &req).skipped.len(), 2);
+    // A clean brain reports nothing.
+    let clean = Brain::new();
+    clean.file("k/good.md", &neuron("Good", "zebra"));
+    assert!(
+        search(&clean.store(), &SearchRequest::new("zebra"))
+            .skipped
+            .is_empty()
+    );
+}
+
+/// `str.title()` of every code point Python 3.11 changes, and of strings that
+/// exercise its context, from `parity/tools/gen_pycase.py` (the oracle).
+#[test]
+fn python_title_matches_the_oracle_for_every_code_point() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/py_title.tsv");
+    let text = fs::read_to_string(path).unwrap();
+    let decode = |hexes: &str| -> String {
+        hexes
+            .split(' ')
+            .map(|h| char::from_u32(u32::from_str_radix(h, 16).unwrap()).unwrap())
+            .collect()
+    };
+    let mut checked = 0;
+    let mut wrong = Vec::new();
+    for line in text.lines().filter(|l| !l.starts_with('#')) {
+        let (input, output) = line.split_once('\t').unwrap();
+        let (input, want) = (decode(input), decode(output));
+        if py_title(&input) != want {
+            wrong.push(format!("{input:?}: {:?} != {want:?}", py_title(&input)));
+        }
+        checked += 1;
+    }
+    assert!(checked > 1400, "{checked}");
+    assert!(
+        wrong.is_empty(),
+        "{} wrong, first: {:?}",
+        wrong.len(),
+        &wrong[..wrong.len().min(10)]
+    );
+}
+
+#[test]
+fn python_title_context_from_the_review() {
+    assert_eq!(py_title("ΟΣ"), "Ος");
+    assert_eq!(py_title("თბილისი"), "თბილისი");
+    assert_eq!(py_title("ᾈ"), "ᾈ");
+}
+
+#[test]
+fn file_name_titles_use_python_title_case() {
+    let b = Brain::new();
+    b.file("k/ΟΣ.md", "---\nupdated: 2026-01-01\n---\nno heading\n");
+    b.file("k/თბილისი.md", "plain body\n");
+    b.file("k/ᾈ-x.yml", "#---\n# updated: 2026-01-01\n#---\nk: v\n");
+    let mut titles: Vec<(String, String)> = collect_items(&b.store())
+        .into_iter()
+        .map(|i| (i.file, i.title))
+        .collect();
+    titles.sort();
+    let want = [
+        ("k/ΟΣ.md", "Ος"),
+        ("k/თბილისი.md", "თბილისი"),
+        ("k/ᾈ-x.yml", "ᾈ X"),
+    ];
+    let mut want: Vec<(String, String)> = want
+        .iter()
+        .map(|(a, b)| (a.to_string(), b.to_string()))
+        .collect();
+    want.sort();
+    assert_eq!(titles, want);
+}
+
+#[test]
+fn the_store_says_where_the_body_starts() {
+    // T-79 finding 5: `line` comes from the store's read, not a second read.
+    use kluris_core::frontmatter::{parse, parse_yaml_neuron};
+    assert_eq!(parse("---\na: 1\n---\nbody\n").unwrap().body_line, 3);
+    assert_eq!(
+        parse("\u{feff}\n---\na: 1\n---\r\nbody\n")
+            .unwrap()
+            .body_line,
+        4
+    );
+    assert_eq!(parse("---\r\na: 1\r\n---\r\nbody").unwrap().body_line, 3);
+    assert_eq!(parse("# no frontmatter\n").unwrap().body_line, 0);
+    assert_eq!(
+        parse("---\na: 1\n").unwrap().body_line,
+        0,
+        "unclosed: no frontmatter"
+    );
+    assert_eq!(
+        parse_yaml_neuron("\n#---\n# a: 1\n#---\nk: v\n")
+            .unwrap()
+            .body_line,
+        4
+    );
+    assert_eq!(parse_yaml_neuron("k: v\n").unwrap().body_line, 0);
+}
+
+/// A store with no files behind it: search must read only through it.
+struct MemStore {
+    root: PathBuf,
+    files: Vec<kluris_core::brain::walk::WalkedFile>,
+    neurons: Vec<kluris_core::brain::neuron_index::Neuron>,
+    texts: std::collections::BTreeMap<String, String>,
+}
+
+impl MemStore {
+    fn new(texts: &[(&str, &str)]) -> MemStore {
+        use kluris_core::brain::neuron_index::{Neuron, NeuronKind};
+        use kluris_core::brain::walk::WalkedFile;
+        let root = PathBuf::from("/nonexistent-kluris-mem-store");
+        let texts: std::collections::BTreeMap<String, String> = texts
+            .iter()
+            .map(|(a, b)| (a.to_string(), b.to_string()))
+            .collect();
+        let files = texts
+            .keys()
+            .map(|rel| WalkedFile {
+                rel: rel.clone(),
+                path: root.join(rel),
+                symlink: false,
+            })
+            .collect();
+        let neurons = texts
+            .keys()
+            .filter(|rel| rel.ends_with(".md") && rel.contains('/'))
+            .map(|rel| Neuron {
+                rel: rel.clone(),
+                path: root.join(rel),
+                kind: NeuronKind::Markdown,
+            })
+            .collect();
+        MemStore {
+            root,
+            files,
+            neurons,
+            texts,
+        }
+    }
+}
+
+impl kluris_core::brain::store::BrainStore for MemStore {
+    fn root(&self) -> &Path {
+        &self.root
+    }
+    fn files(&self) -> &[kluris_core::brain::walk::WalkedFile] {
+        &self.files
+    }
+    fn neurons(&self) -> &[kluris_core::brain::neuron_index::Neuron] {
+        &self.neurons
+    }
+    fn read(
+        &self,
+        rel: &str,
+    ) -> Result<kluris_core::frontmatter::Frontmatter, kluris_core::brain::store::ReadError> {
+        let text = self
+            .texts
+            .get(rel)
+            .ok_or(kluris_core::brain::store::ReadError::Sandbox(
+                kluris_core::brain::sandbox::SandboxError::NotFound,
+            ))?;
+        kluris_core::frontmatter::parse(text).map_err(|e| {
+            kluris_core::brain::store::ReadError::File(kluris_core::frontmatter::FrontmatterError {
+                path: self.root.join(rel),
+                problem: kluris_core::frontmatter::Problem::Yaml(e),
+            })
+        })
+    }
+    fn lobe_names(&self) -> Vec<String> {
+        vec!["k".into()]
+    }
+    fn lobe_neurons(&self, _lobe: &str) -> Vec<kluris_core::brain::neuron_index::Neuron> {
+        self.neurons.clone()
+    }
+    fn structure_file(
+        &self,
+        rel: &str,
+    ) -> Option<
+        Result<kluris_core::frontmatter::Frontmatter, kluris_core::frontmatter::FrontmatterError>,
+    > {
+        self.texts.get(rel).map(|t| {
+            kluris_core::frontmatter::parse(t).map_err(|e| {
+                kluris_core::frontmatter::FrontmatterError {
+                    path: self.root.join(rel),
+                    problem: kluris_core::frontmatter::Problem::Yaml(e),
+                }
+            })
+        })
+    }
+    fn structure_text(&self, rel: &str) -> Option<String> {
+        self.texts.get(rel).cloned()
+    }
+}
+
+#[test]
+fn search_reads_only_through_the_store() {
+    let store = MemStore::new(&[
+        (
+            "k/a.md",
+            "---\nupdated: 2026-01-01\n---\n# A\n\n## Part\n\nzebra here\n",
+        ),
+        (
+            "brain.md",
+            "---\nupdated: 2026-01-01\n---\n\n# mem\n\n## Lobes\n\nzebra lobe\n",
+        ),
+    ]);
+    let hits = search(&store, &SearchRequest::new("zebra")).hits;
+    let lines: Vec<(&str, Option<usize>)> =
+        hits.iter().map(|h| (h.file.as_str(), h.line)).collect();
+    assert!(lines.contains(&("k/a.md", Some(6))), "{lines:?}");
+    assert!(lines.contains(&("brain.md", Some(7))), "{lines:?}");
+}
+
+#[test]
+fn every_query_term_is_tracked_past_64() {
+    // T-79 P3: 64 absent words, then one that matches.
+    let b = Brain::new();
+    b.file("k/a.md", &neuron("A", "the needle is here"));
+    let absent: Vec<String> = (0..64).map(|i| format!("absentword{i}x")).collect();
+    let query = format!("{} needle", absent.join(" "));
+    let hits = b.search(&query);
+    assert_eq!(files(&hits), ["k/a.md"]);
+    assert_eq!(hits[0].matched_terms, ["needle"]);
+    assert_eq!(hits[0].coverage, 0.02);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_backslash_in_a_posix_file_name_is_part_of_the_name() {
+    // T-79 P3: `x\y.md` is one file on POSIX, read by its own name. v2
+    // renders the path with `/` for `\` (`_rel`), so `file` is `k/x/y.md`,
+    // and the title comes from the real stem.
+    let b = Brain::new();
+    b.file("k/x\\y.md", &neuron("Odd name", "zebra"));
+    b.file(
+        "k/a\\b.md",
+        "---\nupdated: 2026-01-01\n---\nzebra without a heading\n",
+    );
+    let hits = b.search("zebra");
+    let mut rows: Vec<(&str, &str, Option<usize>)> = hits
+        .iter()
+        .map(|h| (h.file.as_str(), h.title.as_str(), h.line))
+        .collect();
+    rows.sort();
+    assert_eq!(
+        rows,
+        [
+            ("k/a/b.md", "A\\B", Some(4)),
+            ("k/x/y.md", "Odd name", Some(6))
+        ]
+    );
+}

@@ -258,3 +258,53 @@ fn text_output_uses_v2s_wording() {
     );
     assert!(text.contains("        k/jwt.md\n"), "{text}");
 }
+
+#[test]
+fn skipped_files_are_reported_in_json_and_on_stderr() {
+    // T-79 finding 2: a malformed neuron is skipped and reported.
+    let home = setup();
+    home.child("demo/k/bad.md")
+        .write_str("---\nrelated: [\n---\n# Bad\n\njwt\n")
+        .unwrap();
+    let (text, doc) = json(&home, &["search", "jwt", "--json"]);
+    assert_eq!(
+        keys(&doc),
+        [
+            "ok", "brain", "query", "total", "results", "engine", "skipped"
+        ]
+    );
+    let skipped = doc["skipped"].as_array().unwrap();
+    assert_eq!(skipped.len(), 1, "{text}");
+    assert_eq!(keys(&skipped[0]), ["file", "error"]);
+    assert_eq!(skipped[0]["file"], "k/bad.md");
+    let error = skipped[0]["error"].as_str().unwrap();
+    assert!(error.starts_with("invalid frontmatter: "), "{error}");
+    assert!(
+        !error.contains(&home.path().display().to_string()),
+        "no absolute path: {error}"
+    );
+    assert!(
+        doc["results"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|r| r["file"] != "k/bad.md")
+    );
+
+    let out = kluris(home.path())
+        .args(["search", "jwt"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(0));
+    let stderr = String::from_utf8(out.stderr).unwrap();
+    assert_eq!(stderr.lines().count(), 1, "{stderr}");
+    assert!(
+        stderr.starts_with("Skipped k/bad.md: invalid frontmatter: "),
+        "{stderr}"
+    );
+    assert!(
+        String::from_utf8(out.stdout)
+            .unwrap()
+            .contains("result(s) for 'jwt' in demo")
+    );
+}

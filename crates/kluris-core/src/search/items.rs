@@ -1,18 +1,19 @@
 //! What v2 searches, item for item (research-03 §2.6, v2's
-//! `kluris_runtime/search.py`): every neuron that reads (one that does not is
-//! skipped silently), each glossary entry, and `brain.md`; v2's literal
-//! substring score; its `--lobe` and `--tag` filters.
+//! `kluris_runtime/search.py`): every neuron that reads, each glossary entry,
+//! and `brain.md`; v2's literal substring score; its `--lobe` and `--tag`
+//! filters. A neuron (or `glossary.md`) that does not read is left out, as in
+//! v2, and reported ([`collect`], PAR-024).
+//!
+//! Everything is read through the [`BrainStore`]: a neuron by its own path
+//! ([`BrainStore::read_neuron`]), the body's first line from the read.
 //!
 //! An item's `body` is v2's: for a markdown file the text after the
 //! frontmatter with line breaks read as `\n` and Python's `strip()` applied
 //! (python-frontmatter), for a YAML neuron the text after its `#---` block as
 //! is.
 
-use std::fs;
-use std::path::Path;
-
-use crate::brain::sandbox;
-use crate::brain::store::BrainStore;
+use crate::brain::deprecation::SkippedNeuron;
+use crate::brain::store::{BrainStore, ReadError};
 use crate::frontmatter::{Frontmatter, py_splitlines};
 use crate::pyrepr::py_str;
 use crate::yaml::{Map, Value, date_iso, datetime_iso, is_py_space};
@@ -28,8 +29,13 @@ pub enum ItemKind {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Item {
     pub kind: ItemKind,
-    /// The `/`-separated brain-relative path (`glossary.md` for every entry).
+    /// The brain-relative path as v2 prints it: `/`-separated, a `\` in a
+    /// file name shown as `/` too (v2's `_rel`); `glossary.md` for every
+    /// entry.
     pub file: String,
+    /// The walked path ([`crate::brain::neuron_index::Neuron::rel`]): the
+    /// file's identity.
+    pub source: String,
     /// `"markdown"` or `"yaml"`.
     pub file_type: &'static str,
     pub title: String,
@@ -41,7 +47,7 @@ pub struct Item {
     /// The frontmatter (empty for glossary entries).
     pub meta: Map,
     /// The 0-based line of the file the body starts on; `None` for a
-    /// glossary entry or when the file cannot be read again.
+    /// glossary entry or a `brain.md` that does not read.
     pub body_line: Option<usize>,
 }
 
@@ -54,48 +60,8 @@ pub(crate) fn universal_newlines(text: &str) -> String {
     text.replace("\r\n", "\n").replace('\r', "\n")
 }
 
-/// Python's `str.title()`: a cased character after a cased one is lowercased,
-/// any other is titlecased.
-pub fn py_title(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    let mut previous_cased = false;
-    for c in text.chars() {
-        if previous_cased {
-            out.extend(c.to_lowercase());
-        } else {
-            push_titlecase(&mut out, c);
-        }
-        previous_cased = c.is_lowercase() || c.is_uppercase() || is_titlecase(c);
-    }
-    out
-}
-
-fn is_titlecase(c: char) -> bool {
-    matches!(c, 'ǅ' | 'ǈ' | 'ǋ' | 'ǲ') || ('ᾈ'..='ᾏ').contains(&c) || ('ᾘ'..='ᾟ').contains(&c)
-}
-
-fn push_titlecase(out: &mut String, c: char) {
-    let title = match c {
-        'Ǆ' | 'ǅ' | 'ǆ' => Some('ǅ'),
-        'Ǉ' | 'ǈ' | 'ǉ' => Some('ǈ'),
-        'Ǌ' | 'ǋ' | 'ǌ' => Some('ǋ'),
-        'Ǳ' | 'ǲ' | 'ǳ' => Some('ǲ'),
-        _ => None,
-    };
-    if let Some(t) = title {
-        out.push(t);
-        return;
-    }
-    // A multi-character uppercase (`ß` -> `SS`) titlecases as its first
-    // character followed by the rest lowercased (`Ss`).
-    let mut upper = c.to_uppercase();
-    if let Some(first) = upper.next() {
-        out.push(first);
-        for rest in upper {
-            out.extend(rest.to_lowercase());
-        }
-    }
-}
+/// Python's `str.title()` ([`crate::pycase::title`]).
+pub use crate::pycase::title as py_title;
 
 /// `Path(file).stem.replace("-", " ").title()`.
 fn stem_title(file: &str) -> String {
@@ -149,7 +115,7 @@ fn is_deprecated(meta: &Map) -> bool {
         None => return false,
         Some(value) => normalized_str(value).unwrap_or_else(|| py_str(value)),
     };
-    status.to_lowercase() == "deprecated"
+    crate::pycase::lower(&status) == "deprecated"
 }
 
 fn tags(meta: &Map) -> Vec<Value> {
@@ -163,43 +129,49 @@ fn count_line_breaks(text: &str) -> usize {
     universal_newlines(text).matches('\n').count()
 }
 
-/// The 0-based line of `path` that `body` (a suffix of the file's text, BOM
-/// dropped) starts on, plus the lines `skipped` (the stripped leading
-/// whitespace) covers.
-fn body_line(path: &Path, raw_body: &str, skipped: &str, lossy: bool) -> Option<usize> {
-    let bytes = fs::read(path).ok()?;
-    let text = if lossy {
-        String::from_utf8_lossy(&bytes).into_owned()
-    } else {
-        String::from_utf8(bytes).ok()?
-    };
-    let text = text.strip_prefix('\u{feff}').unwrap_or(&text);
-    let prefix = text.strip_suffix(raw_body)?;
-    Some(count_line_breaks(prefix) + count_line_breaks(skipped))
-}
-
-fn markdown_body(fm: &Frontmatter) -> (String, &str) {
+/// v2's markdown body and the 0-based file line it starts on (the stripped
+/// leading whitespace moves it down).
+fn markdown_body(fm: &Frontmatter) -> (String, usize) {
     let lf = universal_newlines(&fm.body);
     let start = fm.body.len() - fm.body.trim_start_matches(is_py_space).len();
-    (py_strip(&lf).to_string(), &fm.body[..start])
+    (
+        py_strip(&lf).to_string(),
+        fm.body_line + count_line_breaks(&fm.body[..start]),
+    )
+}
+
+/// How v2 prints a walked path (`str(relative_to(...)).replace("\\", "/")`).
+fn rendered(rel: &str) -> String {
+    rel.replace('\\', "/")
 }
 
 /// The searchable items of a brain, in v2's order: neurons (store order),
 /// glossary entries, brain.md.
 pub fn collect_items(store: &impl BrainStore) -> Vec<Item> {
+    collect(store).0
+}
+
+/// The searchable items, and the files left out because they do not read:
+/// neurons (by v2's printed path) and `glossary.md`, in that order.
+pub fn collect(store: &impl BrainStore) -> (Vec<Item>, Vec<SkippedNeuron>) {
     let mut items = Vec::new();
+    let mut skipped = Vec::new();
     for neuron in store.neurons() {
-        let Ok(fm) = store.read(&neuron.rel) else {
-            continue;
+        let fm = match store.read_neuron(neuron) {
+            Ok(fm) => fm,
+            Err(error) => {
+                skipped.push(SkippedNeuron {
+                    rel: rendered(&neuron.rel),
+                    error,
+                });
+                continue;
+            }
         };
         let yaml = neuron.kind == crate::brain::neuron_index::NeuronKind::Yaml;
         let (body, line) = if yaml {
-            let line = body_line(&neuron.path, &fm.body, "", true);
-            (fm.body.clone(), line)
+            (fm.body.clone(), fm.body_line)
         } else {
-            let (body, skipped) = markdown_body(&fm);
-            let line = body_line(&neuron.path, &fm.body, skipped, false);
-            (body, line)
+            markdown_body(&fm)
         };
         let title = if yaml {
             fm.meta
@@ -213,45 +185,53 @@ pub fn collect_items(store: &impl BrainStore) -> Vec<Item> {
         };
         items.push(Item {
             kind: ItemKind::Neuron,
-            file: neuron.rel.clone(),
+            file: rendered(&neuron.rel),
+            source: neuron.rel.clone(),
             file_type: neuron.kind.as_str(),
             title,
             tags: tags(&fm.meta),
             deprecated: is_deprecated(&fm.meta),
             body,
             meta: fm.meta,
-            body_line: line,
+            body_line: Some(line),
         });
     }
 
-    if let Ok(entries) = store.glossary() {
-        for entry in entries {
-            items.push(Item {
-                kind: ItemKind::Glossary,
-                file: "glossary.md".into(),
-                file_type: "markdown",
-                title: entry.term,
-                tags: Vec::new(),
-                body: entry.definition,
-                deprecated: false,
-                meta: Map::new(),
-                body_line: None,
-            });
+    match store.glossary() {
+        Ok(entries) => {
+            for entry in entries {
+                items.push(Item {
+                    kind: ItemKind::Glossary,
+                    file: "glossary.md".into(),
+                    source: "glossary.md".into(),
+                    file_type: "markdown",
+                    title: entry.term,
+                    tags: Vec::new(),
+                    body: entry.definition,
+                    deprecated: false,
+                    meta: Map::new(),
+                    body_line: None,
+                });
+            }
         }
+        Err(error) => skipped.push(SkippedNeuron {
+            rel: "glossary.md".into(),
+            error: ReadError::File(error),
+        }),
     }
 
     if let Some(read) = store.structure_file("brain.md") {
         let (body, meta, line) = match read {
             Ok(fm) => {
-                let (body, skipped) = markdown_body(&fm);
-                let line = body_line(&store.root().join("brain.md"), &fm.body, skipped, false);
-                (body, fm.meta, line)
+                let (body, line) = markdown_body(&fm);
+                (body, fm.meta, Some(line))
             }
             Err(_) => (String::new(), Map::new(), None),
         };
         items.push(Item {
             kind: ItemKind::BrainMd,
             file: "brain.md".into(),
+            source: "brain.md".into(),
             file_type: "markdown",
             title: markdown_title("brain.md", &body),
             tags: Vec::new(),
@@ -261,7 +241,7 @@ pub fn collect_items(store: &impl BrainStore) -> Vec<Item> {
             body_line: line,
         });
     }
-    items
+    (items, skipped)
 }
 
 /// v2's substring match of one item.
@@ -274,7 +254,7 @@ pub struct V2Match {
 }
 
 fn count(haystack: &str, needle: &str) -> i64 {
-    i64::try_from(haystack.to_lowercase().matches(needle).count()).unwrap_or(i64::MAX)
+    i64::try_from(crate::pycase::lower(haystack).matches(needle).count()).unwrap_or(i64::MAX)
 }
 
 /// v2's `score_hit` and `matched_fields` for a lowercased query; `None` when
@@ -289,7 +269,7 @@ pub fn v2_match(item: &Item, query_lower: &str) -> Option<V2Match> {
             "tag",
             item.tags
                 .iter()
-                .filter(|t| py_str(t).to_lowercase().contains(query_lower))
+                .filter(|t| crate::pycase::lower(&py_str(t)).contains(query_lower))
                 .count() as i64,
             5,
         ),
@@ -329,44 +309,57 @@ pub fn passes_filters(item: &Item, lobe: Option<&str>, tag: Option<&str>) -> boo
     true
 }
 
-/// The neurons an item links to through `related:`, as brain-relative
-/// paths: each string entry resolved against the item's directory (links
-/// followed, as v2's deprecation check resolves them), kept when it lands on
-/// a neuron of the store other than the item itself, at most `limit`, in
-/// order.
+/// The neurons an item links to through `related:`, as v2 prints paths:
+/// each string entry joined to the item's directory and normalised (`.` and
+/// `..` dropped lexically; a link that climbs out of the brain is left out),
+/// kept when it names a neuron of the store other than the item itself, at
+/// most `limit`, in order. Only the store's neuron list is consulted.
 pub fn related(store: &impl BrainStore, item: &Item, limit: usize) -> Vec<String> {
     let Some(Value::Seq(links)) = item.meta.get("related") else {
         return Vec::new();
     };
-    let root = store.root();
-    let Ok(resolved_root) = sandbox::resolve(root) else {
-        return Vec::new();
-    };
-    let base = match item.file.rsplit_once('/') {
-        Some((dir, _)) => dir.split('/').fold(root.to_path_buf(), |p, d| p.join(d)),
-        None => root.to_path_buf(),
+    let dir: Vec<&str> = match item.source.rsplit_once('/') {
+        Some((dir, _)) => dir.split('/').collect(),
+        None => Vec::new(),
     };
     let mut out: Vec<String> = Vec::new();
     for link in links.iter().filter_map(Value::as_str) {
         if out.len() >= limit {
             break;
         }
-        let Ok(target) = sandbox::resolve(&base.join(link)) else {
+        let Some(rel) = join_lexically(&dir, link) else {
             continue;
         };
-        let Ok(rel) = target.strip_prefix(&resolved_root) else {
-            continue;
-        };
-        let rel: Vec<String> = rel
-            .components()
-            .map(|c| c.as_os_str().to_string_lossy().into_owned())
-            .collect();
-        let rel = rel.join("/");
-        if rel != item.file && !out.contains(&rel) && store.neurons().iter().any(|n| n.rel == rel) {
-            out.push(rel);
+        let shown = rendered(&rel);
+        if rel != item.source
+            && !out.contains(&shown)
+            && store.neurons().iter().any(|n| n.rel == rel)
+        {
+            out.push(shown);
         }
     }
     out
+}
+
+/// `dir` joined with `link` (`/`-separated; `\\` too on Windows), `.` and
+/// `..` resolved without the filesystem; `None` when it leaves the brain
+/// (an absolute link included).
+fn join_lexically(dir: &[&str], link: &str) -> Option<String> {
+    let separators: &[char] = if cfg!(windows) { &['/', '\\'] } else { &['/'] };
+    if link.starts_with(separators) {
+        return None;
+    }
+    let mut parts: Vec<&str> = dir.to_vec();
+    for part in link.split(separators) {
+        match part {
+            "" | "." => {}
+            ".." => {
+                parts.pop()?;
+            }
+            name => parts.push(name),
+        }
+    }
+    (!parts.is_empty()).then(|| parts.join("/"))
 }
 
 /// `str(updated)` when the frontmatter has a non-null `updated`.

@@ -2,8 +2,10 @@
 //! call, nothing written (research-05 §6 rung 1; research-06 §6). How this
 //! differs from v2 is PAR-020.
 //!
-//! 1. The items are v2's ([`items::collect_items`]): neurons, glossary
-//!    entries (each its own result, `file: "glossary.md"`), `brain.md`.
+//! 1. The items are v2's ([`items::collect`]): neurons, glossary
+//!    entries (each its own result, `file: "glossary.md"`), `brain.md`. A
+//!    neuron or `glossary.md` that does not read is left out and listed in
+//!    [`SearchOutcome::skipped`] (PAR-024).
 //! 2. Each item becomes search units: a neuron or `brain.md` one per heading
 //!    chunk ([`chunk::chunks`]), with its title, tags and path repeated in
 //!    every unit; a glossary entry one unit (term as title, definition as
@@ -39,6 +41,7 @@ use chunk::Chunk;
 use items::{Item, ItemKind, V2Match};
 use tokenize::Analyzer;
 
+use crate::brain::deprecation::SkippedNeuron;
 use crate::brain::store::BrainStore;
 
 /// The score of an item only v2's substring match finds.
@@ -183,6 +186,8 @@ pub struct Hit {
 pub struct SearchOutcome {
     pub hits: Vec<Hit>,
     pub language: Language,
+    /// The files left out because they cannot be read, in brain order.
+    pub skipped: Vec<SkippedNeuron>,
 }
 
 /// One unit's place: its item and chunk, and its text for snippets.
@@ -228,7 +233,7 @@ fn contains_sequence(haystack: &[u32], needle: &[u32]) -> bool {
 
 /// Search the brain in `store`.
 pub fn search(store: &impl BrainStore, request: &SearchRequest) -> SearchOutcome {
-    let all = items::collect_items(store);
+    let (all, skipped) = items::collect(store);
     let language = request.language.unwrap_or_else(|| {
         detect_language(
             all.iter()
@@ -239,6 +244,7 @@ pub fn search(store: &impl BrainStore, request: &SearchRequest) -> SearchOutcome
     let mut outcome = SearchOutcome {
         hits: Vec::new(),
         language,
+        skipped,
     };
     if request.limit <= 0 || request.query.is_empty() {
         return outcome;
@@ -347,11 +353,19 @@ pub fn search(store: &impl BrainStore, request: &SearchRequest) -> SearchOutcome
     }
 
     // Items: the best unit, plus v2's substring candidates.
-    let query_lower = request.query.to_lowercase();
+    let query_lower = crate::pycase::lower(&request.query);
     let mut best: Vec<Option<(usize, f64)>> = vec![None; all.len()];
-    let mut term_masks = vec![0u64; all.len()];
+    let mut item_terms: Vec<Vec<bool>> = vec![Vec::new(); all.len()];
     for (u, info) in infos.iter().enumerate() {
-        term_masks[info.item] |= scored.terms[u];
+        for &qi in &scored.terms[u] {
+            let found = &mut item_terms[info.item];
+            if found.is_empty() {
+                found.resize(query.len(), false);
+            }
+            if let Some(slot) = found.get_mut(qi as usize) {
+                *slot = true;
+            }
+        }
         let entry = &mut best[info.item];
         if entry.is_none_or(|(_, s)| scores[u] > s) {
             *entry = Some((u, scores[u]));
@@ -425,11 +439,11 @@ pub fn search(store: &impl BrainStore, request: &SearchRequest) -> SearchOutcome
                 matched_fields.push(name);
             }
         }
-        let mask = term_masks[c.item];
+        let found = &item_terms[c.item];
         let matched_terms: Vec<String> = query_tokens
             .iter()
             .enumerate()
-            .filter(|(i, _)| *i < 64 && mask & (1 << i) != 0)
+            .filter(|(i, _)| found.get(*i).copied().unwrap_or(false))
             .map(|(_, t)| t.word.clone())
             .collect();
         let coverage = if query_tokens.is_empty() {

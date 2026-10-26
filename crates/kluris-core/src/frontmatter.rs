@@ -24,6 +24,9 @@ pub struct Frontmatter {
     pub body: String,
     pub line_ending: LineEnding,
     pub had_bom: bool,
+    /// The 0-based line of the file (BOM dropped; `\n`, `\r\n` and a lone
+    /// `\r` end a line) that [`Frontmatter::body`] starts on.
+    pub body_line: usize,
 }
 
 /// What went wrong reading a file's frontmatter.
@@ -148,11 +151,13 @@ pub fn parse(text: &str) -> Result<Frontmatter, YamlError> {
         Some(yaml) => load_meta(yaml)?,
         None => Map::new(),
     };
+    let content = text.strip_prefix('\u{feff}').unwrap_or(text);
     Ok(Frontmatter {
         meta,
         body: body.to_string(),
         line_ending: line_ending(text),
         had_bom,
+        body_line: line_breaks(&content[..content.len() - body.len()]),
     })
 }
 
@@ -168,6 +173,20 @@ pub fn read(path: &Path) -> Result<Frontmatter, FrontmatterError> {
     let bytes = fs::read(path).map_err(|e| error(path, Problem::Io(e.to_string())))?;
     let text = String::from_utf8(bytes).map_err(|_| error(path, Problem::NotUtf8))?;
     parse(&text).map_err(|e| error(path, Problem::Yaml(e)))
+}
+
+/// How many lines `text` ends: `\r\n`, a lone `\r` and `\n` each end one.
+fn line_breaks(text: &str) -> usize {
+    let bytes = text.as_bytes();
+    let mut n = 0;
+    for (i, b) in bytes.iter().enumerate() {
+        match b {
+            b'\n' => n += 1,
+            b'\r' if bytes.get(i + 1) != Some(&b'\n') => n += 1,
+            _ => {}
+        }
+    }
+    n
 }
 
 /// Python's `str.splitlines(keepends=True)` line boundaries.
@@ -245,15 +264,16 @@ fn yaml_neuron_block(content: &str) -> Option<(String, usize)> {
 pub fn parse_yaml_neuron(text: &str) -> Result<Frontmatter, YamlError> {
     let had_bom = text.starts_with('\u{feff}');
     let content = text.strip_prefix('\u{feff}').unwrap_or(text);
-    let (meta, body) = match yaml_neuron_block(content) {
-        Some((block, body_start)) => (load_meta(&block)?, &content[body_start..]),
-        None => (Map::new(), content),
+    let (meta, body, body_start) = match yaml_neuron_block(content) {
+        Some((block, body_start)) => (load_meta(&block)?, &content[body_start..], body_start),
+        None => (Map::new(), content, 0),
     };
     Ok(Frontmatter {
         meta,
         body: body.to_string(),
         line_ending: line_ending(content),
         had_bom,
+        body_line: line_breaks(&content[..body_start]),
     })
 }
 
@@ -274,6 +294,7 @@ pub fn read_yaml_neuron_lenient(path: &Path) -> Frontmatter {
         body: body.to_string(),
         line_ending: line_ending(body),
         had_bom: false,
+        body_line: 0,
     };
     let Ok(bytes) = fs::read(path) else {
         return empty("");

@@ -129,7 +129,7 @@ fn recent(store: &impl BrainStore) -> Vec<RecentNeuron> {
         .neurons()
         .iter()
         .filter_map(|neuron| {
-            let fm = store.read(&neuron.rel).ok()?;
+            let fm = store.read_neuron(neuron).ok()?;
             let updated = match fm.meta.get("updated") {
                 None | Some(Value::Null) => return None,
                 Some(value) => py_str(value),

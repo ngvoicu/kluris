@@ -82,9 +82,8 @@ impl QueryTerm {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Scored {
     pub scores: Vec<f64>,
-    /// Per unit, bit `i` set when query term `i` matched (terms past 64 are
-    /// not tracked).
-    pub terms: Vec<u64>,
+    /// Per unit, the indexes of the query terms that matched, ascending.
+    pub terms: Vec<Vec<u32>>,
     /// Per unit, bit `f` set when some query term matched field `f`.
     pub fields: Vec<u8>,
 }
@@ -221,7 +220,7 @@ impl Index {
     pub fn score_detailed(&self, query: &[QueryTerm]) -> Scored {
         let mut scored = Scored {
             scores: vec![0.0; self.units],
-            terms: vec![0; self.units],
+            terms: vec![Vec::new(); self.units],
             fields: vec![0; self.units],
         };
         let mut best = vec![0f64; self.units];
@@ -250,8 +249,9 @@ impl Index {
                     if contribution > best[id] {
                         best[id] = contribution;
                     }
-                    if qi < 64 {
-                        scored.terms[id] |= 1 << qi;
+                    let qi = u32::try_from(qi).unwrap_or(u32::MAX);
+                    if scored.terms[id].last() != Some(&qi) {
+                        scored.terms[id].push(qi);
                     }
                 }
             }

@@ -126,7 +126,7 @@ pub fn detect_deprecation_issues(store: &impl BrainStore) -> DeprecationReport {
     let mut status_by_path: HashMap<PathBuf, Status> = HashMap::new();
     let mut meta_by_path: HashMap<PathBuf, Map> = HashMap::new();
     for neuron in store.neurons() {
-        let meta = match store.read(&neuron.rel) {
+        let meta = match store.read_neuron(neuron) {
             Ok(fm) => fm.meta,
             Err(error) => {
                 report.skipped.push(SkippedNeuron {

@@ -8,6 +8,7 @@ pub mod frontmatter;
 pub mod git;
 pub mod help;
 pub mod list;
+pub mod pycase;
 pub mod pyrepr;
 pub mod resolve;
 pub mod search;

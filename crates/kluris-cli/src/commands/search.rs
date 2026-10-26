@@ -3,7 +3,8 @@
 
 use std::path::Path;
 
-use kluris_core::brain::store::LocalGitStore;
+use kluris_core::brain::deprecation::SkippedNeuron;
+use kluris_core::brain::store::{LocalGitStore, ReadError};
 use kluris_core::config::read_brain_config;
 use kluris_core::pyrepr::py_path_str;
 use kluris_core::search::{Hit, Language, SearchRequest, search};
@@ -49,13 +50,36 @@ pub fn run(options: &Options) -> Result<(), CliError> {
         limit: options.limit,
         language,
     };
-    let hits = search(&store, &request).hits;
+    let outcome = search(&store, &request);
     if options.json {
-        human::print(&json::to_line(&to_json(&brain.name, options.query, &hits)));
+        human::print(&json::to_line(&to_json(
+            &brain.name,
+            options.query,
+            &outcome.hits,
+            &outcome.skipped,
+        )));
     } else {
-        human::print(&text(Painter::stdout(), &brain.name, options.query, &hits));
+        human::print(&text(
+            Painter::stdout(),
+            &brain.name,
+            options.query,
+            &outcome.hits,
+        ));
+        let mut stderr = String::new();
+        for s in &outcome.skipped {
+            stderr.push_str(&format!("Skipped {}: {}\n", s.rel, reason(&s.error)));
+        }
+        let _ = std::io::Write::write_all(&mut std::io::stderr(), stderr.as_bytes());
     }
     Ok(())
+}
+
+/// Why a file was skipped, without its absolute path.
+fn reason(error: &ReadError) -> String {
+    match error {
+        ReadError::File(e) => e.problem.to_string(),
+        ReadError::Sandbox(e) => e.to_string(),
+    }
 }
 
 fn str(text: &str) -> Json {
@@ -75,7 +99,8 @@ fn strings(items: &[String]) -> Json {
 }
 
 /// v2's keys (`cli.py:1101-1107`, `rt/search.py:296-304`), then Kluris 3's.
-fn to_json(brain: &str, query: &str, hits: &[Hit]) -> Json {
+/// `skipped` (PAR-024) is added only when files were left out.
+fn to_json(brain: &str, query: &str, hits: &[Hit], skipped: &[SkippedNeuron]) -> Json {
     let results = hits
         .iter()
         .map(|h| {
@@ -103,14 +128,27 @@ fn to_json(brain: &str, query: &str, hits: &[Hit]) -> Json {
             Json::Object(fields)
         })
         .collect();
-    Json::Object(vec![
+    let mut doc = vec![
         ("ok".into(), Json::Bool(true)),
         ("brain".into(), str(brain)),
         ("query".into(), str(query)),
         ("total".into(), count(hits.len())),
         ("results".into(), Json::Array(results)),
         ("engine".into(), str("bm25")),
-    ])
+    ];
+    if !skipped.is_empty() {
+        let files = skipped
+            .iter()
+            .map(|s| {
+                Json::Object(vec![
+                    ("file".into(), str(&s.rel)),
+                    ("error".into(), str(&reason(&s.error))),
+                ])
+            })
+            .collect();
+        doc.push(("skipped".into(), Json::Array(files)));
+    }
+    Json::Object(doc)
 }
 
 /// v2's wording (`cli.py:1112-1127`).
