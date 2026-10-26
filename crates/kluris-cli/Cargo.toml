@@ -7,6 +7,8 @@ rust-version.workspace = true
 license-file.workspace = true
 repository.workspace = true
 
+build = "build.rs"
+
 [[bin]]
 name = "kluris"
 path = "src/main.rs"
@@ -16,9 +18,25 @@ kluris-core.workspace = true
 clap.workspace = true
 jiff.workspace = true
 signal-hook.workspace = true
+self_update.workspace = true
+self-replace.workspace = true
+serde_json.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows-sys.workspace = true
 
 [dev-dependencies]
 assert_cmd.workspace = true
 assert_fs.workspace = true
 predicates.workspace = true
 serde_json.workspace = true
+tempfile.workspace = true
+wiremock.workspace = true
+tokio.workspace = true
+tar.workspace = true
+flate2.workspace = true
+zip.workspace = true
+sha2.workspace = true
+
+[target.'cfg(windows)'.dev-dependencies]
+windows-sys.workspace = true

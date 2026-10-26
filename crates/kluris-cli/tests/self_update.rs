@@ -1,0 +1,745 @@
+//! `kluris self-update` against a fake GitHub release API (`wiremock`)
+//! serving real `.tar.gz` / `.zip` archives built here, with a temp install
+//! receipt and install prefix (never the real ones).
+//!
+//! Each test copies the built `kluris` into `<home>/.kluris/bin` (the
+//! installer's flat layout: the receipt's `install_prefix` is that folder)
+//! and runs the copy, so the running binary is the installed one. The
+//! release's new binary is a script that records its arguments (Unix), or a
+//! copy of `kluris` with bytes appended (Windows, where an exe must be one).
+
+use std::fs;
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Output, Stdio};
+
+use sha2::{Digest, Sha256};
+use tempfile::TempDir;
+use tokio::runtime::Runtime;
+use wiremock::matchers::{header, method, path};
+use wiremock::{Mock, MockServer, ResponseTemplate};
+
+/// The target the binary under test was built for (`build.rs`).
+const TARGET: &str = env!("KLURIS_TARGET");
+const CURRENT: &str = env!("CARGO_PKG_VERSION");
+const RELEASES: &str = "/repos/ngvoicu/kluris/releases";
+
+fn windows() -> bool {
+    TARGET.contains("windows")
+}
+
+fn exe_name() -> &'static str {
+    if windows() { "kluris.exe" } else { "kluris" }
+}
+
+fn archive_name(target: &str) -> String {
+    if target.contains("windows") {
+        format!("kluris-{target}.zip")
+    } else {
+        format!("kluris-{target}.tar.gz")
+    }
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    Sha256::digest(bytes)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
+/// A `.tar.gz` holding `kluris-<target>/<exe>` (mode 755) and a README, as
+/// dist builds it.
+fn tar_gz(target: &str, exe: &[u8]) -> Vec<u8> {
+    let gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+    let mut tar = tar::Builder::new(gz);
+    let mut add = |name: String, bytes: &[u8], mode: u32| {
+        let mut h = tar::Header::new_gnu();
+        h.set_size(bytes.len() as u64);
+        h.set_mode(mode);
+        h.set_cksum();
+        tar.append_data(&mut h, name, bytes).unwrap();
+    };
+    add(format!("kluris-{target}/kluris"), exe, 0o755);
+    add(format!("kluris-{target}/README.md"), b"# kluris\n", 0o644);
+    tar.into_inner().unwrap().finish().unwrap()
+}
+
+/// A `.zip` holding `kluris-<target>/kluris.exe` and a README.
+fn zip(target: &str, exe: &[u8]) -> Vec<u8> {
+    let mut w = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let opts = zip::write::SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Deflated);
+    w.start_file(format!("kluris-{target}/kluris.exe"), opts)
+        .unwrap();
+    w.write_all(exe).unwrap();
+    w.start_file(format!("kluris-{target}/README.md"), opts)
+        .unwrap();
+    w.write_all(b"# kluris\n").unwrap();
+    w.finish().unwrap().into_inner()
+}
+
+fn archive(target: &str, exe: &[u8]) -> Vec<u8> {
+    if target.contains("windows") {
+        zip(target, exe)
+    } else {
+        tar_gz(target, exe)
+    }
+}
+
+/// One asset of a fake release.
+struct Asset {
+    name: String,
+    bytes: Vec<u8>,
+    /// GitHub's `digest` field; `None` leaves it out.
+    digest: Option<String>,
+}
+
+/// A fake release: its tag and assets, in the API's order.
+struct Release {
+    tag: String,
+    assets: Vec<Asset>,
+}
+
+/// What a test run looks like: a temp HOME with the installed copy and its
+/// receipt, and the fake API.
+struct Fixture {
+    rt: Runtime,
+    server: MockServer,
+    _root: TempDir,
+    home: PathBuf,
+    config_home: PathBuf,
+    prefix: PathBuf,
+    exe: PathBuf,
+    receipt: PathBuf,
+    receipt_text: String,
+    /// The bytes of the installed copy before the run.
+    old_exe: Vec<u8>,
+    /// Where the fake new binary records its arguments (Unix).
+    args_file: PathBuf,
+}
+
+impl Fixture {
+    fn new() -> Fixture {
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .unwrap();
+        let server = rt.block_on(MockServer::start());
+        let root = TempDir::new().unwrap();
+        let root_path = fs::canonicalize(root.path()).unwrap();
+        let home = root_path.join("home");
+        let config_home = root_path.join("config");
+        let prefix = home.join(".kluris").join("bin");
+        fs::create_dir_all(&prefix).unwrap();
+        fs::create_dir_all(config_home.join("kluris")).unwrap();
+        let exe = prefix.join(exe_name());
+        fs::copy(assert_cmd::cargo::cargo_bin!("kluris"), &exe).unwrap();
+        let old_exe = fs::read(&exe).unwrap();
+        let receipt = config_home.join("kluris").join("kluris-receipt.json");
+        // dist 0.33.1's receipt, as its installer writes it (one line).
+        let receipt_text = format!(
+            "{{\"binaries\":[\"{bin}\"],\"binary_aliases\":{{}},\"cdylibs\":[],\"cstaticlibs\":[],\
+             \"install_layout\":\"flat\",\"install_prefix\":{prefix},\"modify_path\":true,\
+             \"provider\":{{\"source\":\"cargo-dist\",\"version\":\"0.33.1\"}},\
+             \"source\":{{\"app_name\":\"kluris\",\"name\":\"kluris\",\"owner\":\"ngvoicu\",\
+             \"release_type\":\"github\"}},\"version\":\"{CURRENT}\"}}\n",
+            bin = exe_name(),
+            prefix = serde_json::to_string(&prefix.display().to_string()).unwrap(),
+        );
+        fs::write(&receipt, &receipt_text).unwrap();
+        let args_file = root_path.join("doctor-args.txt");
+        Fixture {
+            rt,
+            server,
+            _root: root,
+            home,
+            config_home,
+            prefix,
+            exe,
+            receipt,
+            receipt_text,
+            old_exe,
+            args_file,
+        }
+    }
+
+    /// The new binary a release carries: a script that records how it was
+    /// started and prints `doctor_out`, exiting with `code` (Unix); a copy of
+    /// `kluris` with bytes appended (Windows).
+    fn new_binary(&self, code: i32, doctor_out: &str) -> Vec<u8> {
+        if windows() {
+            let mut bytes = self.old_exe.clone();
+            bytes.extend_from_slice(b"\0KLURIS-TEST-NEW-BINARY\0");
+            bytes
+        } else {
+            format!(
+                "#!/bin/sh\nprintf '%s\\n' \"$0\" \"$@\" > '{}'\nprintf '%s\\n' '{doctor_out}'\nexit {code}\n",
+                self.args_file.display()
+            )
+            .into_bytes()
+        }
+    }
+
+    /// A release `tag` whose archive for this target holds `exe`, with a
+    /// correct `sha256.sum`, GitHub digests, and decoys a "contains the
+    /// target" match would pick first.
+    fn release(&self, tag: &str, exe: &[u8]) -> Release {
+        let want = archive_name(TARGET);
+        let real = archive(TARGET, exe);
+        let other_target = if TARGET.contains("x86_64") {
+            TARGET.replace("x86_64", "aarch64")
+        } else {
+            TARGET.replace("aarch64", "x86_64")
+        };
+        let other = archive(&other_target, b"wrong target");
+        let sums = format!(
+            "{} *{}\n{} *{}\n\n",
+            sha256_hex(&other),
+            archive_name(&other_target),
+            sha256_hex(&real),
+            want
+        );
+        let decoy = |name: String| Asset {
+            digest: None,
+            bytes: b"not an archive".to_vec(),
+            name,
+        };
+        Release {
+            tag: tag.into(),
+            assets: vec![
+                decoy(format!("{want}.sha256")),
+                decoy(format!("kluris-{TARGET}-debug.tar.gz")),
+                Asset {
+                    digest: Some(format!("sha256:{}", sha256_hex(&other))),
+                    name: archive_name(&other_target),
+                    bytes: other,
+                },
+                Asset {
+                    digest: Some(format!("sha256:{}", sha256_hex(&real))),
+                    name: want,
+                    bytes: real,
+                },
+                Asset {
+                    digest: None,
+                    name: "sha256.sum".into(),
+                    bytes: sums.into_bytes(),
+                },
+            ],
+        }
+    }
+
+    fn release_json(&self, index: usize, release: &Release) -> serde_json::Value {
+        let assets: Vec<serde_json::Value> = release
+            .assets
+            .iter()
+            .enumerate()
+            .map(|(i, a)| {
+                let mut v = serde_json::json!({
+                    "name": a.name,
+                    "url": format!("{}{RELEASES}/assets/{index}{i}", self.server.uri()),
+                    "browser_download_url": format!("https://github.invalid/{}", a.name),
+                });
+                if let Some(d) = &a.digest {
+                    v["digest"] = serde_json::Value::String(d.clone());
+                }
+                v
+            })
+            .collect();
+        serde_json::json!({
+            "tag_name": release.tag,
+            "name": release.tag,
+            "created_at": "2026-10-26T00:00:00Z",
+            "body": "",
+            "html_url": format!("https://github.invalid/{}", release.tag),
+            "assets": assets,
+        })
+    }
+
+    /// Serve `releases` (newest first) on the listing, each on its tag URL,
+    /// and every asset at its `url`.
+    fn serve(&self, releases: &[Release]) {
+        let listing: Vec<serde_json::Value> = releases
+            .iter()
+            .enumerate()
+            .map(|(i, r)| self.release_json(i, r))
+            .collect();
+        self.mount(
+            Mock::given(method("GET"))
+                .and(path(RELEASES))
+                .respond_with(ResponseTemplate::new(200).set_body_json(&listing)),
+        );
+        for (i, r) in releases.iter().enumerate() {
+            self.mount(
+                Mock::given(method("GET"))
+                    .and(path(format!("{RELEASES}/tags/{}", r.tag)))
+                    .respond_with(
+                        ResponseTemplate::new(200).set_body_json(self.release_json(i, r)),
+                    ),
+            );
+            for (j, a) in r.assets.iter().enumerate() {
+                self.mount(
+                    Mock::given(method("GET"))
+                        .and(path(format!("{RELEASES}/assets/{i}{j}")))
+                        .respond_with(ResponseTemplate::new(200).set_body_bytes(a.bytes.clone())),
+                );
+            }
+        }
+    }
+
+    fn mount(&self, mock: Mock) {
+        self.rt.block_on(mock.mount(&self.server));
+    }
+
+    /// The requests the fake API received, as `METHOD path`.
+    fn requests(&self) -> Vec<String> {
+        self.rt
+            .block_on(self.server.received_requests())
+            .unwrap_or_default()
+            .iter()
+            .map(|r| format!("{} {}", r.method, r.url.path()))
+            .collect()
+    }
+
+    /// The installed copy, with the API pointed at the fake.
+    fn cmd(&self, exe: &Path) -> Command {
+        let mut cmd = Command::new(exe);
+        cmd.env("HOME", &self.home)
+            .env("USERPROFILE", &self.home)
+            .env("XDG_CONFIG_HOME", &self.config_home)
+            .env("LOCALAPPDATA", self.home.join("AppData").join("Local"))
+            .env(
+                "KLURIS_CONFIG",
+                self.home.join(".kluris").join("config.yml"),
+            )
+            .env("KLURIS_GITHUB_API_URL", self.server.uri())
+            .env("KLURIS_NO_PROMPT", "1")
+            .env("NO_COLOR", "1")
+            .env("GIT_CEILING_DIRECTORIES", &self.home)
+            .env_remove("KLURIS_GITHUB_TOKEN")
+            .env_remove("ZDOTDIR")
+            .stdin(Stdio::null());
+        cmd
+    }
+
+    fn run(&self, args: &[&str]) -> Output {
+        self.cmd(&self.exe).args(args).output().unwrap()
+    }
+
+    fn assert_untouched(&self) {
+        assert!(
+            fs::read(&self.exe).unwrap() == self.old_exe,
+            "the installed binary changed"
+        );
+        assert_eq!(
+            fs::read_to_string(&self.receipt).unwrap(),
+            self.receipt_text
+        );
+        assert!(!self.args_file.exists(), "doctor ran");
+    }
+
+    fn asset_requests(&self) -> Vec<String> {
+        self.requests()
+            .into_iter()
+            .filter(|r| r.contains("/assets/"))
+            .collect()
+    }
+}
+
+fn stdout(o: &Output) -> String {
+    String::from_utf8_lossy(&o.stdout).into_owned()
+}
+
+fn stderr(o: &Output) -> String {
+    String::from_utf8_lossy(&o.stderr).into_owned()
+}
+
+#[test]
+fn check_json_prints_current_and_latest_and_changes_nothing() {
+    let f = Fixture::new();
+    let new = f.new_binary(0, "");
+    f.serve(&[f.release("v3.99.0", &new), f.release("v3.98.0", &new)]);
+    let out = f.run(&["self-update", "--check", "--json"]);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    assert_eq!(
+        stdout(&out),
+        format!(
+            "{{\"ok\": true, \"current\": \"{CURRENT}\", \"latest\": \"3.99.0\", \"update_available\": true}}\n"
+        )
+    );
+    f.assert_untouched();
+    assert_eq!(f.asset_requests(), Vec::<String>::new());
+}
+
+#[test]
+fn check_human_names_both_versions() {
+    let f = Fixture::new();
+    let new = f.new_binary(0, "");
+    f.serve(&[f.release("v3.99.0", &new)]);
+    let out = f.run(&["self-update", "--check"]);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    let text = stdout(&out);
+    assert!(text.contains(CURRENT) && text.contains("3.99.0"), "{text}");
+    f.assert_untouched();
+}
+
+#[test]
+fn check_when_up_to_date() {
+    let f = Fixture::new();
+    let new = f.new_binary(0, "");
+    f.serve(&[f.release(&format!("v{CURRENT}"), &new)]);
+    let out = f.run(&["self-update", "--check", "--json"]);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    assert_eq!(
+        stdout(&out),
+        format!(
+            "{{\"ok\": true, \"current\": \"{CURRENT}\", \"latest\": \"{CURRENT}\", \"update_available\": false}}\n"
+        )
+    );
+    f.assert_untouched();
+}
+
+#[test]
+fn up_to_date_installs_nothing_and_runs_no_doctor() {
+    let f = Fixture::new();
+    let new = f.new_binary(0, "");
+    f.serve(&[f.release(&format!("v{CURRENT}"), &new)]);
+    let out = f.run(&["self-update", "--json"]);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    assert_eq!(
+        stdout(&out),
+        format!(
+            "{{\"ok\": true, \"current\": \"{CURRENT}\", \"latest\": \"{CURRENT}\", \"updated\": false}}\n"
+        )
+    );
+    f.assert_untouched();
+    let human = f.run(&["self-update"]);
+    assert_eq!(human.status.code(), Some(0));
+    assert!(stdout(&human).contains("up to date"), "{}", stdout(&human));
+    f.assert_untouched();
+}
+
+/// What `kluris doctor` exits with in this fixture's HOME (Windows, where
+/// the new binary is a real kluris).
+fn doctor_code(f: &Fixture) -> i32 {
+    f.cmd(&f.exe)
+        .arg("doctor")
+        .output()
+        .unwrap()
+        .status
+        .code()
+        .unwrap()
+}
+
+#[test]
+fn update_installs_the_exact_asset_updates_the_receipt_and_runs_doctor() {
+    let f = Fixture::new();
+    let new = f.new_binary(7, "doctor ran");
+    f.serve(&[f.release("v3.99.0", &new), f.release("v3.98.0", b"older")]);
+    let expected_code = if windows() { doctor_code(&f) } else { 7 };
+    let out = f.run(&["self-update"]);
+    assert_eq!(out.status.code(), Some(expected_code), "{}", stderr(&out));
+    assert!(
+        fs::read(&f.exe).unwrap() == new,
+        "the new binary is in place"
+    );
+    assert_eq!(
+        fs::read_to_string(&f.receipt).unwrap(),
+        f.receipt_text.replace(
+            &format!("\"version\":\"{CURRENT}\""),
+            "\"version\":\"3.99.0\""
+        )
+    );
+    let text = stdout(&out);
+    assert!(text.contains(CURRENT) && text.contains("3.99.0"), "{text}");
+    if !windows() {
+        assert!(text.contains("doctor ran"), "{text}");
+        // A fresh process of the new binary, at the install path.
+        assert_eq!(
+            fs::read_to_string(&f.args_file).unwrap(),
+            format!("{}\ndoctor\n", f.exe.display())
+        );
+    }
+    // Only this target's archive and the sums were downloaded.
+    let mut assets = f.asset_requests();
+    assets.sort();
+    assert_eq!(
+        assets,
+        vec![
+            format!("GET {RELEASES}/assets/03"),
+            format!("GET {RELEASES}/assets/04"),
+        ]
+    );
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = fs::metadata(&f.exe).unwrap().permissions().mode();
+        assert_eq!(mode & 0o111, 0o111, "executable");
+    }
+    // No leftovers beside the binary.
+    let mut names: Vec<String> = fs::read_dir(&f.prefix)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    names.retain(|n| !n.ends_with(".__relocated__.exe") && !n.ends_with(".__selfdelete__.exe"));
+    assert_eq!(names, vec![exe_name().to_string()]);
+}
+
+#[cfg(unix)]
+#[test]
+fn update_json_carries_doctors_json_and_exit_code() {
+    let f = Fixture::new();
+    let new = f.new_binary(1, r#"{"ok": false, "checks": []}"#);
+    f.serve(&[f.release("v3.99.0", &new)]);
+    let out = f.run(&["self-update", "--json"]);
+    assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
+    assert_eq!(
+        stdout(&out),
+        format!(
+            "{{\"ok\": false, \"current\": \"{CURRENT}\", \"latest\": \"3.99.0\", \"updated\": true, \
+             \"doctor\": {{\"ok\": false, \"checks\": []}}}}\n"
+        )
+    );
+    assert_eq!(
+        fs::read_to_string(&f.args_file).unwrap(),
+        format!("{}\ndoctor\n--json\n", f.exe.display())
+    );
+}
+
+#[test]
+fn version_flag_installs_that_release() {
+    let f = Fixture::new();
+    let newest = f.new_binary(0, "newest");
+    let wanted = {
+        let mut b = f.new_binary(0, "wanted");
+        b.extend_from_slice(if windows() { b"\0wanted\0" } else { b"\n" });
+        b
+    };
+    f.serve(&[f.release("v3.99.0", &newest), f.release("v3.98.0", &wanted)]);
+    for given in ["3.98.0", "v3.98.0"] {
+        fs::write(&f.exe, &f.old_exe).unwrap();
+        fs::write(&f.receipt, &f.receipt_text).unwrap();
+        let expected_code = if windows() { doctor_code(&f) } else { 0 };
+        let out = f.run(&["self-update", "--version", given]);
+        assert_eq!(out.status.code(), Some(expected_code), "{}", stderr(&out));
+        assert!(fs::read(&f.exe).unwrap() == wanted, "{given}");
+        assert!(
+            fs::read_to_string(&f.receipt)
+                .unwrap()
+                .contains("\"version\":\"3.98.0\"")
+        );
+    }
+    assert!(
+        f.requests()
+            .contains(&format!("GET {RELEASES}/tags/v3.98.0"))
+    );
+}
+
+#[test]
+fn a_sha256_sum_mismatch_replaces_nothing() {
+    let f = Fixture::new();
+    let new = f.new_binary(0, "");
+    let mut release = f.release("v3.99.0", &new);
+    let want = archive_name(TARGET);
+    let sums = release
+        .assets
+        .iter_mut()
+        .find(|a| a.name == "sha256.sum")
+        .unwrap();
+    sums.bytes = format!("{} *{want}\n", "0".repeat(64)).into_bytes();
+    f.serve(&[release]);
+    let out = f.run(&["self-update"]);
+    assert_eq!(out.status.code(), Some(1));
+    let err = stderr(&out);
+    assert!(
+        err.contains("SHA-256") && err.contains("nothing was replaced"),
+        "{err}"
+    );
+    f.assert_untouched();
+    let json = f.run(&["self-update", "--json"]);
+    assert_eq!(json.status.code(), Some(1));
+    let v: serde_json::Value = serde_json::from_slice(&json.stdout).unwrap();
+    assert_eq!(v["ok"], false);
+    assert!(
+        v["error"]
+            .as_str()
+            .unwrap()
+            .contains("nothing was replaced")
+    );
+    f.assert_untouched();
+}
+
+#[test]
+fn a_github_digest_mismatch_replaces_nothing() {
+    let f = Fixture::new();
+    let new = f.new_binary(0, "");
+    let mut release = f.release("v3.99.0", &new);
+    let want = archive_name(TARGET);
+    let asset = release.assets.iter_mut().find(|a| a.name == want).unwrap();
+    asset.digest = Some(format!("sha256:{}", "1".repeat(64)));
+    f.serve(&[release]);
+    let out = f.run(&["self-update"]);
+    assert_eq!(out.status.code(), Some(1));
+    assert!(
+        stderr(&out).contains("nothing was replaced"),
+        "{}",
+        stderr(&out)
+    );
+    f.assert_untouched();
+}
+
+#[test]
+fn a_release_without_sha256_sum_is_refused() {
+    let f = Fixture::new();
+    let new = f.new_binary(0, "");
+    let mut release = f.release("v3.99.0", &new);
+    release.assets.retain(|a| a.name != "sha256.sum");
+    f.serve(&[release]);
+    let out = f.run(&["self-update"]);
+    assert_eq!(out.status.code(), Some(1));
+    assert!(stderr(&out).contains("sha256.sum"), "{}", stderr(&out));
+    f.assert_untouched();
+}
+
+#[test]
+fn a_release_without_this_targets_archive_is_refused() {
+    let f = Fixture::new();
+    let new = f.new_binary(0, "");
+    let mut release = f.release("v3.99.0", &new);
+    let want = archive_name(TARGET);
+    release.assets.retain(|a| a.name != want);
+    f.serve(&[release]);
+    let out = f.run(&["self-update"]);
+    assert_eq!(out.status.code(), Some(1));
+    assert!(stderr(&out).contains(&want), "{}", stderr(&out));
+    f.assert_untouched();
+}
+
+#[test]
+fn kluris_github_token_is_sent_when_set_and_only_then() {
+    let f = Fixture::new();
+    let new = f.new_binary(0, "");
+    // With the token: only a request carrying it is answered.
+    f.mount(
+        Mock::given(method("GET"))
+            .and(path(RELEASES))
+            .and(header("authorization", "token kt-123"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(vec![f.release_json(0, &f.release("v3.99.0", &new))]),
+            ),
+    );
+    let out = f
+        .cmd(&f.exe)
+        .args(["self-update", "--check", "--json"])
+        .env("KLURIS_GITHUB_TOKEN", "kt-123")
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    assert!(stdout(&out).contains("\"latest\": \"3.99.0\""));
+    // Without it (GITHUB_TOKEN is not Kluris's): no authorization header.
+    let out = f
+        .cmd(&f.exe)
+        .args(["self-update", "--check", "--json"])
+        .env("GITHUB_TOKEN", "gh-456")
+        .env("GH_TOKEN", "gh-789")
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1), "unanswered without the token");
+    let received = f.rt.block_on(f.server.received_requests()).unwrap();
+    assert_eq!(received.len(), 2);
+    assert_eq!(
+        received[0]
+            .headers
+            .get("authorization")
+            .map(|v| v.to_str().unwrap()),
+        Some("token kt-123")
+    );
+    assert!(received[1].headers.get("authorization").is_none());
+}
+
+#[test]
+fn a_rate_limit_says_to_set_kluris_github_token() {
+    for (status, headers) in [
+        (
+            403,
+            vec![("x-ratelimit-remaining", "0"), ("x-ratelimit-reset", "1")],
+        ),
+        (429, vec![]),
+    ] {
+        let f = Fixture::new();
+        let mut resp = ResponseTemplate::new(status)
+            .set_body_string(r#"{"message":"API rate limit exceeded"}"#);
+        for (k, v) in headers {
+            resp = resp.insert_header(k, v);
+        }
+        f.mount(
+            Mock::given(method("GET"))
+                .and(path(RELEASES))
+                .respond_with(resp),
+        );
+        for args in [vec!["self-update"], vec!["self-update", "--check"]] {
+            let out = f.run(&args);
+            assert_eq!(out.status.code(), Some(1));
+            let err = stderr(&out);
+            assert!(
+                err.contains("rate limit") && err.contains("KLURIS_GITHUB_TOKEN"),
+                "{status}: {err}"
+            );
+        }
+        let out = f.run(&["self-update", "--json"]);
+        assert_eq!(out.status.code(), Some(1));
+        let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+        assert!(v["error"].as_str().unwrap().contains("KLURIS_GITHUB_TOKEN"));
+        f.assert_untouched();
+    }
+}
+
+#[test]
+fn refuses_without_a_receipt() {
+    let f = Fixture::new();
+    fs::remove_file(&f.receipt).unwrap();
+    let out = f.run(&["self-update"]);
+    assert_eq!(out.status.code(), Some(1));
+    let err = stderr(&out);
+    assert!(
+        err.contains("receipt") && err.contains(&f.receipt.display().to_string()),
+        "{err}"
+    );
+    assert_eq!(f.requests(), Vec::<String>::new());
+    assert!(fs::read(&f.exe).unwrap() == f.old_exe);
+    let out = f.run(&["self-update", "--json"]);
+    assert_eq!(out.status.code(), Some(1));
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["ok"], false);
+}
+
+#[test]
+fn refuses_when_the_running_binary_is_outside_the_install_prefix() {
+    let f = Fixture::new();
+    let new = f.new_binary(0, "");
+    f.serve(&[f.release("v3.99.0", &new)]);
+    // The cargo build, not the installed copy.
+    let out = f
+        .cmd(Path::new(assert_cmd::cargo::cargo_bin!("kluris")))
+        .arg("self-update")
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    let err = stderr(&out);
+    assert!(err.contains(&f.prefix.display().to_string()), "{err}");
+    assert!(err.contains("not the installed"), "{err}");
+    f.assert_untouched();
+    assert_eq!(f.requests(), Vec::<String>::new());
+}
+
+#[test]
+fn self_update_is_in_help() {
+    let f = Fixture::new();
+    let out = f.run(&["self-update", "--help"]);
+    assert_eq!(out.status.code(), Some(0));
+    let text = stdout(&out);
+    for flag in ["--check", "--version", "--json"] {
+        assert!(text.contains(flag), "{text}");
+    }
+}

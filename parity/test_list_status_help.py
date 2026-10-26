@@ -26,7 +26,21 @@ V2_COMMANDS = [
     "create", "register", "list", "status", "search", "wake-up", "companion",
     "dream", "pack", "mri", "remove", "doctor", "help",
 ]
-V3_COMMANDS = [c for c in V2_COMMANDS if c != "pack"]
+# v2's commands Kluris 3 keeps, in v2's order.
+V2_KEPT = [c for c in V2_COMMANDS if c != "pack"]
+# Commands new in v3, after v2's (PAR-056: no v2 counterpart).
+V3_ONLY = [
+    ("self-update", "Update kluris to the newest release (--check only looks)"),
+    ("self-uninstall", "Remove the installed kluris (--purge: also ~/.kluris and Kluris skills)"),
+]
+V3_COMMANDS = V2_KEPT + [name for name, _ in V3_ONLY]
+
+
+def v3_rows(v2_commands: list[dict]) -> list[dict]:
+    """v2's ``help --json`` rows as v3 lists them: without ``pack``, then the
+    v3-only commands."""
+    kept = [c for c in v2_commands if c["name"] != "pack"]
+    return kept + [{"name": name, "description": desc} for name, desc in V3_ONLY]
 
 
 # --- building brains --------------------------------------------------------------
@@ -420,13 +434,21 @@ def without_pack(v2_text: str) -> str:
     return "".join(kept)
 
 
+def with_v3_only(table: str) -> str:
+    """A help table with the v3-only rows after ``help``'s."""
+    lines = table.splitlines(keepends=True)
+    at = next(i for i, line in enumerate(lines) if line.startswith("  help ")) + 1
+    rows = [f"  {name:<10} {desc}\n" for name, desc in V3_ONLY]
+    return "".join(lines[:at] + rows + lines[at:])
+
+
 def test_help_text_matches_v2_without_pack(sandbox: Sandbox):
     write_config(sandbox, [("a", str(sandbox.work / "a"), "x"), ("b", str(sandbox.work / "b"), "y")])
     sandbox.freeze()
     r = run(sandbox, "help")
     v2, v3 = r["v2"], r["v3"]
     assert v2.code == v3.code == 0, (v2.stderr, v3.stderr)
-    same_words(without_pack(v2.stdout), v3.stdout, sandbox.root)
+    same_words(with_v3_only(without_pack(v2.stdout)), v3.stdout, sandbox.root)
     names = [m.group(1) for m in re.finditer(r"^  (\S+) +\S", v3.stdout, re.M)]
     assert names == V3_COMMANDS
     assert "Brains: 2 registered" in v3.stdout
@@ -438,12 +460,12 @@ def test_help_text_matches_v2_without_pack(sandbox: Sandbox):
 def test_help_json_lists_v2s_commands_without_pack(sandbox: Sandbox):
     j2, j3 = json_pair(sandbox, "help", "--json")
     assert [c["name"] for c in j2["commands"]] == V2_COMMANDS
-    j2["commands"] = [c for c in j2["commands"] if c["name"] != "pack"]
+    j2["commands"] = v3_rows(j2["commands"])
     assert j3 == j2
     assert json.dumps(j3) == json.dumps(j2)
 
 
-@pytest.mark.parametrize("command", V3_COMMANDS)
+@pytest.mark.parametrize("command", V2_KEPT)
 def test_help_for_one_command(sandbox: Sandbox, command):
     r = run(sandbox, "help", command)
     v2, v3 = r["v2"], r["v3"]
@@ -451,6 +473,18 @@ def test_help_for_one_command(sandbox: Sandbox, command):
     same_words(v2.stdout, v3.stdout, sandbox.root)
     assert v3.stdout.startswith(f"kluris {command} — ")
     assert f"Run 'kluris {command} --help' for full usage." in v3.stdout
+
+
+@pytest.mark.parametrize(("command", "desc"), V3_ONLY)
+def test_help_for_a_v3_only_command(sandbox: Sandbox, command, desc):
+    """PAR-056: v2 has no such command."""
+    r = run(sandbox, "help", command)
+    v2, v3 = r["v2"], r["v3"]
+    assert v2.code == 1 and v2.stderr == f"Error: Unknown command: {command}\n"
+    assert v3.code == 0, v3.stderr
+    assert v3.stdout == f"kluris {command} — {desc}\n\nRun 'kluris {command} --help' for full usage.\n"
+    j3 = json.loads(run(sandbox, "help", command, "--json")["v3"].stdout)
+    assert j3 == {"ok": True, "commands": [{"name": command, "description": desc}]}
 
 
 @pytest.mark.parametrize("command", ["bogus", "pack"])
@@ -526,6 +560,9 @@ def test_root_help_flag(sandbox: Sandbox):
         line = next(line for line in v2.stdout.splitlines() if line.startswith(f"  {command} "))
         assert re.search(rf"^  {re.escape(command)} +{re.escape(line.split(maxsplit=1)[1])}$", v3.stdout, re.M), line
     assert "pack" not in v3.stdout
+    for command, _ in V3_ONLY:  # PAR-056
+        assert command not in v2.stdout
+        assert re.search(rf"^  {re.escape(command)} +\S", v3.stdout, re.M), command
 
 
 @pytest.mark.parametrize("args", [["-h"], ["-V"], ["status", "-h"], ["help", "-h"], ["help", "--bogus"],
@@ -603,7 +640,7 @@ def test_a_repeated_option_takes_its_last_value(sandbox, two_brains, args):
     elif args[0] == "help" and len(args) > 3:
         assert j3["commands"] == [{"name": "status", "description": "Show brain tree, recent changes, and neuron counts"}]
     elif args[0] == "help":
-        j2["commands"] = [c for c in j2["commands"] if c["name"] != "pack"]
+        j2["commands"] = v3_rows(j2["commands"])
         assert j3 == j2
     else:
         assert j3 == j2
