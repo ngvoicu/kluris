@@ -155,11 +155,18 @@ mod tests {
             r.text_with_version("3.1.0"),
             DIST.replace("\"version\":\"3.0.0\"", "\"version\":\"3.1.0\"")
         );
+        // kluris-installer.ps1's receipt, as dist 0.33.1 wrote it on zeewin2
+        // (2026-10-26): `kluris.exe`, the prefix in backslashes, CRLF, no BOM.
         let windows = DIST
-            .replace("/home/u/.kluris/bin", "C:\\\\Users\\\\u\\\\.kluris/bin")
+            .replace("[\"kluris\"]", "[\"kluris.exe\"]")
+            .replace("/home/u/.kluris/bin", "C:\\\\Users\\\\u\\\\.kluris\\\\bin")
             .replace('\n', "\r\n");
         let r = Receipt::parse(&windows).unwrap();
-        assert_eq!(r.install_prefix, PathBuf::from("C:\\Users\\u\\.kluris/bin"));
+        assert_eq!(
+            r.install_prefix,
+            PathBuf::from("C:\\Users\\u\\.kluris\\bin")
+        );
+        assert_eq!(r.binaries, vec!["kluris.exe".to_string()]);
         assert_eq!(
             r.text_with_version("3.1.0"),
             windows.replace("\"version\":\"3.0.0\"", "\"version\":\"3.1.0\"")

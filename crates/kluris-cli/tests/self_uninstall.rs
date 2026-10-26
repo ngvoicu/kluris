@@ -490,8 +490,10 @@ fn the_user_path_entry_is_removed_through_user_path() {
 #[test]
 fn remove_path_entry_matches_case_and_separators_and_keeps_the_rest() {
     let prefix = Path::new(r"C:\Users\u\.kluris\bin");
-    // The installer's receipt has `C:\Users\u\.kluris/bin`; PowerShell's
-    // `-in` compares without case.
+    // dist 0.33.1 writes the entry as the receipt's prefix,
+    // `C:\Users\u\.kluris\bin` (checked on zeewin2, 2026-10-26); an entry a
+    // user retyped may differ in case, separators or a trailing `\`, and
+    // PowerShell's `-in` compares without case.
     assert_eq!(
         remove_path_entry(r"c:\users\u\.KLURIS/bin\;D:\x;;E:\y", prefix),
         Some((
@@ -892,8 +894,8 @@ fn real_windows_user_path_round_trip() {
     let guard = Restore(saved.clone());
 
     let h = Home::installed();
-    // The installer writes `C:\Users\<u>\.kluris/bin` into the receipt and
-    // the folder it made into PATH.
+    // The installer writes `C:\Users\<u>\.kluris\bin` (backslashes) into
+    // the receipt and the same text into PATH.
     let entry = h.prefix.display().to_string();
     let rest = real_registry::text(&saved).unwrap_or_default();
     let with_ours = if rest.is_empty() {
