@@ -59,23 +59,26 @@ pub fn run(check: bool, version: Option<&str>, as_json: bool) -> Result<(), CliE
     }
     let api = Api::from_env();
 
-    let latest = newest_release(&api)?;
-    let available = latest
-        .as_deref()
-        .is_some_and(|l| self_update::version::bump_is_greater(CURRENT, l).unwrap_or(false));
-    if check {
-        let latest = latest.unwrap_or_else(|| CURRENT.to_string());
-        print_check(&latest, available, as_json);
-        return Ok(());
-    }
-
-    let wanted = match (version, latest) {
-        (Some(v), _) => v.trim_start_matches('v').to_string(),
-        (None, Some(latest)) if available => latest,
-        (None, latest) => {
-            let latest = latest.unwrap_or_else(|| CURRENT.to_string());
-            print_up_to_date(&latest, as_json);
-            return Ok(());
+    // `--version` names the release; otherwise the listing's newest decides.
+    let wanted = match version {
+        Some(v) if !check => v.trim_start_matches('v').to_string(),
+        _ => {
+            let latest = newest_release(&api)?;
+            let available = latest.as_deref().is_some_and(|l| {
+                self_update::version::bump_is_greater(CURRENT, l).unwrap_or(false)
+            });
+            match latest {
+                Some(latest) if available && !check => latest,
+                latest => {
+                    let latest = latest.unwrap_or_else(|| CURRENT.to_string());
+                    if check {
+                        print_check(&latest, available, as_json);
+                    } else {
+                        print_up_to_date(&latest, as_json);
+                    }
+                    return Ok(());
+                }
+            }
         }
     };
     let release = install(&api, &wanted, &exe)?;
