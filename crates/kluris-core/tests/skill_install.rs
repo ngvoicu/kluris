@@ -582,6 +582,92 @@ fn stale_staging_folders_from_a_crash_are_cleared() {
     assert!(s.h(".claude/skills/kluris-acme/SKILL.md").is_file());
 }
 
+/// Staging folders left by a crash next to skills that no longer exist
+/// (a removed brain, or a folder Kluris no longer writes) are removed and
+/// reported, in written and cleared folders alike.
+#[test]
+fn stale_staging_folders_of_gone_skills_are_cleared() {
+    let mut s = Sandbox::new();
+    s.brain("acme", Some(&["claude"]));
+    put(
+        &s.h(".agents/skills/.kluris-gone.tmp/SKILL.md"),
+        "half written",
+    );
+    put(
+        &s.h(".agents/skills/.kluris-gone.old/SKILL.md"),
+        &v2_skill("gone"),
+    );
+    fs::create_dir_all(s.h(".claude/skills/.kluris-gone.tmp")).expect("empty staging");
+    put(
+        &s.h(".cursor/skills/.kluris-acme.tmp/SKILL.md"),
+        &v2_skill("acme"),
+    );
+    let report = s.install();
+    assert!(report.ok(), "{report:?}");
+    for rel in [
+        ".agents/skills/.kluris-gone.tmp",
+        ".agents/skills/.kluris-gone.old",
+        ".claude/skills/.kluris-gone.tmp",
+        ".cursor/skills/.kluris-acme.tmp",
+    ] {
+        assert!(!s.h(rel).exists(), "{rel}");
+    }
+    let removed = |path: PathBuf| -> Vec<String> {
+        report
+            .destinations
+            .iter()
+            .find(|d| d.path == path)
+            .map(|d| d.removed.clone())
+            .unwrap_or_default()
+    };
+    assert_eq!(
+        removed(s.h(".agents/skills")),
+        [".kluris-gone.old", ".kluris-gone.tmp"]
+    );
+    assert_eq!(removed(s.h(".claude/skills")), [".kluris-gone.tmp"]);
+    assert_eq!(removed(s.h(".cursor/skills")), [".kluris-acme.tmp"]);
+    assert!(s.h(".claude/skills/kluris-acme/SKILL.md").is_file());
+}
+
+/// Only a real folder holding nothing but (at most) a `SKILL.md` file is a
+/// staging folder; anything else with such a name is kept.
+#[test]
+fn staging_like_entries_that_are_not_kluris_are_kept() {
+    let mut s = Sandbox::new();
+    s.brain("acme", Some(&["claude"]));
+    put(&s.h(".agents/skills/.kluris-a.tmp/notes.txt"), "mine");
+    put(&s.h(".agents/skills/.kluris-b.tmp"), "a file");
+    put(
+        &s.h(".agents/skills/.kluris-c.old/SKILL.md/inner"),
+        "a folder named SKILL.md",
+    );
+    put(&s.h(".agents/skills/.kluris-d/SKILL.md"), "no suffix");
+    put(
+        &s.h(".agents/skills/.kluris-e.tmpx/SKILL.md"),
+        "other suffix",
+    );
+    #[cfg(unix)]
+    {
+        fs::create_dir_all(s.root.join("target")).expect("target");
+        std::os::unix::fs::symlink(s.root.join("target"), s.h(".agents/skills/.kluris-f.old"))
+            .expect("symlink");
+    }
+    let report = s.install();
+    assert!(report.ok(), "{report:?}");
+    for rel in [
+        ".agents/skills/.kluris-a.tmp/notes.txt",
+        ".agents/skills/.kluris-b.tmp",
+        ".agents/skills/.kluris-c.old/SKILL.md/inner",
+        ".agents/skills/.kluris-d/SKILL.md",
+        ".agents/skills/.kluris-e.tmpx/SKILL.md",
+    ] {
+        assert!(s.h(rel).exists(), "{rel}");
+    }
+    #[cfg(unix)]
+    assert!(fs::symlink_metadata(s.h(".agents/skills/.kluris-f.old")).is_ok());
+    assert!(report.destinations[0].removed.is_empty(), "{report:?}");
+}
+
 /// A destination that cannot be written keeps its old skill; the others are
 /// still written and the failure is reported for that destination.
 #[cfg(unix)]

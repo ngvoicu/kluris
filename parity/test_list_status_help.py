@@ -495,6 +495,8 @@ HELP_TEXTS = {
     "list": ["List registered brains.", "--json", "JSON output", "--help", "Show this message and exit."],
     "status": ["Show brain status and recent changes.", "--brain", "Specific brain", "--json", "JSON output"],
     "help": ["Show help for kluris commands.", "--json", "JSON output"],
+    "doctor": ["Check prerequisites and refresh installed agent skills.", "--no-refresh",
+               "Skip refreshing installed agent skills", "--json", "JSON output"],
     "wake-up": ["Compact brain snapshot for agent session bootstrap.",
                 "kluris wake-up --json          # machine-readable (for agents)", "--brain", "Specific brain"],
 }
