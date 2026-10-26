@@ -5,6 +5,7 @@ pub mod agents;
 pub mod brain;
 pub mod companions;
 pub mod config;
+pub mod doctor;
 pub mod dream;
 pub mod frontmatter;
 pub mod git;

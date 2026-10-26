@@ -11,7 +11,9 @@
 //!    leaves that folder's old skills in place and is reported for it.
 //!    Kluris-written skills of brains no longer registered are removed.
 //! 4. The folders of deselected registry agents lose every Kluris-written
-//!    skill (the folders stay).
+//!    skill (the folders stay). Every folder written or cleared also loses
+//!    the staging folders an interrupted run left for skills it no longer
+//!    holds (`.kluris-<brain>.tmp` / `.old`, `is_staging_dir`).
 //! 5. Once `~/.agents/skills` is written, the v2 migration removes the
 //!    Kluris-written skills and workflows v2 left in folders v3 no longer
 //!    uses ([`registry::V2_ONLY_SKILL_FOLDERS`], `~/.codeium/windsurf*`).
@@ -363,12 +365,16 @@ fn clear_folder(dest: &mut DestinationReport, kind: Kind, keep: &[&str]) {
     let mut names: Vec<String> = entries
         .filter_map(Result::ok)
         .filter_map(|e| e.file_name().to_str().map(str::to_string))
-        .filter(|n| n.starts_with("kluris") && !keep.contains(&n.as_str()))
+        .filter(|n| match staged_skill(n) {
+            Some(skill) => kind == Kind::Skills && !keep.contains(&skill),
+            None => n.starts_with("kluris") && !keep.contains(&n.as_str()),
+        })
         .collect();
     names.sort();
     for name in names {
         let path = dest.path.join(&name);
         let generated = match kind {
+            _ if staged_skill(&name).is_some() => is_staging_dir(&path),
             Kind::Skills => is_generated_skill_dir(&path, &name),
             Kind::Workflows => is_generated_workflow_file(&path, &name),
         };
@@ -382,6 +388,31 @@ fn clear_folder(dest: &mut DestinationReport, kind: Kind, keep: &[&str]) {
                 .push(format!("cannot remove {}: {e}", path.display())),
         }
     }
+}
+
+/// The skill a staging (`.kluris-<brain>.tmp`) or set-aside
+/// (`.kluris-<brain>.old`) folder name belongs to.
+fn staged_skill(name: &str) -> Option<&str> {
+    let skill = name
+        .strip_prefix('.')?
+        .strip_suffix(".tmp")
+        .or_else(|| name.strip_prefix('.')?.strip_suffix(".old"))?;
+    skill.starts_with("kluris").then_some(skill)
+}
+
+/// A staging or set-aside folder an interrupted run left: a real folder
+/// holding nothing but, at most, a `SKILL.md` file (its text may be half
+/// written, so it is not looked at).
+fn is_staging_dir(path: &Path) -> bool {
+    if !fs::symlink_metadata(path).is_ok_and(|m| m.is_dir()) {
+        return false;
+    }
+    let Ok(entries) = fs::read_dir(path) else {
+        return false;
+    };
+    entries.into_iter().all(|entry| {
+        entry.is_ok_and(|e| e.file_name() == "SKILL.md" && e.file_type().is_ok_and(|t| t.is_file()))
+    })
 }
 
 /// How much of a SKILL.md or workflow is read to recognise it: the

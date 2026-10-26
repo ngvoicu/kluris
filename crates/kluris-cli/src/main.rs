@@ -136,6 +136,19 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    #[command(
+        args_override_self = true,
+        about = "Check prerequisites and refresh installed agent skills.",
+        long_about = DOCTOR_HELP
+    )]
+    Doctor {
+        /// Skip refreshing installed agent skills
+        #[arg(long = "no-refresh")]
+        no_refresh: bool,
+        /// JSON output
+        #[arg(long)]
+        json: bool,
+    },
     #[command(about = "Show help for kluris commands.")]
     Help {
         command: Option<String>,
@@ -209,6 +222,18 @@ const COMPANION_REMOVE_HELP: &str = "Remove a companion opt-in from one or more 
 Runs an interactive picker listing currently-enabled companions when no \
 NAME is given. The global companion copy under ~/.kluris/companions is \
 kept for cheap reuse.";
+
+/// v2's `doctor` docstring, for what v3's doctor does.
+const DOCTOR_HELP: &str = "Check prerequisites and refresh installed agent skills.
+
+Checks that git runs, that the first kluris on PATH is this one, and that \
+the config and every registered brain's kluris.yml read. Then refreshes the \
+companion playbooks and re-installs every brain's agent skill \
+(~/.agents/skills, plus the folders of the selected agents), removing the \
+copies Kluris 2 left in folders it no longer uses. This is the step after \
+an upgrade: run `kluris doctor` and everything is back in sync.
+
+Pass --no-refresh to run only the read-only checks.";
 
 /// v2's `wake-up` docstring.
 const WAKE_UP_HELP: &str = "Compact brain snapshot for agent session bootstrap.
@@ -515,6 +540,7 @@ fn run(cli: Cli) -> Result<(), CliError> {
             output,
             json,
         } => commands::mri::run(brain.as_deref(), output.as_deref(), json),
+        Command::Doctor { no_refresh, json } => commands::doctor::run(no_refresh, json),
         Command::Help { command, json } => commands::help::run(command.as_deref(), json),
     }
 }

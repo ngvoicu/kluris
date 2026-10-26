@@ -180,7 +180,7 @@ One entry per difference, under its own heading:
 
 ### PAR-025: root `kluris --help` lists only the ported commands (temporary, until Phase 4 ends)
 - Command: `kluris --help` (and `kluris` with no arguments, which prints the same list)
-- Differs: the Commands section lists only the commands Kluris 3 has ported so far (today `list`, `wake-up`, `search`, `status`, `companion`, `dream`, `mri`, `help`), with v2's one-line descriptions; v2 lists all 13 (with `pack`). `kluris help` (with and without `--json`) lists every command but `pack`, as decided (PAR-018). Temporary: by the end of Phase 4 every command exists and `kluris --help` lists exactly the SPEC acceptance list.
+- Differs: the Commands section lists only the commands Kluris 3 has ported so far (today `list`, `wake-up`, `search`, `status`, `companion`, `dream`, `mri`, `doctor`, `help`), with v2's one-line descriptions; v2 lists all 13 (with `pack`). `kluris help` (with and without `--json`) lists every command but `pack`, as decided (PAR-018). Temporary: by the end of Phase 4 every command exists and `kluris --help` lists exactly the SPEC acceptance list.
 - Decision: SPEC decision 2026-10-27 (tracebacks) row ("a temporary surface difference (root `kluris --help` listing only ported commands until Phase 4 ends) gets its own allowlist entry marked temporary"); SPEC Deviations [IMPL-K3-18]
 - Tests: `parity/test_list_status_help.py::test_root_help_flag` (each ported command's v2 line; no `pack`), `parity/test_mri.py::test_mri_is_in_the_root_help`
 
@@ -351,3 +351,39 @@ One entry per difference, under its own heading:
   - On the seven local brains this changes no count (`test_registered_brains`).
 - Decision: interview-01 #5 ("link checking flagging code blocks, `mailto:` and titled links"); research-03 §5 #32; the chief's brief for T-94 (URL-decoded paths; image links keep v2's behaviour, m-4524)
 - Tests: `crates/kluris-core/src/dream/links.rs` (unit tests), `crates/kluris-cli/tests/dream_resilience.rs::link_checking_ignores_code_other_schemes_and_titles_and_decodes_paths`, `parity/test_dream.py::test_link_checking`
+
+### PAR-050: `doctor` has no Python check, and git must run and exit 0
+- Command: `kluris doctor [--no-refresh] [--json]`
+- Differs: the `python` check is gone. The `git` check runs `git --version` and passes only when it exits 0 (detail: its trimmed stdout, as in v2); v2 passed any `git` that started. A `git` that runs and exits non-zero fails with ``"`git --version` failed (<exit status>)[: <trimmed stderr>]"``; one that cannot be started for another reason than not being found fails with `cannot run git: <error>`. Not found keeps v2's `git not found. Install: https://git-scm.com/downloads`.
+- Decision: interview-01 #8 (drop the Python check; a real git check); SPEC acceptance criteria ("git usable (real `git --version` exit 0) ... it has no Python check")
+- Tests: `crates/kluris-cli/tests/doctor.rs::{healthy_setup_passes_with_v2s_shape_and_no_python_check, a_git_that_runs_but_fails_fails_the_check, no_git_on_path_fails_with_v2s_text}`, `parity/test_doctor.py::{test_v2_home_is_migrated_by_doctor, test_a_failed_check_exits_1_on_both_sides}`
+
+### PAR-051: `doctor` warns when another `kluris` comes first on PATH
+- Command: `kluris doctor [--no-refresh] [--json]`
+- Differs: a new `path` check, second (where v2's `python` was). PATH entries are walked in order for `kluris` (Unix: a regular file with an execute bit, links followed) or `kluris.exe` (Windows); the first one found is compared with this binary (`current_exe`; same device and inode on Unix, the same canonical path without case on Windows). The same file: passes, the detail is that PATH entry. Another file: a warning naming it and this binary, saying to put this binary's folder before the other's in PATH or remove the other (`pipx uninstall kluris` for Kluris 2). None on PATH: a warning that this kluris is not on PATH. The other file is never read or run. A warning passes: in JSON `"passed": true` plus `"warning": true` (the only check entry with a fourth key), in text `  WARN path: <detail>`; it never changes `ok` or the exit code.
+- Decision: interview-01 #8 and #14 (warn, do not block, when another `kluris` shadows it); SPEC decision 2026-10-24 ("doctor PATH-shadow warning") and acceptance criteria ("warning naming the shadowing file otherwise")
+- Tests: `crates/kluris-cli/tests/doctor.rs::{a_kluris_earlier_on_path_is_named_as_a_warning, this_kluris_first_on_path_passes, a_kluris_that_is_not_executable_is_not_a_shadow, not_on_path_at_all_is_a_warning}`, `parity/test_doctor.py::test_v2_home_is_migrated_by_doctor`
+
+### PAR-052: `doctor` checks the config and each brain instead of creating the config folder
+- Command: `kluris doctor [--no-refresh] [--json]`
+- Differs: v2's `config_dir` check (`mkdir -p` of the config folder, detail the folder) is replaced by read-only checks: `config` (the global config reads; a missing file is an empty config; detail the config file path, or the `Cannot access config file ...`/`Invalid config file ...` error), then one `brain:<name>` per registered brain in config order (passes with the registered path as detail; fails with `brain path not found: <path>`, `brain path is not a directory: <path>`, or the `kluris.yml` error, a missing `kluris.yml` included). Nothing is created, so `--no-refresh` writes nothing even on a fresh HOME (v2 creates `~/.kluris`).
+- Decision: SPEC acceptance criteria ("kluris doctor reports: ... config readable"); chief's brief for T-97, 2026-10-26 (config check per brain; `--no-refresh` writes nothing)
+- Tests: `crates/kluris-cli/tests/doctor.rs::{a_missing_brain_path_fails_its_check, an_invalid_kluris_yml_fails_its_check, a_missing_kluris_yml_fails_its_check, an_unreadable_kluris_yml_fails_its_check, no_refresh_writes_nothing, no_refresh_on_a_fresh_home_creates_nothing}`, `parity/test_doctor.py::{test_v2_home_is_migrated_by_doctor, test_no_refresh_writes_nothing}`
+
+### PAR-053: `doctor` with a config that does not read skips the refresh
+- Command: `kluris doctor [--json]`
+- Differs: when the global config does not read, the `config` check fails, no brain is checked, nothing is refreshed or written, and a `skills` check fails with `refresh skipped: the config does not read` (`"skills": null` in the JSON); exit 1 after the full output. v2 prints nothing useful: `read_global_config` raises in the refresh (a traceback). With `--no-refresh` there is no `skills` check.
+- Decision: SPEC decision 2026-10-27 (every v2 traceback becomes a correct result or a clean Kluris error, allowlisted); an install from an empty config would remove every installed skill
+- Tests: `crates/kluris-cli/tests/doctor.rs::a_config_that_does_not_read_fails_and_nothing_is_refreshed`
+
+### PAR-054: `doctor`'s skills report
+- Command: `kluris doctor [--json]` (not `--no-refresh`)
+- Differs: the `skills` check keeps v2's detail format, `<n> files written for <agents> agents across <brains> brain(s)[ (failed: ...)]`, counted from v3's install: `<n>` is the skill copies written (no workflows), `<agents>` the registry agents whose own folders were written (PAR-030), and the failed list names folders (`~/`-relative, `/`-joined) where v2 named agents. It passes when no folder failed; a brain whose `kluris.yml` does not read is reported by its `brain:<name>` check (PAR-052), not again here. A new top-level JSON key after `companions`, `"skills"`: `{"agents": [...], "destinations": [{"path", "role", "written", "removed", "failed"}], "brain_errors": [{"brain", "error"}]}` (`path` absolute and `/`-joined; `role` one of `universal`, `agent:<a>`, `deselected:<a>`, `migration`), or `null` with `--no-refresh`. In text, under the skills line, one line per folder where something was written, removed or failed: `    ~/<folder>: written <names>; removed <names>; failed: <messages>`.
+- Decision: chief's brief for T-97, 2026-10-26 ("report written/removed/failed per destination and brain errors; a failed destination is a failed check"); SPEC acceptance criteria (doctor migrates a v2 install); PAR-030/PAR-031 for what the install does
+- Tests: `crates/kluris-cli/tests/doctor.rs::{healthy_setup_passes_with_v2s_shape_and_no_python_check, text_output_is_one_line_per_check, a_v2_layout_is_migrated_and_reported, removed_entries_are_listed_under_the_skills_line, a_failed_destination_fails_the_skills_check}`, `parity/test_doctor.py::{test_v2_home_is_migrated_by_doctor, test_text_output_keeps_v2s_lines}`
+
+### PAR-055: the skill install removes staging folders an interrupted run left
+- Command: every command that installs skills (`doctor`, `companion add|remove`; later `create`, `register`, `remove`)
+- Differs: in each folder the install writes or clears, a `.kluris-<brain>.tmp` or `.kluris-<brain>.old` entry for a skill the folder no longer holds is removed and listed in that folder's `removed`, when it is a real folder holding nothing but, at most, a `SKILL.md` file; anything else with such a name is kept. v2 never removes the staging folders of skills it no longer writes.
+- Decision: chief's brief for T-97, 2026-10-26 ("remove stale Kluris staging folders left by a crash"), from the T-90 result's known leftover
+- Tests: `crates/kluris-core/tests/skill_install.rs::{stale_staging_folders_of_gone_skills_are_cleared, staging_like_entries_that_are_not_kluris_are_kept}`, `crates/kluris-cli/tests/doctor.rs::stale_staging_folders_are_removed`

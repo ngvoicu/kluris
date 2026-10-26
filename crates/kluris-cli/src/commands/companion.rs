@@ -2,18 +2,17 @@
 //! (research-03 §1.7-1.9).
 
 use std::io;
-use std::path::PathBuf;
 
 use kluris_core::agents::install::{InstallRequest, install_skills, read_brain_configs};
 use kluris_core::companions::prompt::{Aborted, pick_to_add, pick_to_remove};
 use kluris_core::companions::{self, BrainOptIns, KNOWN, OptInBrain};
-use kluris_core::config::{home_dir, read_global_config};
+use kluris_core::config::read_global_config;
 use kluris_core::resolve::ResolvedBrain;
 
 use crate::error::CliError;
 use crate::output::human::{self, Painter};
 use crate::output::json::{self, Json};
-use crate::resolve::{AbortOnInterrupt, config_path, resolve_brains};
+use crate::resolve::{AbortOnInterrupt, config_path, copilot_home, home, resolve_brains};
 
 /// The NAME argument's value name: Click shows a `Choice`'s choices.
 pub const NAME_CHOICES: &str = "specmint-core|specmint-tdd|specmint-core-html|specmint-tdd-html";
@@ -32,13 +31,6 @@ fn name_required() -> CliError {
         "Companion name is required in non-interactive mode. Pass one of: {}",
         KNOWN.join(", ")
     ))
-}
-
-/// The HOME runtime files go under (v2 `_home_path`: `HOME` if set, else
-/// the OS home).
-fn home() -> Result<PathBuf, CliError> {
-    home_dir(std::env::var_os("HOME").as_deref(), std::env::home_dir())
-        .ok_or_else(|| CliError::new("Cannot find the home directory; set HOME."))
 }
 
 /// v2 `_wizard_can_prompt`: not `--json`, `KLURIS_NO_PROMPT` not `1`, and
@@ -77,9 +69,7 @@ fn cli_error(err: impl std::fmt::Display) -> CliError {
 fn refresh_skills(home: &std::path::Path) -> Result<(), CliError> {
     let config = read_global_config(&config_path()?).map_err(cli_error)?;
     let brains = read_brain_configs(&config);
-    let copilot_home = std::env::var_os("COPILOT_HOME")
-        .filter(|v| !v.is_empty())
-        .map(PathBuf::from);
+    let copilot_home = copilot_home();
     install_skills(&InstallRequest {
         config: &config,
         brains: &brains,

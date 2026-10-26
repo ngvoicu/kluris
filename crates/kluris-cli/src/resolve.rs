@@ -7,7 +7,7 @@
 use std::io::{self, IsTerminal, Write};
 use std::path::PathBuf;
 
-use kluris_core::config::{global_config_path, read_global_config};
+use kluris_core::config::{global_config_path, home_dir, read_global_config};
 use kluris_core::resolve::{Request, Resolution, ResolveError, ResolvedBrain, resolve};
 
 use crate::error::CliError;
@@ -20,6 +20,20 @@ pub fn config_path() -> Result<PathBuf, CliError> {
         std::env::home_dir(),
     )
     .ok_or_else(|| CliError::new("Cannot find the home directory; set HOME or KLURIS_CONFIG."))
+}
+
+/// The HOME runtime files go under (v2 `_home_path`: `HOME` if set, else
+/// the OS home).
+pub fn home() -> Result<PathBuf, CliError> {
+    home_dir(std::env::var_os("HOME").as_deref(), std::env::home_dir())
+        .ok_or_else(|| CliError::new("Cannot find the home directory; set HOME."))
+}
+
+/// `COPILOT_HOME`, when set and non-empty.
+pub fn copilot_home() -> Option<PathBuf> {
+    std::env::var_os("COPILOT_HOME")
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
 }
 
 fn cli_error(err: ResolveError) -> CliError {
