@@ -64,7 +64,7 @@ pub(crate) fn universal_newlines(text: &str) -> String {
 pub use crate::pycase::title as py_title;
 
 /// `Path(file).stem.replace("-", " ").title()`.
-fn stem_title(file: &str) -> String {
+pub(crate) fn stem_title(file: &str) -> String {
     let name = file.rsplit('/').next().unwrap_or(file);
     let stem = match name.rfind('.') {
         Some(dot) if dot > 0 && dot + 1 < name.len() => &name[..dot],
@@ -101,7 +101,7 @@ pub fn markdown_title(file: &str, body: &str) -> String {
 
 /// A top-level frontmatter value as v2 sees it after `_normalize_metadata`:
 /// a date or datetime is its ISO text.
-fn normalized_str(value: &Value) -> Option<String> {
+pub(crate) fn normalized_str(value: &Value) -> Option<String> {
     match value {
         Value::Str(s) => Some(s.clone()),
         Value::Date(d) => Some(date_iso(d)),

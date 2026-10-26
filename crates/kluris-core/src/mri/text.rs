@@ -4,6 +4,7 @@
 //! patterns written out by hand.
 
 use crate::frontmatter::py_splitlines;
+use crate::search::items::stem_title;
 use crate::yaml::is_py_space;
 
 /// The excerpt's cap, in characters.
@@ -129,15 +130,6 @@ fn id_anchor(text: &str) -> Option<usize> {
     at += ci(&text[at..], 'a')?;
     at += text[at..].starts_with('>').then_some(1)?;
     Some(at)
-}
-
-/// `Path(file_name).stem.replace("-", " ").title()`.
-pub(crate) fn stem_title(file_name: &str) -> String {
-    let stem = match file_name.rfind('.') {
-        Some(dot) if dot > 0 && dot + 1 < file_name.len() => &file_name[..dot],
-        _ => file_name,
-    };
-    crate::pycase::title(&stem.replace('-', " "))
 }
 
 /// v2's `neuron_excerpt.extract(path, body)`: the first `# ` heading (or the

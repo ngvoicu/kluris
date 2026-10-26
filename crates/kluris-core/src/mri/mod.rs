@@ -33,7 +33,7 @@ use crate::brain::store::BrainStore;
 use crate::frontmatter::{self, Frontmatter};
 use crate::json::{self, Json};
 use crate::pyrepr::py_str;
-use crate::search::items::universal_newlines;
+use crate::search::items::{normalized_str, stem_title, universal_newlines};
 use crate::yaml::{Map, Value, date_iso, datetime_iso, is_py_space};
 
 pub use text::{content_preview, excerpt};
@@ -219,17 +219,6 @@ fn list(meta: &Map, key: &str) -> Vec<Value> {
     }
 }
 
-/// A frontmatter string after v2's normalization (a top-level date is its
-/// ISO text); `None` for any other value.
-fn normalized_str(value: &Value) -> Option<String> {
-    match value {
-        Value::Str(s) => Some(s.clone()),
-        Value::Date(d) => Some(date_iso(d)),
-        Value::DateTime(dt) => Some(datetime_iso(dt, 'T')),
-        _ => None,
-    }
-}
-
 fn make_node(id: usize, file: &Neuron, read: Option<&Frontmatter>) -> Node {
     let parts: Vec<&str> = file.rel.split('/').collect();
     let file_name = parts.last().copied().unwrap_or_default().to_string();
@@ -244,7 +233,7 @@ fn make_node(id: usize, file: &Neuron, read: Option<&Frontmatter>) -> Node {
     let meta = read.map_or(&empty, |fm| &fm.meta);
     let body = read.map(|fm| content(fm, file.kind)).unwrap_or_default();
 
-    let display = text::stem_title(&file_name);
+    let display = stem_title(&file_name);
     let (authored, excerpt) = text::excerpt(&file_name, &body);
     let mut authored = if authored == display {
         String::new()
