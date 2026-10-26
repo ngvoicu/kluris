@@ -1,5 +1,6 @@
 //! Development tasks for the Kluris 3 workspace (`cargo xtask <task>`).
 
+mod brain_dump;
 mod config_rewrite;
 mod float_repr;
 mod windows;
@@ -10,6 +11,9 @@ use std::process::ExitCode;
 const USAGE: &str = "usage: cargo xtask <task>
 
 Tasks:
+  brain-dump --path <brain>
+      Print the brain model of a brain as JSON: its neurons, glossary
+      entries, deprecation issues and the neurons that could not be read.
   config-rewrite global <config.yml> | brain <brain dir>
       Read a config with kluris-core and write it back (for the parity
       harness: no kluris command writes a config yet).
@@ -35,6 +39,7 @@ fn main() -> ExitCode {
             println!("{USAGE}");
             return ExitCode::SUCCESS;
         }
+        Some("brain-dump") => brain_dump::main(&args[1..]),
         Some("config-rewrite") => config_rewrite::main(&args[1..]),
         Some("float-repr") => float_repr::main(&args[1..]),
         Some("windows") => return windows::main(&args[1..]),
