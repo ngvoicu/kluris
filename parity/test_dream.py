@@ -632,6 +632,12 @@ def assert_v2_traceback(outcome: Outcome, error: str) -> None:
     assert "Traceback" in r.stderr and error in r.stderr.strip().splitlines()[-1], r.stderr
 
 
+def lf(data: bytes) -> bytes:
+    """v2's bytes with CRLF read as LF: on Windows v2 writes markdown in text
+    mode (PAR-035)."""
+    return data.replace(b"\r\n", b"\n")
+
+
 NO_PARENT = "---\ncreated: '2026-01-01'\nupdated: '2026-01-01'\n---\n\n# Needs a parent\n"
 
 
@@ -681,7 +687,7 @@ def test_bom_file_keeps_one_block(sandbox):
     register(sandbox, [sandbox.work / "brains" / "calm"])
     v2, v3 = both(sandbox)
     assert v2.result.code == v3.result.code == 0
-    assert v2.result.tree["brains/calm/projects/bom.md"].count(b"---\n") == 4
+    assert lf(v2.result.tree["brains/calm/projects/bom.md"]).count(b"---\n") == 4
     assert v3.result.tree["brains/calm/projects/bom.md"] == (
         "\ufeff---\ncreated: '2026-01-01'\nparent: ./map.md\nupdated: '2026-02-03'\n---\n\n# Needs a parent\n"
     ).encode()
@@ -693,7 +699,7 @@ def test_first_body_line_keeps_its_indentation(sandbox):
     resilience_brain(sandbox, {"projects/code.md": "---\ncreated: '2026-01-01'\nupdated: '2026-01-01'\n---\n\n" + body})
     register(sandbox, [sandbox.work / "brains" / "calm"])
     v2, v3 = both(sandbox)
-    assert v2.result.tree["brains/calm/projects/code.md"].endswith(b"\n\nlet x = 1;\n    let y = 2;\n\nAfter.\n")
+    assert lf(v2.result.tree["brains/calm/projects/code.md"]).endswith(b"\n\nlet x = 1;\n    let y = 2;\n\nAfter.\n")
     assert v3.result.tree["brains/calm/projects/code.md"].endswith(("\n\n" + body).encode())
 
 
@@ -761,6 +767,7 @@ def test_link_checking(sandbox):
     resilience_brain(sandbox, {"projects/links.md": neuron("Links", body=body), "projects/my note.md": neuron("Note"),
                                "projects/pic.png": "png"})
     register(sandbox, [sandbox.work / "brains" / "calm"])
+    before = frozen(sandbox)
     v2, v3 = both(sandbox)
     targets = lambda o: [b["target"] for b in json.loads(o.result.stdout)["broken_synapses_detail"]]  # noqa: E731
     assert targets(v2) == ["./nope1.md", "./nope2.md", "mailto:a@b.c", "ftp://x/y", './alpha.md "Alpha"',
@@ -770,7 +777,7 @@ def test_link_checking(sandbox):
     for doc in (j2, j3):
         del doc["broken_synapses"], doc["broken_synapses_detail"]
     assert j3 == j2
-    assert v3.result.tree == v2.result.tree
+    compare_trees(v2.result.tree, v3.result.tree, before)
 
 
 # --- the brains registered on this machine -----------------------------------------
