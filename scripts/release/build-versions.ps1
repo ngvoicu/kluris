@@ -6,11 +6,14 @@
 #
 #   powershell -NoProfile -ExecutionPolicy Bypass -File scripts\release\build-versions.ps1 -Out <dir> -Versions 3.0.0,3.0.1
 #
+# -Versions is one comma-separated word: `-File` hands a script its
+# arguments as strings, never as arrays.
+#
 # The copies build into this tree's target folder (CARGO_TARGET_DIR, else
 # target\) and use its tools (KLURIS_TOOLS_DIR, else target\tools).
 param(
     [Parameter(Mandatory = $true)][string]$Out,
-    [Parameter(Mandatory = $true)][string[]]$Versions
+    [Parameter(Mandatory = $true)][string]$Versions
 )
 
 $ErrorActionPreference = 'Stop'
@@ -31,7 +34,7 @@ $utf8 = New-Object Text.UTF8Encoding($false)
 # PowerShell 5.1 turns a native command's redirected stderr into an error).
 $ErrorActionPreference = 'Continue'
 
-foreach ($version in $Versions) {
+foreach ($version in @($Versions -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })) {
     if ($version -notmatch '^[0-9][0-9A-Za-z.+-]*$') { throw "not a version: '$version'" }
     $copy = Join-Path $work "kluris-$version"
     $null = New-Item -ItemType Directory -Force -Path $copy
