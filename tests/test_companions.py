@@ -328,7 +328,7 @@ def test_companion_add_html_updates_brain_and_runtime(tmp_path, monkeypatch):
     ])
 
     assert result.exit_code == 0, result.output
-    payload = json.loads(result.output)
+    payload = json.loads(result.stdout)
     assert payload["name"] == "specmint-core-html"
     assert read_brain_config(brain).companions == ["specmint-core-html"]
     installed = tmp_path / ".kluris" / "companions" / "specmint-core-html"
@@ -360,7 +360,7 @@ def test_companion_list_and_remove_support_html_companions(tmp_path, monkeypatch
 
     listed = runner.invoke(cli, ["companion", "list", "--json"])
     assert listed.exit_code == 0, listed.output
-    payload = json.loads(listed.output)
+    payload = json.loads(listed.stdout)
     assert payload["known"] == list(companions.KNOWN)
     assert "specmint-tdd-html" in payload["installed"]
     assert payload["brains"] == [{
@@ -373,7 +373,7 @@ def test_companion_list_and_remove_support_html_companions(tmp_path, monkeypatch
         "companion", "remove", "specmint-tdd-html", "--brain", "brain", "--json",
     ])
     assert removed.exit_code == 0, removed.output
-    assert json.loads(removed.output)["name"] == "specmint-tdd-html"
+    assert json.loads(removed.stdout)["name"] == "specmint-tdd-html"
     assert read_brain_config(brain).companions == []
 
 

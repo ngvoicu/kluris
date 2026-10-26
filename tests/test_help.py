@@ -25,7 +25,7 @@ def test_help_json(tmp_path, monkeypatch):
     monkeypatch.setenv("KLURIS_CONFIG", str(tmp_path / "config.yml"))
     runner = CliRunner()
     result = runner.invoke(cli, ["help", "--json"])
-    data = json.loads(result.output)
+    data = json.loads(result.stdout)
     assert data["ok"] is True
     assert len(data["commands"]) == 13
     names = {c["name"] for c in data["commands"]}

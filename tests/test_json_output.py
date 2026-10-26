@@ -17,7 +17,7 @@ def test_create_json(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
     runner = CliRunner()
     result = runner.invoke(cli, ["create", "my-brain", "--path", str(tmp_path), "--json"])
-    data = json.loads(result.output)
+    data = json.loads(result.stdout)
     assert data["ok"] is True
     assert "name" in data
     assert "path" in data
@@ -31,7 +31,7 @@ def test_list_json(tmp_path, monkeypatch):
     runner = CliRunner()
     _create_brain(runner, tmp_path)
     result = runner.invoke(cli, ["list", "--json"])
-    data = json.loads(result.output)
+    data = json.loads(result.stdout)
     assert data["ok"] is True
     assert "brains" in data
     assert data["brains"][0]["companions"] == []
@@ -43,7 +43,7 @@ def test_status_json(tmp_path, monkeypatch):
     runner = CliRunner()
     _create_brain(runner, tmp_path)
     result = runner.invoke(cli, ["status", "--json"])
-    data = json.loads(result.output)
+    data = json.loads(result.stdout)
     assert data["ok"] is True
     assert "brains" in data
     assert "lobes" in data["brains"][0]
@@ -56,7 +56,7 @@ def test_dream_json(tmp_path, monkeypatch):
     runner = CliRunner()
     _create_brain(runner, tmp_path)
     result = runner.invoke(cli, ["dream", "--json"])
-    data = json.loads(result.output)
+    data = json.loads(result.stdout)
     assert data["ok"] is True
     assert "healthy" in data
     assert "broken_synapses" in data
@@ -72,7 +72,7 @@ def test_mri_json(tmp_path, monkeypatch):
     runner = CliRunner()
     _create_brain(runner, tmp_path)
     result = runner.invoke(cli, ["mri", "--json"])
-    data = json.loads(result.output)
+    data = json.loads(result.stdout)
     assert data["ok"] is True
     assert "brains" in data
     assert "nodes" in data["brains"][0]
@@ -85,13 +85,13 @@ def test_companion_json(tmp_path, monkeypatch):
     runner = CliRunner()
     _create_brain(runner, tmp_path)
     result = runner.invoke(cli, ["companion", "add", "specmint-core", "--json"])
-    data = json.loads(result.output)
+    data = json.loads(result.stdout)
     assert data["ok"] is True
     assert data["name"] == "specmint-core"
     assert data["opted_in"] is True
 
     result = runner.invoke(cli, ["companion", "remove", "specmint-core", "--json"])
-    data = json.loads(result.output)
+    data = json.loads(result.stdout)
     assert data["ok"] is True
     assert data["opted_in"] is False
     assert data["files_kept"] is True
@@ -103,7 +103,7 @@ def test_remove_json(tmp_path, monkeypatch):
     runner = CliRunner()
     _create_brain(runner, tmp_path)
     result = runner.invoke(cli, ["remove", "my-brain", "--json"])
-    data = json.loads(result.output)
+    data = json.loads(result.stdout)
     assert data["ok"] is True
     assert "name" in data
     assert "was_default" not in data
@@ -113,7 +113,7 @@ def test_help_json(tmp_path, monkeypatch):
     monkeypatch.setenv("KLURIS_CONFIG", str(tmp_path / "config.yml"))
     runner = CliRunner()
     result = runner.invoke(cli, ["help", "--json"])
-    data = json.loads(result.output)
+    data = json.loads(result.stdout)
     assert data["ok"] is True
     assert "commands" in data
     assert len(data["commands"]) == 13
@@ -128,7 +128,7 @@ def test_doctor_json(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
     runner = CliRunner()
     result = runner.invoke(cli, ["doctor", "--json"])
-    data = json.loads(result.output)
+    data = json.loads(result.stdout)
     assert data["ok"] is True
     assert "checks" in data
     assert "companions" in data

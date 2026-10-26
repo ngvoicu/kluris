@@ -80,7 +80,7 @@ def test_companion_add_noninteractive_json(tmp_path, monkeypatch):
 
     result = runner.invoke(cli, ["companion", "add", "specmint-core", "--json"])
 
-    data = json.loads(result.output)
+    data = json.loads(result.stdout)
     assert data["ok"] is True
     assert data["name"] == "specmint-core"
     assert data["brains"] == ["my-brain"]
@@ -150,7 +150,7 @@ def test_companion_add_json_without_name_errors(tmp_path, monkeypatch):
     result = runner.invoke(cli, ["companion", "add", "--json"])
 
     assert result.exit_code != 0
-    data = json.loads(result.output)
+    data = json.loads(result.stdout)
     assert data["ok"] is False
     assert "non-interactive" in data["error"].lower()
 

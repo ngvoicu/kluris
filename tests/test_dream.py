@@ -29,7 +29,7 @@ def test_dream_json(tmp_path, monkeypatch):
     runner = CliRunner()
     create_test_brain(runner, "my-brain", tmp_path)
     result = runner.invoke(cli, ["dream", "--json"])
-    data = json.loads(result.output)
+    data = json.loads(result.stdout)
     assert "healthy" in data
     assert "broken_synapses" in data
     assert "fixes" in data
@@ -118,7 +118,7 @@ def test_dream_reports_broken_links(tmp_path, monkeypatch):
         "# Bad\n\n[broken](./nonexistent.md)\n", encoding="utf-8"
     )
     result = runner.invoke(cli, ["dream", "--json"])
-    data = json.loads(result.output)
+    data = json.loads(result.stdout)
     assert data["broken_synapses"] >= 1
     # --json payload now also carries the per-entry detail agents use to repair.
     assert data["broken_synapses_detail"]
@@ -140,7 +140,7 @@ def test_dream_broken_only_json_returns_filtered_payload(tmp_path, monkeypatch):
         "# Bad\n\n[broken](./nonexistent.md)\n", encoding="utf-8"
     )
     result = runner.invoke(cli, ["dream", "--json", "--broken-only"])
-    data = json.loads(result.output)
+    data = json.loads(result.stdout)
     assert data["ok"] is True
     assert data["broken_synapses_count"] >= 1
     assert data["broken_synapses"]
@@ -174,7 +174,7 @@ def test_dream_fixes_one_way_synapse(tmp_path, monkeypatch):
         "---\nparent: ./map.md\nrelated: []\ntags: []\ncreated: 2026-04-01\nupdated: 2026-04-01\n---\n# B\n", encoding="utf-8"
     )
     result = runner.invoke(cli, ["dream", "--json"])
-    data = json.loads(result.output)
+    data = json.loads(result.stdout)
     meta, _ = read_frontmatter(tmp_path / "my-brain" / "knowledge" / "b.md")
     assert result.exit_code == 0
     assert data["one_way_synapses"] == 0
@@ -194,7 +194,7 @@ def test_dream_adds_missing_parent_frontmatter(tmp_path, monkeypatch):
     )
 
     result = runner.invoke(cli, ["dream", "--json"])
-    data = json.loads(result.output)
+    data = json.loads(result.stdout)
     meta, _ = read_frontmatter(neuron)
 
     assert result.exit_code == 0
@@ -219,7 +219,7 @@ def test_dream_fixes_orphans_by_regenerating_parent_map(tmp_path, monkeypatch):
     )
 
     result = runner.invoke(cli, ["dream", "--json"])
-    data = json.loads(result.output)
+    data = json.loads(result.stdout)
     map_content = (tmp_path / "my-brain" / "projects" / "map.md").read_text(encoding="utf-8")
 
     assert result.exit_code == 0
@@ -277,7 +277,7 @@ def test_dream_reports_broken_related_synapse(tmp_path, monkeypatch):
     )
 
     result = runner.invoke(cli, ["dream", "--json"])
-    data = json.loads(result.output)
+    data = json.loads(result.stdout)
 
     assert result.exit_code == 1
     assert data["broken_synapses"] >= 1
@@ -367,7 +367,7 @@ def test_dream_reports_deprecation_warnings_json(tmp_path, monkeypatch):
     )
 
     result = runner.invoke(cli, ["dream", "--json"])
-    data = json.loads(result.output)
+    data = json.loads(result.stdout)
 
     assert "deprecation_issues" in data
     assert data["deprecation_issues"] >= 1
@@ -404,7 +404,7 @@ def test_dream_no_deprecation_issues_on_clean_brain(tmp_path, monkeypatch):
     runner = CliRunner()
     create_test_brain(runner, "my-brain", tmp_path)
     result = runner.invoke(cli, ["dream", "--json"])
-    data = json.loads(result.output)
+    data = json.loads(result.stdout)
     assert data["deprecation_issues"] == 0
 
 
@@ -432,7 +432,7 @@ def test_dream_mixed_structural_and_deprecation_issues(tmp_path, monkeypatch):
     )
 
     result = runner.invoke(cli, ["dream", "--json"])
-    data = json.loads(result.output)
+    data = json.loads(result.stdout)
 
     # Structural issue dominates exit/healthy
     assert result.exit_code == 1

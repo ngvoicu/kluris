@@ -44,7 +44,7 @@ def test_mri_json(tmp_path, monkeypatch):
     runner = CliRunner()
     create_test_brain(runner, "my-brain", tmp_path)
     result = runner.invoke(cli, ["mri", "--json"])
-    data = json.loads(result.output)
+    data = json.loads(result.stdout)
     assert data["ok"] is True
     # Unified schema: mri always emits {ok, brains: [...]} regardless of brain count.
     assert "brains" in data
@@ -67,7 +67,7 @@ def test_mri_runs_dream_preflight(tmp_path, monkeypatch):
         encoding="utf-8",
     )
     result = runner.invoke(cli, ["mri", "--json"])
-    data = json.loads(result.output)
+    data = json.loads(result.stdout)
     map_content = (tmp_path / "my-brain" / "projects" / "map.md").read_text(encoding="utf-8")
 
     assert result.exit_code == 0
@@ -87,7 +87,7 @@ def test_mri_brain_all_emits_single_json_envelope(tmp_path, monkeypatch):
     result = runner.invoke(cli, ["mri", "--brain", "all", "--json"])
     assert result.exit_code == 0
     # Must parse as a single JSON document (no concatenated objects)
-    data = json.loads(result.output)
+    data = json.loads(result.stdout)
     assert data["ok"] is True
     assert "brains" in data
     assert len(data["brains"]) == 2

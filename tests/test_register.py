@@ -334,7 +334,7 @@ def test_register_json_output(tmp_path, monkeypatch):
     result = runner.invoke(cli, ["register", str(source), "--json"])
 
     assert result.exit_code == 0, result.output
-    payload = json_lib.loads(result.output.strip())
+    payload = json_lib.loads(result.stdout.strip())
     assert payload["ok"] is True
     assert payload["name"] == "source-brain"
     assert Path(payload["path"]).resolve() == source.resolve()

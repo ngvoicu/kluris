@@ -222,7 +222,7 @@ def test_large_brain_wake_up_json_schema(tmp_path, monkeypatch):
 
     result = runner.invoke(cli, ["wake-up", "--json", "--brain", "large-brain"])
     assert result.exit_code == 0, result.output
-    data = json.loads(result.output)
+    data = json.loads(result.stdout)
     assert "total_yaml_neurons" in data
     assert data["total_yaml_neurons"] == large_brain_expected_counts()["yaml_neurons"]
     # Each lobe entry has a yaml_count

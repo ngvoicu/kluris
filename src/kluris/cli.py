@@ -224,8 +224,31 @@ def _sync_brain_state(brain_path: Path, brain_config) -> dict:
     }
 
 
+SUNSET_NOTICE = (
+    "kluris: Kluris 3 is a native app — uninstall this version "
+    "(pipx uninstall kluris / uv tool uninstall kluris) and install from "
+    "https://kluris.ngvoicu.dev"
+)
+
+
+def _print_sunset_notice() -> None:
+    """Emit the Kluris 3 sunset notice on stderr unless opted out."""
+    import os
+    if os.environ.get("KLURIS_NO_SUNSET_NOTICE") == "1":
+        return
+    click.echo(SUNSET_NOTICE, err=True)
+
+
 class KlurisGroup(click.Group):
     """Custom group that outputs JSON errors when --json is in args."""
+
+    def main(self, *args, **kwargs):
+        # The sunset notice fires here — before parsing — so every path is
+        # covered: eager --version/--help exits, usage errors, and the JSON
+        # error path. main() runs once per process; nested groups only ever
+        # get invoke(), so the notice can never print twice.
+        _print_sunset_notice()
+        return super().main(*args, **kwargs)
 
     def invoke(self, ctx):
         # Capture raw subcommand args before Click consumes them so we can

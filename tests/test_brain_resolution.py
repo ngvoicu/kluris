@@ -15,7 +15,7 @@ def test_explicit_brain_flag(tmp_path, monkeypatch):
     create_test_brain(runner, "brain-a", tmp_path)
     create_test_brain(runner, "brain-b", tmp_path)
     result = runner.invoke(cli, ["status", "--brain", "brain-b", "--json"])
-    data = json.loads(result.output)
+    data = json.loads(result.stdout)
     assert data["brains"][0]["name"] == "brain-b"
 
 
@@ -25,7 +25,7 @@ def test_single_brain_auto(tmp_path, monkeypatch):
     runner = CliRunner()
     create_test_brain(runner, "only-brain", tmp_path)
     result = runner.invoke(cli, ["status", "--json"])
-    data = json.loads(result.output)
+    data = json.loads(result.stdout)
     assert len(data["brains"]) == 1
 
 
@@ -99,7 +99,7 @@ def test_multi_brain_json_no_brain_errors(tmp_path, monkeypatch):
     create_test_brain(runner, "brain-b", tmp_path)
     result = runner.invoke(cli, ["status", "--json"])
     assert result.exit_code != 0
-    data = json.loads(result.output)
+    data = json.loads(result.stdout)
     assert data["ok"] is False
     assert "Multiple brains" in data["error"]
 
@@ -136,7 +136,7 @@ def test_brain_all_on_fan_out(tmp_path, monkeypatch):
     create_test_brain(runner, "brain-b", tmp_path)
     result = runner.invoke(cli, ["status", "--brain", "all", "--json"])
     assert result.exit_code == 0
-    data = json.loads(result.output)
+    data = json.loads(result.stdout)
     assert data["ok"] is True
     names = [b["name"] for b in data["brains"]]
     assert "brain-a" in names

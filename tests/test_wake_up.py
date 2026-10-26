@@ -40,7 +40,7 @@ def test_wake_up_json_schema(temp_brain, cli_runner):
 
     result = cli_runner.invoke(cli, ["wake-up", "--json"])
     assert result.exit_code == 0
-    data = json.loads(result.output)
+    data = json.loads(result.stdout)
 
     assert data["ok"] is True
     assert data["name"] == "test-brain"
@@ -72,7 +72,7 @@ def test_wake_up_recent_sorted_newest_first(temp_brain, cli_runner):
     _write_neuron(temp_brain, "knowledge/middle.md", "Middle", updated="2026-03-15")
 
     result = cli_runner.invoke(cli, ["wake-up", "--json"])
-    data = json.loads(result.output)
+    data = json.loads(result.stdout)
     recent = data["recent"]
     assert recent[0]["path"] == "knowledge/newer.md"
     assert recent[1]["path"] == "knowledge/middle.md"
@@ -90,7 +90,7 @@ def test_wake_up_recent_limited_to_five(temp_brain, cli_runner):
         )
 
     result = cli_runner.invoke(cli, ["wake-up", "--json"])
-    data = json.loads(result.output)
+    data = json.loads(result.stdout)
     assert len(data["recent"]) == 5
     # Newest (day 10) should be first
     assert data["recent"][0]["path"] == "knowledge/neuron-09.md"
@@ -105,7 +105,7 @@ def test_wake_up_lobes_reflect_research_scaffold(tmp_path, temp_config, cli_runn
 
     result = cli_runner.invoke(cli, ["wake-up", "--brain", "research-brain", "--json"])
     assert result.exit_code == 0
-    data = json.loads(result.output)
+    data = json.loads(result.stdout)
     assert "type" not in data
     assert "type_structure" not in data
     lobe_names = {lobe["name"] for lobe in data["lobes"]}
@@ -132,7 +132,7 @@ def test_wake_up_lobes_reflect_live_changes(tmp_path, temp_config, cli_runner, m
 
     result = cli_runner.invoke(cli, ["wake-up", "--brain", "live-brain", "--json"])
     assert result.exit_code == 0
-    data = json.loads(result.output)
+    data = json.loads(result.stdout)
     lobe_names = {lobe["name"] for lobe in data["lobes"]}
     assert "monitoring" in lobe_names
     descs = {l["name"]: l["description"] for l in data["lobes"]}
@@ -147,7 +147,7 @@ def test_wake_up_lobes_include_description(tmp_path, temp_config, cli_runner, mo
 
     result = cli_runner.invoke(cli, ["wake-up", "--json"])
     assert result.exit_code == 0
-    data = json.loads(result.output)
+    data = json.loads(result.stdout)
     descs = {l["name"]: l["description"] for l in data["lobes"]}
     assert "Hosting" in descs.get("infrastructure", "")
     assert "Decisions" in descs.get("knowledge", "")
@@ -165,7 +165,7 @@ def test_wake_up_lobes_description_legacy_body_only(temp_brain, cli_runner):
     )
     result = cli_runner.invoke(cli, ["wake-up", "--json"])
     assert result.exit_code == 0
-    data = json.loads(result.output)
+    data = json.loads(result.stdout)
     knowledge = next(l for l in data["lobes"] if l["name"] == "knowledge")
     assert "Decisions" in knowledge["description"]
 
@@ -179,7 +179,7 @@ def test_wake_up_targets_named_brain(tmp_path, temp_config, cli_runner, monkeypa
 
     result = cli_runner.invoke(cli, ["wake-up", "--brain", "brain-b", "--json"])
     assert result.exit_code == 0
-    data = json.loads(result.output)
+    data = json.loads(result.stdout)
     assert data["name"] == "brain-b"
     assert "is_default" not in data
 
@@ -188,7 +188,7 @@ def test_wake_up_unknown_brain_errors(temp_brain, cli_runner):
     """Unknown brain name exits non-zero with clear error."""
     result = cli_runner.invoke(cli, ["wake-up", "--brain", "nonexistent", "--json"])
     assert result.exit_code != 0
-    data = json.loads(result.output)
+    data = json.loads(result.stdout)
     assert data["ok"] is False
     assert "nonexistent" in data["error"]
 
@@ -197,7 +197,7 @@ def test_wake_up_no_brains_errors(temp_config, cli_runner):
     """No brains registered -> error."""
     result = cli_runner.invoke(cli, ["wake-up", "--json"])
     assert result.exit_code != 0
-    data = json.loads(result.output)
+    data = json.loads(result.stdout)
     assert data["ok"] is False
 
 
@@ -222,7 +222,7 @@ def test_wake_up_reports_deprecation_count(temp_brain, cli_runner):
 
     result = cli_runner.invoke(cli, ["wake-up", "--json"])
     assert result.exit_code == 0
-    data = json.loads(result.output)
+    data = json.loads(result.stdout)
     assert "deprecation_count" in data
     assert data["deprecation_count"] >= 1
 
@@ -230,7 +230,7 @@ def test_wake_up_reports_deprecation_count(temp_brain, cli_runner):
 def test_wake_up_deprecation_count_zero_on_clean_brain(temp_brain, cli_runner):
     """Clean brain must report deprecation_count == 0, not omit the field."""
     result = cli_runner.invoke(cli, ["wake-up", "--json"])
-    data = json.loads(result.output)
+    data = json.loads(result.stdout)
     assert data["deprecation_count"] == 0
 
 
@@ -238,7 +238,7 @@ def test_wake_up_includes_brain_md_body(temp_brain, cli_runner):
     """brain.md body is returned in the snapshot so the agent doesn't re-read it."""
     # temp_brain's brain.md already contains `# Test Brain`
     result = cli_runner.invoke(cli, ["wake-up", "--json"])
-    data = json.loads(result.output)
+    data = json.loads(result.stdout)
     assert "brain_md" in data
     assert isinstance(data["brain_md"], str)
     assert "Test Brain" in data["brain_md"]
@@ -252,7 +252,7 @@ def test_wake_up_brain_md_absent_returns_empty_string(temp_brain, cli_runner):
     (temp_brain / "brain.md").unlink()
     result = cli_runner.invoke(cli, ["wake-up", "--json"])
     assert result.exit_code == 0
-    data = json.loads(result.output)
+    data = json.loads(result.stdout)
     assert data["brain_md"] == ""
 
 
@@ -263,7 +263,7 @@ def test_wake_up_brain_md_is_truncated_when_huge(temp_brain, cli_runner):
     huge += "x" * 10000  # 10 KB of body content
     (temp_brain / "brain.md").write_text(huge, encoding="utf-8")
     result = cli_runner.invoke(cli, ["wake-up", "--json"])
-    data = json.loads(result.output)
+    data = json.loads(result.stdout)
     # Body capped at 4000 bytes + a small truncation marker
     assert len(data["brain_md"].encode("utf-8")) < 4200
     assert "truncated" in data["brain_md"]
@@ -281,7 +281,7 @@ def test_wake_up_includes_glossary_table_format(temp_brain, cli_runner):
         encoding="utf-8",
     )
     result = cli_runner.invoke(cli, ["wake-up", "--json"])
-    data = json.loads(result.output)
+    data = json.loads(result.stdout)
     assert "glossary" in data
     terms = {e["term"]: e["definition"] for e in data["glossary"]}
     assert terms.get("SIT", "").startswith("System integration")
@@ -301,7 +301,7 @@ def test_wake_up_includes_glossary_bold_dash_format(temp_brain, cli_runner):
         encoding="utf-8",
     )
     result = cli_runner.invoke(cli, ["wake-up", "--json"])
-    data = json.loads(result.output)
+    data = json.loads(result.stdout)
     terms = {e["term"]: e["definition"] for e in data["glossary"]}
     assert "Synapse" in terms
     assert "Lobe" in terms
@@ -311,7 +311,7 @@ def test_wake_up_includes_glossary_bold_dash_format(temp_brain, cli_runner):
 def test_wake_up_glossary_empty_when_no_entries(temp_brain, cli_runner):
     """Brain with only the scaffolded glossary (no entries) returns an empty list, not an error."""
     result = cli_runner.invoke(cli, ["wake-up", "--json"])
-    data = json.loads(result.output)
+    data = json.loads(result.stdout)
     assert "glossary" in data
     assert isinstance(data["glossary"], list)
     assert data["glossary"] == []
@@ -325,7 +325,7 @@ def test_wake_up_includes_deprecation_list(temp_brain, cli_runner):
         encoding="utf-8",
     )
     result = cli_runner.invoke(cli, ["wake-up", "--json"])
-    data = json.loads(result.output)
+    data = json.loads(result.stdout)
     assert "deprecation" in data
     assert isinstance(data["deprecation"], list)
     assert len(data["deprecation"]) == data["deprecation_count"]
@@ -337,7 +337,7 @@ def test_wake_up_includes_deprecation_list(temp_brain, cli_runner):
 def test_wake_up_deprecation_list_empty_on_clean_brain(temp_brain, cli_runner):
     """Clean brain returns deprecation: [] AND deprecation_count: 0 (both fields present)."""
     result = cli_runner.invoke(cli, ["wake-up", "--json"])
-    data = json.loads(result.output)
+    data = json.loads(result.stdout)
     assert data["deprecation"] == []
     assert data["deprecation_count"] == 0
 
@@ -355,7 +355,7 @@ def test_wake_up_stale_brain_path_returns_json_error(tmp_path, temp_config, cli_
 
     result = cli_runner.invoke(cli, ["wake-up", "--json"])
     assert result.exit_code != 0
-    data = json.loads(result.output)
+    data = json.loads(result.stdout)
     assert data["ok"] is False
     assert "ghost-brain" in data["error"] or "path" in data["error"].lower()
 
@@ -380,7 +380,7 @@ def test_wake_up_counts_opted_in_yaml_in_lobes(temp_brain, cli_runner):
 
     result = cli_runner.invoke(cli, ["wake-up", "--json"])
     assert result.exit_code == 0, result.output
-    data = json.loads(result.output)
+    data = json.loads(result.stdout)
 
     knowledge = next(l for l in data["lobes"] if l["name"] == "knowledge")
     # neurons total includes the yaml neuron but not the raw yaml
@@ -401,7 +401,7 @@ def test_wake_up_recent_entries_include_file_type(temp_brain, cli_runner):
 
     result = cli_runner.invoke(cli, ["wake-up", "--json"])
     assert result.exit_code == 0, result.output
-    data = json.loads(result.output)
+    data = json.loads(result.stdout)
 
     types = {r.get("file_type") for r in data["recent"]}
     # Both file types should appear in recent
@@ -421,7 +421,7 @@ def test_wake_up_excludes_kluris_yml(temp_brain, cli_runner):
 
     result = cli_runner.invoke(cli, ["wake-up", "--json"])
     assert result.exit_code == 0, result.output
-    data = json.loads(result.output)
+    data = json.loads(result.stdout)
     # kluris.yml must not appear in any lobe's contents nor in recent.
     for lobe in data["lobes"]:
         assert lobe["name"] != "kluris.yml"

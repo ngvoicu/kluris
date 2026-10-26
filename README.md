@@ -1,3 +1,5 @@
+> ⚠️ **[Kluris 3](https://kluris.ngvoicu.dev) is the current version** — a native app installed from <https://kluris.ngvoicu.dev>. This Python package is no longer updated: uninstall it (`pipx uninstall kluris` / `uv tool uninstall kluris`) and install Kluris 3 instead.
+
 # Kluris
 
 > Kluris turns your AI agents into a subject matter expert that never sleeps and never quits.

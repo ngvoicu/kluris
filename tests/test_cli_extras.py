@@ -94,7 +94,7 @@ def test_version_does_not_mention_companions():
     result = runner.invoke(cli, ["--version"])
     assert result.exit_code == 0
     import kluris
-    assert result.output.strip() == f"kluris {kluris.__version__}"
+    assert result.stdout.strip() == f"kluris {kluris.__version__}"
     assert "specmint-core" not in result.output
     assert "specmint-tdd" not in result.output
 

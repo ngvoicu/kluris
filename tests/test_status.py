@@ -30,7 +30,7 @@ def test_status_json(tmp_path, monkeypatch):
     create_test_brain(runner, "my-brain", tmp_path)
     result = runner.invoke(cli, ["status", "--json"])
     import json
-    data = json.loads(result.output)
+    data = json.loads(result.stdout)
     assert data["ok"] is True
     assert "brains" in data
     # `type` was dropped from the BrainEntry / status payload in 2.16.0.
@@ -59,7 +59,7 @@ def test_status_no_git_brain(tmp_path, monkeypatch):
                         "--description", "test", "--no-git", "--json"])
     result = runner.invoke(cli, ["status", "--json"])
     import json
-    data = json.loads(result.output)
+    data = json.loads(result.stdout)
     assert result.exit_code == 0
     assert data["brains"][0]["git_enabled"] is False
     assert data["brains"][0]["recent_commits"] == []
@@ -87,6 +87,6 @@ def test_status_ignores_hidden_and_tooling_dirs(tmp_path, monkeypatch):
 
     result = runner.invoke(cli, ["status", "--json"])
     import json
-    data = json.loads(result.output)
+    data = json.loads(result.stdout)
     # Baseline brain has no neurons under test fixture so count must be 0
     assert data["brains"][0]["neurons"] == 0

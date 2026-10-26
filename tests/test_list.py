@@ -31,7 +31,7 @@ def test_list_json(tmp_path, monkeypatch):
     runner = CliRunner()
     create_test_brain(runner, "my-brain", tmp_path)
     result = runner.invoke(cli, ["list", "--json"])
-    data = json.loads(result.output)
+    data = json.loads(result.stdout)
     assert data["ok"] is True
     assert len(data["brains"]) == 1
     assert data["brains"][0]["companions"] == []
@@ -70,6 +70,6 @@ def test_list_shows_companions(tmp_path, monkeypatch):
     assert "specmint-core" in result.output
 
     result = runner.invoke(cli, ["list", "--json"])
-    data = json.loads(result.output)
+    data = json.loads(result.stdout)
     assert data["brains"][0]["companions"] == ["specmint-core"]
 

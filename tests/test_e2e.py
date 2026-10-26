@@ -76,12 +76,12 @@ def test_multi_brain(tmp_path, monkeypatch):
     create_test_brain(runner, "brain-b", tmp_path)
 
     result = runner.invoke(cli, ["list", "--json"])
-    data = json.loads(result.output)
+    data = json.loads(result.stdout)
     assert len(data["brains"]) == 2
 
     runner.invoke(cli, ["remove", "brain-a"])
 
     result = runner.invoke(cli, ["list", "--json"])
-    data = json.loads(result.output)
+    data = json.loads(result.stdout)
     assert len(data["brains"]) == 1
     assert data["brains"][0]["name"] == "brain-b"

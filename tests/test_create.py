@@ -42,7 +42,7 @@ def test_create_prints_learn_hint(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
     runner = CliRunner()
     result = create_test_brain(runner, "my-brain", tmp_path)
-    data = json.loads(result.output)
+    data = json.loads(result.stdout)
     assert data["ok"] is True
 
 
@@ -75,7 +75,7 @@ def test_create_json(tmp_path, monkeypatch):
     runner = CliRunner()
     result = runner.invoke(cli, ["create", "my-brain", "--path", str(tmp_path), "--json"])
     assert result.exit_code == 0
-    data = json.loads(result.output)
+    data = json.loads(result.stdout)
     assert data["ok"] is True
     assert data["name"] == "my-brain"
 

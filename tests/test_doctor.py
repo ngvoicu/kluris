@@ -20,7 +20,7 @@ def test_doctor_json(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
     runner = CliRunner()
     result = runner.invoke(cli, ["doctor", "--json"])
-    data = json.loads(result.output)
+    data = json.loads(result.stdout)
     assert data["ok"] is True
     assert len(data["checks"]) >= 4  # git, python, config_dir, skills
     assert "companions" in data
@@ -74,7 +74,7 @@ def test_doctor_json_includes_skills_check(tmp_path, monkeypatch):
     create_test_brain(runner, "my-brain", tmp_path)
 
     result = runner.invoke(cli, ["doctor", "--json"])
-    data = json.loads(result.output)
+    data = json.loads(result.stdout)
     skill_check = next((c for c in data["checks"] if c["name"] == "skills"), None)
     assert skill_check is not None
     assert skill_check["passed"] is True
@@ -97,7 +97,7 @@ def test_doctor_refreshes_referenced_companion(tmp_path, monkeypatch):
 
     result = runner.invoke(cli, ["doctor", "--json"])
 
-    data = json.loads(result.output)
+    data = json.loads(result.stdout)
     assert result.exit_code == 0, result.output
     assert (companion_dir / "SKILL.md").exists()
     assert (companion_dir / "references" / "researcher.md").is_file()
@@ -116,7 +116,7 @@ def test_doctor_refresh_replaces_old_single_file_companion(tmp_path, monkeypatch
 
     result = runner.invoke(cli, ["doctor", "--json"])
 
-    data = json.loads(result.output)
+    data = json.loads(result.stdout)
     assert result.exit_code == 0, result.output
     assert data["companions"] == [{"name": "specmint-core-html", "refreshed": True}]
     assert sorted(p.name for p in companion_dir.iterdir()) == ["SKILL.md", "assets", "references"]
@@ -140,7 +140,7 @@ def test_doctor_no_refresh_skips_companion_refresh(tmp_path, monkeypatch):
 
     result = runner.invoke(cli, ["doctor", "--no-refresh", "--json"])
 
-    data = json.loads(result.output)
+    data = json.loads(result.stdout)
     assert result.exit_code == 0, result.output
     assert data["companions"] == []
     assert not (tmp_path / ".kluris" / "companions" / "specmint-core").exists()

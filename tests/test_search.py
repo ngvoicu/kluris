@@ -707,7 +707,7 @@ def test_search_cli_single_brain_json(tmp_path, monkeypatch):
 
     result = runner.invoke(cli, ["search", "oauth", "--json"])
     assert result.exit_code == 0
-    data = json.loads(result.output)
+    data = json.loads(result.stdout)
 
     # Top-level envelope
     assert data["ok"] is True
@@ -794,7 +794,7 @@ def test_search_no_matches_returns_empty_results(tmp_path, monkeypatch):
 
     result = runner.invoke(cli, ["search", "absolutelynothingmatchesthis", "--json"])
     assert result.exit_code == 0
-    data = json.loads(result.output)
+    data = json.loads(result.stdout)
     assert data["ok"] is True
     assert data["total"] == 0
     assert data["results"] == []
@@ -830,7 +830,7 @@ def test_search_special_characters_treated_literally(tmp_path, monkeypatch):
     # Searching for the literal `a.b*?` finds weird.md ONLY
     result = runner.invoke(cli, ["search", "a.b*?", "--json"])
     assert result.exit_code == 0
-    data = json.loads(result.output)
+    data = json.loads(result.stdout)
     files = [r["file"] for r in data["results"]]
     assert "knowledge/weird.md" in files
     assert "knowledge/decoy.md" not in files
@@ -838,7 +838,7 @@ def test_search_special_characters_treated_literally(tmp_path, monkeypatch):
     # Searching for the literal `a.b` should NOT match `axb` (the decoy)
     result2 = runner.invoke(cli, ["search", "a.b", "--json"])
     assert result2.exit_code == 0
-    data2 = json.loads(result2.output)
+    data2 = json.loads(result2.stdout)
     files2 = [r["file"] for r in data2["results"]]
     # weird.md contains "a.b" literally, so it should match
     assert "knowledge/weird.md" in files2
@@ -868,7 +868,7 @@ def test_search_non_ascii_query(tmp_path, monkeypatch):
     # Search for an accented query
     result = runner.invoke(cli, ["search", "café", "--json"])
     assert result.exit_code == 0
-    data = json.loads(result.output)
+    data = json.loads(result.stdout)
     files = [r["file"] for r in data["results"]]
     assert "knowledge/french.md" in files
 
@@ -939,7 +939,7 @@ def test_search_command_listed_in_help(tmp_path, monkeypatch):
 
     result = runner.invoke(cli, ["help", "--json"])
     assert result.exit_code == 0
-    data = json.loads(result.output)
+    data = json.loads(result.stdout)
     names = {c["name"] for c in data["commands"]}
     assert "search" in names
     assert "companion" in names
