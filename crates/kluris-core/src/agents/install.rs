@@ -373,10 +373,13 @@ fn clear_folder(dest: &mut DestinationReport, kind: Kind, keep: &[&str]) {
     names.sort();
     for name in names {
         let path = dest.path.join(&name);
-        let generated = match kind {
-            _ if staged_skill(&name).is_some() => is_staging_dir(&path),
-            Kind::Skills => is_generated_skill_dir(&path, &name),
-            Kind::Workflows => is_generated_workflow_file(&path, &name),
+        let generated = if staged_skill(&name).is_some() {
+            is_staging_dir(&path)
+        } else {
+            match kind {
+                Kind::Skills => is_generated_skill_dir(&path, &name),
+                Kind::Workflows => is_generated_workflow_file(&path, &name),
+            }
         };
         if !generated {
             continue;
@@ -393,10 +396,10 @@ fn clear_folder(dest: &mut DestinationReport, kind: Kind, keep: &[&str]) {
 /// The skill a staging (`.kluris-<brain>.tmp`) or set-aside
 /// (`.kluris-<brain>.old`) folder name belongs to.
 fn staged_skill(name: &str) -> Option<&str> {
-    let skill = name
-        .strip_prefix('.')?
+    let rest = name.strip_prefix('.')?;
+    let skill = rest
         .strip_suffix(".tmp")
-        .or_else(|| name.strip_prefix('.')?.strip_suffix(".old"))?;
+        .or_else(|| rest.strip_suffix(".old"))?;
     skill.starts_with("kluris").then_some(skill)
 }
 
