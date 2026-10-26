@@ -249,6 +249,9 @@ enum Command {
             allow_hyphen_values = true
         )]
         message: Option<String>,
+        /// Skip the pre-commit and commit-msg hooks
+        #[arg(long = "no-verify")]
+        no_verify: bool,
         /// JSON output
         #[arg(long)]
         json: bool,
@@ -433,7 +436,10 @@ the map.md/brain.md files the map step regenerates because of them. Every \
 other changed file is left as it is, staged or not, and listed as left \
 uncommitted. The author is your git identity; the message ends with a \
 Kluris-Approved-By trailer (git user.name) and, when KLURIS_AGENT is set, a \
-Co-Authored-By trailer naming the agent.
+Co-Authored-By trailer naming the agent. The maps are built from what is \
+committed, so an uncommitted file never shows up in them. The repository's \
+hooks run as git commit runs them (--no-verify skips pre-commit and \
+commit-msg). Needs git 2.38 or newer.
 
   kluris commit --brain acme --paths knowledge/auth.md,knowledge/oauth.md
   kluris commit --brain acme --paths old.md -m \"Remove the old note\" --json";
@@ -846,11 +852,13 @@ fn run(cli: Cli) -> Result<(), CliError> {
             brain,
             paths,
             message,
+            no_verify,
             json,
         } => commands::commit::run(&commands::commit::Options {
             brain: brain.as_deref(),
             paths: &paths,
             message: message.as_deref(),
+            no_verify,
             json,
         }),
         Command::Help { command, json } => commands::help::run(command.as_deref(), json),

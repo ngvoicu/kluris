@@ -151,7 +151,7 @@ pub trait BrainStore {
 }
 
 /// Names sorted as Python's `sorted(Path)` sorts siblings.
-fn py_sorted(mut names: Vec<String>) -> Vec<String> {
+pub(crate) fn py_sorted(mut names: Vec<String>) -> Vec<String> {
     if cfg!(windows) {
         names.sort_by_cached_key(|name| (name.to_lowercase(), name.clone()));
     } else {

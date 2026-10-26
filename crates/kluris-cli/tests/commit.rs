@@ -744,23 +744,27 @@ fn the_first_commit_of_a_repo_with_no_commit_yet() {
     assert_eq!(code, 0, "{doc}");
     assert_eq!(doc["committed"], true);
     assert_eq!(doc["commit"], b.head().as_str());
-    // Every lobe on the way is new: its map, brain.md, its siblings' maps.
-    assert_eq!(
-        doc["regenerated"],
-        json!(["brain.md", "ideas/map.md", "notes/map.md"])
-    );
+    // The lobe is new: its map and brain.md. The uncommitted `ideas` lobe
+    // is not in the commit, so no committed map names it.
+    assert_eq!(doc["regenerated"], json!(["brain.md", "notes/map.md"]));
     assert_eq!(
         b.committed("HEAD"),
-        ["brain.md", "ideas/map.md", "notes/first.md", "notes/map.md"]
+        ["brain.md", "notes/first.md", "notes/map.md"]
     );
+    assert!(!show(&b, "HEAD", "brain.md").contains("ideas"));
+    assert!(!show(&b, "HEAD", "notes/map.md").contains("keep.md"));
     assert!(!b.git_ok(&["rev-parse", "-q", "--verify", "HEAD^"]));
+    // Untracked work-tree maps had changes of their own: left as they are.
     assert_eq!(
         doc["left_dirty"],
         json!([
             ".gitignore",
+            "brain.md",
             "glossary.md",
             "ideas/idea.md",
-            "notes/keep.md"
+            "ideas/map.md",
+            "notes/keep.md",
+            "notes/map.md"
         ])
     );
     assert_eq!(b.staged(), Vec::<String>::new());
@@ -769,8 +773,10 @@ fn the_first_commit_of_a_repo_with_no_commit_yet() {
 #[test]
 fn a_map_that_cannot_be_regenerated_stops_the_commit() {
     let b = Brain::new();
+    // Committed: the maps are built from the commit, not the work tree.
     let bad = "---\ntitle: Foo: bar\n---\n\n# Notes\n";
     b.write("notes/map.md", bad);
+    b.git(&["commit", "-q", "-am", "a map that does not parse"]);
     b.write("notes/second.md", &neuron("Second"));
     let before = b.head();
     let (code, doc) = b.commit("notes/second.md", &[]);
@@ -907,9 +913,323 @@ fn commit_is_in_help() {
         "Usage: kluris commit [OPTIONS]",
         "--paths",
         "-m, --message",
+        "--no-verify",
         "--brain",
         "--json",
     ] {
         assert!(out.contains(text), "{text}: {out}");
     }
+}
+
+// --- the committed maps come from the commit, not the work tree ----------------------
+
+/// A file at `rev`, as text.
+fn show(b: &Brain, rev: &str, rel: &str) -> String {
+    b.git(&["show", &format!("{rev}:./{rel}")])
+}
+
+#[test]
+fn an_uncommitted_draft_never_reaches_the_committed_map() {
+    let b = Brain::new();
+    b.write("notes/second.md", &neuron("Second"));
+    b.write("notes/draft.md", &neuron("Secret draft"));
+    let (code, doc) = b.commit("notes/second.md", &[]);
+    assert_eq!(code, 0, "{doc}");
+    let map = show(&b, "HEAD", "notes/map.md");
+    assert!(map.contains("- [second.md](./second.md) — Second"), "{map}");
+    assert!(!map.contains("draft") && !map.contains("Secret"), "{map}");
+    // The work tree's map was clean: it gets the committed bytes.
+    assert_eq!(b.read("notes/map.md"), map);
+    assert_eq!(doc["regenerated"], json!(["notes/map.md"]));
+    assert_eq!(doc["left_dirty"], json!(["notes/draft.md"]));
+    assert_eq!(b.status(), ["?? notes/draft.md"]);
+}
+
+#[test]
+fn a_dirty_tracked_neuron_keeps_its_committed_title_in_the_map() {
+    let b = Brain::new();
+    let renamed = b
+        .read("notes/first.md")
+        .replace("# First", "# First Renamed");
+    b.write("notes/first.md", &renamed);
+    b.write("notes/second.md", &neuron("Second"));
+    let (code, doc) = b.commit("notes/second.md", &[]);
+    assert_eq!(code, 0, "{doc}");
+    let map = show(&b, "HEAD", "notes/map.md");
+    assert!(map.contains("- [first.md](./first.md) — First\n"), "{map}");
+    assert!(!map.contains("Renamed"), "{map}");
+    assert_eq!(doc["left_dirty"], json!(["notes/first.md"]));
+    assert_eq!(b.status(), [" M notes/first.md"]);
+}
+
+#[test]
+fn an_ignored_file_is_not_in_the_committed_map() {
+    let b = Brain::new();
+    b.write(
+        ".gitignore",
+        "kluris.yml\nbrain-mri.html\nnotes/private.md\n",
+    );
+    b.git(&["commit", "-q", "-am", "ignore a private note"]);
+    b.write("notes/private.md", &neuron("Private"));
+    b.write("notes/second.md", &neuron("Second"));
+    let (code, doc) = b.commit("notes/second.md", &[]);
+    assert_eq!(code, 0, "{doc}");
+    let map = show(&b, "HEAD", "notes/map.md");
+    assert!(!map.contains("private"), "{map}");
+    assert_eq!(b.read("notes/map.md"), map);
+    assert_eq!(doc["left_dirty"], json!([]));
+    assert_eq!(b.status(), Vec::<String>::new());
+}
+
+#[test]
+fn a_map_dream_rewrote_with_a_draft_is_left_alone_and_reported() {
+    let b = Brain::new();
+    b.write("notes/second.md", &neuron("Second"));
+    b.write("notes/draft.md", &neuron("Secret draft"));
+    let (code, out, err) = b.run(&["dream", "--brain", "demo", "--json"], &[]);
+    assert_eq!(code, 0, "{out}{err}");
+    let dreamt = b.read("notes/map.md");
+    assert!(dreamt.contains("Secret draft"));
+
+    let (code, doc) = b.commit("notes/second.md", &[]);
+    assert_eq!(code, 0, "{doc}");
+    let map = show(&b, "HEAD", "notes/map.md");
+    assert!(map.contains("second.md") && !map.contains("draft"), "{map}");
+    assert_eq!(b.read("notes/map.md"), dreamt, "a dirty map was rewritten");
+    let left: Vec<String> = doc["left_dirty"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap().to_string())
+        .collect();
+    assert!(left.contains(&"notes/map.md".to_string()), "{left:?}");
+    assert!(left.contains(&"notes/draft.md".to_string()), "{left:?}");
+    assert!(b.status().contains(&" M notes/map.md".to_string()));
+}
+
+#[test]
+fn a_clean_map_with_crlf_endings_keeps_them() {
+    let b = Brain::new();
+    let crlf = b.read("notes/map.md").replace('\n', "\r\n");
+    b.write("notes/map.md", &crlf);
+    b.git(&["commit", "-q", "-am", "crlf map"]);
+    b.write("notes/second.md", &neuron("Second"));
+    let (code, doc) = b.commit("notes/second.md", &[]);
+    assert_eq!(code, 0, "{doc}");
+    let map = b.read("notes/map.md");
+    assert!(map.contains("second.md"), "{map}");
+    assert_eq!(
+        map.matches('\n').count(),
+        map.matches("\r\n").count(),
+        "{map:?}"
+    );
+    assert_eq!(b.status(), Vec::<String>::new());
+}
+
+// --- hooks ---------------------------------------------------------------------------
+
+/// A hook script (`#!/bin/sh`; Git for Windows runs it with its sh).
+fn hook(dir: &Path, name: &str, body: &str) {
+    fs::create_dir_all(dir).unwrap();
+    let path = dir.join(name);
+    fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+}
+
+impl Brain {
+    fn hooks(&self) -> PathBuf {
+        self.repo.join(".git").join("hooks")
+    }
+
+    fn out_file(&self, name: &str) -> PathBuf {
+        self.dir.path().join(name)
+    }
+}
+
+#[test]
+fn a_passing_pre_commit_hook_sees_what_is_committed() {
+    let b = Brain::new();
+    hook(
+        &b.hooks(),
+        "pre-commit",
+        "git diff --cached --name-only > \"$HOOK_OUT\"\necho 'scanned: clean'",
+    );
+    b.write("notes/second.md", &neuron("Second"));
+    b.write("glossary.md", &format!("{GLOSSARY}\n- term: other\n"));
+    let out_file = b.out_file("staged.txt");
+    let out = out_file.display().to_string();
+    let (code, stdout, stderr) = b.run(
+        &[
+            "commit",
+            "--brain",
+            "demo",
+            "--paths",
+            "notes/second.md",
+            "--json",
+        ],
+        &[("HOOK_OUT", &out)],
+    );
+    assert_eq!(code, 0, "{stdout}{stderr}");
+    // The hook's output goes to stderr; stdout stays one JSON document.
+    let doc: Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(doc["committed"], true);
+    assert!(stderr.contains("scanned: clean"), "{stderr}");
+    let staged = fs::read_to_string(&out_file).unwrap();
+    assert_eq!(lines(&staged), ["notes/map.md", "notes/second.md"]);
+}
+
+#[test]
+fn a_failing_pre_commit_hook_stops_the_commit() {
+    let b = Brain::new();
+    hook(
+        &b.hooks(),
+        "pre-commit",
+        "echo 'secret found in notes/second.md' >&2\nexit 1",
+    );
+    b.write("notes/second.md", &neuron("Second"));
+    let before = b.head();
+    let map = b.read("notes/map.md");
+    let status = b.status();
+    let (code, stdout, stderr) = b.run(
+        &["commit", "--brain", "demo", "--paths", "notes/second.md"],
+        &[],
+    );
+    assert_eq!(code, 1, "{stdout}");
+    assert!(
+        stderr.contains("secret found in notes/second.md"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("pre-commit"), "{stderr}");
+    assert_eq!(b.head(), before);
+    assert_eq!(b.staged(), Vec::<String>::new());
+    assert_eq!(b.read("notes/map.md"), map);
+    assert_eq!(b.status(), status);
+
+    let (code, stdout, _) = b.run(
+        &[
+            "commit",
+            "--brain",
+            "demo",
+            "--paths",
+            "notes/second.md",
+            "--json",
+        ],
+        &[],
+    );
+    assert_eq!(code, 1);
+    let doc: Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(doc["ok"], false);
+    assert!(
+        doc["error"].as_str().unwrap().contains("pre-commit"),
+        "{doc}"
+    );
+    assert_eq!(b.head(), before);
+}
+
+#[test]
+fn the_message_hooks_shape_the_message() {
+    let b = Brain::new();
+    hook(
+        &b.hooks(),
+        "prepare-commit-msg",
+        "echo 'Prepared: yes' >> \"$1\"",
+    );
+    hook(
+        &b.hooks(),
+        "commit-msg",
+        "sed 's/^kluris: update/brain: update/' \"$1\" > \"$1.tmp\" && mv \"$1.tmp\" \"$1\"",
+    );
+    b.write("notes/second.md", &neuron("Second"));
+    let (code, doc) = b.commit("notes/second.md", &[]);
+    assert_eq!(code, 0, "{doc}");
+    assert_eq!(
+        b.message(),
+        "brain: update notes/second.md\n\nKluris-Approved-By: Ana Tester\nPrepared: yes\n\n"
+    );
+}
+
+#[test]
+fn a_failing_commit_msg_hook_stops_the_commit() {
+    let b = Brain::new();
+    hook(&b.hooks(), "commit-msg", "echo 'bad message' >&2\nexit 1");
+    b.write("notes/second.md", &neuron("Second"));
+    let before = b.head();
+    let map = b.read("notes/map.md");
+    let (code, stdout, stderr) = b.run(
+        &["commit", "--brain", "demo", "--paths", "notes/second.md"],
+        &[],
+    );
+    assert_eq!(code, 1, "{stdout}");
+    assert!(
+        stderr.contains("bad message") && stderr.contains("commit-msg"),
+        "{stderr}"
+    );
+    assert_eq!(b.head(), before);
+    assert_eq!(b.staged(), Vec::<String>::new());
+    assert_eq!(b.read("notes/map.md"), map);
+}
+
+#[test]
+fn core_hooks_path_is_honoured() {
+    let b = Brain::new();
+    hook(&b.hooks(), "pre-commit", "exit 1");
+    let custom = b.dir.path().join("team-hooks");
+    hook(&custom, "pre-commit", "echo ran > \"$HOOK_OUT\"");
+    b.git(&["config", "core.hooksPath", custom.to_str().unwrap()]);
+    b.write("notes/second.md", &neuron("Second"));
+    let out_file = b.out_file("ran.txt");
+    let out = out_file.display().to_string();
+    let (code, doc) = b.commit_env("notes/second.md", &[], &[("HOOK_OUT", &out)]);
+    assert_eq!(code, 0, "{doc}");
+    assert_eq!(fs::read_to_string(&out_file).unwrap().trim(), "ran");
+}
+
+#[test]
+fn no_verify_skips_pre_commit_and_commit_msg() {
+    let b = Brain::new();
+    hook(&b.hooks(), "pre-commit", "exit 1");
+    hook(&b.hooks(), "commit-msg", "exit 1");
+    hook(
+        &b.hooks(),
+        "prepare-commit-msg",
+        "echo 'Prepared: yes' >> \"$1\"",
+    );
+    b.write("notes/second.md", &neuron("Second"));
+    let (code, doc) = b.commit("notes/second.md", &["--no-verify"]);
+    assert_eq!(code, 0, "{doc}");
+    assert_eq!(doc["committed"], true);
+    assert!(b.message().contains("\nPrepared: yes\n"), "{}", b.message());
+}
+
+#[test]
+fn post_commit_runs_after_the_commit_lands() {
+    let b = Brain::new();
+    hook(
+        &b.hooks(),
+        "post-commit",
+        "git rev-parse HEAD > \"$HOOK_OUT\"\nexit 1",
+    );
+    b.write("notes/second.md", &neuron("Second"));
+    let out_file = b.out_file("head.txt");
+    let out = out_file.display().to_string();
+    let (code, stdout, _) = b.run(
+        &[
+            "commit",
+            "--brain",
+            "demo",
+            "--paths",
+            "notes/second.md",
+            "--json",
+        ],
+        &[("HOOK_OUT", &out)],
+    );
+    // A failing post-commit hook does not undo or fail the commit (git's rule).
+    assert_eq!(code, 0, "{stdout}");
+    let doc: Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(doc["commit"], b.head().as_str());
+    assert_eq!(fs::read_to_string(&out_file).unwrap().trim(), b.head());
 }

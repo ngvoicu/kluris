@@ -3,7 +3,6 @@
 
 use std::path::Path;
 
-use kluris_core::brain::store::LocalGitStore;
 use kluris_core::config::{ConfigErrorKind, read_brain_config};
 use kluris_core::dream::DreamOptions;
 use kluris_core::git::SystemGit;
@@ -21,6 +20,7 @@ pub struct Options<'a> {
     /// `--paths`: comma-separated, each trimmed, empty items dropped.
     pub paths: &'a str,
     pub message: Option<&'a str>,
+    pub no_verify: bool,
     pub json: bool,
 }
 
@@ -60,14 +60,14 @@ pub fn run(options: &Options) -> Result<(), CliError> {
         .map(str::to_string)
         .collect();
     let agent = std::env::var("KLURIS_AGENT").ok();
-    let mut store = LocalGitStore::open(Path::new(&root));
     let report = commit(
-        &mut store,
+        Path::new(&root),
         &SystemGit::new(),
         &CommitRequest {
             paths: &paths,
             message: options.message,
             agent: agent.as_deref(),
+            no_verify: options.no_verify,
             maps: DreamOptions {
                 name: &config.name,
                 description: &config.description,
@@ -97,10 +97,11 @@ pub fn run(options: &Options) -> Result<(), CliError> {
 }
 
 fn text(name: &str, report: &CommitReport) -> String {
-    let mut out = match (&report.commit, &report.set) {
-        (Some(hash), Some(set)) => {
+    let mut out = match (&report.commit, &report.message) {
+        (Some(hash), Some(message)) => {
             let short: String = hash.chars().take(7).collect();
-            let mut out = format!("Committed {short} in {name}: {}\n", set.subject());
+            let subject = message.lines().next().unwrap_or_default();
+            let mut out = format!("Committed {short} in {name}: {subject}\n");
             for path in &report.paths {
                 out.push_str(&format!("  {path}\n"));
             }

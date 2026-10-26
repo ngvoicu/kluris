@@ -9,22 +9,43 @@
 //! `HEAD` is still at the base revision (compare-and-swap), which `sync`
 //! relies on when it runs beside a commit.
 //!
+//! The maps are built from what is committed, never from the work tree: the
+//! map step reads a [`TreeStore`] holding the base revision's files with the
+//! given paths taken from the work tree, so a file that is uncommitted,
+//! untracked or ignored never reaches a committed map (not even its title).
 //! Which generated files the paths change ([`affected_generated`]): the map
 //! of each path's directory; and, for every directory on the way up that the
 //! paths create or remove (its `map.md` is new, or is in the base but the
-//! directory is gone), its parent's map (`brain.md` at the top) and its
-//! siblings' maps (their `sideways` links). The map step writes those maps
-//! only; every other map stays as it is on disk.
+//! directory is gone from the work tree), its parent's map (`brain.md` at the
+//! top) and its siblings' maps (their `sideways` links). Only those are
+//! committed. Afterwards a regenerated map's work-tree copy gets the committed
+//! bytes (its line endings kept) when it had no change of its own, as a
+//! checkout would; one with changes of its own is left as it is.
+//!
+//! Hooks run as `git commit` runs them (`git hook run`, so `core.hooksPath`
+//! counts), against the temporary index: `pre-commit` before the tree is
+//! written, `prepare-commit-msg` and `commit-msg` on a message file (the
+//! message is what they leave there, cleaned up as `git commit -m` does),
+//! `post-commit` once `HEAD` has moved. A failing `pre-commit`,
+//! `prepare-commit-msg` or `commit-msg` stops the commit with nothing
+//! changed; `no_verify` skips `pre-commit` and `commit-msg`. That needs git
+//! >= 2.36 (`git hook run`); `sync` needs 2.38, which `commit` checks first.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use crate::atomic;
 use crate::brain::sandbox;
 use crate::brain::store::BrainStore;
+use crate::brain::tree_store::{Node, TreeStore};
 use crate::dream::{DreamOptions, map_changes};
-use crate::git::{GitError, Identity, InProgress, Plumbing};
+use crate::frontmatter::{LineEnding, line_ending};
+use crate::git::{
+    GitError, Identity, InProgress, MIN_SYNC_VERSION, Plumbing, Repo, StagedBlob, StagingIndex,
+    parse_version,
+};
 
 /// The longest default subject, in characters.
 pub const SUBJECT_MAX: usize = 72;
@@ -274,6 +295,32 @@ impl CommitSet {
     }
 }
 
+/// A commit message cleaned up as `git commit -m` cleans one up (its
+/// `whitespace` mode): trailing whitespace dropped from every line, runs of
+/// blank lines made one, leading and trailing blank lines dropped, one final
+/// newline. `#` lines stay. Empty when nothing is left.
+pub fn cleanup_message(text: &str) -> String {
+    let mut out: Vec<&str> = Vec::new();
+    let mut blank = false;
+    for line in text.lines() {
+        let line = line.trim_end();
+        if line.is_empty() {
+            blank = !out.is_empty();
+            continue;
+        }
+        if blank {
+            out.push("");
+            blank = false;
+        }
+        out.push(line);
+    }
+    if out.is_empty() {
+        String::new()
+    } else {
+        out.join("\n") + "\n"
+    }
+}
+
 /// What to commit.
 #[derive(Debug, Clone, Copy)]
 pub struct CommitRequest<'a> {
@@ -283,6 +330,9 @@ pub struct CommitRequest<'a> {
     pub message: Option<&'a str>,
     /// `KLURIS_AGENT`: the agent named in `Co-Authored-By`, when not blank.
     pub agent: Option<&'a str>,
+    /// `--no-verify`: skip the `pre-commit` and `commit-msg` hooks, as
+    /// `git commit --no-verify` does.
+    pub no_verify: bool,
     /// For the map step (`brain.md`'s name and description, today's date).
     pub maps: DreamOptions<'a>,
 }
@@ -301,10 +351,16 @@ pub struct CommitReport {
     pub left_dirty: Vec<String>,
     /// The commit as it was made.
     pub set: Option<CommitSet>,
+    /// Its message as the hooks left it.
+    pub message: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CommitError {
+    /// git is older than [`MIN_SYNC_VERSION`] (`found`: `git --version`).
+    GitTooOld {
+        found: String,
+    },
     /// The brain is not in a git work tree.
     NotARepo,
     /// The work tree is in the middle of a merge, rebase, ...
@@ -321,6 +377,15 @@ pub enum CommitError {
         rel: String,
         reason: String,
     },
+    /// A hook that can stop a commit failed with this exit code.
+    Hook {
+        name: &'static str,
+        code: i32,
+    },
+    /// The hooks left the message empty.
+    EmptyMessage,
+    /// The message file in the git directory could not be written or read.
+    MessageFile(String),
     /// `HEAD` moved while the commit was built; nothing was committed.
     HeadMoved(GitError),
     /// The commit was made, but the user's index could not be updated for
@@ -335,6 +400,13 @@ pub enum CommitError {
 impl fmt::Display for CommitError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            CommitError::GitTooOld { found } => {
+                let (major, minor, _) = MIN_SYNC_VERSION;
+                write!(
+                    f,
+                    "kluris commit needs git {major}.{minor} or newer; this is {found}"
+                )
+            }
             CommitError::NotARepo => f.write_str("it is not a git repository"),
             CommitError::InProgress(op) => write!(
                 f,
@@ -347,6 +419,17 @@ impl fmt::Display for CommitError {
             CommitError::Regenerate { rel, reason } => write!(
                 f,
                 "cannot regenerate {rel}: {reason}; nothing was committed"
+            ),
+            CommitError::Hook { name, code } => write!(
+                f,
+                "the {name} hook failed (exit {code}); nothing was committed"
+            ),
+            CommitError::EmptyMessage => {
+                f.write_str("the commit message is empty; nothing was committed")
+            }
+            CommitError::MessageFile(e) => write!(
+                f,
+                "cannot write the commit message file: {e}; nothing was committed"
             ),
             CommitError::HeadMoved(e) => write!(
                 f,
@@ -369,16 +452,196 @@ impl From<GitError> for CommitError {
     }
 }
 
-/// Commit `request.paths` and the generated files they change, from the
-/// brain `store` is open on (see the module docs). Nothing to commit is not
-/// an error: the report's `commit` is `None`.
-pub fn commit<S: BrainStore, G: Plumbing>(
-    store: &mut S,
+/// Whether a map reads a file's contents: markdown and YAML files.
+fn is_text_suffix(rel: &str) -> bool {
+    let lower = rel.to_ascii_lowercase();
+    [".md", ".yml", ".yaml"].iter().any(|s| lower.ends_with(s))
+}
+
+/// A tree's files as the view holds them, and each file's git mode.
+type Files = (BTreeMap<String, Node>, BTreeMap<String, String>);
+
+/// The files of `rev` under the brain, as the view holds them, and their
+/// modes.
+fn base_nodes<G: Plumbing>(git: &G, repo: &Repo, rev: &str) -> Result<Files, GitError> {
+    let entries = git.tree_entries(repo, rev)?;
+    let wanted: Vec<String> = entries
+        .iter()
+        .filter(|e| e.is_symlink() || is_text_suffix(&e.rel))
+        .map(|e| e.oid.clone())
+        .collect();
+    let blobs = git.read_blobs(repo, &wanted)?;
+    let mut nodes = BTreeMap::new();
+    let mut modes = BTreeMap::new();
+    for entry in entries {
+        let bytes = blobs.get(&entry.oid).cloned();
+        let node = if entry.is_symlink() {
+            Node::Link(String::from_utf8_lossy(&bytes.unwrap_or_default()).into_owned())
+        } else {
+            Node::File(bytes)
+        };
+        modes.insert(entry.rel.clone(), entry.mode);
+        nodes.insert(entry.rel, node);
+    }
+    Ok((nodes, modes))
+}
+
+fn join(root: &Path, rel: &str) -> PathBuf {
+    rel.split('/')
+        .fold(root.to_path_buf(), |p, part| p.join(part))
+}
+
+/// A given path as the work tree has it, into the view: a file, a symlink,
+/// or (gone) nothing.
+fn overlay_from_disk(root: &Path, rel: &str, nodes: &mut BTreeMap<String, Node>) {
+    let path = join(root, rel);
+    match fs::symlink_metadata(&path) {
+        Ok(meta) if meta.file_type().is_symlink() => {
+            let target = fs::read_link(&path)
+                .map(|t| t.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            let target = if cfg!(windows) {
+                target.replace('\\', "/")
+            } else {
+                target
+            };
+            nodes.insert(rel.to_string(), Node::Link(target));
+        }
+        Ok(_) => {
+            nodes.insert(rel.to_string(), Node::File(fs::read(&path).ok()));
+        }
+        Err(_) => {
+            nodes.remove(rel);
+        }
+    }
+}
+
+/// A lobe on the way to a given path that the work tree no longer has, and
+/// whose only files left in the view are maps, goes with them: they are
+/// taken out of the view and returned, to be deleted in the commit.
+fn drop_removed_lobes(
+    root: &Path,
+    paths: &[String],
+    nodes: &mut BTreeMap<String, Node>,
+) -> Vec<String> {
+    let mut removed = BTreeSet::new();
+    for path in paths {
+        let mut dir = parent_dir(path);
+        while !dir.is_empty() {
+            let prefix = format!("{dir}/");
+            let on_disk = fs::symlink_metadata(join(root, dir)).is_ok_and(|m| m.is_dir());
+            let left: Vec<&String> = nodes
+                .keys()
+                .filter(|rel| rel.starts_with(&prefix))
+                .collect();
+            if !on_disk
+                && nodes.contains_key(&map_of(dir))
+                && left.iter().all(|rel| base_name(rel) == "map.md")
+            {
+                let maps: Vec<String> = left.into_iter().cloned().collect();
+                for rel in maps {
+                    nodes.remove(&rel);
+                    removed.insert(rel);
+                }
+            }
+            dir = parent_dir(dir);
+        }
+    }
+    removed.into_iter().collect()
+}
+
+/// Which of `paths` differ between `base` (none: an empty tree) and `tree`.
+fn changed_paths<G: Plumbing>(
+    git: &G,
+    repo: &Repo,
+    base: Option<&str>,
+    tree: &str,
+    paths: &[String],
+) -> Result<BTreeSet<String>, GitError> {
+    match base {
+        Some(rev) => {
+            let base_tree = git.tree_of(repo, rev)?;
+            if base_tree == tree {
+                Ok(BTreeSet::new())
+            } else {
+                git.changed(repo, &base_tree, tree, paths)
+            }
+        }
+        None => git.tracked(repo, tree, paths),
+    }
+}
+
+/// `text` with every line ending made `ending`.
+fn with_line_ending(text: &[u8], ending: LineEnding) -> Vec<u8> {
+    let text = String::from_utf8_lossy(text).replace("\r\n", "\n");
+    match ending {
+        LineEnding::Lf => text.into_bytes(),
+        LineEnding::Crlf => text.replace('\n', "\r\n").into_bytes(),
+    }
+}
+
+/// Bring a regenerated map's work-tree copy to the committed bytes when it
+/// had no change of its own (`clean`), keeping its line endings, as a
+/// checkout would; a map with changes of its own is left as it is. A new
+/// map is created only where its directory is.
+fn update_worktree_map(root: &Path, rel: &str, committed: &[u8], clean: bool) {
+    if !clean {
+        return;
+    }
+    let path = join(root, rel);
+    let bytes = match fs::read(&path) {
+        Ok(old) => {
+            let ending = line_ending(&String::from_utf8_lossy(&old));
+            let new = with_line_ending(committed, ending);
+            if new == old {
+                return;
+            }
+            new
+        }
+        Err(_) if path.parent().is_some_and(Path::is_dir) => committed.to_vec(),
+        Err(_) => return,
+    };
+    // A failed write leaves the map as it was; it is then listed in
+    // `left_dirty`.
+    let _ = atomic::write_atomic(&path, &bytes);
+}
+
+/// Removes a file when dropped.
+struct TempFile(PathBuf);
+
+impl Drop for TempFile {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.0);
+    }
+}
+
+/// Run a hook that can stop the commit.
+fn gate<G: Plumbing>(
+    git: &G,
+    repo: &Repo,
+    index: &StagingIndex,
+    name: &'static str,
+    args: &[&str],
+) -> Result<(), CommitError> {
+    match git.run_hook(repo, Some(index), name, args)? {
+        0 => Ok(()),
+        code => Err(CommitError::Hook { name, code }),
+    }
+}
+
+/// Commit `request.paths` and the generated files they change, in the brain
+/// at `root` (see the module docs). Nothing to commit is not an error: the
+/// report's `commit` is `None`.
+pub fn commit<G: Plumbing>(
+    root: &Path,
     git: &G,
     request: &CommitRequest,
 ) -> Result<CommitReport, CommitError> {
-    let root: PathBuf = store.root().to_path_buf();
-    let repo = git.repo(&root).ok_or(CommitError::NotARepo)?;
+    let found = git.version()?;
+    if !parse_version(&found).is_some_and(|v| v >= MIN_SYNC_VERSION) {
+        return Err(CommitError::GitTooOld { found });
+    }
+    let repo = git.repo(root).ok_or(CommitError::NotARepo)?;
     if let Some(op) = git.in_progress(&repo)? {
         return Err(CommitError::InProgress(op));
     }
@@ -404,58 +667,86 @@ pub fn commit<S: BrainStore, G: Plumbing>(
     };
     let tracked = in_base(&paths)?;
     for (raw, rel) in &given {
-        check_on_disk(&root, rel, tracked.contains(rel)).map_err(|problem| CommitError::Path {
+        check_on_disk(root, rel, tracked.contains(rel)).map_err(|problem| CommitError::Path {
             path: raw.to_string(),
             problem,
         })?;
     }
+    let dirty_before: BTreeSet<String> = git.dirty(&repo)?.into_iter().collect();
 
-    // The map step, limited to the generated files the paths change.
+    // The view: the base revision's files, the given paths from the work
+    // tree, nothing else.
+    let (mut nodes, modes) = match &base {
+        Some(rev) => base_nodes(git, &repo, rev)?,
+        None => (BTreeMap::new(), BTreeMap::new()),
+    };
+    for rel in &paths {
+        overlay_from_disk(root, rel, &mut nodes);
+    }
+    let removed_maps = drop_removed_lobes(root, &paths, &mut nodes);
+    let view = TreeStore::new(root, nodes);
+
+    // The map step over the view, limited to the generated files the paths
+    // change.
     let generated_in_base = in_base(&generated_candidates(&paths))?;
-    let affected = affected_generated(&paths, store.dirs(), &generated_in_base);
-    let (mut changes, skipped) = map_changes(&*store, &request.maps);
+    let affected = affected_generated(&paths, view.dirs(), &generated_in_base);
+    let (changes, skipped) = map_changes(&view, &request.maps);
     if let Some((rel, reason)) = skipped.iter().find(|(rel, _)| affected.contains(*rel)) {
         return Err(CommitError::Regenerate {
             rel: rel.clone(),
             reason: reason.clone(),
         });
     }
-    changes.writes.retain(|write| affected.contains(&write.rel));
-    let applied = store.apply(&changes);
-    if let Some(failed) = applied.failed.first() {
-        return Err(CommitError::Regenerate {
-            rel: failed.rel.clone(),
-            reason: failed.error.clone(),
-        });
-    }
+    let mode = |rel: &str| modes.get(rel).cloned().unwrap_or_else(|| "100644".into());
+    let mut generated: Vec<StagedBlob> = changes
+        .writes
+        .into_iter()
+        .filter(|write| affected.contains(&write.rel))
+        .map(|write| StagedBlob {
+            mode: mode(&write.rel),
+            rel: write.rel,
+            bytes: Some(write.contents),
+        })
+        .collect();
+    generated.extend(
+        removed_maps
+            .iter()
+            .filter(|rel| affected.contains(*rel))
+            .map(|rel| StagedBlob {
+                rel: rel.clone(),
+                mode: mode(rel),
+                bytes: None,
+            }),
+    );
 
+    let index = git.staging_index(&repo, base.as_deref())?;
+    git.stage_worktree(&repo, &index, &paths)?;
+    git.stage_blobs(&repo, &index, &generated)?;
     let mut stage = paths.clone();
-    for rel in &affected {
-        if !stage.contains(rel) && (store.exists(rel) || generated_in_base.contains(rel)) {
-            stage.push(rel.clone());
-        }
-    }
-    let tree = git.stage_tree(&repo, base.as_deref(), &stage)?;
-    let changed = match &base {
-        Some(rev) => {
-            let base_tree = git.tree_of(&repo, rev)?;
-            if base_tree == tree {
-                BTreeSet::new()
-            } else {
-                git.changed(&repo, &base_tree, &tree, &stage)?
-            }
-        }
-        None => git.tracked(&repo, &tree, &stage)?,
-    };
-    if changed.is_empty() {
+    stage.extend(
+        generated
+            .iter()
+            .filter(|blob| !paths.contains(&blob.rel))
+            .map(|blob| blob.rel.clone()),
+    );
+    let tree = git.write_tree(&repo, &index)?;
+    if changed_paths(git, &repo, base.as_deref(), &tree, &stage)?.is_empty() {
         return Ok(CommitReport {
             commit: None,
             paths,
             regenerated: Vec::new(),
             left_dirty: git.dirty(&repo)?,
             set: None,
+            message: None,
         });
     }
+
+    if !request.no_verify {
+        gate(git, &repo, &index, "pre-commit", &[])?;
+    }
+    // The hook may have changed the index, as with `git commit`.
+    let tree = git.write_tree(&repo, &index)?;
+    let changed = changed_paths(git, &repo, base.as_deref(), &tree, &stage)?;
     let regenerated: Vec<String> = affected
         .iter()
         .filter(|rel| changed.contains(*rel) && !paths.contains(rel))
@@ -482,22 +773,63 @@ pub fn commit<S: BrainStore, G: Plumbing>(
             .map(str::to_string),
         message,
     };
+
+    // The message hooks work on a file, as with `git commit`.
+    let file =
+        TempFile(git.git_dir_path(&repo, &format!("KLURIS_EDITMSG-{}", std::process::id()))?);
+    // Hooks are shell scripts (Git for Windows' sh too): `/` separators.
+    let file_arg = file.0.to_string_lossy().replace('\\', "/");
+    fs::write(&file.0, set.full_message()).map_err(|e| CommitError::MessageFile(e.to_string()))?;
+    gate(
+        git,
+        &repo,
+        &index,
+        "prepare-commit-msg",
+        &[&file_arg, "message"],
+    )?;
+    if !request.no_verify {
+        gate(git, &repo, &index, "commit-msg", &[&file_arg])?;
+    }
+    let final_message = fs::read(&file.0)
+        .map(|bytes| cleanup_message(&String::from_utf8_lossy(&bytes)))
+        .map_err(|e| CommitError::MessageFile(e.to_string()))?;
+    if final_message.is_empty() {
+        return Err(CommitError::EmptyMessage);
+    }
+    fs::write(&file.0, &final_message).map_err(|e| CommitError::MessageFile(e.to_string()))?;
+
     let parents: Vec<&str> = set.base.iter().map(String::as_str).collect();
-    let new = git.commit_tree(&repo, &tree, &parents, &set.full_message())?;
-    let reason = format!("kluris commit: {}", set.subject());
-    git.update_head(&repo, &new, set.base.as_deref(), &reason)
-        .map_err(CommitError::HeadMoved)?;
+    let new = git.commit_tree(&repo, &tree, &parents, &file.0)?;
+    let subject = final_message.lines().next().unwrap_or_default();
+    git.update_head(
+        &repo,
+        &new,
+        set.base.as_deref(),
+        &format!("kluris commit: {subject}"),
+    )
+    .map_err(CommitError::HeadMoved)?;
+    drop(index);
     git.reset_paths(&repo, &new, &set.paths)
         .map_err(|error| CommitError::IndexNotUpdated {
             commit: new.clone(),
             error,
         })?;
+    for blob in &generated {
+        if let Some(bytes) = &blob.bytes
+            && regenerated.contains(&blob.rel)
+        {
+            update_worktree_map(root, &blob.rel, bytes, !dirty_before.contains(&blob.rel));
+        }
+    }
+    // As with `git commit`, post-commit cannot undo or fail the commit.
+    let _ = git.run_hook(&repo, None, "post-commit", &[]);
     Ok(CommitReport {
         commit: Some(new),
         paths,
         regenerated,
         left_dirty: git.dirty(&repo)?,
         set: Some(set),
+        message: Some(final_message),
     })
 }
 
@@ -629,6 +961,17 @@ mod tests {
             set.full_message(),
             "s\n\nKluris-Approved-By: Ana Evil: yes\nCo-Authored-By: A B\n"
         );
+    }
+
+    #[test]
+    fn a_message_is_cleaned_up_as_git_commit_does() {
+        assert_eq!(
+            cleanup_message("Subject  \n\n\n\nBody\t\n\n"),
+            "Subject\n\nBody\n"
+        );
+        assert_eq!(cleanup_message("\n\n  \nSubject\r\n"), "Subject\n");
+        assert_eq!(cleanup_message(" \n\n"), "");
+        assert_eq!(cleanup_message("# kept\nline"), "# kept\nline\n");
     }
 
     #[test]

@@ -18,8 +18,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
 use std::fmt;
+use std::io::Write as _;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::{Command, Output, Stdio};
 
 use crate::yaml::is_py_space;
 
@@ -261,6 +262,49 @@ impl SystemGit {
         self.output(cmd, args).map(|out| out.stdout)
     }
 
+    /// Run git in `dir` (with `GIT_INDEX_FILE` when `index` is given),
+    /// feeding `input` on stdin; its stdout on success.
+    fn run_input(
+        &self,
+        dir: &Path,
+        index: Option<&Path>,
+        args: &[&str],
+        input: Vec<u8>,
+    ) -> Result<Vec<u8>, GitError> {
+        let error = |code, detail| GitError {
+            args: args.iter().map(|a| a.to_string()).collect(),
+            code,
+            detail,
+        };
+        let mut cmd = self.command(Some(dir), args);
+        if let Some(index) = index {
+            cmd.env("GIT_INDEX_FILE", index);
+        }
+        cmd.stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let mut child = cmd.spawn().map_err(|e| error(None, e.to_string()))?;
+        // Written from a thread: git may fill stdout before it has read all
+        // of stdin.
+        let writer = child.stdin.take().map(|mut stdin| {
+            std::thread::spawn(move || {
+                let _ = stdin.write_all(&input);
+            })
+        });
+        let out = child
+            .wait_with_output()
+            .map_err(|e| error(None, e.to_string()))?;
+        if let Some(writer) = writer {
+            let _ = writer.join();
+        }
+        if out.status.success() {
+            Ok(out.stdout)
+        } else {
+            let detail = String::from_utf8_lossy(&out.stderr).trim().to_string();
+            Err(error(out.status.code(), detail))
+        }
+    }
+
     /// A path `git rev-parse --git-path` names, made absolute.
     fn git_path(&self, dir: &Path, name: &str) -> Result<PathBuf, GitError> {
         let out = self.run(dir, &["rev-parse", "--git-path", name])?;
@@ -450,15 +494,56 @@ pub trait Plumbing: Git {
         paths: &[String],
     ) -> Result<BTreeSet<String>, GitError>;
 
-    /// The tree of `base` (none: empty) with `paths` taken from the work
-    /// tree as `git add -A` takes them (a missing file is removed), built in
-    /// a temporary index: the user's index is not touched.
-    fn stage_tree(
+    /// Every file of `rev` (a commit or a tree) under the brain directory,
+    /// brain-relative; submodules are left out.
+    fn tree_entries(&self, repo: &Repo, rev: &str) -> Result<Vec<TreeEntry>, GitError>;
+
+    /// The contents of blobs, by their ids (one `git cat-file --batch`).
+    fn read_blobs(
         &self,
         repo: &Repo,
-        base: Option<&str>,
+        oids: &[String],
+    ) -> Result<BTreeMap<String, Vec<u8>>, GitError>;
+
+    /// A path in the git directory (`git rev-parse --git-path`), absolute.
+    fn git_dir_path(&self, repo: &Repo, name: &str) -> Result<PathBuf, GitError>;
+
+    /// A temporary index holding the tree of `base` (none: empty). The
+    /// user's index is never touched through it.
+    fn staging_index(&self, repo: &Repo, base: Option<&str>) -> Result<StagingIndex, GitError>;
+
+    /// Take `paths` from the work tree into `index` as `git add -A` takes
+    /// them (a missing file is removed).
+    fn stage_worktree(
+        &self,
+        repo: &Repo,
+        index: &StagingIndex,
         paths: &[String],
-    ) -> Result<String, GitError>;
+    ) -> Result<(), GitError>;
+
+    /// Put contents that are not in the work tree into `index` (a `None`
+    /// removes the path).
+    fn stage_blobs(
+        &self,
+        repo: &Repo,
+        index: &StagingIndex,
+        blobs: &[StagedBlob],
+    ) -> Result<(), GitError>;
+
+    /// `git write-tree` of `index`.
+    fn write_tree(&self, repo: &Repo, index: &StagingIndex) -> Result<String, GitError>;
+
+    /// Run a hook (`git hook run --ignore-missing`, so `core.hooksPath` is
+    /// honoured), against `index` when given; its stdout and stderr go to
+    /// this process's stderr. Returns the hook's exit code (0 when there is
+    /// no such hook).
+    fn run_hook(
+        &self,
+        repo: &Repo,
+        index: Option<&StagingIndex>,
+        name: &str,
+        args: &[&str],
+    ) -> Result<i32, GitError>;
 
     /// The tree of a commit.
     fn tree_of(&self, repo: &Repo, rev: &str) -> Result<String, GitError>;
@@ -480,14 +565,15 @@ pub trait Plumbing: Git {
     /// empty.
     fn config(&self, repo: &Repo, key: &str) -> Option<String>;
 
-    /// A commit of `tree` on `parents` (`git commit-tree`), authored as
-    /// [`Plumbing::author`] says. No hooks run.
+    /// A commit of `tree` on `parents` (`git commit-tree -F`, the message
+    /// read from `message_file` as it is), authored as [`Plumbing::author`]
+    /// says.
     fn commit_tree(
         &self,
         repo: &Repo,
         tree: &str,
         parents: &[&str],
-        message: &str,
+        message_file: &Path,
     ) -> Result<String, GitError>;
 
     /// Move `HEAD` (the branch it names) to `new` only if it is still at
@@ -511,11 +597,66 @@ pub trait Plumbing: Git {
     fn dirty(&self, repo: &Repo) -> Result<Vec<String>, GitError>;
 }
 
-/// A temporary index file, removed (with a lock git may have left) when
-/// dropped.
-struct TempIndex(PathBuf);
+/// The oldest git Kluris's sync commands run with: `merge-tree
+/// --write-tree` (2.38) and `git hook run` (2.36).
+pub const MIN_SYNC_VERSION: (u32, u32, u32) = (2, 38, 0);
 
-impl Drop for TempIndex {
+/// `git --version` as `(major, minor, patch)`: `git version 2.47.1.windows.1`
+/// is `(2, 47, 1)`, `git version 2.38` is `(2, 38, 0)`.
+pub fn parse_version(text: &str) -> Option<(u32, u32, u32)> {
+    let number = text.trim().strip_prefix("git version ")?;
+    let number = number.split_whitespace().next()?;
+    let mut parts = number.split('.').map_while(|p| p.parse::<u32>().ok());
+    let major = parts.next()?;
+    let minor = parts.next()?;
+    Some((major, minor, parts.next().unwrap_or(0)))
+}
+
+/// A file of a git tree ([`Plumbing::tree_entries`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TreeEntry {
+    /// Brain-relative, `/`-separated.
+    pub rel: String,
+    /// `100644`, `100755` or `120000` (a symlink).
+    pub mode: String,
+    pub oid: String,
+}
+
+impl TreeEntry {
+    pub fn is_symlink(&self) -> bool {
+        self.mode == "120000"
+    }
+}
+
+/// Contents for [`Plumbing::stage_blobs`]: `None` removes the path.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StagedBlob {
+    /// Brain-relative, `/`-separated.
+    pub rel: String,
+    pub mode: String,
+    pub bytes: Option<Vec<u8>>,
+}
+
+/// A temporary index file in the git directory ([`Plumbing::staging_index`]),
+/// removed (with a lock git may have left) when dropped.
+#[derive(Debug)]
+pub struct StagingIndex(PathBuf);
+
+impl StagingIndex {
+    pub fn path(&self) -> &Path {
+        &self.0
+    }
+}
+
+/// A file name unique to this process and moment.
+fn unique_name(stem: &str) -> String {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.subsec_nanos());
+    format!("{stem}-{}-{nanos}", std::process::id())
+}
+
+impl Drop for StagingIndex {
     fn drop(&mut self) {
         let _ = std::fs::remove_file(&self.0);
         let mut lock = self.0.clone().into_os_string();
@@ -543,6 +684,47 @@ fn nul_names(out: &[u8]) -> impl Iterator<Item = String> + '_ {
 /// One hash on a line of its own.
 fn hash_line(out: &[u8]) -> String {
     String::from_utf8_lossy(out).trim().to_string()
+}
+
+/// `git ls-tree -r -z` records: `<mode> <type> <oid>\t<path>`; blobs only.
+fn parse_ls_tree(out: &[u8]) -> Vec<TreeEntry> {
+    out.split(|b| *b == 0)
+        .filter_map(|record| {
+            let tab = record.iter().position(|b| *b == b'\t')?;
+            let head = String::from_utf8_lossy(&record[..tab]);
+            let mut fields = head.split(' ');
+            let (mode, kind, oid) = (fields.next()?, fields.next()?, fields.next()?);
+            (kind == "blob").then(|| TreeEntry {
+                rel: String::from_utf8_lossy(&record[tab + 1..]).into_owned(),
+                mode: mode.to_string(),
+                oid: oid.to_string(),
+            })
+        })
+        .collect()
+}
+
+/// `git cat-file --batch` output: per object `<oid> <type> <size>\n`, the
+/// contents, `\n`; a `<oid> missing` line for one that is not there.
+fn parse_batch(out: &[u8]) -> BTreeMap<String, Vec<u8>> {
+    let mut blobs = BTreeMap::new();
+    let mut rest = out;
+    while let Some(end) = rest.iter().position(|b| *b == b'\n') {
+        let header = String::from_utf8_lossy(&rest[..end]).into_owned();
+        rest = &rest[end + 1..];
+        let fields: Vec<&str> = header.split(' ').collect();
+        let [oid, _kind, size] = fields[..] else {
+            continue;
+        };
+        let Ok(size) = size.parse::<usize>() else {
+            break;
+        };
+        let Some(contents) = rest.get(..size) else {
+            break;
+        };
+        blobs.insert(oid.to_string(), contents.to_vec());
+        rest = rest.get(size + 1..).unwrap_or_default();
+    }
+    blobs
 }
 
 /// `Name <email> <time> <zone>` from `git var GIT_AUTHOR_IDENT`.
@@ -615,26 +797,132 @@ impl Plumbing for SystemGit {
         Ok(nul_names(&out).collect())
     }
 
-    fn stage_tree(
+    fn tree_entries(&self, repo: &Repo, rev: &str) -> Result<Vec<TreeEntry>, GitError> {
+        let out = self.run(&repo.dir, &["ls-tree", "-r", "-z", rev])?;
+        Ok(parse_ls_tree(&out))
+    }
+
+    fn read_blobs(
         &self,
         repo: &Repo,
-        base: Option<&str>,
-        paths: &[String],
-    ) -> Result<String, GitError> {
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |d| d.subsec_nanos());
-        let name = format!("kluris-commit-{}-{nanos}.index", std::process::id());
-        let index = TempIndex(self.git_path(&repo.dir, &name)?);
+        oids: &[String],
+    ) -> Result<BTreeMap<String, Vec<u8>>, GitError> {
+        if oids.is_empty() {
+            return Ok(BTreeMap::new());
+        }
+        let mut input = oids.join("\n").into_bytes();
+        input.push(b'\n');
+        let out = self.run_input(&repo.dir, None, &["cat-file", "--batch"], input)?;
+        Ok(parse_batch(&out))
+    }
+
+    fn git_dir_path(&self, repo: &Repo, name: &str) -> Result<PathBuf, GitError> {
+        self.git_path(&repo.dir, name)
+    }
+
+    fn staging_index(&self, repo: &Repo, base: Option<&str>) -> Result<StagingIndex, GitError> {
+        let name = format!("{}.index", unique_name("kluris-commit"));
+        let index = StagingIndex(self.git_path(&repo.dir, &name)?);
         if let Some(base) = base {
             self.run_with_index(&repo.dir, &index.0, &["read-tree", base])?;
         }
-        if !paths.is_empty() {
-            let args = with_paths(&["add", "-A"], paths);
+        Ok(index)
+    }
+
+    fn stage_worktree(
+        &self,
+        repo: &Repo,
+        index: &StagingIndex,
+        paths: &[String],
+    ) -> Result<(), GitError> {
+        if paths.is_empty() {
+            return Ok(());
+        }
+        let args = with_paths(&["add", "-A"], paths);
+        self.run_with_index(&repo.dir, &index.0, &args).map(drop)
+    }
+
+    fn stage_blobs(
+        &self,
+        repo: &Repo,
+        index: &StagingIndex,
+        blobs: &[StagedBlob],
+    ) -> Result<(), GitError> {
+        let mut info = Vec::new();
+        let mut removed = Vec::new();
+        for blob in blobs {
+            match &blob.bytes {
+                Some(bytes) => {
+                    let out = self.run_input(
+                        &repo.dir,
+                        None,
+                        &["hash-object", "-w", "--stdin"],
+                        bytes.clone(),
+                    )?;
+                    // `--index-info` paths are relative to the work tree root.
+                    let record = format!(
+                        "{} {}\t{}{}\0",
+                        blob.mode,
+                        hash_line(&out),
+                        repo.prefix,
+                        blob.rel
+                    );
+                    info.extend_from_slice(record.as_bytes());
+                }
+                None => removed.push(blob.rel.clone()),
+            }
+        }
+        if !info.is_empty() {
+            self.run_input(
+                &repo.dir,
+                Some(&index.0),
+                &["update-index", "-z", "--index-info"],
+                info,
+            )?;
+        }
+        if !removed.is_empty() {
+            let mut args = vec!["update-index", "--force-remove", "--"];
+            args.extend(removed.iter().map(String::as_str));
             self.run_with_index(&repo.dir, &index.0, &args)?;
         }
+        Ok(())
+    }
+
+    fn write_tree(&self, repo: &Repo, index: &StagingIndex) -> Result<String, GitError> {
         let out = self.run_with_index(&repo.dir, &index.0, &["write-tree"])?;
         Ok(hash_line(&out))
+    }
+
+    fn run_hook(
+        &self,
+        repo: &Repo,
+        index: Option<&StagingIndex>,
+        name: &str,
+        args: &[&str],
+    ) -> Result<i32, GitError> {
+        let mut all = vec!["hook", "run", "--ignore-missing", name];
+        if !args.is_empty() {
+            all.push("--");
+            all.extend_from_slice(args);
+        }
+        let error = |code, detail: String| GitError {
+            args: all.iter().map(|a| a.to_string()).collect(),
+            code,
+            detail,
+        };
+        let mut cmd = self.command(Some(&repo.dir), &all);
+        if let Some(index) = index {
+            cmd.env("GIT_INDEX_FILE", &index.0);
+        }
+        // As `git commit` runs them: no editor, the hook's output on stderr.
+        cmd.env("GIT_EDITOR", ":")
+            .stdin(Stdio::null())
+            .stdout(Stdio::from(std::io::stderr()))
+            .stderr(Stdio::inherit());
+        let status = cmd.status().map_err(|e| error(None, e.to_string()))?;
+        status
+            .code()
+            .ok_or_else(|| error(None, "the hook was killed by a signal".into()))
     }
 
     fn tree_of(&self, repo: &Repo, rev: &str) -> Result<String, GitError> {
@@ -691,13 +979,14 @@ impl Plumbing for SystemGit {
         repo: &Repo,
         tree: &str,
         parents: &[&str],
-        message: &str,
+        message_file: &Path,
     ) -> Result<String, GitError> {
+        let file = message_file.to_string_lossy();
         let mut args = vec!["commit-tree", tree];
         for parent in parents {
             args.extend(["-p", parent]);
         }
-        args.extend(["-m", message]);
+        args.extend(["-F", &file]);
         let mut cmd = self.command(Some(&repo.dir), &args);
         self.identity_fallback(&repo.dir, &mut cmd);
         let out = self.output(cmd, &args)?;
@@ -805,6 +1094,22 @@ mod tests {
         assert_eq!(commits[1].subject, "");
         assert_eq!(commits[1].date, "2026-01-02T00:00:00+02:00");
         assert!(parse_log("").is_empty());
+    }
+
+    #[test]
+    fn parse_git_versions() {
+        assert_eq!(parse_version("git version 2.55.0"), Some((2, 55, 0)));
+        assert_eq!(
+            parse_version("git version 2.47.1.windows.1"),
+            Some((2, 47, 1))
+        );
+        assert_eq!(parse_version("git version 2.38"), Some((2, 38, 0)));
+        assert_eq!(
+            parse_version("git version 2.39.5 (Apple Git-154)"),
+            Some((2, 39, 5))
+        );
+        assert_eq!(parse_version("not git"), None);
+        assert!(MIN_SYNC_VERSION <= (2, 38, 0) && (2, 37, 9) < MIN_SYNC_VERSION);
     }
 
     #[test]

@@ -8,4 +8,5 @@ pub mod glossary;
 pub mod neuron_index;
 pub mod sandbox;
 pub mod store;
+pub mod tree_store;
 pub mod walk;
