@@ -173,6 +173,89 @@ mod tests {
         );
     }
 
+    // T-111 finding 3: only a receipt that is dist's, for Kluris, says what
+    // may be removed or replaced.
+    #[test]
+    fn dists_receipt_is_klurises_on_its_platform() {
+        let unix = Receipt::parse(DIST).unwrap();
+        assert_eq!(unix.check_kluris(false), Ok(()));
+        // The Unix receipt names `kluris`, which no Windows install has.
+        assert!(unix.check_kluris(true).is_err());
+        let windows = Receipt::parse(
+            &DIST
+                .replace("[\"kluris\"]", "[\"kluris.exe\"]")
+                .replace("/home/u/.kluris/bin", "C:\\\\Users\\\\u\\\\.kluris\\\\bin")
+                .replace('\n', "\r\n"),
+        )
+        .unwrap();
+        assert_eq!(windows.check_kluris(true), Ok(()));
+        assert!(windows.check_kluris(false).is_err());
+    }
+
+    #[test]
+    fn a_receipt_that_is_not_dists_for_kluris_is_refused_with_why() {
+        for (from, to, why) in [
+            ("[\"kluris\"]", "[\"notes.txt\"]", "binaries"),
+            ("[\"kluris\"]", "[\"kluris\",\"x\"]", "binaries"),
+            ("\"cdylibs\":[]", "\"cdylibs\":[\"libx.so\"]", "cdylibs"),
+            (
+                "\"cstaticlibs\":[]",
+                "\"cstaticlibs\":[\"libx.a\"]",
+                "cstaticlibs",
+            ),
+            (
+                "\"binary_aliases\":{}",
+                "\"binary_aliases\":{\"k\":[\"x\"]}",
+                "binary_aliases",
+            ),
+            ("\"flat\"", "\"hierarchical\"", "install_layout"),
+            (
+                "\"/home/u/.kluris/bin\"",
+                "\"home/u/.kluris/bin\"",
+                "install_prefix",
+            ),
+            ("\"cargo-dist\"", "\"homebrew\"", "provider"),
+            ("\"app_name\":\"kluris\"", "\"app_name\":\"x\"", "source"),
+            (
+                "\"name\":\"kluris\",\"owner\"",
+                "\"name\":\"x\",\"owner\"",
+                "source",
+            ),
+            ("\"ngvoicu\"", "\"someone\"", "source"),
+            (
+                "\"release_type\":\"github\"",
+                "\"release_type\":\"x\"",
+                "source",
+            ),
+            (
+                "\"modify_path\":true",
+                "\"modify_path\":\"yes\"",
+                "modify_path",
+            ),
+        ] {
+            assert_eq!(DIST.matches(from).count(), 1, "{from}");
+            let r = Receipt::parse(&DIST.replace(from, to)).unwrap();
+            let err = r.check_kluris(false).unwrap_err();
+            assert!(err.contains(why), "{to}: {err}");
+        }
+        for windows_prefix in ["C:\\\\x", "\\\\\\\\server\\\\share\\\\bin"] {
+            let r = Receipt::parse(
+                &DIST
+                    .replace("[\"kluris\"]", "[\"kluris.exe\"]")
+                    .replace("\"/home/u/.kluris/bin\"", &format!("\"{windows_prefix}\"")),
+            )
+            .unwrap();
+            assert_eq!(r.check_kluris(true), Ok(()), "{windows_prefix}");
+        }
+        let relative = Receipt::parse(
+            &DIST
+                .replace("[\"kluris\"]", "[\"kluris.exe\"]")
+                .replace("\"/home/u/.kluris/bin\"", "\"kluris\\\\bin\""),
+        )
+        .unwrap();
+        assert!(relative.check_kluris(true).is_err());
+    }
+
     #[test]
     fn not_a_receipt() {
         assert!(Receipt::parse("[]").is_err());

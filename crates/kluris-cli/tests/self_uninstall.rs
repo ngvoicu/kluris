@@ -267,11 +267,12 @@ fn slashed(p: &Path) -> String {
     p.display().to_string().replace('\\', "/")
 }
 
-/// An in-memory HKCU `Path`.
+/// An in-memory HKCU `Path`; `fail_writes` makes every write fail.
 #[derive(Default)]
 struct FakeUserPath {
     value: Option<String>,
     writes: Vec<String>,
+    fail_writes: bool,
 }
 
 impl UserPath for FakeUserPath {
@@ -280,6 +281,9 @@ impl UserPath for FakeUserPath {
     }
 
     fn write(&mut self, value: &str) -> io::Result<()> {
+        if self.fail_writes {
+            return Err(io::Error::other("registry locked"));
+        }
         self.writes.push(value.to_string());
         self.value = Some(value.to_string());
         Ok(())
@@ -445,6 +449,7 @@ fn the_user_path_entry_is_removed_through_user_path() {
     let mut fake = FakeUserPath {
         value: Some(format!("{entry};%USERPROFILE%\\bin;C:\\Other")),
         writes: Vec::new(),
+        fail_writes: false,
     };
     let report = uninstall(
         &request(&h, &receipt, false),
@@ -464,6 +469,7 @@ fn the_user_path_entry_is_removed_through_user_path() {
     let mut fake = FakeUserPath {
         value: Some("C:\\Other;%USERPROFILE%\\.kluris\\bin2".into()),
         writes: Vec::new(),
+        fail_writes: false,
     };
     let report = uninstall(
         &request(&h, &receipt, false),
@@ -578,17 +584,288 @@ fn the_binary_goes_through_the_callers_remover() {
     assert_eq!(asked, vec![h.prefix.join(exe_name())]);
 }
 
+// A failed step keeps what a retry needs (T-111 finding 5): the rc files
+// go first and a failure there stops everything; then the env scripts, the
+// fish file and the PATH entry, a failure stopping before the binary; the
+// receipt goes last, once the binary is gone. A rerun finishes the job.
+// (This replaces `a_failure_is_reported_and_the_rest_goes_on`, which required
+// the receipt to be removed after a failed binary removal: that was the bug.)
+
 #[test]
-fn a_failure_is_reported_and_the_rest_goes_on() {
+fn a_failed_binary_removal_keeps_the_receipt_and_a_retry_finishes() {
     let h = Home::installed();
     let receipt = h.receipt();
     let mut remover = |_: &Path| Err(io::Error::other("busy"));
     let report = uninstall(&request(&h, &receipt, false), None, &mut remover).unwrap();
     assert_eq!(report.failed.len(), 1, "{:?}", report.failed);
     assert!(report.failed[0].contains("busy"));
+    assert!(!report.ok());
     assert!(h.prefix.join(exe_name()).exists());
+    assert!(h.receipt.exists(), "the receipt a retry needs is kept");
     h.assert_rc_files_restored();
+
+    let receipt = h.receipt();
+    let report = uninstall(&request(&h, &receipt, false), None, &mut remove_file).unwrap();
+    assert!(report.ok(), "{:?}", report.failed);
+    h.assert_installer_files_gone();
+    h.assert_rc_files_restored();
+    h.assert_user_things_kept();
+}
+
+#[cfg(unix)]
+fn read_only(dir: &Path, yes: bool) {
+    use std::os::unix::fs::PermissionsExt;
+    fs::set_permissions(
+        dir,
+        fs::Permissions::from_mode(if yes { 0o500 } else { 0o700 }),
+    )
+    .unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn an_rc_file_that_cannot_be_edited_stops_before_anything_is_removed() {
+    // The reviewer's case: ~/.profile is a link into a dotfiles folder the
+    // atomic rewrite cannot write in.
+    let h = Home::installed();
+    let dotfiles = h.root.join("dotfiles");
+    fs::create_dir_all(&dotfiles).unwrap();
+    let profile = h.home.join(".profile");
+    fs::rename(&profile, dotfiles.join("profile")).unwrap();
+    std::os::unix::fs::symlink(dotfiles.join("profile"), &profile).unwrap();
+    read_only(&dotfiles, true);
+    let receipt = h.receipt();
+    let report = uninstall(&request(&h, &receipt, false), None, &mut remove_file).unwrap();
+    read_only(&dotfiles, false);
+    assert!(!report.ok());
+    assert!(
+        report.failed.iter().any(|f| f.contains(".profile")),
+        "{:?}",
+        report.failed
+    );
+    for kept in [
+        h.prefix.join(exe_name()),
+        h.receipt.clone(),
+        h.config_home.join("kluris/env.sh"),
+        h.config_home.join("kluris/env.fish"),
+        h.home.join(".config/fish/conf.d/kluris.env.fish"),
+    ] {
+        assert!(
+            kept.exists(),
+            "{} went, though an rc edit failed",
+            kept.display()
+        );
+    }
+    assert!(report.removed.is_empty(), "{:?}", report.removed);
+
+    let receipt = h.receipt();
+    let report = uninstall(&request(&h, &receipt, false), None, &mut remove_file).unwrap();
+    assert!(report.ok(), "{:?}", report.failed);
+    h.assert_installer_files_gone();
+    h.assert_rc_files_restored();
+    assert!(
+        fs::symlink_metadata(&profile)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn an_env_script_that_cannot_be_removed_stops_before_the_binary() {
+    let h = Home::installed();
+    let folder = h.config_home.join("kluris");
+    read_only(&folder, true);
+    let receipt = h.receipt();
+    let report = uninstall(&request(&h, &receipt, false), None, &mut remove_file).unwrap();
+    read_only(&folder, false);
+    assert!(!report.ok());
+    assert!(
+        h.prefix.join(exe_name()).exists(),
+        "the binary a retry runs is kept"
+    );
+    assert!(h.receipt.exists());
+    h.assert_rc_files_restored();
+
+    let receipt = h.receipt();
+    let report = uninstall(&request(&h, &receipt, false), None, &mut remove_file).unwrap();
+    assert!(report.ok(), "{:?}", report.failed);
+    h.assert_installer_files_gone();
+}
+
+#[test]
+fn a_failed_path_update_keeps_the_binary_and_receipt_and_a_retry_finishes() {
+    let h = Home::installed();
+    let entry = h.prefix.display().to_string();
+    let mut fake = FakeUserPath {
+        value: Some(format!("{entry};C:\\Other")),
+        fail_writes: true,
+        ..FakeUserPath::default()
+    };
+    let receipt = h.receipt();
+    let report = uninstall(
+        &request(&h, &receipt, false),
+        Some(&mut fake),
+        &mut remove_file,
+    )
+    .unwrap();
+    assert!(!report.ok());
+    assert!(report.failed.iter().any(|f| f.contains("registry locked")));
+    assert!(h.prefix.join(exe_name()).exists());
+    assert!(h.receipt.exists());
+
+    fake.fail_writes = false;
+    let receipt = h.receipt();
+    let report = uninstall(
+        &request(&h, &receipt, false),
+        Some(&mut fake),
+        &mut remove_file,
+    )
+    .unwrap();
+    assert!(report.ok(), "{:?}", report.failed);
+    assert_eq!(fake.value.as_deref(), Some("C:\\Other"));
+    h.assert_installer_files_gone();
+}
+
+// `modify_path` and the env scripts (T-111 finding 4).
+
+/// The receipt with `modify_path` false, as the installer writes it under
+/// KLURIS_NO_MODIFY_PATH=1.
+fn without_modify_path(h: &Home) {
+    let text = fs::read_to_string(&h.receipt).unwrap();
+    assert!(text.contains("\"modify_path\":true"));
+    fs::write(
+        &h.receipt,
+        text.replace("\"modify_path\":true", "\"modify_path\":false"),
+    )
+    .unwrap();
+}
+
+/// Every file under HOME with its bytes.
+fn snapshot(root: &Path) -> Vec<(PathBuf, Vec<u8>)> {
+    let mut files = Vec::new();
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        for entry in fs::read_dir(&dir).unwrap() {
+            let path = entry.unwrap().path();
+            let meta = fs::symlink_metadata(&path).unwrap();
+            if meta.is_dir() {
+                stack.push(path);
+            } else {
+                files.push((path.clone(), fs::read(&path).unwrap_or_default()));
+            }
+        }
+    }
+    files.sort();
+    files
+}
+
+#[test]
+fn with_modify_path_false_no_path_setup_is_touched() {
+    // The user manages PATH: their own env.sh (not dist's) and the profile
+    // line sourcing it; the installer, run with KLURIS_NO_MODIFY_PATH=1, wrote
+    // neither.
+    let h = Home::installed();
+    without_modify_path(&h);
+    fs::write(
+        h.config_home.join("kluris/env.sh"),
+        "export USER_SENTINEL=1\n",
+    )
+    .unwrap();
+    let entry = h.prefix.display().to_string();
+    let mut fake = FakeUserPath {
+        value: Some(format!("{entry};C:\\Other")),
+        ..FakeUserPath::default()
+    };
+    let before = snapshot(&h.home);
+    let receipt = h.receipt();
+    assert!(!receipt.modify_path);
+    let report = uninstall(
+        &request(&h, &receipt, false),
+        Some(&mut fake),
+        &mut remove_file,
+    )
+    .unwrap();
+    assert!(report.ok(), "{:?}", report.failed);
+    assert!(report.edited.is_empty(), "{:?}", report.edited);
+    assert!(report.path_entries.is_empty());
+    assert!(fake.writes.is_empty(), "the user PATH was written");
+    let gone = [h.prefix.join(exe_name()), h.receipt.clone()];
+    let after = snapshot(&h.home);
+    let expected: Vec<_> = before
+        .into_iter()
+        .filter(|(p, _)| !gone.contains(p))
+        .collect();
+    assert_eq!(after, expected, "only the binary and the receipt went");
+}
+
+#[test]
+fn env_scripts_that_are_not_dists_are_kept_with_the_lines_that_source_them() {
+    let h = Home::installed();
+    let env_sh = h.config_home.join("kluris/env.sh");
+    let mine = format!("{ENV_SH}export EDITOR=vi\n");
+    fs::write(&env_sh, &mine).unwrap();
+    let rc_before: Vec<(PathBuf, String)> = h
+        .originals
+        .iter()
+        .map(|(p, _)| (p.clone(), fs::read_to_string(p).unwrap()))
+        .collect();
+    let receipt = h.receipt();
+    let report = uninstall(&request(&h, &receipt, false), None, &mut remove_file).unwrap();
+    assert!(report.ok(), "{:?}", report.failed);
+    assert_eq!(
+        fs::read_to_string(&env_sh).unwrap(),
+        mine,
+        "the user's env.sh is kept"
+    );
+    assert!(report.kept.contains(&env_sh), "{:?}", report.kept);
+    for (path, text) in rc_before {
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            text,
+            "{}: the line sourcing the kept env.sh stays",
+            path.display()
+        );
+    }
+    // env.fish is dist's: it and its conf.d file go.
+    assert!(!h.config_home.join("kluris/env.fish").exists());
+    assert!(!h.home.join(".config/fish/conf.d/kluris.env.fish").exists());
+    assert!(!h.prefix.join(exe_name()).exists());
     assert!(!h.receipt.exists());
+}
+
+#[test]
+fn a_fish_env_script_that_is_not_dists_is_kept_with_its_conf_d_line() {
+    let h = Home::installed();
+    let env_fish = h.config_home.join("kluris/env.fish");
+    fs::write(&env_fish, "set -x EDITOR vi\n").unwrap();
+    let conf = h.home.join(".config/fish/conf.d/kluris.env.fish");
+    let conf_text = fs::read_to_string(&conf).unwrap();
+    let receipt = h.receipt();
+    let report = uninstall(&request(&h, &receipt, false), None, &mut remove_file).unwrap();
+    assert!(report.ok(), "{:?}", report.failed);
+    assert_eq!(fs::read_to_string(&env_fish).unwrap(), "set -x EDITOR vi\n");
+    assert_eq!(fs::read_to_string(&conf).unwrap(), conf_text);
+    assert!(report.kept.contains(&env_fish), "{:?}", report.kept);
+    assert!(!h.config_home.join("kluris/env.sh").exists());
+    h.assert_rc_files_restored();
+}
+
+#[test]
+fn uninstall_refuses_a_receipt_that_is_not_klurises() {
+    let h = Home::installed();
+    let edited = fs::read_to_string(&h.receipt)
+        .unwrap()
+        .replace(&format!("[\"{}\"]", exe_name()), "[\"notes.txt\"]");
+    let receipt = Receipt::parse(&edited).unwrap();
+    let before = snapshot(&h.home);
+    let err = uninstall(&request(&h, &receipt, false), None, &mut remove_file).unwrap_err();
+    assert!(
+        err.to_string().contains("not a Kluris install receipt"),
+        "{err}"
+    );
+    assert_eq!(snapshot(&h.home), before);
 }
 
 // The command.
@@ -623,6 +900,7 @@ fn cli_uninstall_json() {
             "ok",
             "removed",
             "edited",
+            "kept",
             "path_entries",
             "skills",
             "purged",

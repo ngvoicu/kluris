@@ -46,6 +46,8 @@ pub struct UninstallReport {
     pub removed: Vec<PathBuf>,
     /// rc files a line was taken out of.
     pub edited: Vec<PathBuf>,
+    /// Files the installer's names point at that are not what it wrote, kept.
+    pub kept: Vec<PathBuf>,
     /// User PATH entries removed (Windows), as they were written.
     pub path_entries: Vec<String>,
     /// The skill folders a purge cleared something from (or failed in).
