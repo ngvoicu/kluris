@@ -202,6 +202,11 @@ with a `.sha256` each and one `sha256.sum`, GitHub attestations, and
 updater: `kluris self-update`). dist names everything after the Cargo
 package, hence the package `kluris`.
 
+- **Archive layouts** (what `kluris_core::dist::binary_in_archive` and
+  self-update follow): a `.tar.gz` holds everything in a top-level
+  `kluris-<target>/` folder; a Windows `.zip` is flat, `kluris.exe` at its
+  root. `--version` is the package's version (clap's `version`), so a
+  release prints its own.
 - **Archives** hold `kluris`, `LICENSE`, `README.md`,
   `THIRD_PARTY_NOTICES.md` (ported code) and `THIRD_PARTY_LICENSES.md` (the
   crates built into `kluris`, from cargo-about). Auto-includes are off: dist
@@ -214,7 +219,12 @@ package, hence the package `kluris`.
   and adds `. "$HOME/.config/kluris/env.sh"` to `~/.profile` and `~/.zshrc`
   (or the existing bash/zsh rc files) plus fish's `conf.d/kluris.env.fish`;
   the PowerShell one checks no checksum, prepends to `HKCU\Environment\Path`
-  as REG_EXPAND_SZ and writes the receipt to `%LOCALAPPDATA%\kluris\`.
+  as REG_EXPAND_SZ and writes the receipt to `%LOCALAPPDATA%\kluris\`
+  (one line, CRLF, no BOM; `binaries` `["kluris.exe"]`, `install_prefix` in
+  backslashes, the same text it puts first in PATH). It rebuilds the user
+  PATH as `-split ';' -ne ''`, so empty entries (a trailing `;`) are gone and
+  a REG_SZ value becomes REG_EXPAND_SZ; `kluris self-uninstall` then removes
+  only its own entry and cannot bring those back.
 - **release.yml is generated:** change `dist-workspace.toml`, then
   `dist generate`; `dist plan` fails while it is stale.
 - **Its tag trigger is dist's own** (`'**[0-9]+.[0-9]+.[0-9]+*'`, decided
@@ -239,6 +249,19 @@ package, hence the package `kluris`.
   [--wrapper <site install.sh>] target/distrib` (`.ps1` on Windows) installs
   it from a local server in a sandbox HOME, and checks the rc lines, a fresh
   login shell, `kluris --version` and `kluris doctor --json`.
+- **The installed life cycle** (`cargo xtask windows|linux --installer-smoke`
+  runs it after the installer smoke): `scripts/release/build-versions.sh
+  target/releases 3.0.0 3.0.1` (`.ps1`: `-Versions 3.0.0,3.0.1`, one word)
+  builds the tree as two releases that differ only in version, and
+  `scripts/release/lifecycle-smoke.sh target/releases 3.0.0 3.0.1` (`.ps1`
+  on Windows) serves them with a fake GitHub release API (`serve.py`; plain
+  http is allowed to loopback in `KLURIS_GITHUB_API_URL`), installs 3.0.0
+  with its own installer, makes a brain, a companion and skills, then
+  checks `self-update --check --json`, `self-update --json` (the binary is
+  the new archive's, only the receipt's `version` changes), `--version`,
+  and `self-uninstall --yes --json` (exactly the installer's files and PATH
+  entry go; every other file, the seeded rc files included, is
+  byte-identical).
 - **Site wrappers** live in `../sites/kluris-site` (`install.sh`,
   `install.ps1`): thin pass-throughs to `releases/latest/download/` or
   `releases/download/v$KLURIS_VERSION/`; a push there deploys the site.
