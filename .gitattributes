@@ -1,3 +1,9 @@
+# Every text file is checked out with LF, Windows too (GitHub's Windows
+# runners have core.autocrlf=true): the tree the release builds and the tests
+# read is the committed bytes, as the zeewin/zeelin runs' git archive is.
+# vendored/ is embedded into the binary (include_dir!).
+* text=auto eol=lf
+
 # Byte-exact fixtures: never convert line endings on checkout.
 crates/kluris-core/tests/fixtures/** -text
 crates/kluris-core/templates/** -text

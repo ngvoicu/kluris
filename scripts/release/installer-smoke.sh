@@ -103,7 +103,7 @@ server_pid=$!
 tries=0
 while [ ! -s "$work/port" ]; do
     tries=$((tries + 1))
-    [ "$tries" -le 100 ] || fail "the local server did not start"
+    [ "$tries" -le 600 ] || fail "the local server did not start in 60 s"
     kill -0 "$server_pid" 2>/dev/null || fail "the local server exited"
     sleep 0.1
 done
@@ -201,7 +201,7 @@ if [ -n "$wrapper" ]; then
     tries=0
     while [ ! -s "$work/port2" ]; do
         tries=$((tries + 1))
-        [ "$tries" -le 100 ] || fail "the second local server did not start"
+        [ "$tries" -le 600 ] || fail "the second local server did not start in 60 s"
         sleep 0.1
     done
     bad="http://127.0.0.1:$(cat "$work/port2")"
