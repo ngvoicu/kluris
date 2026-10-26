@@ -623,7 +623,7 @@ fn stale_staging_folders_from_a_crash_are_cleared() {
     );
     let claude = dest(&report, &s.h(".claude/skills"));
     assert_eq!(claude.removed, sorted(&[&tmp, &old]));
-    assert_eq!(claude.kept, [half.clone()]);
+    assert_eq!(claude.kept, std::slice::from_ref(&half));
     assert!(s.h(".claude/skills/kluris-acme/SKILL.md").is_file());
 }
 

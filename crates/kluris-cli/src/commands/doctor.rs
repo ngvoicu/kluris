@@ -92,8 +92,8 @@ fn role(role: &DestinationRole) -> String {
     }
 }
 
-/// `{"agents", "destinations": [{"path", "role", "written", "removed",
-/// "failed"}], "brain_errors": [{"brain", "error"}]}`.
+/// `{"agents", "destinations": [{"path", "role", "alias_of", "written",
+/// "removed", "kept", "failed"}], "brain_errors": [{"brain", "error"}]}`.
 fn skills_json(skills: &InstallReport) -> Json {
     let destinations = skills
         .destinations
@@ -102,8 +102,15 @@ fn skills_json(skills: &InstallReport) -> Json {
             Json::Object(vec![
                 ("path".into(), Json::Str(slashed(&d.path))),
                 ("role".into(), Json::Str(role(&d.role))),
+                (
+                    "alias_of".into(),
+                    d.alias_of
+                        .as_ref()
+                        .map_or(Json::Null, |p| Json::Str(slashed(p))),
+                ),
                 ("written".into(), strings(&d.written)),
                 ("removed".into(), strings(&d.removed)),
+                ("kept".into(), strings(&d.kept)),
                 ("failed".into(), strings(&d.failed)),
             ])
         })
@@ -149,14 +156,21 @@ fn report_text(report: &DoctorReport, home: &std::path::Path, painter: Painter) 
     out
 }
 
-/// `    ~/.agents/skills: written a, b; removed c; failed: <message>`.
+/// `    ~/.agents/skills: written a, b; removed c; kept d; failed: <message>`,
+/// or `    ~/.codex/skills: same folder as ~/.agents/skills`.
 fn destination_line(dest: &DestinationReport, home: &std::path::Path) -> Option<String> {
     let mut parts = Vec::new();
+    if let Some(first) = &dest.alias_of {
+        parts.push(format!("same folder as {}", home_relative(first, home)));
+    }
     if !dest.written.is_empty() {
         parts.push(format!("written {}", dest.written.join(", ")));
     }
     if !dest.removed.is_empty() {
         parts.push(format!("removed {}", dest.removed.join(", ")));
+    }
+    if !dest.kept.is_empty() {
+        parts.push(format!("kept {}", dest.kept.join(", ")));
     }
     if !dest.failed.is_empty() {
         parts.push(format!("failed: {}", dest.failed.join("; ")));

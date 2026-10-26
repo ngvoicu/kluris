@@ -277,13 +277,26 @@ fn same_file(a: &Path, b: &Path) -> bool {
     }
 }
 
-/// v2: refresh each known companion that is installed or referenced.
+/// v2: refresh each known companion that is installed or referenced, and
+/// each one a failed refresh left a backup of.
 fn refresh_companions(config: &GlobalConfig, home: &Path, report: &mut DoctorReport) {
     let mut targets = companions::installed(home);
     targets.extend(companions::referenced(config));
+    // A backup a failed refresh kept is restored (and refreshed) too.
+    targets.extend(companions::pending_backups(home));
     for name in companions::normalize(&targets) {
         let (status, detail, error) = match companions::refresh(&name, home) {
-            Ok(()) => (Status::Pass, format!("refreshed {name}"), None),
+            Ok(done) => match done.restored {
+                None => (Status::Pass, format!("refreshed {name}"), None),
+                Some(backup) => (
+                    Status::Pass,
+                    format!(
+                        "refreshed {name} (first restored the copy a failed refresh kept at {})",
+                        backup.display()
+                    ),
+                    None,
+                ),
+            },
             Err(e) => (
                 Status::Fail,
                 format!("refresh failed: {e}"),

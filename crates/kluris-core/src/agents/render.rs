@@ -5,13 +5,16 @@
 //! research-05's "Search" paragraph.
 //!
 //! Also here: recognising the skills and Windsurf workflows Kluris wrote
-//! (v3's marker, or the shape of every v1/v2 rendering), so installs remove
-//! only those and never a user's own `kluris-*` folder.
+//! (v3's marker at its place, or the full template of a v1/v2 release,
+//! [`super::legacy`]), so installs remove only those and never a user's own
+//! `kluris-*` folder.
 //!
 //! `windows_splitroot` below is translated from CPython 3.11
 //! `Lib/pathlib.py` (`_WindowsFlavour.splitroot`); see LICENSE-PSF.
 
+use super::legacy::{ERAS, Era, Style, Workflow};
 use crate::companions;
+use crate::scaffold::is_valid_v2_name;
 
 /// The SKILL.md template: frontmatter, marker and v2's `SKILL_BODY` with the
 /// decided changes. Placeholders are `{name}` (see [`fill`]).
@@ -23,14 +26,9 @@ const FLAG_HINT: &str = include_str!("../../templates/flag_hint.md");
 /// v2's `_build_specmint_block` text around the routing lines.
 const COMPANION_BLOCK: &str = include_str!("../../templates/companion_block.md");
 
-/// The marker comment v3 writes right after the frontmatter. Only the
-/// prefix up to [`MARKER_PREFIX`] is matched, so a later wording change
-/// still recognises older v3 skills.
+/// The marker comment v3 writes right after the frontmatter; a SKILL.md is
+/// v3's when this whole line is in that place.
 pub const MARKER: &str = "<!-- kluris:generated -- Kluris writes this skill and `kluris doctor` rewrites it; edits here are lost. -->";
-const MARKER_PREFIX: &str = "<!-- kluris:generated";
-
-/// The opening words of every description Kluris has written (v1.0 on).
-const V2_DESCRIPTION_START: &str = "You are the team's subject matter expert";
 
 /// What a brain's skill is rendered from.
 #[derive(Debug, Clone, Copy)]
@@ -264,47 +262,131 @@ fn lf(text: &str) -> std::borrow::Cow<'_, str> {
     }
 }
 
-/// Whether `skill_md`, the SKILL.md of the folder `dir_name`, was written by
-/// Kluris: its frontmatter opens with `name: <dir_name>` and `description:`,
-/// and either v3's marker is the first line after the frontmatter or the
-/// description is Kluris's (every v1/v2 rendering opens with "You are the
-/// team's subject matter expert"). A user's own `kluris-notes` skill is
-/// neither.
+/// Whether `skill_md`, the SKILL.md of the folder `dir_name` (its name as
+/// the folder listing gives it), was written by Kluris:
+///
+/// - v3: the frontmatter is `name: <dir_name>` and a one-line
+///   `description:`, then a blank line and [`MARKER`] as a line of its own;
+/// - v1/v2: the frontmatter is a release's own, byte for byte, with only
+///   the brain name varying (`kluris-<brain>`, or v1/v2.0's bare `kluris`),
+///   and the body has that release's headings in order.
+///
+/// Anything else, a user's `kluris-notes` whose description merely opens
+/// like Kluris's included, is not. CRLF reads as LF.
 pub fn is_generated_skill(dir_name: &str, skill_md: &str) -> bool {
     let text = lf(skill_md);
-    let head = format!("---\nname: {dir_name}\ndescription: ");
-    let Some(description) = text.strip_prefix(&head) else {
-        return false;
-    };
-    if is_kluris_description(description) {
-        return true;
-    }
-    match description.find("\n---\n") {
-        Some(end) => description[end + "\n---\n".len()..]
-            .trim_start_matches('\n')
-            .starts_with(MARKER_PREFIX),
-        None => false,
-    }
+    has_marker(dir_name, &text)
+        || ERAS.iter().any(|era| {
+            let frontmatter = |desc: &str| skill_frontmatter(era.style, dir_name, desc);
+            matches_era(era, dir_name, &text, frontmatter)
+        })
 }
 
 /// Whether `text`, the file `file_name` in a Windsurf `global_workflows`
-/// folder, is a workflow v2 wrote: `kluris*.md` opening with
-/// `description:` and Kluris's description.
+/// folder, is a workflow a v1/v2 release wrote (`kluris-<brain>.md` or
+/// `kluris.md`): that release's frontmatter byte for byte and its headings
+/// in order.
 pub fn is_generated_workflow(file_name: &str, text: &str) -> bool {
-    if !file_name.starts_with("kluris") || !file_name.ends_with(".md") {
+    let Some(stem) = file_name.strip_suffix(".md") else {
         return false;
-    }
+    };
     let text = lf(text);
-    text.strip_prefix("---\ndescription: ")
-        .is_some_and(is_kluris_description)
+    ERAS.iter().any(|era| {
+        era.workflow != Workflow::None
+            && matches_era(era, stem, &text, |desc| {
+                workflow_frontmatter(era.workflow, desc)
+            })
+    })
 }
 
-/// A frontmatter description value (quoted or not) Kluris wrote.
-fn is_kluris_description(value: &str) -> bool {
-    value
-        .strip_prefix('"')
-        .unwrap_or(value)
-        .starts_with(V2_DESCRIPTION_START)
+/// v3's frontmatter and marker: `---`, `name: <dir_name>`, a non-empty
+/// `description: ...` line, `---`, a blank line, the marker line.
+fn has_marker(dir_name: &str, text: &str) -> bool {
+    let head = format!("---\nname: {dir_name}\ndescription: ");
+    let Some((description, rest)) = text.strip_prefix(&head).and_then(|r| r.split_once('\n'))
+    else {
+        return false;
+    };
+    !description.is_empty()
+        && rest
+            .strip_prefix("---\n\n")
+            .and_then(|r| r.strip_prefix(MARKER))
+            .is_some_and(|r| r.starts_with('\n'))
+}
+
+/// The brain an `era` file named `name` (`kluris-<brain>` or `kluris`)
+/// would be for, then whether `text` is that file: `frontmatter(desc)`
+/// built from the era's description with that brain, then its headings.
+fn matches_era(era: &Era, name: &str, text: &str, frontmatter: impl Fn(&str) -> String) -> bool {
+    let slotted = era.description.contains(BRAIN_SLOT);
+    let brain = match name.strip_prefix("kluris-") {
+        // v2 names a brain's skill `kluris-<brain>`; v1 wrote only `kluris`.
+        Some(brain) if slotted => brain.to_string(),
+        Some(_) => return false,
+        None if name != "kluris" => return false,
+        None if !slotted => String::new(),
+        // v2.0's single-brain `kluris`: the brain is the one its
+        // description names.
+        None => {
+            let template = frontmatter(era.description);
+            let Some(slot) = template.find(BRAIN_SLOT) else {
+                return false;
+            };
+            let Some(rest) = text.strip_prefix(&template[..slot]) else {
+                return false;
+            };
+            rest.chars()
+                .take_while(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || *c == '-')
+                .collect()
+        }
+    };
+    if slotted && !is_valid_v2_name(&brain) {
+        return false;
+    }
+    let expected = frontmatter(&era.description.replace(BRAIN_SLOT, &brain));
+    text.strip_prefix(&expected)
+        .is_some_and(|body| headings_in_order(body, era.headings, &brain))
+}
+
+/// The one placeholder of a v1/v2 description and heading.
+const BRAIN_SLOT: &str = "{brain_name}";
+
+/// A v1/v2 SKILL.md's frontmatter and the blank line after it.
+fn skill_frontmatter(style: Style, name: &str, description: &str) -> String {
+    match style {
+        Style::Folded => format!(
+            "---\nname: {name}\ndescription: >\n  {description}\n\
+             allowed-tools: Read, Write, Bash, Glob, Grep\n---\n\n"
+        ),
+        Style::Plain => format!("---\nname: {name}\ndescription: {description}\n---\n\n"),
+        Style::Quoted => format!(
+            "---\nname: {name}\ndescription: \"{}\"\n---\n\n",
+            description.replace('"', "\\\"")
+        ),
+    }
+}
+
+/// A v1/v2 Windsurf workflow's frontmatter: the description's first 200
+/// characters (Python's `[:200]`).
+fn workflow_frontmatter(style: Workflow, description: &str) -> String {
+    let cut: String = description.chars().take(200).collect();
+    match style {
+        Workflow::Quoted => format!(
+            "---\ndescription: \"{}\"\n---\n\n",
+            cut.replace('"', "\\\"")
+        ),
+        _ => format!("---\ndescription: {cut}\n---\n\n"),
+    }
+}
+
+/// Every one of `headings` (with `brain` in its slot) is a whole line of
+/// `body`, in that order.
+fn headings_in_order(body: &str, headings: &[&str], brain: &str) -> bool {
+    let mut lines = body.split('\n');
+    headings.iter().all(|heading| {
+        let want = heading.replace(BRAIN_SLOT, brain);
+        lines.any(|line| line == want)
+    })
 }
 
 #[cfg(test)]

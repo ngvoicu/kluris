@@ -187,7 +187,7 @@ fn strings(items: &[String]) -> Json {
 }
 
 /// `{"ok", "removed", "edited", "path_entries", "skills": [{"path",
-/// "removed", "failed"}], "purged", "failed"}`.
+/// "removed", "kept", "failed"}], "purged", "failed"}`.
 fn report_json(report: &UninstallReport) -> Json {
     let skills = report
         .skills
@@ -196,6 +196,7 @@ fn report_json(report: &UninstallReport) -> Json {
             Json::Object(vec![
                 ("path".into(), Json::Str(slashed(&d.path))),
                 ("removed".into(), strings(&d.removed)),
+                ("kept".into(), strings(&d.kept)),
                 ("failed".into(), strings(&d.failed)),
             ])
         })
@@ -231,6 +232,13 @@ fn report_text(report: &UninstallReport, home: &Path) -> String {
                 "Removed Kluris skills from {}: {}\n",
                 home_relative(&dest.path, home),
                 dest.removed.join(", ")
+            ));
+        }
+        if !dest.kept.is_empty() {
+            out.push_str(&format!(
+                "Kept in {} (not written by Kluris): {}\n",
+                home_relative(&dest.path, home),
+                dest.kept.join(", ")
             ));
         }
         for failure in &dest.failed {

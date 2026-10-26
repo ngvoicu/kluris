@@ -163,7 +163,7 @@ pub fn uninstall(
     if req.purge {
         report.skills = remove_generated_skills(home, req.copilot_home)
             .into_iter()
-            .filter(|d| !d.removed.is_empty() || !d.failed.is_empty())
+            .filter(|d| !d.removed.is_empty() || !d.kept.is_empty() || !d.failed.is_empty())
             .collect();
     }
 

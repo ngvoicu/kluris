@@ -1,14 +1,18 @@
 //! Installing a companion folder into `~/.kluris/companions/<name>/` (v2
 //! `companions.install`): copy the allowlisted entries into a staging
-//! folder, verify it, move the old copy (folder, file or link) aside, rename
-//! the staging folder in, then drop the old copy. Any failure leaves the
-//! old copy in place.
+//! folder, verify it, move the old copy (folder, file or link) aside to
+//! `.<name>.old`, rename the staging folder in, then drop the old copy.
+//! Any failure leaves the old copy: in place, or, when it cannot be moved
+//! back, in `.<name>.old`, which the error names and the next install
+//! (`kluris doctor` included) restores first (SPEC decision 2026-10-26,
+//! T-103: the backup is deleted only once the new copy is in place).
 
 use std::path::{Path, PathBuf};
 use std::{fmt, fs, io};
 
 use super::{CompanionTree, KNOWN, embedded, normalize};
 use crate::config::{ConfigError, GlobalConfig, read_brain_config};
+use crate::fileops::{FileOps, RealFs};
 use crate::pyrepr::py_path_str;
 
 /// The only top-level file a companion folder may hold.
@@ -29,6 +33,16 @@ pub enum CompanionError {
     Io { path: PathBuf, error: io::Error },
     /// A brain's `kluris.yml` could not be written.
     Config(ConfigError),
+    /// The previous copy stays in the backup folder `backup`: it could not
+    /// be put back.
+    BackupKept { backup: PathBuf, message: String },
+}
+
+/// What an install did besides installing.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Installed {
+    /// The backup a failed earlier install left, restored before this one.
+    pub restored: Option<PathBuf>,
 }
 
 impl fmt::Display for CompanionError {
@@ -45,6 +59,7 @@ impl fmt::Display for CompanionError {
             CompanionError::Invalid(message) => f.write_str(message),
             CompanionError::Io { path, error } => write!(f, "{}: {error}", path.display()),
             CompanionError::Config(err) => err.fmt(f),
+            CompanionError::BackupKept { message, .. } => f.write_str(message),
         }
     }
 }
@@ -98,6 +113,24 @@ pub fn referenced(config: &GlobalConfig) -> Vec<String> {
         }
     }
     normalize(&refs)
+}
+
+/// `~/.kluris/companions/.<name>.old` under `home`: where an install keeps
+/// the previous copy until the new one is in place.
+fn backup_dir(name: &str, home: &Path) -> PathBuf {
+    home.join(".kluris")
+        .join("companions")
+        .join(format!(".{name}.old"))
+}
+
+/// The known companions whose backup a failed install left behind; the
+/// next install restores it first.
+pub fn pending_backups(home: &Path) -> Vec<String> {
+    KNOWN
+        .iter()
+        .filter(|name| present(&backup_dir(name, home)))
+        .map(|name| name.to_string())
+        .collect()
 }
 
 /// Whether `path` is there at all: a file, a folder or a link (dangling
@@ -217,7 +250,17 @@ pub fn verify_runtime_dir(path: &Path) -> Result<(), CompanionError> {
 
 /// Install companion `name` from `tree` into `home` (see the module docs).
 pub fn install_tree(name: &str, tree: &CompanionTree, home: &Path) -> Result<(), CompanionError> {
-    install_with(name, tree, home, verify_runtime_dir)
+    install_tree_with(name, tree, home, &RealFs).map(|_| ())
+}
+
+/// [`install_tree`], renaming through `ops`.
+pub fn install_tree_with(
+    name: &str,
+    tree: &CompanionTree,
+    home: &Path,
+    ops: &dyn FileOps,
+) -> Result<Installed, CompanionError> {
+    install_with(name, tree, home, verify_runtime_dir, ops)
 }
 
 fn install_with(
@@ -225,7 +268,8 @@ fn install_with(
     tree: &CompanionTree,
     home: &Path,
     verify: impl Fn(&Path) -> Result<(), CompanionError>,
-) -> Result<(), CompanionError> {
+    ops: &dyn FileOps,
+) -> Result<Installed, CompanionError> {
     if !KNOWN.contains(&name) {
         return Err(CompanionError::Unknown(name.to_string()));
     }
@@ -236,26 +280,68 @@ fn install_with(
     let parent = dest.parent().unwrap_or(home).to_path_buf();
     fs::create_dir_all(&parent).map_err(io_error(&parent))?;
     let staging = parent.join(format!(".{name}.tmp"));
-    let backup = parent.join(format!(".{name}.old"));
-    remove_any(&staging);
-    remove_any(&backup);
+    let backup = backup_dir(name, home);
 
-    let result = (|| {
-        stage(tree, &staging)?;
-        verify(&staging)?;
+    // A backup an earlier install kept: the copy to restore when there is
+    // none in place; superseded by the one in place otherwise.
+    let mut done = Installed::default();
+    if present(&backup) {
         if present(&dest) {
-            fs::rename(&dest, &backup).map_err(io_error(&dest))?;
-        }
-        fs::rename(&staging, &dest).map_err(io_error(&dest))
-    })();
-    if result.is_err() {
-        remove_any(&staging);
-        if present(&backup) && !present(&dest) {
-            let _ = fs::rename(&backup, &dest);
+            remove_any(&backup);
+        } else {
+            ops.rename(&backup, &dest)
+                .map_err(|e| CompanionError::BackupKept {
+                    backup: backup.clone(),
+                    message: format!(
+                        "cannot restore the previous copy kept at {}: {e}",
+                        backup.display()
+                    ),
+                })?;
+            done.restored = Some(backup.clone());
         }
     }
-    remove_any(&backup);
-    result
+    remove_any(&staging);
+
+    let staged = stage(tree, &staging).and_then(|()| verify(&staging));
+    if let Err(e) = staged {
+        remove_any(&staging);
+        return Err(e);
+    }
+    if present(&dest)
+        && let Err(e) = ops.rename(&dest, &backup)
+    {
+        remove_any(&staging);
+        return Err(CompanionError::Io {
+            path: dest,
+            error: e,
+        });
+    }
+    if let Err(e) = ops.rename(&staging, &dest) {
+        remove_any(&staging);
+        if present(&backup)
+            && !present(&dest)
+            && let Err(restore) = ops.rename(&backup, &dest)
+        {
+            return Err(CompanionError::BackupKept {
+                message: format!(
+                    "{}: {e}; the previous copy could not be put back ({restore}) and is kept at {} \
+                     (the next install or `kluris doctor` restores it)",
+                    dest.display(),
+                    backup.display()
+                ),
+                backup,
+            });
+        }
+        return Err(CompanionError::Io {
+            path: dest,
+            error: e,
+        });
+    }
+    // The new copy is in place: only now does the old one go.
+    if dest.join("SKILL.md").is_file() {
+        remove_any(&backup);
+    }
+    Ok(done)
 }
 
 /// Install the embedded copy of companion `name` into `home`.
@@ -264,9 +350,11 @@ pub fn install(name: &str, home: &Path) -> Result<(), CompanionError> {
     install_tree(name, &tree, home)
 }
 
-/// Refresh a companion: an unconditional re-copy of the embedded folder.
-pub fn refresh(name: &str, home: &Path) -> Result<(), CompanionError> {
-    install(name, home)
+/// Refresh a companion: an unconditional re-copy of the embedded folder
+/// (restoring a backup an earlier failure kept first, [`Installed`]).
+pub fn refresh(name: &str, home: &Path) -> Result<Installed, CompanionError> {
+    let tree = embedded(name).ok_or_else(|| CompanionError::Unknown(name.to_string()))?;
+    install_tree_with(name, &tree, home, &RealFs)
 }
 
 #[cfg(test)]
@@ -286,9 +374,13 @@ mod tests {
         let dest = installed_dir("specmint-core", home.path());
         fs::write(dest.join("references").join("r.md"), "old").unwrap();
 
-        let err = install_with("specmint-core", &tree(), home.path(), |_| {
-            Err(CompanionError::Invalid("verify failed".into()))
-        })
+        let err = install_with(
+            "specmint-core",
+            &tree(),
+            home.path(),
+            |_| Err(CompanionError::Invalid("verify failed".into())),
+            &RealFs,
+        )
         .unwrap_err();
 
         assert_eq!(err.to_string(), "verify failed");

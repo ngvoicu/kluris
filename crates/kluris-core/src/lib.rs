@@ -9,6 +9,7 @@ pub mod create;
 pub mod dist;
 pub mod doctor;
 pub mod dream;
+pub mod fileops;
 pub mod frontmatter;
 pub mod git;
 pub mod help;

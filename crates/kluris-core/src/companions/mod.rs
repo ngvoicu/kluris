@@ -16,8 +16,8 @@ mod optin;
 pub mod prompt;
 
 pub use install::{
-    CompanionError, install, install_tree, installed, installed_dir, is_installed, referenced,
-    refresh, verify_runtime_dir,
+    CompanionError, Installed, install, install_tree, install_tree_with, installed, installed_dir,
+    is_installed, pending_backups, referenced, refresh, verify_runtime_dir,
 };
 pub use optin::{BrainOptIns, OptInBrain, add, enabled, listing, load_brains, remove};
 

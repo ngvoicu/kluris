@@ -501,35 +501,36 @@ fn a_missing_or_reordered_heading_is_not_recognised() {
 }
 
 /// v3's marker counts only on its own line right after the frontmatter
-/// and its blank line.
+/// and its blank line. (v3's own rendering is v2.11's template with the
+/// decided changes, so it is recognised by that too: a user's file shows
+/// the marker rule alone.)
 #[test]
 fn the_marker_counts_only_at_its_place() {
     let case = &cases()[0];
-    let name = skill_name(&case.brain_name);
-    let v3 = render_skill(&case.input());
-    assert!(is_generated_skill(&name, &v3));
-    let block = format!("\n---\n\n{MARKER_LINE}\n\n");
-    assert_eq!(v3.matches(&block).count(), 1);
-    for moved in [
-        v3.replace(&block, &format!("\n---\n\n\n{MARKER_LINE}\n\n")),
-        v3.replace(&block, &format!("\n---\n{MARKER_LINE}\n\n")),
-        v3.replace(&block, &format!("\n---\n\n {MARKER_LINE}\n\n")),
-        v3.replace(&block, &format!("\n---\n\n{MARKER_LINE} extra\n\n")),
-        v3.replace(&block, "\n---\n\n<!-- kluris:generated -->\n\n"),
-    ] {
-        assert!(
-            !is_generated_skill(&name, &moved),
-            "{}",
-            &moved[..400.min(moved.len())]
-        );
-    }
+    assert!(is_generated_skill(
+        &skill_name(&case.brain_name),
+        &render_skill(&case.input())
+    ));
+    let marked =
+        format!("---\nname: kluris-notes\ndescription: x\n---\n\n{MARKER_LINE}\n\n# Notes\n");
     // A user's skill that copies the marker below its own frontmatter is
     // marked: the marker is the promise.
-    let own = format!("---\nname: kluris-notes\ndescription: x\n---\n\n{MARKER_LINE}\n\n# Notes\n");
-    assert!(is_generated_skill("kluris-notes", &own));
-    let two_lines =
-        format!("---\nname: kluris-notes\ndescription: x\nmetadata: y\n---\n\n{MARKER_LINE}\n");
-    assert!(!is_generated_skill("kluris-notes", &two_lines));
+    assert!(is_generated_skill("kluris-notes", &marked));
+    let block = format!("\n---\n\n{MARKER_LINE}\n\n");
+    for moved in [
+        marked.replace(&block, &format!("\n---\n\n\n{MARKER_LINE}\n\n")),
+        marked.replace(&block, &format!("\n---\n{MARKER_LINE}\n\n")),
+        marked.replace(&block, &format!("\n---\n\n {MARKER_LINE}\n\n")),
+        marked.replace(&block, &format!("\n---\n\n{MARKER_LINE} extra\n\n")),
+        marked.replace(&block, "\n---\n\n<!-- kluris:generated -->\n\n"),
+        marked.replace(&block, &format!("\n---\n\n# Notes\n{MARKER_LINE}\n\n")),
+        marked.replace("description: x\n", "description: x\nmetadata: y\n"),
+        marked.replace("description: x\n", "description:\n"),
+    ] {
+        assert_ne!(moved, marked);
+        assert!(!is_generated_skill("kluris-notes", &moved), "{moved}");
+    }
+    assert!(!is_generated_skill("kluris-other", &marked));
 }
 
 /// T-103 `description-prefix`: a user's own `kluris-notes` whose
