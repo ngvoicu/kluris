@@ -520,7 +520,7 @@ def test_registered_brains(tmp_path, oracle):
 
 
 def test_preflight_skipped_files_are_reported(sandbox):
-    """PAR-065 (with PAR-046): v2's preflight raises on a neuron it cannot
+    """PAR-066 (with PAR-046): v2's preflight raises on a neuron it cannot
     read; v3 leaves it alone, writes the page and reports it as dream does:
     ``skipped`` after v2's keys in its brain's entry, and dream's stderr line.
     A brain with nothing skipped keeps v2's shape."""

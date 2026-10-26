@@ -898,7 +898,7 @@ def test_yaml_neuron_that_is_not_utf8(sandbox):
 
 @pytest.mark.skipif(IS_WINDOWS, reason="RLIMIT_FSIZE is POSIX")
 def test_a_write_cut_short_keeps_the_original(sandbox):
-    """PAR-066: under a 1,024-byte file-size limit, v2's in-place write
+    """PAR-067: under a 1,024-byte file-size limit, v2's in-place write
     truncates the neuron; v3 leaves it whole and reports it."""
     import resource
     import signal

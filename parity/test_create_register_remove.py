@@ -1037,7 +1037,7 @@ def test_root_help_lists_the_new_commands(sandbox: Sandbox):
 
 @pytest.mark.skipif(IS_WINDOWS, reason="POSIX directory modes")
 def test_create_into_a_directory_that_cannot_be_listed(sandbox: Sandbox):
-    """PAR-067: v2 stops with a ``PermissionError`` traceback when it cannot
+    """PAR-068: v2 stops with a ``PermissionError`` traceback when it cannot
     list an existing target; v3 refuses with a clean error. Neither writes."""
     demo = sandbox.work / "brains" / "demo"
     demo.mkdir(parents=True)

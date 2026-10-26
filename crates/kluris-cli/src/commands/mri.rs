@@ -1,6 +1,6 @@
 //! `kluris mri [--brain NAME|all] [--output FILE] [--json]` (v2
 //! `cli.py:1556-1604`): the dream preflight, then the brain's page. The
-//! files the preflight skipped are reported as dream reports them (PAR-065).
+//! files the preflight skipped are reported as dream reports them (PAR-066).
 
 use std::io::{self, Write};
 use std::path::Path;
@@ -91,7 +91,7 @@ pub fn run(brain: Option<&str>, output: Option<&str>, as_json: bool) -> Result<(
             ("nodes".into(), count(stats.nodes)),
             ("edges".into(), count(stats.edges)),
         ];
-        // After v2's keys, only when the preflight skipped a file (PAR-065),
+        // After v2's keys, only when the preflight skipped a file (PAR-066),
         // with dream's `{brain, file, error}` items.
         if !sync.skipped.is_empty() {
             let skipped = sync
