@@ -31,6 +31,10 @@
 #    exactly that entry. Whether that is the text from before the install is
 #    reported: dist's Add-Path writes the value back without its empty
 #    entries (`-split ';' -ne ''`) and as REG_EXPAND_SZ, whatever it was.
+# 6. KLURIS_NO_MODIFY_PATH=1 (T-111 finding 4): the receipt says
+#    modify_path false, the installer leaves the user PATH alone, and
+#    self-uninstall removes kluris.exe and the receipt and leaves the user
+#    PATH exactly as it was (its text and its type).
 #
 # Exits 0 when every check passes and the PATH comparison holds, 1 otherwise.
 param(
@@ -260,6 +264,29 @@ try {
         throw ($problems -join '; ')
     }
     foreach ($d in @('.kluris\bin', 'AppData\Local\kluris')) { if (Test-Path -LiteralPath (Join-Path $sandbox $d)) { Step "left folder: $d" } }
+
+    # 6. No PATH setup by the installer, and none undone by the uninstall.
+    $sandbox = Join-Path $work 'home-no-modify-path'
+    $localAppData = Join-Path $sandbox 'AppData\Local'
+    $null = New-Item -ItemType Directory -Force -Path $sandbox, $localAppData
+    $sandboxEnv['HOME'] = $sandbox; $sandboxEnv['USERPROFILE'] = $sandbox; $sandboxEnv['LOCALAPPDATA'] = $localAppData
+    $userStart = Read-Environment ([Microsoft.Win32.Registry]::CurrentUser) 'Environment'
+    $install = Invoke-Installer "irm '$download/kluris-installer.ps1' | iex" @{ KLURIS_DOWNLOAD_URL = $download; KLURIS_NO_MODIFY_PATH = '1' }
+    if ($install.Code -ne 0) { throw "the KLURIS_NO_MODIFY_PATH=1 install exited with $($install.Code): $($install.Out) $($install.Err)" }
+    $exe2 = Join-Path $sandbox '.kluris\bin\kluris.exe'
+    $receipt2 = Join-Path $localAppData 'kluris\kluris-receipt.json'
+    if (-not (Test-Path -LiteralPath $exe2)) { throw "no $exe2 after the KLURIS_NO_MODIFY_PATH=1 install" }
+    if ([IO.File]::ReadAllText($receipt2) -notmatch '"modify_path":false') { throw 'the KLURIS_NO_MODIFY_PATH=1 receipt does not say modify_path false' }
+    $userInstalled2 = Read-Environment ([Microsoft.Win32.Registry]::CurrentUser) 'Environment'
+    if ($userInstalled2.Text -cne $userStart.Text -or $userInstalled2.Kind -ne $userStart.Kind) { throw 'the KLURIS_NO_MODIFY_PATH=1 install changed the user PATH' }
+    $environment = $sandboxEnv.Clone()
+    $uninstall2 = Invoke-Child $exe2 'self-uninstall --yes --json' $environment $work
+    if ($uninstall2.Code -ne 0) { throw "self-uninstall after a KLURIS_NO_MODIFY_PATH=1 install exited $($uninstall2.Code): $($uninstall2.Out) $($uninstall2.Err)" }
+    $null = Wait-Until { -not (Test-Path -LiteralPath $exe2) }
+    if ((Test-Path -LiteralPath $exe2) -or (Test-Path -LiteralPath $receipt2)) { throw 'self-uninstall left kluris.exe or the receipt of a KLURIS_NO_MODIFY_PATH=1 install' }
+    $userAfter2 = Read-Environment ([Microsoft.Win32.Registry]::CurrentUser) 'Environment'
+    if ($userAfter2.Text -cne $userStart.Text -or $userAfter2.Kind -ne $userStart.Kind) { throw 'self-uninstall changed the user PATH of a KLURIS_NO_MODIFY_PATH=1 install' }
+    Step "KLURIS_NO_MODIFY_PATH=1: modify_path false; the user PATH untouched by the install and the uninstall ($($userStart.Kind)); kluris.exe and the receipt removed"
 } catch {
     $failure = $_
 } finally {
@@ -278,5 +305,5 @@ if (-not $restored) {
     Write-Output 'lifecycle-smoke: FAIL: the user PATH was not written back identically'
     exit 1
 }
-Step "ok (Windows $env:PROCESSOR_ARCHITECTURE, v$Old -> v$New -> uninstalled)"
+Step "ok (Windows $env:PROCESSOR_ARCHITECTURE, v$Old -> v$New -> uninstalled; no-modify-path)"
 exit 0

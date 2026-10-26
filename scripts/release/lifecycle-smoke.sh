@@ -25,6 +25,14 @@
 #    else: every other file is byte-identical to before it (config,
 #    companions, skills, the brain), and the rc files the sandbox started with
 #    are byte-identical to before the install.
+# 6. KLURIS_NO_MODIFY_PATH=1 over the user's own ~/.config/kluris/env.sh and
+#    the profile line sourcing it (T-111 finding 4): the receipt says
+#    modify_path false, and self-uninstall removes the binary and the
+#    receipt and leaves both of the user's files byte-identical.
+# 7. An rc file the uninstall cannot rewrite (~/.profile a link into a
+#    read-only dotfiles folder, T-111 finding 5): self-uninstall fails and
+#    keeps the binary, the receipt and the env scripts; once the folder is
+#    writable again a rerun finishes, the profile byte-identical to before.
 #
 # The local server and the JSON checks run on KLURIS_SMOKE_PYTHON (default
 # python3). Exits 0 when every check passes, 1 at the first failure.
@@ -243,4 +251,59 @@ PY
 for d in .config/fish/conf.d .config/kluris .kluris/bin; do
     if [ -d "$sandbox/$d" ]; then step "left folder: ~/$d ($(find "$sandbox/$d" -mindepth 1 | wc -l | tr -d ' ') entries)"; fi
 done
-step "ok ($(uname -s) $(uname -m), v$old -> v$new -> uninstalled)"
+
+# 6. No PATH setup by the installer: the user's own is kept.
+sandbox="$work/home-no-modify-path"
+mkdir -p "$sandbox/.config/kluris"
+printf 'export USER_SENTINEL=1\n' > "$sandbox/.config/kluris/env.sh"
+# shellcheck disable=SC2016 # the line names $HOME as text, as a profile does
+printf 'export EDITOR=vi\n. "$HOME/.config/kluris/env.sh"\n' > "$sandbox/.profile"
+cp "$sandbox/.config/kluris/env.sh" "$work/user-env.sh"
+cp "$sandbox/.profile" "$work/user-profile"
+in_sandbox KLURIS_NO_MODIFY_PATH=1 KLURIS_DOWNLOAD_URL="$api/ngvoicu/kluris/releases/download/v$old" \
+    sh "$releases_dir/v$old/kluris-installer.sh" > "$work/nomodify-install.out" 2>&1 \
+    || { cat "$work/nomodify-install.out"; fail "KLURIS_NO_MODIFY_PATH=1 install failed"; }
+grep -q '"modify_path":false' "$sandbox/.config/kluris/kluris-receipt.json" \
+    || fail "the KLURIS_NO_MODIFY_PATH=1 receipt does not say modify_path false"
+cmp -s "$sandbox/.config/kluris/env.sh" "$work/user-env.sh" || fail "the installer changed the user's env.sh"
+cmp -s "$sandbox/.profile" "$work/user-profile" || fail "the installer changed the user's .profile"
+in_sandbox "$sandbox/.kluris/bin/kluris" self-uninstall --yes --json > "$work/nomodify-uninstall.json" 2>&1 \
+    || { cat "$work/nomodify-uninstall.json"; fail "self-uninstall after a KLURIS_NO_MODIFY_PATH=1 install failed"; }
+cmp -s "$sandbox/.config/kluris/env.sh" "$work/user-env.sh" || fail "self-uninstall changed the user's own env.sh"
+cmp -s "$sandbox/.profile" "$work/user-profile" || fail "self-uninstall changed the user's own .profile line"
+[ ! -e "$sandbox/.kluris/bin/kluris" ] && [ ! -e "$sandbox/.config/kluris/kluris-receipt.json" ] \
+    || fail "self-uninstall left the binary or the receipt of a KLURIS_NO_MODIFY_PATH=1 install"
+step "KLURIS_NO_MODIFY_PATH=1: modify_path false; the uninstall removed the binary and the receipt, the user's env.sh and .profile byte-identical"
+
+# 7. An rc file the uninstall cannot rewrite, then a rerun.
+sandbox="$work/home-failed-rc"
+mkdir -p "$sandbox"
+printf 'export EDITOR=vi\n' > "$sandbox/.profile"
+cp "$sandbox/.profile" "$work/failed-rc-profile"
+in_sandbox KLURIS_DOWNLOAD_URL="$api/ngvoicu/kluris/releases/download/v$old" \
+    sh "$releases_dir/v$old/kluris-installer.sh" > "$work/failed-rc-install.out" 2>&1 \
+    || { cat "$work/failed-rc-install.out"; fail "the install for the failed-rc case failed"; }
+mkdir -p "$sandbox/dotfiles"
+mv "$sandbox/.profile" "$sandbox/dotfiles/profile"
+ln -s "$sandbox/dotfiles/profile" "$sandbox/.profile"
+chmod 500 "$sandbox/dotfiles"
+if in_sandbox "$sandbox/.kluris/bin/kluris" self-uninstall --yes --json > "$work/failed-rc-1.json" 2>&1; then
+    chmod 700 "$sandbox/dotfiles"
+    cat "$work/failed-rc-1.json"
+    fail "self-uninstall succeeded though ~/.profile could not be rewritten"
+fi
+chmod 700 "$sandbox/dotfiles"
+for kept in .kluris/bin/kluris .config/kluris/kluris-receipt.json .config/kluris/env.sh .config/kluris/env.fish; do
+    [ -e "$sandbox/$kept" ] || { cat "$work/failed-rc-1.json"; fail "a failed rc edit removed ~/$kept, which a retry needs"; }
+done
+step "an rc file that cannot be rewritten: self-uninstall exit 1, the binary, receipt and env scripts kept: $(tail -n 1 "$work/failed-rc-1.json" | sed 's/.*"failed": //' | cut -c1-160)"
+in_sandbox "$sandbox/.kluris/bin/kluris" self-uninstall --yes --json > "$work/failed-rc-2.json" 2>&1 \
+    || { cat "$work/failed-rc-2.json"; fail "the rerun of self-uninstall failed"; }
+for gone in .kluris/bin/kluris .config/kluris/kluris-receipt.json .config/kluris/env.sh .config/kluris/env.fish .config/fish/conf.d/kluris.env.fish; do
+    [ ! -e "$sandbox/$gone" ] || fail "the rerun left ~/$gone"
+done
+cmp -s "$sandbox/dotfiles/profile" "$work/failed-rc-profile" || fail "the profile is not byte-identical after the rerun"
+[ -L "$sandbox/.profile" ] || fail "the rerun replaced the ~/.profile link"
+step "the rerun finished: the installer's files gone, the profile byte-identical and still a link"
+
+step "ok ($(uname -s) $(uname -m), v$old -> v$new -> uninstalled; no-modify-path and failed-rc)"
