@@ -1,0 +1,34 @@
+# Called by release.yml (dist's `post-announce-jobs`) once dist has created
+# the GitHub release: rewrites the release's body so it leads with the
+# site's install commands (scripts/release/release_notes.py). The release,
+# its title and its files stay dist's. If dist's body is not laid out as
+# expected the script exits 1 and the release keeps dist's body.
+name: Release notes
+
+on:
+  workflow_call:
+    inputs:
+      plan:
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  release-notes:
+    if: ${{ !github.event.pull_request }}
+    runs-on: ubuntu-24.04
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      PLAN: ${{ inputs.plan }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: lead the release body with the site's install commands
+        run: |
+          printf '%s' "$PLAN" > "$RUNNER_TEMP/plan.json"
+          python3 -I scripts/release/release_notes.py "$RUNNER_TEMP/plan.json" > "$RUNNER_TEMP/notes.md"
+          tag=$(jq -r .announcement_tag "$RUNNER_TEMP/plan.json")
+          gh release edit "$tag" --repo "$GITHUB_REPOSITORY" --notes-file "$RUNNER_TEMP/notes.md"
