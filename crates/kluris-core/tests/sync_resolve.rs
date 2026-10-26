@@ -157,6 +157,24 @@ fn delete_edit_resolved_theirs_deletes_and_rebuilds_the_map() {
     assert!(!w.read(&w.ours, "notes/map.md").contains("first.md"));
 }
 
+#[test]
+fn delete_edit_resolved_with_a_file_keeps_the_file() {
+    let w = World::new();
+    let ours = delete_edit(&w);
+    let merged = ours.replace("Three, ours.", "Three, kept by hand.");
+    let r = resolve_with(
+        &w,
+        "notes/first.md",
+        Choice::File(merged.clone().into_bytes()),
+    )
+    .unwrap();
+    assert_completed(&w, &r);
+    assert_eq!(w.read(&w.ours, "notes/first.md"), merged);
+    assert!(w.read(&w.ours, "notes/map.md").contains("first.md"));
+    let mode = w.run(&w.ours, &["ls-tree", "HEAD", "notes/first.md"]);
+    assert!(mode.starts_with("100644 blob "), "{mode}");
+}
+
 fn parent_conflict(w: &World) -> (String, String) {
     let base = w.read(&w.ours, "notes/keep.md");
     let theirs = base.replace("parent: ./map.md", "parent: ../ideas/map.md");
@@ -185,9 +203,7 @@ fn parent_resolved_ours_theirs_and_file() {
     }
 }
 
-#[test]
-fn frontmatter_resolved_with_a_file() {
-    let w = World::new();
+fn frontmatter_conflict(w: &World) {
     w.ours_commit(
         &[("notes/keep.md", &neuron("owner: team\n", "# Keep\n"))],
         &[],
@@ -202,11 +218,24 @@ fn frontmatter_resolved_with_a_file() {
         &[("notes/keep.md", &neuron("owner: ana\n", "# Keep\n"))],
         &[],
     );
-    open(&w, &["notes/keep.md"]);
-    let both = neuron("owner: ana and bob\n", "# Keep\n");
-    let r = resolve_with(&w, "notes/keep.md", Choice::File(both.clone().into_bytes())).unwrap();
-    assert_completed(&w, &r);
-    assert_eq!(w.read(&w.ours, "notes/keep.md"), both);
+    open(w, &["notes/keep.md"]);
+}
+
+#[test]
+fn frontmatter_resolved_ours_theirs_and_file() {
+    for which in ["ours", "theirs", "file"] {
+        let w = World::new();
+        frontmatter_conflict(&w);
+        let both = neuron("owner: ana and bob\n", "# Keep\n");
+        let (choice, expected) = match which {
+            "ours" => (Choice::Ours, neuron("owner: ana\n", "# Keep\n")),
+            "theirs" => (Choice::Theirs, neuron("owner: bob\n", "# Keep\n")),
+            _ => (Choice::File(both.clone().into_bytes()), both),
+        };
+        let r = resolve_with(&w, "notes/keep.md", choice).unwrap();
+        assert_completed(&w, &r);
+        assert_eq!(w.read(&w.ours, "notes/keep.md"), expected, "{which}");
+    }
 }
 
 // --- one by one, validation, errors -------------------------------------------------
