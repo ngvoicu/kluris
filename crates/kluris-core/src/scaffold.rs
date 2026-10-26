@@ -16,6 +16,7 @@ use std::path::{Path, PathBuf};
 use crate::brain::change::{ChangeSet, FileWrite};
 use crate::brain::store::{BrainStore, LocalGitStore};
 use crate::config::{BrainConfig, brain_config_to_yaml};
+use crate::fileops::under;
 use crate::frontmatter::{self, py_splitlines};
 use crate::pycase;
 use crate::pyrepr::{py_repr_str, py_str};
@@ -378,7 +379,7 @@ pub fn scaffold_brain(
     });
     match applied.failed.into_iter().next() {
         Some(write) => Err(ScaffoldError {
-            path: root.join(&write.rel),
+            path: under(root, &write.rel),
             reason: write.error,
         }),
         None => Ok(()),

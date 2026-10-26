@@ -911,6 +911,65 @@ fn v2_install_is_migrated_and_nothing_else_is_touched() {
     assert_eq!(migrated, 10 * 2 + 1 + 2 * 2);
 }
 
+/// The report's absolute paths are in the OS's own separators: the
+/// registry's `/`-relative folder names are joined under HOME component by
+/// component, and a collision's message names the entry that way
+/// (SPEC 2026-10-27; PAR-054's JSON `path` and the `~/` labels stay
+/// `/`-joined).
+#[test]
+fn destination_paths_and_failure_messages_are_os_native() {
+    // A collision in the universal folder: the failed message names the
+    // entry's absolute path.
+    let mut s = Sandbox::new();
+    s.brain("acme", None);
+    put(&s.h(".agents/skills/kluris-acme/SKILL.md"), FOREIGN);
+    let report = s.install();
+    let universal = report
+        .destinations
+        .iter()
+        .find(|d| d.role == DestinationRole::Universal)
+        .expect("universal destination");
+    let skills_dir = s.home.join(".agents").join("skills");
+    assert_eq!(universal.path.as_os_str(), skills_dir.as_os_str());
+    let blocked = skills_dir.join("kluris-acme");
+    assert!(
+        universal
+            .failed
+            .iter()
+            .any(|m| m.contains(&blocked.display().to_string())),
+        "{:?}",
+        universal.failed
+    );
+
+    // A migration folder (its registry name is a `/`-string) reports a
+    // native path too.
+    let mut s = Sandbox::new();
+    s.brain("acme", Some(&["claude"]));
+    put(
+        &s.h(".cursor/skills/kluris-gone/SKILL.md"),
+        &v2_skill("gone"),
+    );
+    let clean = s.install();
+    let migrated = clean
+        .destinations
+        .iter()
+        .find(|d| d.role == DestinationRole::Migration)
+        .expect("migration destination");
+    assert_eq!(
+        migrated.path.as_os_str(),
+        s.home.join(".cursor").join("skills").as_os_str()
+    );
+
+    #[cfg(windows)]
+    for dest in report.destinations.iter().chain(clean.destinations.iter()) {
+        assert!(
+            !dest.path.to_string_lossy().contains('/'),
+            "{}",
+            dest.path.display()
+        );
+    }
+}
+
 #[test]
 fn copilot_folder_is_kept_when_copilot_home_is_set() {
     let mut s = Sandbox::new();

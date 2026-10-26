@@ -12,7 +12,7 @@ use std::{fmt, fs, io};
 
 use super::{CompanionTree, KNOWN, embedded, normalize};
 use crate::config::{ConfigError, GlobalConfig, read_brain_config};
-use crate::fileops::{FileOps, RealFs};
+use crate::fileops::{FileOps, RealFs, under};
 use crate::pyrepr::py_path_str;
 
 /// The only top-level file a companion folder may hold.
@@ -180,11 +180,11 @@ fn allowlisted(rel: &str, is_dir: bool) -> bool {
 fn stage(tree: &CompanionTree, staging: &Path) -> Result<(), CompanionError> {
     fs::create_dir_all(staging).map_err(io_error(staging))?;
     for rel in tree.dirs().filter(|rel| allowlisted(rel, true)) {
-        let path = staging.join(rel);
+        let path = under(staging, rel);
         fs::create_dir_all(&path).map_err(io_error(&path))?;
     }
     for (rel, bytes) in tree.files().filter(|(rel, _)| allowlisted(rel, false)) {
-        let path = staging.join(rel);
+        let path = under(staging, rel);
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).map_err(io_error(parent))?;
         }
@@ -393,6 +393,26 @@ mod tests {
             .map(|e| e.unwrap().file_name())
             .collect();
         assert_eq!(names, ["specmint-core"]);
+    }
+
+    /// The tree's `rel`s are POSIX `/`-strings; an io error names the
+    /// staged path in the OS's own separators.
+    #[test]
+    fn a_stage_error_names_a_native_path() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let staging = tmp.path().join("st");
+        fs::create_dir(&staging).unwrap();
+        // `references` as a file blocks the folder the tree wants.
+        fs::write(staging.join("references"), "a file").unwrap();
+        let tree = CompanionTree::new()
+            .file("SKILL.md", b"s".to_vec())
+            .file("references/a/r.md", b"r".to_vec());
+        let err = stage(&tree, &staging).unwrap_err();
+        let want = staging.join("references").join("a");
+        assert!(
+            err.to_string().contains(&want.display().to_string()),
+            "{err}"
+        );
     }
 
     #[test]

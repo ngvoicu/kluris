@@ -1,14 +1,15 @@
 //! The file operations the skill and companion installs move and delete
 //! with, behind a trait so tests can make one fail or race ([`FileOps`]);
-//! the binary always uses [`RealFs`]. Also the two helpers those installs
-//! share: a run-unique name token ([`unique_token`]) and a folder's
-//! physical identity ([`folder_id`]).
+//! the binary always uses [`RealFs`]. Also the helpers those installs
+//! share: a run-unique name token ([`unique_token`]), a folder's
+//! physical identity ([`folder_id`]), and [`under`] for joining a
+//! `/`-relative path under a base.
 
 use std::collections::hash_map::RandomState;
 use std::fs;
 use std::hash::{BuildHasher, Hasher};
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// Renames and removals, one call each. Every method defaults to `std::fs`.
 pub trait FileOps {
@@ -56,6 +57,16 @@ pub fn is_unique_token(token: &str) -> bool {
         && pid.bytes().all(|b| b.is_ascii_digit())
         && hex.len() == 16
         && hex.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+}
+
+/// `rel` (a `/`-separated relative path) joined under `base` component by
+/// component, so the stored path's separators are the OS's own: a plain
+/// `base.join(rel)` keeps the `/` inside one component (`C:\u\.agents/skills`
+/// on Windows), which `display()` and reports then show.
+pub fn under(base: &Path, rel: &str) -> PathBuf {
+    rel.split('/')
+        .filter(|part| !part.is_empty())
+        .fold(base.to_path_buf(), |path, part| path.join(part))
 }
 
 /// The physical identity of a folder: two paths with the same identity are
@@ -109,6 +120,31 @@ mod tests {
         ] {
             assert!(!is_unique_token(bad), "{bad}");
         }
+    }
+
+    /// `under` joins a `/`-string component by component, so the stored
+    /// path's separators are the OS's own: a plain `join` keeps the `/`
+    /// inside one component (`C:\u\.agents/skills` on Windows), which
+    /// `display()` then shows (SPEC 2026-10-27: absolute paths are native;
+    /// only `~/` labels and JSON `path` values are `/`-joined).
+    #[test]
+    fn under_joins_a_slash_path_component_by_component() {
+        let base = Path::new(if cfg!(windows) { r"C:\u" } else { "/u" });
+        let joined = under(base, ".agents/skills");
+        // The same components as a plain `join`; the stored separators are
+        // the difference.
+        assert_eq!(joined, base.join(".agents/skills"));
+        assert_eq!(
+            joined.as_os_str(),
+            base.join(".agents").join("skills").as_os_str()
+        );
+        assert_eq!(under(base, "").as_os_str(), base.as_os_str());
+        assert_eq!(
+            under(base, "a//b/").as_os_str(),
+            base.join("a").join("b").as_os_str()
+        );
+        #[cfg(windows)]
+        assert!(!joined.to_string_lossy().contains('/'));
     }
 
     #[test]

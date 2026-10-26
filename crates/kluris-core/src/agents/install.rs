@@ -56,7 +56,7 @@ use super::registry::{self, REGISTRY};
 use super::render::{self, SkillInput};
 use crate::companions;
 use crate::config::{BrainConfig, ConfigError, ConfigErrorKind, GlobalConfig, read_brain_config};
-use crate::fileops::{FileOps, FolderId, RealFs, folder_id, is_unique_token, unique_token};
+use crate::fileops::{FileOps, FolderId, RealFs, folder_id, is_unique_token, under, unique_token};
 
 /// What [`install_skills`] works from.
 #[derive(Debug, Clone, Copy)]
@@ -219,7 +219,7 @@ pub fn install_skills_with(req: &InstallRequest, ops: &dyn FileOps) -> InstallRe
     // Written folders: universal first, then each active agent's.
     let mut seen = Seen::default();
     let mut targets = vec![(
-        req.home.join(registry::UNIVERSAL),
+        under(req.home, registry::UNIVERSAL),
         DestinationRole::Universal,
     )];
     for agent in &active {
@@ -259,7 +259,11 @@ pub fn install_skills_with(req: &InstallRequest, ops: &dyn FileOps) -> InstallRe
             if rel == ".copilot/skills" && req.copilot_home.is_some() {
                 continue;
             }
-            cleanup.push((req.home.join(rel), DestinationRole::Migration, Kind::Skills));
+            cleanup.push((
+                under(req.home, rel),
+                DestinationRole::Migration,
+                Kind::Skills,
+            ));
         }
     }
     for (path, role, kind) in cleanup {
@@ -286,7 +290,7 @@ pub fn remove_generated_skills_with(
     ops: &dyn FileOps,
 ) -> Vec<DestinationReport> {
     let mut folders = vec![(
-        home.join(registry::UNIVERSAL),
+        under(home, registry::UNIVERSAL),
         DestinationRole::Universal,
         Kind::Skills,
     )];
@@ -303,7 +307,7 @@ pub fn remove_generated_skills_with(
         folders.push((folder, DestinationRole::Migration, Kind::Workflows));
     }
     for rel in registry::V2_ONLY_SKILL_FOLDERS {
-        folders.push((home.join(rel), DestinationRole::Migration, Kind::Skills));
+        folders.push((under(home, rel), DestinationRole::Migration, Kind::Skills));
     }
     let mut seen = Seen::default();
     folders
