@@ -172,6 +172,12 @@ One entry per difference, under its own heading:
 - Decision: SPEC decision 2026-10-27 (tracebacks), which names this case; review T-79 finding 1 (T-82)
 - Tests: `crates/kluris-core/tests/git.rs::{log_of_a_corrupt_repo_is_an_error_naming_the_command, log_with_a_broken_branch_ref_is_an_error, log_on_an_orphan_branch_of_a_repo_with_history_is_an_error, log_of_a_fresh_repo_with_staged_files_is_empty}`, `parity/test_list_status_help.py::{test_status_of_a_corrupt_repo, test_status_when_head_does_not_verify}`
 
+### PAR-024: `search` reports the files it skips
+- Command: `kluris search` (with and without `--json`)
+- Differs: a neuron whose frontmatter cannot be read (it does not parse, is not UTF-8, cannot be opened) and a `glossary.md` that does not read are left out of the results, as in v2, and reported, where v2 drops them silently. With `--json` the top level gets `"skipped": [{"file": <path as v2 prints it>, "error": <reason, no absolute path>}]` after `engine`, only when at least one file was skipped (otherwise the output is PAR-020's); in text mode stderr gets one line per file, `Skipped <file>: <reason>`, and stdout is unchanged. The exit code stays 0.
+- Decision: SPEC acceptance criterion "One malformed neuron (invalid YAML, non-string key, BOM, `related: [1]`, a link outside the brain) never crashes `dream`, `mri`, `wake-up` or `search`: the file is skipped and reported, `--json` output stays valid JSON, other files are processed"; review T-79 finding 2, chief's brief for T-83, 2026-10-26
+- Tests: `crates/kluris-core/tests/search.rs::malformed_neurons_are_skipped_and_reported`, `crates/kluris-cli/tests/search.rs::skipped_files_are_reported_in_json_and_on_stderr`, `parity/test_search.py::test_malformed_neuron_is_skipped_and_reported`
+
 ### PAR-025: root `kluris --help` lists only the ported commands (temporary, until Phase 4 ends)
 - Command: `kluris --help` (and `kluris` with no arguments, which prints the same list)
 - Differs: the Commands section lists only the commands Kluris 3 has ported so far (today `list`, `wake-up`, `search`, `status`, `help`), with v2's one-line descriptions; v2 lists all 13 (with `pack`). `kluris help` (with and without `--json`) lists every command but `pack`, as decided (PAR-018). Temporary: by the end of Phase 4 every command exists and `kluris --help` lists exactly the SPEC acceptance list.

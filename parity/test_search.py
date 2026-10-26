@@ -131,8 +131,15 @@ def v3_args(name: str, query: dict) -> list[str]:
 
 
 def check_shape(doc: dict, name: str, query: str, limit: int) -> None:
-    """v2's keys and types, v3's added keys, ``total`` after ``--limit``."""
-    assert list(doc) == ["ok", "brain", "query", "total", "results", "engine"], list(doc)
+    """v2's keys and types, v3's added keys, ``total`` after ``--limit``;
+    ``skipped`` (PAR-024) only when files were left out."""
+    keys = ["ok", "brain", "query", "total", "results", "engine"]
+    if "skipped" in doc:
+        keys.append("skipped")
+        assert doc["skipped"], "skipped is present only when non-empty"
+        for s in doc["skipped"]:
+            assert list(s) == ["file", "error"] and all(isinstance(v, str) for v in s.values()), s
+    assert list(doc) == keys, list(doc)
     assert doc["ok"] is True and doc["brain"] == name and doc["query"] == query
     assert doc["engine"] == "bm25"
     results = doc["results"]
@@ -472,3 +479,84 @@ def test_registered_brains_invariant(tmp_path, oracle):
     if tuning:
         print(f"{counted} of {len(tuning)} tuning queries ran against registered brains")
     assert not failures, "\n".join(failures[:60])
+
+
+# --- T-79 review findings -------------------------------------------------------------
+
+
+def test_malformed_neuron_is_skipped_and_reported(sandbox):
+    # PAR-024: v2 drops the neuron silently; v3 drops it from the results too
+    # and reports it (`skipped` in JSON, one stderr line in text mode).
+    brain = sandbox.work / "brains" / "bad"
+    (brain / "k").mkdir(parents=True)
+    (brain / "k" / "bad.md").write_text("---\nrelated: [\n---\n# Bad\n\nzebra\n", encoding="utf-8")
+    (brain / "k" / "good.md").write_text("---\nupdated: 2026-01-01\n---\n# Good\n\nzebra\n", encoding="utf-8")
+    register(sandbox, [("bad", brain)])
+    sandbox.freeze()
+    r = run_both(sandbox, ["search", "zebra", "--json"])
+    assert r["v2"].code == r["v3"].code == 0
+    j2, j3 = parse_exact(r["v2"].stdout, sandbox.root, "v2"), parse_exact(r["v3"].stdout, sandbox.root, "v3")
+    check_shape(j3, "bad", "zebra", 10)
+    assert "skipped" not in j2
+    assert [x["file"] for x in j2["results"]] == [x["file"] for x in j3["results"]] == ["k/good.md"]
+    assert [s["file"] for s in j3["skipped"]] == ["k/bad.md"]
+    assert j3["skipped"][0]["error"].startswith("invalid frontmatter: ")
+    assert r["v2"].stderr == r["v3"].stderr == ""
+    for d in ("v2", "v3"):
+        shutil.rmtree(sandbox.root / d)
+    r = run_both(sandbox, ["search", "zebra"])
+    assert r["v2"].code == r["v3"].code == 0
+    assert r["v2"].stderr == ""
+    assert r["v3"].stderr.splitlines() and r["v3"].stderr.splitlines()[0].startswith(
+        "Skipped k/bad.md: invalid frontmatter: "
+    ), r["v3"].stderr
+    assert "result(s) for 'zebra' in bad" in r["v3"].stdout
+
+
+TITLE_NAMES = [
+    "ΟΣ", "თბილისი", "ᾈ", "ŉ-x", "ǆemal", "straße", "ßa", "o'neil", "2nd-try", "ΣΑΣ-ΣΑΣ", "ﬁle",
+    "ꭰꭱ", "ΑΣ.Β-c", "ALL-CAPS", "İstanbul", "ǰx", "ʰa", "aΣ", "𐐨𐐩",
+]
+
+
+def test_file_name_titles_match_v2(sandbox):
+    # T-79 finding 4: a markdown neuron without an H1 and a YAML neuron
+    # without a `title` are titled `stem.replace("-", " ").title()`.
+    brain = sandbox.work / "brains" / "titles"
+    (brain / "md").mkdir(parents=True)
+    (brain / "yml").mkdir(parents=True)
+    for name in TITLE_NAMES:
+        (brain / "md" / f"{name}.md").write_text("---\nupdated: 2026-01-01\n---\nno heading\n", encoding="utf-8")
+        (brain / "yml" / f"{name}.yml").write_text("#---\n# updated: 2026-01-01\n#---\nk: v\n", encoding="utf-8")
+    register(sandbox, [("titles", brain)])
+    sandbox.freeze()
+    r = run_both(sandbox, ["search", "/", "--json", "--limit", str(EVERYTHING)])
+    j2, j3 = parse_exact(r["v2"].stdout, sandbox.root, "v2"), parse_exact(r["v3"].stdout, sandbox.root, "v3")
+    titles2 = {x["file"]: x["title"] for x in j2["results"]}
+    titles3 = {x["file"]: x["title"] for x in j3["results"]}
+    assert len(titles2) == 2 * len(TITLE_NAMES)
+    assert titles3 == titles2
+    assert titles3["md/ΟΣ.md"] == "Ος" and titles3["md/თბილისი.md"] == "თბილისი" and titles3["md/ᾈ.md"] == "ᾈ"
+
+
+def test_pycase_tables_are_current():
+    # The Rust case tables and the title expectations are the oracle's.
+    python = oracle_kluris().parent / ("python.exe" if IS_WINDOWS else "python")
+    out = subprocess.run(
+        [str(python), "-I", str(PARITY_DIR / "tools" / "gen_pycase.py"), "--check"],
+        capture_output=True, text=True, encoding="utf-8",
+    )
+    assert out.returncode == 0, out.stdout + out.stderr
+
+
+@pytest.mark.skipif(IS_WINDOWS, reason="a backslash is a path separator on Windows")
+def test_a_backslash_file_name_is_searched(sandbox):
+    # T-79 P3: on POSIX `x\y.md` is one file; v2 searches it, so v3 must.
+    brain = sandbox.work / "brains" / "bs"
+    (brain / "k").mkdir(parents=True)
+    (brain / "k" / "x\\y.md").write_text("---\nupdated: 2026-01-01\n---\n# Odd\n\nzebra\n", encoding="utf-8")
+    register(sandbox, [("bs", brain)])
+    failures = run_queries(sandbox, "bs", brain, [{"q": "zebra", "limit": EVERYTHING}, {"q": "odd"}])
+    assert not failures, "\n".join(failures)
+    r = run_v3(["search", "zebra", "--brain", "bs", "--json"], sandbox.env)
+    assert [x["file"] for x in parse_exact(r.stdout, sandbox.root, "v3")["results"]] == ["k/x/y.md"]
