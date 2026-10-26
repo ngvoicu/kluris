@@ -17,9 +17,9 @@ use clap::{Arg, ArgAction, ArgMatches, CommandFactory, FromArgMatches, Parser, S
 use crate::error::CliError;
 use crate::output::human;
 
-/// The root command. Its surface is Click's, as in v2 ([`command`]): `--help`
-/// on every command and `--version` on the root, no `-h`, `-V` or automatic
-/// `help` subcommand; `kluris help` is Kluris's own command.
+// The root command. Its surface is Click's, as in v2 (`command`): `--help`
+// on every command and `--version` on the root, no `-h`, `-V` or automatic
+// `help` subcommand; `kluris help` is Kluris's own command.
 #[derive(Debug, Parser)]
 #[command(
     name = "kluris",
@@ -50,8 +50,8 @@ enum Command {
         /// Directory to create the brain in (default: current dir)
         #[arg(long, value_name = "PATH", allow_hyphen_values = true)]
         path: Option<String>,
-        /// Brain type. Kept as given: only the winning occurrence is
-        /// converted ([`converted`]).
+        // Kept as given: only the winning occurrence is converted
+        // (`converted`).
         #[arg(
             long = "type",
             value_name = "[product-group|personal|product|research|blank]",
@@ -68,8 +68,7 @@ enum Command {
         /// Skip git entirely (default: local git only)
         #[arg(long = "no-git")]
         no_git: bool,
-        /// Custom YAML config file for structure. Checked like the type
-        /// ([`converted`]).
+        // Checked like the type (`converted`).
         #[arg(
             long = "from-config",
             value_name = "PATH",
@@ -132,8 +131,9 @@ enum Command {
         /// Filter to neurons with this frontmatter tag
         #[arg(long, value_name = "TAG", allow_hyphen_values = true)]
         tag: Option<String>,
-        /// Max number of results (default 10). Kept as given: only the
-        /// winning occurrence is converted ([`converted`]).
+        // Kept as given: only the winning occurrence is converted
+        // (`converted`).
+        /// Max number of results (default 10)
         #[arg(
             long,
             value_name = "INTEGER",
