@@ -121,7 +121,8 @@ pub fn run(brain: Option<&str>, no_verify: bool, as_json: bool) -> Result<(), Cl
     let git = SystemGit::new();
     check_git(&git).map_err(|e| CliError::new(e.to_string()))?;
     let today = today()?;
-    let all = brain == Some("all");
+    // `--brain all`, or `all` picked from the interactive list.
+    let all = brain == Some("all") || brains.len() > 1;
     let mut outcomes = Vec::new();
     for brain in &brains {
         let root = py_path_str(&brain.entry.path);

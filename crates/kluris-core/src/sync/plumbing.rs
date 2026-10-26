@@ -4,6 +4,7 @@
 
 use std::collections::BTreeSet;
 use std::path::Path;
+use std::process::Stdio;
 use std::time::Instant;
 
 use super::fresh::{FreshError, FreshGit, prompt_env};
@@ -200,7 +201,26 @@ impl SyncGit for SystemGit {
 
     fn fast_forward_to(&self, repo: &Repo, to: &str) -> Result<(), GitError> {
         let args = SystemGit::with_no_background(&["merge", "--ff-only", "--quiet", to]);
-        self.run(&repo.dir, &args).map(drop)
+        // The post-merge hook's output reaches the user, all of it on
+        // stderr so `--json` stays one document; so does git's own message
+        // when it refuses.
+        let mut cmd = self.command(Some(&repo.dir), &args);
+        cmd.stdout(Stdio::from(std::io::stderr()))
+            .stderr(Stdio::inherit());
+        let status = cmd.status().map_err(|e| GitError {
+            args: args.iter().map(|a| a.to_string()).collect(),
+            code: None,
+            detail: e.to_string(),
+        })?;
+        if status.success() {
+            Ok(())
+        } else {
+            Err(GitError {
+                args: args.iter().map(|a| a.to_string()).collect(),
+                code: status.code(),
+                detail: "git refused the fast-forward (its message is above)".into(),
+            })
+        }
     }
 
     fn push(&self, repo: &Repo, tracking: &Tracking, deadline: Instant) -> PushOutcome {
