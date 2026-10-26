@@ -1,6 +1,7 @@
 """Skill install parity: a HOME written by v2.28.11 itself (`create`,
-`companion add`, `doctor`) migrated by Kluris 3's skill install
-(`cargo xtask skills-install`, until a v3 command calls it).
+`companion add`, `doctor`) migrated by Kluris 3's skill install alone
+(`cargo xtask skills-install`, the install create, register, remove,
+companion add/remove and doctor call).
 
 Expected (parity/allowlist.md, the skill-install entries):
 
