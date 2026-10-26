@@ -752,3 +752,52 @@ fn log_of_a_corrupt_repo_is_an_error_naming_the_command() {
     assert!(git.status_short(&repo).is_err());
     assert_eq!(git.file_dates(&repo), Default::default());
 }
+
+#[test]
+fn log_with_a_broken_branch_ref_is_an_error() {
+    // Review T-79 finding 1: the branch ref replaced by `invalid-oid` fails
+    // `rev-parse --verify HEAD` too, but the repo has commits: git says
+    // "your current branch appears to be broken", v2 exits 1.
+    let sb = Sandbox::new();
+    let brain = sb.repo("brain");
+    sb.commit(&brain, &[("a.md", "a")], "first", DATE);
+    let branch = sb.run(&brain, &["symbolic-ref", "HEAD"]).trim().to_string();
+    let ref_file = branch
+        .split('/')
+        .fold(brain.join(".git"), |path, part| path.join(part));
+    fs::write(&ref_file, "invalid-oid\n").unwrap();
+    let git = sb.git();
+    let repo = git.repo(&brain).expect("still a work tree");
+    let err = git.log(&repo, 10).unwrap_err();
+    assert_eq!(err.code, Some(128), "{err}");
+    assert!(err.to_string().contains("appears to be broken"), "{err}");
+}
+
+#[test]
+fn log_on_an_orphan_branch_of_a_repo_with_history_is_an_error() {
+    // Unborn HEAD, but the repo has other refs and commits: not a fresh
+    // repo, so not "no commits" (v2: a traceback, exit 1).
+    let sb = Sandbox::new();
+    let brain = sb.repo("brain");
+    sb.commit(&brain, &[("a.md", "a")], "first", DATE);
+    sb.run(&brain, &["checkout", "-q", "--orphan", "fresh"]);
+    let git = sb.git();
+    let repo = git.repo(&brain).unwrap();
+    let err = git.log(&repo, 10).unwrap_err();
+    assert!(
+        err.to_string().contains("does not have any commits yet"),
+        "{err}"
+    );
+}
+
+#[test]
+fn log_of_a_fresh_repo_with_staged_files_is_empty() {
+    // The one case git itself calls "does not have any commits yet" with no
+    // history anywhere: HEAD names a branch, no refs, no commit objects.
+    let sb = Sandbox::new();
+    let brain = sb.repo("brain");
+    fs::write(brain.join("a.md"), "a").unwrap();
+    sb.run(&brain, &["add", "a.md"]);
+    let git = sb.git();
+    assert_eq!(git.log(&git.repo(&brain).unwrap(), 10).unwrap(), []);
+}

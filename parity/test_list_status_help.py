@@ -326,6 +326,30 @@ def test_status_of_a_corrupt_repo(sandbox: Sandbox):
     assert (v3.code, v3.stdout, v3.stderr) == (1, "", f"Error: {error}\n")
 
 
+@pytest.mark.parametrize("damage", ["broken-ref", "orphan-branch"])
+def test_status_when_head_does_not_verify(sandbox: Sandbox, damage):
+    """PAR-023, review T-79 finding 1: HEAD that does not name a commit is "no
+    commits" only in a fresh repo; a broken branch ref (``invalid-oid``) or an
+    orphan branch beside other history is the ``git log`` error, as v2 fails."""
+    brain = init(sandbox, sandbox.work / "brains" / "demo")
+    commit(sandbox, brain, "brain: initialize demo", brain_files())
+    if damage == "broken-ref":
+        branch = git(sandbox, brain, "symbolic-ref", "HEAD").strip()
+        (brain / ".git" / branch).write_text("invalid-oid\n", encoding="utf-8")
+        why = "fatal: your current branch appears to be broken"
+    else:
+        git(sandbox, brain, "checkout", "-q", "--orphan", "fresh")
+        why = "fatal: your current branch 'fresh' does not have any commits yet"
+    register(sandbox, [("demo", brain)])
+    sandbox.freeze()
+
+    error = f"`git log -10 --format=%H%x00%s%x00%aI%x00` failed (exit 128): {why}"
+    r = run(sandbox, "status", "--json")
+    v2, v3 = r["v2"], r["v3"]
+    assert v2.code == 1 and v2.stdout == "" and "CalledProcessError" in v2.stderr
+    assert (v3.code, v3.stdout) == (1, json.dumps({"ok": False, "error": error}) + "\n"), v3
+
+
 # --- human output: user text is never markup (PAR-016) ---------------------------
 
 

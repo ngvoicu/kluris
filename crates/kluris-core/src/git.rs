@@ -115,8 +115,9 @@ pub trait Git {
     /// variable only when the environment does not set it already.
     fn commit(&self, dir: &Path, message: &str) -> Result<(), GitError>;
 
-    /// The newest `limit` commits, newest first; none in a repo without
-    /// commits. Scoped to the brain when it is nested.
+    /// The newest `limit` commits, newest first; none in a fresh repo (no
+    /// commit yet). Any other failure is an error. Scoped to the brain when it
+    /// is nested.
     fn log(&self, repo: &Repo, limit: usize) -> Result<Vec<Commit>, GitError>;
 
     /// `git status --short`, stripped as Python's `str.strip()` strips it
@@ -231,10 +232,29 @@ impl SystemGit {
         (!value.is_empty()).then_some(value)
     }
 
-    /// Whether `HEAD` names a commit.
-    fn has_commits(&self, dir: &Path) -> bool {
-        self.run(dir, &["rev-parse", "--verify", "--quiet", "HEAD"])
-            .is_ok()
+    /// Whether the repo is a fresh one: `HEAD` names a branch (`git
+    /// symbolic-ref`, which fails on a broken ref), no ref exists at all and
+    /// the object database holds no commit. That is where git's own log says
+    /// "your current branch '<b>' does not have any commits yet" with no
+    /// history anywhere; an orphan branch beside other history, a broken ref
+    /// or a missing object is not.
+    fn is_fresh_repo(&self, dir: &Path) -> bool {
+        if self.run(dir, &["symbolic-ref", "--quiet", "HEAD"]).is_err() {
+            return false;
+        }
+        let refs = self.run(dir, &["for-each-ref", "--count=1", "--format=%(refname)"]);
+        if !refs.is_ok_and(|out| out.is_empty()) {
+            return false;
+        }
+        let objects = self.run(
+            dir,
+            &[
+                "cat-file",
+                "--batch-all-objects",
+                "--batch-check=%(objecttype)",
+            ],
+        );
+        objects.is_ok_and(|out| !out.split(|b| *b == b'\n').any(|t| t == b"commit"))
     }
 }
 
@@ -302,7 +322,7 @@ impl Git for SystemGit {
         }
         let out = match self.run(&repo.dir, &args) {
             Ok(out) => out,
-            Err(_) if !self.has_commits(&repo.dir) => return Ok(Vec::new()),
+            Err(_) if self.is_fresh_repo(&repo.dir) => return Ok(Vec::new()),
             Err(err) => return Err(err),
         };
         Ok(parse_log(&String::from_utf8_lossy(&out)))
