@@ -520,16 +520,6 @@ fn put_back(ops: &dyn FileOps, quarantine: &Path, original: &Path) -> Option<Str
     ))
 }
 
-/// What the entry `name` of a cleared folder is.
-enum Candidate<'a> {
-    /// `kluris*`: a skill folder or a workflow file.
-    Entry,
-    /// An earlier run's staging or quarantine entry for `base`.
-    Staged(&'a str),
-    /// A `.kluris*` name that is neither: never Kluris's.
-    Lookalike,
-}
-
 /// Remove the Kluris-written `kluris*` entries (and earlier runs' staging
 /// entries) of `dest.path` whose names are not in `keep`; `own` are this
 /// run's staging names. Every candidate not proven Kluris's goes to
@@ -554,23 +544,18 @@ fn clear_folder(
         if own.contains(&name) {
             continue;
         }
-        let candidate = match staged_base(&name, kind) {
-            Some(base) => Candidate::Staged(base),
-            None if name.starts_with("kluris") => match kind {
-                Kind::Skills if keep.contains(&name.as_str()) => continue,
-                Kind::Workflows if !name.ends_with(".md") => continue,
-                _ => Candidate::Entry,
-            },
-            None if name.starts_with(".kluris") => Candidate::Lookalike,
-            None => continue,
-        };
-        let base = match candidate {
-            Candidate::Entry => name.as_str(),
-            Candidate::Staged(base) => base,
-            Candidate::Lookalike => {
+        // The skill (or workflow) the entry would be: its own name, or the
+        // one an earlier run's staging or quarantine name carries.
+        let base = match staged_base(&name, kind) {
+            Some(base) => base,
+            None if name.starts_with(".kluris") => {
                 dest.kept.push(name);
                 continue;
             }
+            None if !name.starts_with("kluris") => continue,
+            None if kind == Kind::Skills && keep.contains(&name.as_str()) => continue,
+            None if kind == Kind::Workflows && !name.ends_with(".md") => continue,
+            None => name.as_str(),
         };
         let owned = |path: &Path| match kind {
             Kind::Skills => is_owned_skill_entry(path, base),
