@@ -379,7 +379,10 @@ GitHub's digest), replaces this binary in place, then runs the new \
 ~/.kluris/bin (its install receipt says where).
 
 Set KLURIS_GITHUB_TOKEN to a GitHub token when GitHub's rate limit for \
-unauthenticated requests (60 an hour per address) is in the way.";
+unauthenticated requests (60 an hour per address) is in the way. Set \
+KLURIS_GITHUB_API_URL to use a GitHub API mirror or GitHub Enterprise \
+instead of https://api.github.com (https only; the checksums are still \
+checked).";
 
 /// `self-uninstall` (new in v3).
 const SELF_UNINSTALL_HELP: &str = "Remove the installed kluris.

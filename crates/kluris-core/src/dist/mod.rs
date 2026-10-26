@@ -7,11 +7,11 @@
 //! - The install receipt is `kluris-receipt.json` in the receipt folder:
 //!   `$XDG_CONFIG_HOME/kluris` or `~/.config/kluris` on Unix; on Windows
 //!   `$XDG_CONFIG_HOME\kluris` when set, else `%LOCALAPPDATA%\kluris`.
-//! - Unix PATH setup: `env.sh` and `env.fish` in the receipt folder (dist
-//!   before 0.33 wrote `env` and `env.fish` beside the binary, which 0.33.1
-//!   migrates), an empty line then `. "$HOME/.config/kluris/env.sh"` appended
-//!   to the rc files, and `~/.config/fish/conf.d/kluris.env.fish` sourcing
-//!   `env.fish`.
+//! - Unix PATH setup: `env.sh` and `env.fish` in the receipt folder, an
+//!   empty line then `. "$HOME/.config/kluris/env.sh"` appended to the rc
+//!   files, and `~/.config/fish/conf.d/kluris.env.fish` sourcing `env.fish`.
+//!   (dist before 0.33 put env scripts beside the binary; no Kluris
+//!   installer did, so nothing there is touched.)
 //! - Windows PATH setup: the install folder in front of the user PATH
 //!   (`HKCU\Environment\Path`, `REG_EXPAND_SZ`).
 //!

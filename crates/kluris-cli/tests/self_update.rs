@@ -739,7 +739,13 @@ fn self_update_is_in_help() {
     let out = f.run(&["self-update", "--help"]);
     assert_eq!(out.status.code(), Some(0));
     let text = stdout(&out);
-    for flag in ["--check", "--version", "--json", "KLURIS_GITHUB_TOKEN", "KLURIS_GITHUB_API_URL"] {
+    for flag in [
+        "--check",
+        "--version",
+        "--json",
+        "KLURIS_GITHUB_TOKEN",
+        "KLURIS_GITHUB_API_URL",
+    ] {
         assert!(text.contains(flag), "{text}");
     }
 }
@@ -753,8 +759,10 @@ fn a_plain_http_api_url_is_refused_unless_loopback() {
     for token in [None, Some("kt-123")] {
         for json in [false, true] {
             let mut cmd = f.cmd(&f.exe);
-            cmd.args(["self-update", "--check"])
-                .env("KLURIS_GITHUB_API_URL", "http://github.example.invalid/api/v3");
+            cmd.args(["self-update", "--check"]).env(
+                "KLURIS_GITHUB_API_URL",
+                "http://github.example.invalid/api/v3",
+            );
             if json {
                 cmd.arg("--json");
             }
@@ -782,7 +790,11 @@ fn a_plain_http_api_url_is_refused_unless_loopback() {
         .output()
         .unwrap();
     assert_eq!(out.status.code(), Some(1));
-    assert!(stderr(&out).contains("KLURIS_GITHUB_API_URL"), "{}", stderr(&out));
+    assert!(
+        stderr(&out).contains("KLURIS_GITHUB_API_URL"),
+        "{}",
+        stderr(&out)
+    );
     f.assert_untouched();
     assert_eq!(f.requests(), Vec::<String>::new());
 }

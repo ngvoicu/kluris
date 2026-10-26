@@ -15,8 +15,10 @@
 //!    process, `<install path> doctor`, and its exit code is the command's.
 //!
 //! `KLURIS_GITHUB_TOKEN` is sent when set (never `GITHUB_TOKEN`).
-//! `KLURIS_GITHUB_API_URL` replaces `https://api.github.com` (a mirror, or
-//! the tests' fake); a token goes over plain http only to a loopback host.
+//! `KLURIS_GITHUB_API_URL` replaces `https://api.github.com` for a GitHub
+//! API mirror or GitHub Enterprise: https, or plain http only to a loopback
+//! host (where the tests' fake runs); anything else is refused before any
+//! request. `sha256.sum` is checked whatever the API.
 
 use std::fs;
 use std::path::Path;
@@ -57,7 +59,7 @@ pub fn run(check: bool, version: Option<&str>, as_json: bool) -> Result<(), CliE
             installed.display()
         )));
     }
-    let api = Api::from_env();
+    let api = Api::from_env()?;
 
     // `--version` names the release; otherwise the listing's newest decides.
     let wanted = match version {
@@ -105,27 +107,60 @@ struct Api {
 }
 
 impl Api {
-    fn from_env() -> Api {
+    /// From the environment; a `KLURIS_GITHUB_API_URL` that is neither
+    /// https nor plain http to a loopback host is refused.
+    fn from_env() -> Result<Api, CliError> {
         let var = |name| {
             std::env::var(name)
                 .ok()
                 .map(|v| v.trim().to_string())
                 .filter(|v| !v.is_empty())
         };
-        Api {
-            base: var("KLURIS_GITHUB_API_URL").map(|b| b.trim_end_matches('/').to_string()),
-            token: var("KLURIS_GITHUB_TOKEN"),
+        let base = var("KLURIS_GITHUB_API_URL").map(|b| b.trim_end_matches('/').to_string());
+        if let Some(base) = &base
+            && !base.to_ascii_lowercase().starts_with("https://")
+            && !is_http_loopback(base)
+        {
+            return Err(CliError::new(format!(
+                "KLURIS_GITHUB_API_URL must be an https URL (plain http only to 127.0.0.1, \
+                 localhost or [::1]), not {base}"
+            )));
         }
-    }
-
-    /// A token may go over plain http only to this machine.
-    fn http_loopback(&self) -> bool {
-        self.base.as_deref().is_some_and(|b| {
-            ["http://127.0.0.1", "http://localhost", "http://[::1]"]
-                .iter()
-                .any(|p| b.starts_with(p))
+        Ok(Api {
+            base,
+            token: var("KLURIS_GITHUB_TOKEN"),
         })
     }
+
+    /// The base is plain http to this machine: the token may go there.
+    fn http_loopback(&self) -> bool {
+        self.base.as_deref().is_some_and(is_http_loopback)
+    }
+}
+
+/// `url` is `http://` to 127.0.0.1, localhost or [::1] (any port).
+fn is_http_loopback(url: &str) -> bool {
+    let Some(rest) = url
+        .get(..7)
+        .filter(|scheme| scheme.eq_ignore_ascii_case("http://"))
+        .map(|_| &url[7..])
+    else {
+        return false;
+    };
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
+    if authority.contains('@') {
+        return false;
+    }
+    let host = match authority.strip_prefix('[') {
+        Some(v6) => v6.split(']').next().map(|h| format!("[{h}]")),
+        None => authority.split(':').next().map(str::to_string),
+    };
+    host.is_some_and(|h| {
+        matches!(
+            h.to_ascii_lowercase().as_str(),
+            "127.0.0.1" | "localhost" | "[::1]"
+        )
+    })
 }
 
 /// The newest version in the release listing; `None` when there is no
@@ -371,5 +406,32 @@ fn from_serde(value: &serde_json::Value) -> Json {
                 .map(|(k, v)| (k.clone(), from_serde(v)))
                 .collect(),
         ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_http_loopback;
+
+    #[test]
+    fn loopback_is_the_host_not_a_prefix() {
+        for yes in [
+            "http://127.0.0.1",
+            "http://127.0.0.1:8080/api",
+            "HTTP://LOCALHOST:1",
+            "http://[::1]:9/x",
+        ] {
+            assert!(is_http_loopback(yes), "{yes}");
+        }
+        for no in [
+            "http://localhost.evil.example",
+            "http://127.0.0.1.evil.example/",
+            "http://user@127.0.0.1",
+            "https://127.0.0.1",
+            "http://example.com",
+            "http:/127.0.0.1",
+        ] {
+            assert!(!is_http_loopback(no), "{no}");
+        }
     }
 }

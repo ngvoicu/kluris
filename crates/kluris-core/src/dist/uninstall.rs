@@ -114,11 +114,9 @@ pub fn uninstall(
     let receipt_dir = req.receipt_path.parent().unwrap_or(Path::new(""));
     let env_sh = receipt_dir.join("env.sh");
     let env_fish = receipt_dir.join("env.fish");
-    let legacy_sh = prefix.join("env");
-    let legacy_fish = prefix.join("env.fish");
 
     // rc files: the sh line in each, the fish line in the conf.d file.
-    let sh_lines = source_lines(".", &[&env_sh, &legacy_sh], home);
+    let sh_lines = source_lines(".", &[&env_sh], home);
     let zdir = req.env.zdotdir.unwrap_or(home);
     let rc_files = [
         home.join(".profile"),
@@ -131,7 +129,7 @@ pub fn uninstall(
     for rc in &rc_files {
         edit_rc(rc, &sh_lines, false, &mut report);
     }
-    let fish_lines = source_lines("source", &[&env_fish, &legacy_fish], home);
+    let fish_lines = source_lines("source", &[&env_fish], home);
     let fish_conf = home
         .join(".config")
         .join("fish")
@@ -139,7 +137,7 @@ pub fn uninstall(
         .join(format!("{}.env.fish", super::APP_NAME));
     edit_rc(&fish_conf, &fish_lines, true, &mut report);
 
-    for script in [&env_sh, &env_fish, &legacy_sh, &legacy_fish] {
+    for script in [&env_sh, &env_fish] {
         remove_file(script, &mut report);
     }
 

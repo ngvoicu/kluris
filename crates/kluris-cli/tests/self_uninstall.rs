@@ -388,8 +388,14 @@ fn files_the_installer_never_wrote_are_kept() {
     let report = uninstall(&request(&h, &receipt, false), None, &mut remove_file).unwrap();
     assert!(report.failed.is_empty(), "{:?}", report.failed);
     assert_eq!(fs::read_to_string(h.prefix.join("env")).unwrap(), ENV_SH);
-    assert_eq!(fs::read_to_string(h.prefix.join("env.fish")).unwrap(), ENV_FISH);
-    assert_eq!(fs::read(h.home.join(".bash_profile")).unwrap(), bash_profile);
+    assert_eq!(
+        fs::read_to_string(h.prefix.join("env.fish")).unwrap(),
+        ENV_FISH
+    );
+    assert_eq!(
+        fs::read(h.home.join(".bash_profile")).unwrap(),
+        bash_profile
+    );
     assert!(!h.prefix.join(exe_name()).exists());
     assert!(!h.receipt.exists());
     h.assert_rc_files_restored();
