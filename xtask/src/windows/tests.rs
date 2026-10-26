@@ -725,7 +725,7 @@ mod scripts {
         );
         assert!(restores.iter().any(|at| *at > lifecycle), "{text}");
         assert!(
-            !text[smoke..versions].contains("if ($python -and $state.last -eq 0) { Invoke-Step 'release-versions'"),
+            text[..versions].ends_with("if ($python) { "),
             "the life cycle does not wait on the installer smoke's result: {text}"
         );
     }

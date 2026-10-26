@@ -56,6 +56,21 @@ pub const INSTALLER_SMOKE: Step = Step {
     name: "installer-smoke",
     minutes: 20,
 };
+/// The tree built as the two life-cycle releases (scripts/release/build-versions).
+pub const RELEASE_VERSIONS: Step = Step {
+    name: "release-versions",
+    minutes: 60,
+};
+/// scripts/release/lifecycle-smoke: install the old release, self-update to
+/// the new one, self-uninstall.
+pub const LIFECYCLE: Step = Step {
+    name: "lifecycle",
+    minutes: 20,
+};
+/// The two releases the life cycle installs and updates between: any two
+/// versions, the second the higher; only the version differs between them.
+pub const LIFECYCLE_OLD: &str = "3.0.0";
+pub const LIFECYCLE_NEW: &str = "3.0.1";
 
 /// What the unpack, the sweep and uv's download may take besides the steps.
 const MARGIN_MINUTES: u32 = 20;
@@ -70,7 +85,14 @@ pub fn steps(parity: bool) -> Vec<Step> {
 
 /// The steps of an installer smoke, which runs no tests.
 pub fn smoke_steps() -> Vec<Step> {
-    vec![TOOLCHAIN, PYTHON, RELEASE_DIST, INSTALLER_SMOKE]
+    vec![
+        TOOLCHAIN,
+        PYTHON,
+        RELEASE_DIST,
+        INSTALLER_SMOKE,
+        RELEASE_VERSIONS,
+        LIFECYCLE,
+    ]
 }
 
 /// How long the whole run may take, as this side waits for it.

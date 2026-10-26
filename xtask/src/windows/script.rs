@@ -27,8 +27,8 @@ use base64::engine::general_purpose::STANDARD;
 pub use crate::ssh_ci::outcome::exit_said;
 pub use crate::ssh_ci::outcome::{EXIT_MARK, STEP_MARK, TREE_MARK};
 use crate::ssh_ci::plan::{
-    self, CARGO_TEST, INSTALLER_SMOKE, PARITY, PYTHON, RELEASE_BUILD, RELEASE_DIST, SMOKE_PYTHON,
-    TOOLCHAIN, WRAPPER_DIR, fill,
+    self, CARGO_TEST, INSTALLER_SMOKE, LIFECYCLE, LIFECYCLE_NEW, LIFECYCLE_OLD, PARITY, PYTHON,
+    RELEASE_BUILD, RELEASE_DIST, RELEASE_VERSIONS, SMOKE_PYTHON, TOOLCHAIN, WRAPPER_DIR, fill,
 };
 pub use crate::ssh_ci::plan::{CI_DIR, TREE_FILE, UV_VERSION, run_id, tarball_name};
 
@@ -205,6 +205,10 @@ pub fn run_script(spec: &Spec) -> String {
                 ("dist_minutes", &RELEASE_DIST.minutes.to_string()),
                 ("smoke_minutes", &INSTALLER_SMOKE.minutes.to_string()),
                 ("wrapper", &wrapper),
+                ("versions_minutes", &RELEASE_VERSIONS.minutes.to_string()),
+                ("lifecycle_minutes", &LIFECYCLE.minutes.to_string()),
+                ("old", LIFECYCLE_OLD),
+                ("new", LIFECYCLE_NEW),
             ],
         );
         (String::new(), uv + &smoke)
@@ -434,11 +438,13 @@ const PARITY_TEMPLATE: &str = r##"if (Test-Path -LiteralPath $uv -PathType Leaf)
 
 /// The installer smoke: uv's Python for the local release server, the tree's
 /// release built by dist (scripts\release\build-local.ps1, dist fetched into
-/// the tools folder), then scripts\release\installer-smoke.ps1 against it.
-/// The smoke saves the user PATH in `$record` before it installs and removes
-/// the record once it has written the PATH back; a record still there after
-/// the step (a smoke ended past its bound never reaches its `finally`) is
-/// written back here, and by the stop.
+/// the tools folder), then scripts\release\installer-smoke.ps1 against it;
+/// then the tree built as two releases (build-versions.ps1) and the installed
+/// life cycle across them (lifecycle-smoke.ps1), whatever the first smoke's
+/// end. Each smoke saves the user PATH in `$record` before it installs and
+/// removes the record once it has written the PATH back; a record still
+/// there after a step (a smoke ended past its bound never reaches its
+/// `finally`) is written back here, and by the stop.
 const SMOKE_TEMPLATE: &str = r##"if (Test-Path -LiteralPath $uv -PathType Leaf) {
   $env:UV_CACHE_DIR = Join-Path $cache 'uv'
   $env:UV_PYTHON_INSTALL_DIR = Join-Path $tools 'python'
@@ -455,6 +461,14 @@ const SMOKE_TEMPLATE: &str = r##"if (Test-Path -LiteralPath $uv -PathType Leaf) 
   }
   if (Test-Path -LiteralPath $record) {
     Write-Output '== the installer smoke left the user PATH it saved: writing it back'
+    Invoke-Step 'user-path' 2 $powershell "-NoProfile -ExecutionPolicy Bypass -File scripts\release\user-path.ps1 -Restore `"$record`""
+  }
+  if ($python) { Invoke-Step 'release-versions' «versions_minutes» $powershell '-NoProfile -ExecutionPolicy Bypass -File scripts\release\build-versions.ps1 -Out target\releases -Versions «old»,«new»' }
+  if ($python -and $state.last -eq 0 -and -not (Test-Path -LiteralPath $record)) {
+    Invoke-Step 'lifecycle' «lifecycle_minutes» $powershell "-NoProfile -ExecutionPolicy Bypass -File scripts\release\lifecycle-smoke.ps1 -Releases target\releases -Old «old» -New «new» -Python `"$python`" -Record `"$record`""
+  }
+  if (Test-Path -LiteralPath $record) {
+    Write-Output '== the life-cycle smoke left the user PATH it saved: writing it back'
     Invoke-Step 'user-path' 2 $powershell "-NoProfile -ExecutionPolicy Bypass -File scripts\release\user-path.ps1 -Restore `"$record`""
   }
 }

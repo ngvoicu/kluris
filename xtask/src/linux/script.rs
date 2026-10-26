@@ -25,8 +25,9 @@ use crate::ssh_ci::outcome::{EXIT_MARK, STEP_MARK, TREE_MARK};
 use std::time::Duration;
 
 use crate::ssh_ci::plan::{
-    self, CARGO_TEST, CI_DIR, INSTALLER_SMOKE, PARITY, PYTHON, RELEASE_BUILD, RELEASE_DIST,
-    SMOKE_PYTHON, TOOLCHAIN, TREE_FILE, UV_VERSION, WRAPPER_DIR, fill, tarball_name,
+    self, CARGO_TEST, CI_DIR, INSTALLER_SMOKE, LIFECYCLE, LIFECYCLE_NEW, LIFECYCLE_OLD, PARITY,
+    PYTHON, RELEASE_BUILD, RELEASE_DIST, RELEASE_VERSIONS, SMOKE_PYTHON, TOOLCHAIN, TREE_FILE,
+    UV_VERSION, WRAPPER_DIR, fill, tarball_name,
 };
 
 /// The ssh host: the laptop's Ubuntu under WSL2.
@@ -249,6 +250,10 @@ pub fn run_script(spec: &Spec) -> String {
                 ("dist_minutes", &RELEASE_DIST.minutes.to_string()),
                 ("smoke_minutes", &INSTALLER_SMOKE.minutes.to_string()),
                 ("wrapper", &wrapper),
+                ("versions_minutes", &RELEASE_VERSIONS.minutes.to_string()),
+                ("lifecycle_minutes", &LIFECYCLE.minutes.to_string()),
+                ("old", LIFECYCLE_OLD),
+                ("new", LIFECYCLE_NEW),
             ],
         );
         (String::new(), uv + &smoke)
@@ -510,7 +515,9 @@ fi
 /// The installer smoke: uv's Python for the local release server, the tree's
 /// release built by dist (scripts/release/build-local.sh, dist fetched into
 /// the tools folder), then scripts/release/installer-smoke.sh against it, in
-/// a HOME of its own.
+/// a HOME of its own; then the tree built as two releases (build-versions.sh)
+/// and the installed life cycle across them (lifecycle-smoke.sh), whatever
+/// the first smoke's end.
 const SMOKE_TEMPLATE: &str = r#"if [ -x "$uv" ]; then
   export UV_CACHE_DIR="$cache/uv"
   export UV_PYTHON_INSTALL_DIR="$tools/python"
@@ -524,6 +531,10 @@ const SMOKE_TEMPLATE: &str = r#"if [ -x "$uv" ]; then
   if [ -n "$python" ]; then step release-dist «dist_minutes» bash 'scripts/release/build-local.sh'; fi
   if [ -n "$python" ] && [ "$last" -eq 0 ]; then
     step installer-smoke «smoke_minutes» env KLURIS_SMOKE_PYTHON="$python" sh 'scripts/release/installer-smoke.sh'«wrapper» 'target/distrib'
+  fi
+  if [ -n "$python" ]; then step release-versions «versions_minutes» bash 'scripts/release/build-versions.sh' 'target/releases' '«old»' '«new»'; fi
+  if [ -n "$python" ] && [ "$last" -eq 0 ]; then
+    step lifecycle «lifecycle_minutes» env KLURIS_SMOKE_PYTHON="$python" sh 'scripts/release/lifecycle-smoke.sh' 'target/releases' '«old»' '«new»'
   fi
 fi
 "#;
