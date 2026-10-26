@@ -109,6 +109,9 @@ pub struct DreamReport {
     /// The files written, by path.
     pub written: Vec<String>,
     pub skipped: Vec<SkippedFile>,
+    /// Temp files an interrupted atomic write left, removed before the run
+    /// (brain-relative, `/`-joined, sorted).
+    pub removed_temp_files: Vec<String>,
 }
 
 impl DreamReport {
@@ -296,9 +299,12 @@ pub fn regenerate_maps<S: BrainStore>(store: &mut S, options: &DreamOptions) -> 
     skipped_files(skipped)
 }
 
-/// Run dream on a brain: compute every write, apply them as one change set,
-/// and validate the result.
+/// Run dream on a brain: remove the temp files an interrupted write left
+/// (PAR-069), compute every write, apply them as one change set, and
+/// validate the result.
 pub fn dream<S: BrainStore>(store: &mut S, git: &impl Git, options: &DreamOptions) -> DreamReport {
+    // First, so `git add -A` after a dream never commits one.
+    let removed_temp_files = store.remove_stale_temp_files(crate::atomic::STALE_TEMP_AGE);
     let mut skipped = BTreeMap::new();
     let sync = sync(store, git, options, &mut skipped);
 
@@ -323,5 +329,6 @@ pub fn dream<S: BrainStore>(store: &mut S, git: &impl Git, options: &DreamOption
         deprecation: deprecation.issues,
         written: sync.written,
         skipped: skipped_files(skipped),
+        removed_temp_files,
     }
 }

@@ -41,6 +41,26 @@ const RENAME_ATTEMPTS: u32 = 6;
 
 static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
+/// How old a temp file of [`write_atomic`] must be before `dream` takes it
+/// for one a crash left behind and removes it.
+pub const STALE_TEMP_AGE: Duration = Duration::from_secs(3600);
+
+/// Whether `name` is exactly a temp file name of [`write_atomic`]:
+/// `.<name>.kluris-tmp-<pid>-<n>`, a non-empty name and two decimal numbers.
+pub fn is_temp_file_name(name: &str) -> bool {
+    let Some((target, tail)) = name
+        .strip_prefix('.')
+        .and_then(|rest| rest.rsplit_once(".kluris-tmp-"))
+    else {
+        return false;
+    };
+    let digits = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
+    !target.is_empty()
+        && tail
+            .split_once('-')
+            .is_some_and(|(pid, n)| digits(pid) && digits(n))
+}
+
 /// The file-system steps of [`write_atomic`] that can fail, so tests can
 /// make each one fail. The shipped binary uses [`RealFs`] only.
 pub(crate) trait AtomicFs {
@@ -238,6 +258,31 @@ mod tests {
             true
         }
         fn pause(&self, _: u32) {}
+    }
+
+    #[test]
+    fn temp_file_names_are_recognized_exactly() {
+        for name in [
+            ".a.md.kluris-tmp-1-2",
+            ".kluris.yml.kluris-tmp-9-0",
+            ".x.kluris-tmp-1-2.kluris-tmp-3-4",
+        ] {
+            assert!(is_temp_file_name(name), "{name}");
+        }
+        for name in [
+            "a.md.kluris-tmp-1-2",
+            ".a.md.kluris-tmp-1-2.md",
+            ".a.md.kluris-tmp-x-2",
+            ".a.md.kluris-tmp-1-",
+            ".a.md.kluris-tmp--2",
+            ".a.md.kluris-tmp-12",
+            ".kluris-tmp-1-2",
+            ".a.md.KLURIS-TMP-1-2",
+            ".a.md.kluris-tmp-1-2-3",
+            ".a.md.kluris-tmp-+1-2",
+        ] {
+            assert!(!is_temp_file_name(name), "{name}");
+        }
     }
 
     #[test]

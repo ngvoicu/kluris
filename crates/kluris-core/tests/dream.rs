@@ -901,3 +901,100 @@ fn create_regenerates_its_own_unparseable_scaffold_map() {
         "---\nauto_generated: true\ndescription: 'Sub-folder per project: branches'\nparent: ../brain.md\nsiblings: []\nupdated: '2026-10-26'\n---\n\n# Projects\n\nSub-folder per project: branches\n\nup [brain.md](../brain.md)\n\n## Contents\n\n(empty)\n"
     );
 }
+
+// --- temp files an interrupted write left (review T-106) ---------------------------
+
+/// Set a file's modification time `secs` seconds into the past.
+fn age(path: &Path, secs: u64) {
+    let when = std::time::SystemTime::now() - std::time::Duration::from_secs(secs);
+    fs::File::options()
+        .write(true)
+        .open(path)
+        .unwrap()
+        .set_modified(when)
+        .unwrap();
+}
+
+#[test]
+fn dream_removes_only_old_temp_files_of_its_own_writer() {
+    let b = Brain::new(&[
+        ("glossary.md", GLOSSARY),
+        ("notes/a.md", &neuron("A", "")),
+        // Old: removed.
+        ("notes/.a.md.kluris-tmp-123-4", "half a write"),
+        (".kluris.yml.kluris-tmp-9-0", "half a config"),
+        // Fresh: another process may still be writing it.
+        ("notes/.b.md.kluris-tmp-77-1", "being written"),
+        // Look-alikes, old: kept.
+        ("notes/a.md.kluris-tmp-1-2", "no leading dot"),
+        ("notes/.a.md.kluris-tmp-1-2.md", "a suffix after"),
+        ("notes/.a.md.kluris-tmp-x-2", "not a pid"),
+        ("notes/.a.md.kluris-tmp-1-", "no counter"),
+        ("notes/.a.md.kluris-tmp-12", "one number"),
+        ("notes/.kluris-tmp-1-2", "no name"),
+        ("notes/.A.md.KLURIS-TMP-1-2", "other case"),
+        // Under a directory the walker prunes: never looked at.
+        (".archive/.x.md.kluris-tmp-1-2", "pruned"),
+    ]);
+    let old = [
+        "notes/.a.md.kluris-tmp-123-4",
+        ".kluris.yml.kluris-tmp-9-0",
+        "notes/a.md.kluris-tmp-1-2",
+        "notes/.a.md.kluris-tmp-1-2.md",
+        "notes/.a.md.kluris-tmp-x-2",
+        "notes/.a.md.kluris-tmp-1-",
+        "notes/.a.md.kluris-tmp-12",
+        "notes/.kluris-tmp-1-2",
+        "notes/.A.md.KLURIS-TMP-1-2",
+        ".archive/.x.md.kluris-tmp-1-2",
+    ];
+    for rel in old {
+        age(&b.path(rel), 2 * 3600);
+    }
+    // A directory with a temp file's name: kept.
+    b.mkdir("notes/.c.md.kluris-tmp-5-6");
+    let report = b.dream(&FakeGit::none());
+    assert_eq!(
+        report.removed_temp_files,
+        [".kluris.yml.kluris-tmp-9-0", "notes/.a.md.kluris-tmp-123-4"]
+    );
+    assert!(!b.exists("notes/.a.md.kluris-tmp-123-4"));
+    assert!(!b.exists(".kluris.yml.kluris-tmp-9-0"));
+    for rel in &old[2..] {
+        assert!(b.exists(rel), "{rel} was removed");
+    }
+    assert!(b.exists("notes/.b.md.kluris-tmp-77-1"));
+    assert!(b.path("notes/.c.md.kluris-tmp-5-6").is_dir());
+}
+
+/// A symlink named like a temp file is never removed, even when what it
+/// points at is old.
+#[cfg(unix)]
+#[test]
+fn a_symlink_named_like_a_temp_file_is_kept() {
+    let b = Brain::new(&[
+        ("glossary.md", GLOSSARY),
+        ("notes/a.md", &neuron("A", "")),
+        ("notes/old.txt", "mine"),
+    ]);
+    age(&b.path("notes/old.txt"), 2 * 3600);
+    std::os::unix::fs::symlink("old.txt", b.path("notes/.a.md.kluris-tmp-1-2")).unwrap();
+    let report = b.dream(&FakeGit::none());
+    assert_eq!(report.removed_temp_files, Vec::<String>::new());
+    assert!(
+        fs::symlink_metadata(b.path("notes/.a.md.kluris-tmp-1-2"))
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    assert_eq!(b.text("notes/old.txt"), "mine");
+}
+
+#[test]
+fn nothing_to_remove_is_an_empty_list() {
+    let b = Brain::new(&[("glossary.md", GLOSSARY), ("notes/a.md", &neuron("A", ""))]);
+    assert_eq!(
+        b.dream(&FakeGit::none()).removed_temp_files,
+        Vec::<String>::new()
+    );
+}

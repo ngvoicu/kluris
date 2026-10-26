@@ -134,6 +134,16 @@ pub trait BrainStore {
     fn read_markdown_at(&self, path: &Path) -> Result<Frontmatter, FrontmatterError> {
         frontmatter::read(path)
     }
+    /// Remove the temp files an interrupted [`atomic::write_atomic`] left in
+    /// the directories the walker visits: regular files (never a symlink or
+    /// a directory) named exactly `.<name>.kluris-tmp-<pid>-<n>` and
+    /// modified more than `max_age` ago; then walk the brain again. Returns
+    /// their brain-relative `/`-joined paths, sorted. A store without files
+    /// behind it has none.
+    fn remove_stale_temp_files(&mut self, max_age: std::time::Duration) -> Vec<String> {
+        let _ = max_age;
+        Vec::new()
+    }
     /// Write every file of `changes`, then walk the brain again. A write that
     /// fails is reported, leaves the file as it was, and the others still
     /// happen.
@@ -311,6 +321,43 @@ impl BrainStore for LocalGitStore {
             .map(|c| c.as_os_str().to_string_lossy().into_owned())
             .collect();
         (!parts.is_empty()).then(|| parts.join("/"))
+    }
+
+    fn remove_stale_temp_files(&mut self, max_age: std::time::Duration) -> Vec<String> {
+        let now = std::time::SystemTime::now();
+        let mut removed = Vec::new();
+        for dir in std::iter::once("").chain(self.dirs.iter().map(String::as_str)) {
+            let Ok(entries) = fs::read_dir(self.join(dir)) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                let name = entry.file_name();
+                let Some(name) = name.to_str().filter(|n| atomic::is_temp_file_name(n)) else {
+                    continue;
+                };
+                // `DirEntry::metadata` does not follow a symlink.
+                let stale = entry.metadata().is_ok_and(|meta| {
+                    meta.file_type().is_file()
+                        && meta
+                            .modified()
+                            .ok()
+                            .and_then(|at| now.duration_since(at).ok())
+                            .is_some_and(|old| old > max_age)
+                });
+                if stale && fs::remove_file(entry.path()).is_ok() {
+                    removed.push(if dir.is_empty() {
+                        name.to_string()
+                    } else {
+                        format!("{dir}/{name}")
+                    });
+                }
+            }
+        }
+        removed.sort();
+        if !removed.is_empty() {
+            *self = LocalGitStore::open(&self.root);
+        }
+        removed
     }
 
     fn apply(&mut self, changes: &ChangeSet) -> Applied {

@@ -103,6 +103,7 @@ pub fn run(brain: Option<&str>, as_json: bool, broken_only: bool) -> Result<(), 
     let mut deprecation = Vec::new();
     let mut broken_detail = Vec::new();
     let mut skipped = Vec::new();
+    let mut removed_temp_files = Vec::new();
     for (brain, (root, config)) in brains.iter().zip(&configs) {
         let mut store = LocalGitStore::open(Path::new(root));
         let report = dream(
@@ -139,16 +140,27 @@ pub fn run(brain: Option<&str>, as_json: bool, broken_only: bool) -> Result<(), 
                 ("error".into(), str(&s.reason)),
             ])
         }));
+        removed_temp_files.extend(report.removed_temp_files.iter().map(|file| {
+            Json::Object(vec![
+                ("brain".into(), str(&brain.name)),
+                ("file".into(), str(file)),
+            ])
+        }));
         healthy &= report.healthy();
         if !as_json {
             human::print(&text(painter, &brain.name, &report));
+            let who = if name_brains {
+                format!("{}: ", brain.name)
+            } else {
+                String::new()
+            };
             let mut lines = String::new();
+            for file in &report.removed_temp_files {
+                lines.push_str(&format!(
+                    "Removed {who}{file} (a temp file an interrupted write left)\n"
+                ));
+            }
             for s in &report.skipped {
-                let who = if name_brains {
-                    format!("{}: ", brain.name)
-                } else {
-                    String::new()
-                };
                 lines.push_str(&format!("Skipped {who}{}: {}\n", s.rel, s.reason));
             }
             let _ = std::io::Write::write_all(&mut std::io::stderr(), lines.as_bytes());
@@ -177,7 +189,11 @@ pub fn run(brain: Option<&str>, as_json: bool, broken_only: bool) -> Result<(), 
                 ("fixes".into(), fixes_json(&fixes)),
             ]
         };
-        // After v2's keys, only when a file was skipped (PAR-038).
+        // After v2's keys, each only when it has an item: the temp files an
+        // interrupted write left (PAR-069), then the skipped files (PAR-038).
+        if !removed_temp_files.is_empty() {
+            doc.push(("removed_temp_files".into(), Json::Array(removed_temp_files)));
+        }
         if !skipped.is_empty() {
             doc.push(("skipped".into(), Json::Array(skipped)));
         }

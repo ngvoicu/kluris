@@ -21,6 +21,7 @@ import os
 import re
 import shutil
 import subprocess
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -930,3 +931,30 @@ def test_a_write_cut_short_keeps_the_original(sandbox):
     item = next(s for s in doc["skipped"] if s["file"] == "projects/large.md")
     assert item["error"].startswith("cannot write the file: ")
     assert not [rel for rel in trees["v3"] if "kluris-tmp" in rel]
+
+
+def test_old_temp_files_are_removed(sandbox):
+    """PAR-069: v3 removes the temp files of its atomic writer that an
+    interrupted write left (old, regular, the exact name), reports them
+    before ``skipped``, and keeps everything else; v2 has no such files and
+    leaves them. The rest of the output is v2's."""
+    brain = healthy_brain(sandbox)
+    write(brain, {
+        "projects/.alpha.md.kluris-tmp-41-0": "half a write",
+        "projects/.beta.md.kluris-tmp-41-1": "fresh",
+        "projects/alpha.md.kluris-tmp-41-2": "no leading dot",
+    })
+    old = time.time() - 2 * 3600
+    for rel in ("projects/.alpha.md.kluris-tmp-41-0", "projects/alpha.md.kluris-tmp-41-2"):
+        os.utime(brain / rel, (old, old))
+    register(sandbox, [brain])
+    v2, v3 = both(sandbox)
+    gone = "brains/calm/projects/.alpha.md.kluris-tmp-41-0"
+    assert gone in v2.result.tree and gone not in v3.result.tree
+    for kept in ("brains/calm/projects/.beta.md.kluris-tmp-41-1", "brains/calm/projects/alpha.md.kluris-tmp-41-2"):
+        assert kept in v3.result.tree
+    j2 = parse_exact(v2.result.stdout, sandbox.root, "v2")
+    j3 = parse_exact(v3.result.stdout, sandbox.root, "v3")
+    assert j3.pop("removed_temp_files") == [{"brain": "calm", "file": "projects/.alpha.md.kluris-tmp-41-0"}]
+    assert v3.result.code == v2.result.code
+    assert json.dumps(j3) == json.dumps(j2)

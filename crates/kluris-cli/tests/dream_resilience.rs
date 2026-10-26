@@ -597,3 +597,72 @@ fn mri_keeps_v2s_shape_when_nothing_was_skipped() {
         "{stderr}"
     );
 }
+
+// --- temp files an interrupted write left (review T-106) ---------------------------
+
+fn age(path: &Path, secs: u64) {
+    let when = std::time::SystemTime::now() - std::time::Duration::from_secs(secs);
+    fs::File::options()
+        .write(true)
+        .open(path)
+        .unwrap()
+        .set_modified(when)
+        .unwrap();
+}
+
+#[test]
+fn dream_reports_the_temp_files_it_removed() {
+    let home = Home::new()
+        .brain(
+            "demo",
+            &[
+                ("notes/good.md", neuron("", "# Good\n").as_bytes()),
+                ("notes/.good.md.kluris-tmp-41-0", b"half"),
+                ("notes/bad.md", b"---\n1: x\n---\n\n# Key\n"),
+            ],
+        )
+        .brain("calm", &[("lobe/a.md", neuron("", "# A\n").as_bytes())]);
+    age(&home.path("demo", "notes/.good.md.kluris-tmp-41-0"), 7200);
+    let (code, doc) = home.json(&["dream", "--json", "--brain", "demo"]);
+    assert_eq!(code, 1, "{doc}");
+    assert!(!home.path("demo", "notes/.good.md.kluris-tmp-41-0").exists());
+    let keys = keys(&doc);
+    assert_eq!(
+        keys[keys.len() - 2..],
+        ["removed_temp_files".to_string(), "skipped".to_string()]
+    );
+    assert_eq!(
+        doc["removed_temp_files"],
+        serde_json::json!([{"brain": "demo", "file": "notes/.good.md.kluris-tmp-41-0"}])
+    );
+
+    // Text: one stderr line per file, naming the brain under --brain all.
+    home.write("demo", "notes/.bad.md.kluris-tmp-41-1", b"half");
+    age(&home.path("demo", "notes/.bad.md.kluris-tmp-41-1"), 7200);
+    let (_, _, stderr) = home.run(&["dream", "--brain", "all"]);
+    let removed: Vec<&str> = stderr
+        .lines()
+        .filter(|l| l.starts_with("Removed "))
+        .collect();
+    assert_eq!(
+        removed,
+        ["Removed demo: notes/.bad.md.kluris-tmp-41-1 (a temp file an interrupted write left)"],
+        "{stderr}"
+    );
+}
+
+#[test]
+fn no_removed_temp_files_key_when_none_was_removed() {
+    let home = Home::new().brain(
+        "demo",
+        &[
+            ("notes/good.md", neuron("", "# Good\n").as_bytes()),
+            ("notes/.good.md.kluris-tmp-41-0", b"fresh"),
+        ],
+    );
+    let (_, doc) = home.json(&["dream", "--json"]);
+    assert!(doc.get("removed_temp_files").is_none(), "{doc}");
+    let (_, doc) = home.json(&["dream", "--json", "--broken-only"]);
+    assert!(doc.get("removed_temp_files").is_none(), "{doc}");
+    assert!(home.path("demo", "notes/.good.md.kluris-tmp-41-0").exists());
+}
