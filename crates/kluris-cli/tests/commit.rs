@@ -734,6 +734,55 @@ fn a_deleted_lobe_takes_its_map_and_updates_brain_md_and_siblings() {
 }
 
 #[test]
+fn the_first_commit_of_a_repo_with_no_commit_yet() {
+    let b = Brain::without_git();
+    b.git(&["init", "-q", "-b", "main"]);
+    b.git(&["config", "core.autocrlf", "false"]);
+    b.git(&["config", "user.name", "Ana Tester"]);
+    b.git(&["config", "user.email", "ana@example.com"]);
+    let (code, doc) = b.commit("notes/first.md", &[]);
+    assert_eq!(code, 0, "{doc}");
+    assert_eq!(doc["committed"], true);
+    assert_eq!(doc["commit"], b.head().as_str());
+    // Every lobe on the way is new: its map, brain.md, its siblings' maps.
+    assert_eq!(
+        doc["regenerated"],
+        json!(["brain.md", "ideas/map.md", "notes/map.md"])
+    );
+    assert_eq!(
+        b.committed("HEAD"),
+        ["brain.md", "ideas/map.md", "notes/first.md", "notes/map.md"]
+    );
+    assert!(!b.git_ok(&["rev-parse", "-q", "--verify", "HEAD^"]));
+    assert_eq!(
+        doc["left_dirty"],
+        json!([
+            ".gitignore",
+            "glossary.md",
+            "ideas/idea.md",
+            "notes/keep.md"
+        ])
+    );
+    assert_eq!(b.staged(), Vec::<String>::new());
+}
+
+#[test]
+fn a_map_that_cannot_be_regenerated_stops_the_commit() {
+    let b = Brain::new();
+    let bad = "---\ntitle: Foo: bar\n---\n\n# Notes\n";
+    b.write("notes/map.md", bad);
+    b.write("notes/second.md", &neuron("Second"));
+    let before = b.head();
+    let (code, doc) = b.commit("notes/second.md", &[]);
+    assert_eq!(code, 1, "{doc}");
+    let error = doc["error"].as_str().unwrap();
+    assert!(error.contains("cannot regenerate notes/map.md"), "{error}");
+    assert_eq!(b.head(), before);
+    assert_eq!(b.staged(), Vec::<String>::new());
+    assert_eq!(b.read("notes/map.md"), bad);
+}
+
+#[test]
 fn a_brain_inside_a_larger_repo() {
     let b = Brain::nested();
     fs::write(b.repo.join("README.md"), "changed\n").unwrap();
