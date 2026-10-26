@@ -1,7 +1,9 @@
 #!/bin/sh
 # Fail when Kluris 3's tree could publish to PyPI: v2's
 # .github/workflows/publish.yml is back, or any workflow uses PyPI's publish
-# action. release.yml keeps dist's own tag trigger, which matches v2 tags too;
+# action. Also fail when ci.yml no longer runs the installed life cycle
+# (build-versions and lifecycle-smoke, Unix and Windows) beside the
+# installer smoke. release.yml keeps dist's own tag trigger, which matches v2 tags too;
 # v3 stays off PyPI because no workflow in this tree can publish there (GitHub
 # runs the workflows of the tagged commit). See CLAUDE.md, Release.
 #
@@ -27,5 +29,12 @@ if [ ! -f "$workflows/release.yml" ]; then
     echo "check_workflows: no .github/workflows/release.yml" >&2
     failed=1
 fi
-[ "$failed" -eq 0 ] && echo "check_workflows: no workflow publishes to PyPI"
+for needed in scripts/release/build-versions.sh scripts/release/lifecycle-smoke.sh \
+    'scripts\release\build-versions.ps1' 'scripts\release\lifecycle-smoke.ps1'; do
+    if ! grep -qF "$needed" "$workflows/ci.yml"; then
+        printf 'check_workflows: ci.yml does not run %s (the installed life cycle)\n' "$needed" >&2
+        failed=1
+    fi
+done
+[ "$failed" -eq 0 ] && echo "check_workflows: no workflow publishes to PyPI; ci.yml runs the life cycle"
 exit "$failed"

@@ -261,7 +261,38 @@ package, hence the package `kluris`.
   the new archive's, only the receipt's `version` changes), `--version`,
   and `self-uninstall --yes --json` (exactly the installer's files and PATH
   entry go; every other file, the seeded rc files included, is
-  byte-identical).
+  byte-identical); then a KLURIS_NO_MODIFY_PATH=1 install over the user's
+  own env.sh and profile line (Windows: the user PATH), and on Unix an rc
+  file the uninstall cannot rewrite, failed safely and then rerun. ci.yml's
+  installer-smoke job runs it on the three OSes (`check_workflows.sh` fails
+  if that goes).
+- **A receipt authorises nothing unless it is Kluris's** (T-111):
+  `Receipt::read` (so `self-update` and `self-uninstall` alike) accepts only
+  dist 0.33.1's receipt for Kluris: `source` kluris/kluris/ngvoicu/github,
+  `provider.source` cargo-dist, `binaries` exactly `["kluris"]`
+  (`["kluris.exe"]`), no cdylibs, cstaticlibs or aliases, `install_layout`
+  flat, an absolute `install_prefix`, a boolean `modify_path`; anything
+  else is "The receipt at <path> is not a Kluris install receipt; nothing
+  was changed (<why>)", exit 1. The one file removed or replaced is
+  `<install_prefix>/kluris(.exe)`.
+- **`self-uninstall`'s order keeps what a retry needs**: with `modify_path`
+  false (KLURIS_NO_MODIFY_PATH=1) no rc file, env script, fish file or PATH
+  entry is touched. Otherwise: the rc lines first (a failure stops
+  everything), then the fish conf.d line, env.sh/env.fish and the Windows
+  PATH entry (a failure stops before the binary), then the binary, the
+  receipt last. env.sh/env.fish go only when they are byte for byte what
+  dist writes (`write_env_script_sh`/`_fish` around `$HOME/.kluris/bin`);
+  one the user changed is kept, with the lines sourcing it, and listed in
+  `kept`. A rerun finishes a partial uninstall.
+- **Checksums.** dist's shell installer verifies the archive with
+  `sha256sum` only and silently skips it without one (macOS 14 and older;
+  Apple added `sha256sum` in macOS 15). The site's `install.sh` then puts
+  a temp `sha256sum` that is `exec shasum -a 256 "$@"` first on PATH for
+  the installer alone, and refuses with neither command;
+  `installer-smoke.sh --wrapper` tests it with `sha256sum` off PATH and a
+  corrupted archive. **dist's PowerShell installer checks no checksum at
+  all**: a known dist 0.33.1 limitation, not fixed here (the download is
+  over https from GitHub; `kluris self-update` does check `sha256.sum`).
 - **Site wrappers** live in `../sites/kluris-site` (`install.sh`,
   `install.ps1`): thin pass-throughs to `releases/latest/download/` or
   `releases/download/v$KLURIS_VERSION/`; a push there deploys the site.

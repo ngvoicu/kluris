@@ -115,6 +115,14 @@ jobs:
           scripts/release/build-local.sh
           scripts/release/installer-smoke.sh target/distrib
           scripts/release/installer-smoke.sh --wrapper site/install.sh target/distrib
+      # The installed life cycle: 3.0.0 installed by its own installer,
+      # self-update to 3.0.1 through a local fake release API, self-uninstall
+      # (and KLURIS_NO_MODIFY_PATH=1, an rc file that cannot be rewritten).
+      - name: the installed life cycle (macOS, Linux)
+        if: runner.os != 'Windows'
+        run: |
+          scripts/release/build-versions.sh target/releases 3.0.0 3.0.1
+          scripts/release/lifecycle-smoke.sh target/releases 3.0.0 3.0.1
       - name: build a local release and install it (Windows)
         if: runner.os == 'Windows'
         shell: powershell
@@ -125,4 +133,13 @@ jobs:
           powershell -NoProfile -ExecutionPolicy Bypass -File scripts\release\installer-smoke.ps1 -Release target\distrib -Python $python
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           powershell -NoProfile -ExecutionPolicy Bypass -File scripts\release\installer-smoke.ps1 -Release target\distrib -Python $python -Wrapper site\install.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: the installed life cycle (Windows)
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          powershell -NoProfile -ExecutionPolicy Bypass -File scripts\release\build-versions.ps1 -Out target\releases -Versions 3.0.0,3.0.1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $python = (Get-Command python).Source
+          powershell -NoProfile -ExecutionPolicy Bypass -File scripts\release\lifecycle-smoke.ps1 -Releases target\releases -Old 3.0.0 -New 3.0.1 -Python $python
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
