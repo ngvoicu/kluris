@@ -8,9 +8,11 @@ mod resolve;
 use std::ffi::OsString;
 use std::process::ExitCode;
 
-use clap::{Arg, ArgAction, CommandFactory, FromArgMatches, Parser, Subcommand};
+use clap::error::{ContextKind, ContextValue, ErrorKind};
+use clap::{Arg, ArgAction, ArgMatches, CommandFactory, FromArgMatches, Parser, Subcommand};
 
 use crate::error::CliError;
+use crate::output::human;
 
 /// The root command. Its surface is Click's, as in v2 ([`command`]): `--help`
 /// on every command and `--version` on the root, no `-h`, `-V` or automatic
@@ -127,15 +129,18 @@ Examples:
   kluris search \"raw sql\" --lobe knowledge --json
   kluris search \"auth\" --tag oauth --limit 5";
 
-/// The `--help` flag Click gives every command.
+/// The `--help` flag Click gives every command. It is a plain flag, not
+/// clap's help action (which prints at once), so the whole line is parsed
+/// first, as Click does ([`parse`]).
 fn help_flag() -> Arg {
     Arg::new("help")
         .long("help")
         .help("Show this message and exit.")
-        .action(ArgAction::Help)
+        .action(ArgAction::SetTrue)
 }
 
-/// The root command with Click's surface (see [`Cli`]).
+/// The root command with Click's surface (see [`Cli`]). Every option may
+/// repeat, the last value winning, as in Click.
 fn command() -> clap::Command {
     Cli::command()
         // Usage says `kluris` whatever argv[0] is (`kluris.exe` on Windows).
@@ -143,28 +148,100 @@ fn command() -> clap::Command {
         .disable_help_subcommand(true)
         .disable_help_flag(true)
         .disable_version_flag(true)
+        .args_override_self(true)
         .arg(
             Arg::new("version")
                 .long("version")
                 .help("Show the version and exit.")
-                .action(ArgAction::Version),
+                .action(ArgAction::SetTrue),
         )
         .arg(help_flag())
-        .mut_subcommands(|sub| sub.disable_help_flag(true).arg(help_flag()))
+        .mut_subcommands(|sub| {
+            sub.disable_help_flag(true)
+                .args_override_self(true)
+                .arg(help_flag())
+        })
 }
 
-fn parse(args: &[OsString]) -> Result<Cli, clap::Error> {
+/// What the command line asks for.
+enum Parsed {
+    Run(Cli),
+    /// `--help`: the help text of the command it was given to.
+    Help(String),
+    /// `--version`.
+    Version(String),
+}
+
+/// Parse in Click's order: every token first (an unknown option, an option
+/// without its value or a value given to a flag fail here, wherever
+/// `--help` is), then the eager `--help` / `--version` in the order given,
+/// and only then values are converted, required arguments checked and extra
+/// arguments refused (so `--help` wins over those). The first step is a
+/// parse with [`lenient`], which fails only where Click's parser fails.
+fn parse(args: &[OsString]) -> Result<Parsed, clap::Error> {
+    let mut first = lenient(command());
+    let matches = first.try_get_matches_from_mut(args)?;
+    if let Some(parsed) = eager(&mut first, &matches) {
+        return Ok(parsed);
+    }
     let mut root = command();
     let matches = root
         .try_get_matches_from_mut(args)
         .map_err(|e| with_usage(e, &mut root, args))?;
-    Cli::from_arg_matches(&matches)
+    Cli::from_arg_matches(&matches).map(Parsed::Run)
+}
+
+/// `cmd` with what Click checks after its parser left out: values are kept
+/// as strings, nothing is required, every command takes extra arguments and
+/// the root any command name.
+fn lenient(cmd: clap::Command) -> clap::Command {
+    fn relax(cmd: clap::Command) -> clap::Command {
+        cmd.mut_args(|arg| {
+            if arg.get_action().takes_values() {
+                arg.value_parser(clap::builder::ValueParser::os_string())
+                    .required(false)
+            } else {
+                arg
+            }
+        })
+        .arg(
+            Arg::new("extra-arguments")
+                .num_args(1..)
+                .action(ArgAction::Append)
+                .value_parser(clap::builder::ValueParser::os_string())
+                .hide(true),
+        )
+    }
+    cmd.subcommand_required(false)
+        .allow_external_subcommands(true)
+        .mut_subcommands(relax)
+}
+
+fn flag(matches: &ArgMatches, id: &str) -> Option<usize> {
+    match matches.try_get_one::<bool>(id) {
+        Ok(Some(true)) => matches.index_of(id),
+        _ => None,
+    }
+}
+
+/// The root's `--help` or `--version` (the first given), else a command's
+/// `--help`.
+fn eager(root: &mut clap::Command, matches: &ArgMatches) -> Option<Parsed> {
+    match (flag(matches, "help"), flag(matches, "version")) {
+        (Some(h), Some(v)) if v < h => return Some(Parsed::Version(root.render_version())),
+        (Some(_), _) => return Some(Parsed::Help(root.render_long_help().to_string())),
+        (None, Some(_)) => return Some(Parsed::Version(root.render_version())),
+        (None, None) => {}
+    }
+    let (name, sub_matches) = matches.subcommand()?;
+    let sub = root.find_subcommand_mut(name)?;
+    flag(sub_matches, "help")?;
+    Some(Parsed::Help(sub.render_long_help().to_string()))
 }
 
 /// A value parser's error carries no usage line; Click prints the command's
 /// (`Usage: kluris search [OPTIONS] QUERY`), so it is added.
 fn with_usage(mut err: clap::Error, root: &mut clap::Command, args: &[OsString]) -> clap::Error {
-    use clap::error::{ContextKind, ContextValue, ErrorKind};
     if err.kind() != ErrorKind::ValueValidation || err.get(ContextKind::Usage).is_some() {
         return err;
     }
@@ -204,10 +281,14 @@ fn main() -> ExitCode {
     let args: Vec<OsString> = std::env::args_os().collect();
     let json = error::json_requested(args.get(1..).unwrap_or_default());
     match parse(&args) {
-        Ok(cli) => match run(cli) {
+        Ok(Parsed::Run(cli)) => match run(cli) {
             Ok(()) => ExitCode::SUCCESS,
             Err(err) => error::report(&err, json),
         },
+        Ok(Parsed::Help(text) | Parsed::Version(text)) => {
+            human::print(&text);
+            ExitCode::SUCCESS
+        }
         Err(err) => error::report_parse(&err, json),
     }
 }

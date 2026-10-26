@@ -102,7 +102,7 @@ fn command_path(usage: &str) -> String {
     let words: Vec<&str> = usage
         .trim_start_matches("Usage:")
         .split_whitespace()
-        .take_while(|w| !w.starts_with(['[', '<']) && *w != "COMMAND")
+        .take_while(|w| !w.starts_with(['[', '<', '-']) && *w != "COMMAND")
         .collect();
     if words.is_empty() {
         "kluris".into()
@@ -150,6 +150,13 @@ fn usage_message(err: &clap::Error) -> String {
                 && first.starts_with('<')
             {
                 return format!("Missing argument '{}'.", first.trim_matches(['<', '>']));
+            }
+        }
+        ErrorKind::TooManyValues => {
+            // `--json=1`: a value given to a flag.
+            if let Some(arg) = context(ContextKind::InvalidArg) {
+                let option = arg.split([' ', '=']).next().unwrap_or(&arg);
+                return format!("Option '{option}' does not take a value.");
             }
         }
         ErrorKind::UnknownArgument => {

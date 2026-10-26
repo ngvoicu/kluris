@@ -548,3 +548,122 @@ def test_usage_errors_with_json(sandbox: Sandbox, args):
     else:
         assert v2.code == 1
         assert v3.stdout == v2.stdout
+
+
+# --- options as Click parses them (review T-79 finding 3 and the P3 table) ----------
+
+
+@pytest.fixture
+def two_brains(sandbox: Sandbox) -> None:
+    """Brains ``a`` (a lobe with one tagged neuron) and ``b`` (empty), no git."""
+    write(sandbox.work / "brains" / "a", {
+        "brain.md": "# a\n",
+        "lobe/map.md": "# Lobe\n",
+        "lobe/needle.md": "---\nparent: map.md\ntags: [y]\nupdated: 2026-01-01\n---\n# Needle\n\nneedle text\n",
+    })
+    (sandbox.work / "brains" / "b").mkdir(parents=True)
+    register(sandbox, [("a", sandbox.work / "brains" / "a"), ("b", sandbox.work / "brains" / "b")])
+    sandbox.freeze()
+
+
+def search_view(doc: dict) -> tuple:
+    """What a repeated search option decides: the brain, the query and the
+    files found (v3 ranks and adds keys of its own, PAR-020)."""
+    return doc["ok"], doc["brain"], doc["query"], sorted(r["file"] for r in doc["results"])
+
+
+REPEATED = [
+    ["list", "--json", "--json"],
+    ["help", "--json", "--json"],
+    ["help", "status", "--json", "--json"],
+    ["status", "--brain", "b", "--brain", "a", "--json", "--json"],
+    ["wake-up", "--brain", "b", "--brain", "a", "--json", "--json"],
+    ["search", "needle", "--brain", "b", "--brain", "a", "--json", "--json"],
+    ["search", "needle", "--brain", "a", "--lobe", "nope", "--lobe", "lobe", "--json"],
+    ["search", "needle", "--brain", "a", "--lobe", "lobe", "--lobe", "nope", "--json"],
+    ["search", "needle", "--brain", "a", "--tag", "x", "--tag", "y", "--json"],
+    ["search", "needle", "--brain", "a", "--tag", "y", "--tag", "x", "--json"],
+    ["search", "needle", "--brain", "a", "--limit", "0", "--limit", "1", "--json"],
+    ["search", "needle", "--brain", "a", "--limit", "1", "--limit", "0", "--json"],
+]
+
+
+@pytest.mark.parametrize("args", REPEATED, ids=lambda a: " ".join(a))
+def test_a_repeated_option_takes_its_last_value(sandbox, two_brains, args):
+    """Click lets every option repeat, the last value winning; clap refuses a
+    repeat unless told otherwise."""
+    j2, j3 = json_pair(sandbox, *args)
+    if args[0] == "search":
+        assert search_view(j3) == search_view(j2)
+        assert j3["brain"] == "a"
+    elif args[0] == "wake-up":
+        assert j3 == j2 and j3["name"] == "a"
+    elif args[0] == "help" and len(args) > 3:
+        assert j3["commands"] == [{"name": "status", "description": "Show brain tree, recent changes, and neuron counts"}]
+    elif args[0] == "help":
+        j2["commands"] = [c for c in j2["commands"] if c["name"] != "pack"]
+        assert j3 == j2
+    else:
+        assert j3 == j2
+
+
+def outcome(result, root: Path) -> tuple:
+    """How a run ended, in terms both CLIs share: ``("help", "kluris list")``
+    (whose help: the command path of its usage line), ``("version",)``,
+    ``("error", <code>, <last stderr line>)`` or ``("ran", <code>)``."""
+    if result.code == 0 and result.stderr == "" and "Usage: kluris" in result.stdout:
+        usage = next(line for line in result.stdout.splitlines() if line.startswith("Usage: "))
+        words = [w for w in usage.split()[1:] if not w.startswith(("[", "<")) and not w.isupper()]
+        return ("help", " ".join(words))
+    if result.code == 0 and re.fullmatch(r"kluris \S+\n", result.stdout):
+        return ("version",)
+    if result.code != 0 and result.stdout == "" and result.stderr:
+        return ("error", result.code, normalize(result.stderr.strip().splitlines()[-1], root))
+    return ("ran", result.code)
+
+
+# Click parses every token first (an unknown option, an option without its
+# value, a value given to a flag fail there, wherever --help is), then runs
+# the eager --help / --version (in the order given) before converting values,
+# checking required arguments or refusing extra ones.
+PRECEDENCE = [
+    (["list", "--help", "--bogus"], ("error", 2, "Error: No such option '--bogus'.")),
+    (["list", "--bogus", "--help"], ("error", 2, "Error: No such option '--bogus'.")),
+    (["list", "--help", "--json=1"], ("error", 2, "Error: Option '--json' does not take a value.")),
+    (["list", "--json=1", "--help"], ("error", 2, "Error: Option '--json' does not take a value.")),
+    (["list", "--help", "--help"], ("help", "kluris list")),
+    (["list", "--json", "--help", "--json"], ("help", "kluris list")),
+    (["status", "--help", "--brain"], ("error", 2, "Error: Option '--brain' requires an argument.")),
+    (["status", "--brain", "x", "--help"], ("help", "kluris status")),
+    (["status", "--brain=x", "--help", "--bogus"], ("error", 2, "Error: No such option '--bogus'.")),
+    (["wake-up", "--help", "--brain"], ("error", 2, "Error: Option '--brain' requires an argument.")),
+    (["search", "--help"], ("help", "kluris search")),
+    (["search", "needle", "--limit", "x", "--help"], ("help", "kluris search")),
+    (["search", "--limit", "x", "needle", "--help"], ("help", "kluris search")),
+    (["search", "needle", "--limit=x", "--help"], ("help", "kluris search")),
+    (["search", "needle", "--help", "extra"], ("help", "kluris search")),
+    (["search", "--help", "--limit"], ("error", 2, "Error: Option '--limit' requires an argument.")),
+    (["search", "--tag", "--help"], ("error", 2, "Error: Missing argument 'QUERY'.")),
+    (["help", "a", "b", "--help"], ("help", "kluris help")),
+    (["help", "bogus", "--help"], ("help", "kluris help")),
+    (["help", "--json", "--json", "--help"], ("help", "kluris help")),
+    (["--help", "--help"], ("help", "kluris")),
+    (["--help", "list"], ("help", "kluris")),
+    (["--help", "bogus"], ("help", "kluris")),
+    (["--help", "--bogus"], ("error", 2, "Error: No such option '--bogus'.")),
+    (["bogus", "--help"], ("error", 2, "Error: No such command 'bogus'.")),
+    (["--version", "--version"], ("version",)),
+    (["--version", "--help"], ("version",)),
+    (["--help", "--version"], ("help", "kluris")),
+    (["--version", "--bogus"], ("error", 2, "Error: No such option '--bogus'.")),
+    (["--bogus", "--version"], ("error", 2, "Error: No such option '--bogus'.")),
+    (["--version", "list"], ("version",)),
+]
+
+
+@pytest.mark.parametrize("args,expected", PRECEDENCE, ids=[" ".join(a) for a, _ in PRECEDENCE])
+def test_help_and_usage_errors_in_clicks_order(sandbox, two_brains, args, expected):
+    r = run(sandbox, *args)
+    v2, v3 = outcome(r["v2"], sandbox.root), outcome(r["v3"], sandbox.root)
+    assert v2 == expected, f"the oracle no longer does this: {r['v2']}"
+    assert v3 == expected, r["v3"]
