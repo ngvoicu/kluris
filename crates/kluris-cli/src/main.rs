@@ -3,6 +3,7 @@
 mod commands;
 mod error;
 mod output;
+mod platform;
 mod prompt;
 mod resolve;
 mod skills;
@@ -223,6 +224,40 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    #[command(
+        name = "self-update",
+        args_override_self = true,
+        about = "Update kluris to the newest release.",
+        long_about = SELF_UPDATE_HELP
+    )]
+    SelfUpdate {
+        /// Only show the installed and the newest version
+        #[arg(long)]
+        check: bool,
+        /// Install this release instead of the newest (3.1.0 or v3.1.0)
+        #[arg(long = "version", value_name = "VERSION", allow_hyphen_values = true)]
+        version: Option<String>,
+        /// JSON output
+        #[arg(long)]
+        json: bool,
+    },
+    #[command(
+        name = "self-uninstall",
+        args_override_self = true,
+        about = "Remove the installed kluris.",
+        long_about = SELF_UNINSTALL_HELP
+    )]
+    SelfUninstall {
+        /// Also remove ~/.kluris and every Kluris-written agent skill
+        #[arg(long)]
+        purge: bool,
+        /// Do not ask before --purge
+        #[arg(long)]
+        yes: bool,
+        /// JSON output
+        #[arg(long)]
+        json: bool,
+    },
     #[command(about = "Show help for kluris commands.")]
     Help {
         command: Option<String>,
@@ -333,6 +368,30 @@ copies Kluris 2 left in folders it no longer uses. This is the step after \
 an upgrade: run `kluris doctor` and everything is back in sync.
 
 Pass --no-refresh to run only the read-only checks.";
+
+/// `self-update` (new in v3).
+const SELF_UPDATE_HELP: &str = "Update kluris to the newest release.
+
+Downloads this platform's archive from the newest GitHub release of \
+ngvoicu/kluris, checks its SHA-256 against the release's sha256.sum (and \
+GitHub's digest), replaces this binary in place, then runs the new \
+`kluris doctor`. Works only on the copy the Kluris installer put in \
+~/.kluris/bin (its install receipt says where).
+
+Set KLURIS_GITHUB_TOKEN to a GitHub token when GitHub's rate limit for \
+unauthenticated requests (60 an hour per address) is in the way.";
+
+/// `self-uninstall` (new in v3).
+const SELF_UNINSTALL_HELP: &str = "Remove the installed kluris.
+
+Removes what the Kluris installer wrote: the binary in ~/.kluris/bin, the \
+PATH setup (the env scripts, the line each shell profile got, the Windows \
+user PATH entry) and the install receipt. Keeps ~/.kluris/config.yml, the \
+companions, the agent skills and every brain.
+
+--purge also removes ~/.kluris and every Kluris-written agent skill, after \
+asking (--yes skips the question; it is required when not interactive). \
+Brains are never removed.";
 
 /// v2's `wake-up` docstring.
 const WAKE_UP_HELP: &str = "Compact brain snapshot for agent session bootstrap.
@@ -730,6 +789,14 @@ fn run(cli: Cli) -> Result<(), CliError> {
         Command::Register { source, json } => commands::register::run(source.as_deref(), json),
         Command::Remove { brain_name, json } => commands::remove::run(&brain_name, json),
         Command::Doctor { no_refresh, json } => commands::doctor::run(no_refresh, json),
+        Command::SelfUpdate {
+            check,
+            version,
+            json,
+        } => commands::self_update::run(check, version.as_deref(), json),
+        Command::SelfUninstall { purge, yes, json } => {
+            commands::self_uninstall::run(purge, yes, json)
+        }
         Command::Help { command, json } => commands::help::run(command.as_deref(), json),
     }
 }

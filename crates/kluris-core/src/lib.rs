@@ -6,6 +6,7 @@ pub mod brain;
 pub mod companions;
 pub mod config;
 pub mod create;
+pub mod dist;
 pub mod doctor;
 pub mod dream;
 pub mod frontmatter;

@@ -239,6 +239,46 @@ pub fn install_skills(req: &InstallRequest) -> InstallReport {
     report
 }
 
+/// Remove every Kluris-written skill (and Windsurf workflow) from every
+/// folder Kluris has written to: `~/.agents/skills`, each registry agent's
+/// folders, and the folders only v2 used (`kluris self-uninstall --purge`).
+/// A user's own `kluris-*` folder is never touched. One report per folder
+/// that exists, in that order.
+pub fn remove_generated_skills(home: &Path, copilot_home: Option<&Path>) -> Vec<DestinationReport> {
+    let mut folders = vec![(
+        home.join(registry::UNIVERSAL),
+        DestinationRole::Universal,
+        Kind::Skills,
+    )];
+    for agent in REGISTRY {
+        for folder in registry::skill_folders(agent, home, copilot_home) {
+            folders.push((folder, DestinationRole::Agent(agent), Kind::Skills));
+        }
+    }
+    let (windsurf_skills, windsurf_workflows) = registry::windsurf_folders(home);
+    for folder in windsurf_skills {
+        folders.push((folder, DestinationRole::Migration, Kind::Skills));
+    }
+    for folder in windsurf_workflows {
+        folders.push((folder, DestinationRole::Migration, Kind::Workflows));
+    }
+    for rel in registry::V2_ONLY_SKILL_FOLDERS {
+        folders.push((home.join(rel), DestinationRole::Migration, Kind::Skills));
+    }
+    let mut seen: Vec<PathBuf> = Vec::new();
+    let mut reports = Vec::new();
+    for (path, role, kind) in folders {
+        if seen.contains(&path) || !path.is_dir() {
+            continue;
+        }
+        seen.push(path.clone());
+        let mut dest = DestinationReport::new(path, role);
+        clear_folder(&mut dest, kind, &[]);
+        reports.push(dest);
+    }
+    reports
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Kind {
     /// `kluris*/SKILL.md` skill folders.

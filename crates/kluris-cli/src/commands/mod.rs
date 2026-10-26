@@ -10,5 +10,7 @@ pub mod mri;
 pub mod register;
 pub mod remove;
 pub mod search;
+pub mod self_uninstall;
+pub mod self_update;
 pub mod status;
 pub mod wake_up;

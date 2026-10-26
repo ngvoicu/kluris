@@ -2,6 +2,8 @@ __pycache__/
 *.pyc
 *.egg-info/
 dist/
+# Kluris 3's module for what the dist installers write (not a build output).
+!crates/kluris-core/src/dist/
 build/
 .venv/
 .env

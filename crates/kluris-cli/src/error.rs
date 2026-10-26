@@ -19,8 +19,10 @@ use crate::output::json::{self, Json};
 pub struct CliError {
     message: String,
     aborted: bool,
-    /// Exit 1 with nothing more printed (the command printed its output).
+    /// Exit with `code` and nothing more printed (the command printed its
+    /// output).
     silent: bool,
+    code: u8,
 }
 
 impl CliError {
@@ -29,16 +31,24 @@ impl CliError {
             message: message.into(),
             aborted: false,
             silent: false,
+            code: 1,
         }
     }
 
     /// Exit 1 after the command printed its own output (`dream` when the
     /// brain is unhealthy; v2's `SystemExit(1)`).
     pub fn exit_only() -> Self {
+        Self::exit_code(1)
+    }
+
+    /// Exit with `code` after the command printed its own output
+    /// (`self-update` passes on the exit code of the doctor it ran).
+    pub fn exit_code(code: u8) -> Self {
         Self {
             message: String::new(),
             aborted: false,
             silent: true,
+            code,
         }
     }
 
@@ -48,6 +58,7 @@ impl CliError {
             message: "Aborted!".into(),
             aborted: true,
             silent: false,
+            code: 1,
         }
     }
 }
@@ -65,7 +76,7 @@ fn print_envelope(message: &str) -> ExitCode {
 /// Report a command's error.
 pub fn report(err: &CliError, json: bool) -> ExitCode {
     if err.silent {
-        return ExitCode::from(1);
+        return ExitCode::from(err.code);
     }
     if err.aborted {
         let _ = writeln!(io::stderr(), "{}", err.message);

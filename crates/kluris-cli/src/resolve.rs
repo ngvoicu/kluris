@@ -29,6 +29,48 @@ pub fn home() -> Result<PathBuf, CliError> {
         .ok_or_else(|| CliError::new("Cannot find the home directory; set HOME."))
 }
 
+/// The environment the installers' files are found from
+/// (`kluris_core::dist::DistEnv`).
+pub struct DistPaths {
+    pub home: PathBuf,
+    pub xdg_config_home: Option<PathBuf>,
+    pub local_app_data: Option<PathBuf>,
+    pub zdotdir: Option<PathBuf>,
+}
+
+impl DistPaths {
+    pub fn from_env() -> Result<DistPaths, CliError> {
+        let var = |name: &str| {
+            std::env::var_os(name)
+                .filter(|v| !v.is_empty())
+                .map(PathBuf::from)
+        };
+        Ok(DistPaths {
+            home: home()?,
+            xdg_config_home: var("XDG_CONFIG_HOME"),
+            local_app_data: var("LOCALAPPDATA"),
+            zdotdir: var("ZDOTDIR"),
+        })
+    }
+
+    pub fn env(&self) -> kluris_core::dist::DistEnv<'_> {
+        kluris_core::dist::DistEnv {
+            home: &self.home,
+            xdg_config_home: self.xdg_config_home.as_deref(),
+            local_app_data: self.local_app_data.as_deref(),
+            zdotdir: self.zdotdir.as_deref(),
+            windows: cfg!(windows),
+        }
+    }
+}
+
+/// Whether a prompt may be shown: not `--json`, `KLURIS_NO_PROMPT` not
+/// exactly `1`, and stdin a terminal (the resolver's rule).
+pub fn interactive(as_json: bool) -> bool {
+    let no_prompt = std::env::var_os("KLURIS_NO_PROMPT").is_some_and(|v| v == "1");
+    !as_json && !no_prompt && io::stdin().is_terminal()
+}
+
 /// `COPILOT_HOME`, when set and non-empty.
 pub fn copilot_home() -> Option<PathBuf> {
     std::env::var_os("COPILOT_HOME")

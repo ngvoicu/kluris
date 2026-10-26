@@ -1,6 +1,7 @@
 //! `kluris help`: v2's command table (`cli.py:2010-2024`) without `pack`,
-//! with `mri`'s description as fixed in v2.28.11. Commands Kluris 3 has not
-//! ported yet are listed as v2 lists them.
+//! with `mri`'s description as fixed in v2.28.11, then the commands new in
+//! v3 (PAR-056). Commands Kluris 3 has not ported yet are listed as v2 lists
+//! them.
 
 /// One row of the table.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -13,8 +14,8 @@ const fn row(name: &'static str, description: &'static str) -> CommandHelp {
     CommandHelp { name, description }
 }
 
-/// Every command, in v2's order.
-pub const COMMANDS: [CommandHelp; 12] = [
+/// Every command: v2's, in v2's order, then v3's own.
+pub const COMMANDS: [CommandHelp; 14] = [
     row("create", "Create a new brain (--type, --remote, --no-git)"),
     row("register", "Register an existing brain directory on disk"),
     row("list", "List registered brains"),
@@ -45,6 +46,14 @@ pub const COMMANDS: [CommandHelp; 12] = [
         "Check prerequisites and refresh installed agent skills (--no-refresh to skip)",
     ),
     row("help", "Show this help"),
+    row(
+        "self-update",
+        "Update kluris to the newest release (--check only looks)",
+    ),
+    row(
+        "self-uninstall",
+        "Remove the installed kluris (--purge: also ~/.kluris and Kluris skills)",
+    ),
 ];
 
 /// The row of a command, by its exact name.
