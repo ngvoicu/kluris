@@ -497,6 +497,13 @@ fn a_write_cut_short_leaves_the_original_whole() {
         .env("KLURIS_NO_PROMPT", "1")
         .env("NO_COLOR", "1")
         .env("GIT_CEILING_DIRECTORIES", home.dir.path())
+        // Under coverage the child's profile would be cut by the same limit
+        // and break the merge: it goes to a throwaway file outside the
+        // collector instead.
+        .env(
+            "LLVM_PROFILE_FILE",
+            home.dir.path().join("size-limited-%p.profraw"),
+        )
         .output()
         .unwrap();
     let stdout = String::from_utf8(out.stdout).unwrap();
