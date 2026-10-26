@@ -8,6 +8,7 @@ license-file.workspace = true
 repository.workspace = true
 
 [dependencies]
+include_dir.workspace = true
 indexmap.workspace = true
 num-bigint.workspace = true
 regex.workspace = true

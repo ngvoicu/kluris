@@ -191,7 +191,9 @@ fn verify_runtime_dir_accepts_the_allowlist() {
 fn verify_runtime_dir_rejects_entries_outside_allowlist() {
     type Make = fn(&Path);
     let cases: [(&str, Make); 4] = [
-        ("README.md", |d| fs::write(d.join("README.md"), "x").unwrap()),
+        ("README.md", |d| {
+            fs::write(d.join("README.md"), "x").unwrap()
+        }),
         ("evals", |d| fs::create_dir(d.join("evals")).unwrap()),
         (".DS_Store", |d| {
             fs::write(d.join("references").join(".DS_Store"), "x").unwrap()
@@ -242,7 +244,10 @@ fn verify_runtime_dir_rejects_links() {
     let d = tmp.path().join("c");
     fs::create_dir_all(d.join("references")).unwrap();
     fs::write(d.join("SKILL.md"), "x").unwrap();
-    if !symlink_file(&outside.join("leak.md"), &d.join("references").join("leak.md")) {
+    if !symlink_file(
+        &outside.join("leak.md"),
+        &d.join("references").join("leak.md"),
+    ) {
         eprintln!("symlinks unavailable; skipped");
         return;
     }
@@ -293,7 +298,11 @@ fn install_twice_over_stray_entry_at_companion_path() {
         let meta = fs::symlink_metadata(&dest).unwrap();
         assert!(meta.is_dir() && !meta.file_type().is_symlink(), "{kind}");
         assert_eq!(tree(&dest), FOLDER, "{kind}");
-        assert_eq!(names_in(&companions_dir(&home)), ["specmint-core"], "{kind}");
+        assert_eq!(
+            names_in(&companions_dir(&home)),
+            ["specmint-core"],
+            "{kind}"
+        );
         if kind == "symlink" {
             assert_eq!(
                 fs::read_to_string(elsewhere.join("keep.md")).unwrap(),
@@ -559,7 +568,10 @@ fn load_brains_reads_every_kluris_yml_first() {
     assert_eq!(loaded[0].config.companions, ["specmint-tdd"]);
 
     let err = load_brains(&[a.clone(), missing]).unwrap_err();
-    assert!(err.to_string().starts_with("Cannot access config file "), "{err}");
+    assert!(
+        err.to_string().starts_with("Cannot access config file "),
+        "{err}"
+    );
     assert!(err.to_string().contains("kluris.yml"), "{err}");
     let err = load_brains(&[a, invalid]).unwrap_err();
     assert!(err.to_string().starts_with("Invalid config file "), "{err}");
@@ -569,8 +581,16 @@ fn load_brains_reads_every_kluris_yml_first() {
 fn enabled_is_the_union_in_known_order() {
     let tmp = TempDir::new().unwrap();
     let brains = load_brains(&[
-        brain(tmp.path(), "a", Some(&yml("a", &["specmint-tdd-html", "bogus"]))),
-        brain(tmp.path(), "b", Some(&yml("b", &["specmint-tdd", "specmint-core"]))),
+        brain(
+            tmp.path(),
+            "a",
+            Some(&yml("a", &["specmint-tdd-html", "bogus"])),
+        ),
+        brain(
+            tmp.path(),
+            "b",
+            Some(&yml("b", &["specmint-tdd", "specmint-core"])),
+        ),
         brain(tmp.path(), "c", Some(&yml("c", &[]))),
     ])
     .unwrap();
@@ -584,7 +604,11 @@ fn enabled_is_the_union_in_known_order() {
 fn add_installs_the_files_and_opts_every_brain_in() {
     let tmp = TempDir::new().unwrap();
     let home = tmp.path().join("home");
-    let a = brain(tmp.path(), "a", Some(&yml("a", &["specmint-tdd-html", "bogus"])));
+    let a = brain(
+        tmp.path(),
+        "a",
+        Some(&yml("a", &["specmint-tdd-html", "bogus"])),
+    );
     let b = brain(tmp.path(), "b", Some(&yml("b", &["specmint-core"])));
     let brains = load_brains(&[a, b]).unwrap();
 
@@ -628,7 +652,11 @@ fn add_rewrites_a_v2_kluris_yml_keeping_crlf() {
 fn remove_touches_only_brains_that_had_the_companion() {
     // research-03 §5 #25: v2 rewrites (and reports) every resolved brain.
     let tmp = TempDir::new().unwrap();
-    let a = brain(tmp.path(), "a", Some(&yml("a", &["specmint-core", "specmint-tdd"])));
+    let a = brain(
+        tmp.path(),
+        "a",
+        Some(&yml("a", &["specmint-core", "specmint-tdd"])),
+    );
     let b = brain(tmp.path(), "b", Some(V2_KLURIS_YML));
     let c = brain(tmp.path(), "c", Some(&yml("c", &["specmint-tdd", "bogus"])));
     let brains = load_brains(&[a, b, c]).unwrap();

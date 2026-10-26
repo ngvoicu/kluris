@@ -180,6 +180,45 @@ pub enum Choice {
 /// The prompt Click prints before each read.
 pub const PROMPT: &str = "Choice: ";
 
+/// One line as Click's `prompt(type=IntRange(1, max))` reads it: an empty
+/// line asks again, else Python's `int()` on the text, then the range
+/// check, with Click's messages.
+pub fn parse_int_range(line: &str, max: usize) -> Choice {
+    if line.is_empty() {
+        return Choice::Empty;
+    }
+    let Some(value) = py_int_from_str(line) else {
+        return Choice::Invalid(format!(
+            "{} is not a valid integer range.",
+            py_repr_str(line)
+        ));
+    };
+    match usize::try_from(&value) {
+        Ok(n) if (1..=max).contains(&n) => Choice::Picked(n),
+        _ => Choice::Invalid(format!("{value} is not in the range 1<=x<={max}.")),
+    }
+}
+
+/// Write `prompt` to `out` and read one line from `input`, without its final
+/// `\n` (and a `\r` before it); invalid UTF-8 reads as U+FFFD. `None` at
+/// end of input (Click's `Abort`).
+pub fn prompt_line(input: &mut impl BufRead, out: &mut impl Write, prompt: &str) -> Option<String> {
+    let _ = out.write_all(prompt.as_bytes());
+    let _ = out.flush();
+    let mut raw = Vec::new();
+    match input.read_until(b'\n', &mut raw) {
+        Ok(0) | Err(_) => return None,
+        Ok(_) => {}
+    }
+    if raw.ends_with(b"\n") {
+        raw.pop();
+        if raw.ends_with(b"\r") {
+            raw.pop();
+        }
+    }
+    Some(String::from_utf8_lossy(&raw).into_owned())
+}
+
 /// The interactive picker (`_pick_brain_interactively`): the brains in
 /// config order, then `all` when the command fans out.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -217,25 +256,10 @@ impl Picker {
         out
     }
 
-    /// Read one line as Click's `prompt(type=IntRange(1, N))` does: Python's
-    /// `int()` on the text, then the range check.
+    /// Read one line as Click's `prompt(type=IntRange(1, N))` does
+    /// ([`parse_int_range`]).
     pub fn parse(&self, line: &str) -> Choice {
-        if line.is_empty() {
-            return Choice::Empty;
-        }
-        let Some(value) = py_int_from_str(line) else {
-            return Choice::Invalid(format!(
-                "{} is not a valid integer range.",
-                py_repr_str(line)
-            ));
-        };
-        match usize::try_from(&value) {
-            Ok(n) if (1..=self.option_count()).contains(&n) => Choice::Picked(n),
-            _ => Choice::Invalid(format!(
-                "{value} is not in the range 1<=x<={}.",
-                self.option_count()
-            )),
-        }
+        parse_int_range(line, self.option_count())
     }
 
     /// The brains option `index` (1-based) stands for, path-checked.
@@ -263,20 +287,9 @@ impl Picker {
     ) -> Result<Vec<ResolvedBrain>, ResolveError> {
         let _ = out.write_all(self.menu().as_bytes());
         loop {
-            let _ = out.write_all(PROMPT.as_bytes());
-            let _ = out.flush();
-            let mut raw = Vec::new();
-            match input.read_until(b'\n', &mut raw) {
-                Ok(0) | Err(_) => return Err(ResolveError::Aborted),
-                Ok(_) => {}
-            }
-            if raw.ends_with(b"\n") {
-                raw.pop();
-                if raw.ends_with(b"\r") {
-                    raw.pop();
-                }
-            }
-            let line = String::from_utf8_lossy(&raw);
+            let Some(line) = prompt_line(input, out, PROMPT) else {
+                return Err(ResolveError::Aborted);
+            };
             match self.parse(&line) {
                 Choice::Empty => {}
                 Choice::Invalid(message) => {

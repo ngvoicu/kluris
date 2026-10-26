@@ -55,10 +55,10 @@ pub fn resolve_brains(
 
 /// While alive, Ctrl-C (SIGINT) prints `Aborted!` on stderr and exits 1,
 /// which is what Click does when it interrupts a prompt.
-struct AbortOnInterrupt(Option<signal_hook::SigId>);
+pub struct AbortOnInterrupt(Option<signal_hook::SigId>);
 
 impl AbortOnInterrupt {
-    fn install() -> Self {
+    pub fn install() -> Self {
         // SAFETY: the handler writes to stderr, which is unbuffered and not
         // in use (the main thread is blocked reading stdin), then leaves
         // with `_exit`, which is async-signal-safe.

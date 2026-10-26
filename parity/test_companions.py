@@ -12,8 +12,8 @@ from what a v2 user has. Compared:
 - the re-rendered skills: v2's SKILL.md with the decided changes (PAR-026 ...
   PAR-031, via ``test_skill_install``), v2's per-agent copies removed.
 
-Allowlisted: PAR-033 (``remove`` touches only brains that had the companion),
-PAR-034 (a brain whose ``kluris.yml`` does not read is an error before
+Allowlisted: PAR-039 (``remove`` touches only brains that had the companion),
+PAR-040 (a brain whose ``kluris.yml`` does not read is an error before
 anything is written).
 """
 
@@ -278,7 +278,7 @@ def test_remove_text(sandbox: Sandbox):
 
 
 def test_remove_all_touches_only_brains_that_had_it(sandbox: Sandbox):
-    """PAR-033 (research-03 §5 #25): v2 rewrites every resolved brain's
+    """PAR-039 (research-03 §5 #25): v2 rewrites every resolved brain's
     ``kluris.yml`` (here dropping ``b``'s comment) and reports it; v3 only
     the brains that had the companion."""
     brains = v2_brains(sandbox, ("specmint-core", "a"))
@@ -377,24 +377,27 @@ def test_bare_companion_prints_its_help_and_exits_2(sandbox: Sandbox):
     r = run_trees(sandbox, ["companion"])
     for side in ("v2", "v3"):
         assert r[side].code == 2 and r[side].stdout == "", side
-        assert "Usage: kluris companion [OPTIONS] COMMAND [ARGS]..." in r[side].stderr
+        assert "Usage: kluris companion" in r[side].stderr
         assert "Manage embedded companion playbooks per brain." in r[side].stderr
 
 
+# Help keeps v2's wording, not Click's layout (as test_list_status_help's
+# test_command_help_flag): checked by substring on both sides.
 HELP = {
-    (): ["Usage: kluris companion [OPTIONS] COMMAND [ARGS]...", "Manage embedded companion playbooks per brain.",
-         "Opt one or more brains into an embedded companion playbook.",
-         "Remove a companion opt-in from one or more brains."],
+    (): ["Usage: kluris companion", "Manage embedded companion playbooks per brain.",
+         "add", "Opt one or more brains into an embedded companion playbook.",
+         "list", "remove", "Remove a companion opt-in from one or more brains.", "--help"],
     ("list",): ["Usage: kluris companion list [OPTIONS]",
                 "List known companions, installed runtime copies, and brain opt-ins.",
-                "--brain TEXT", "Brain name or 'all'", "--json", "JSON output"],
+                "--brain", "Brain name or 'all'", "--json", "JSON output", "Show this message and exit."],
     ("add",): ["Usage: kluris companion add [OPTIONS] [specmint-core|specmint-tdd|specmint-",
                "Opt one or more brains into an embedded companion playbook.",
-               "Runs an interactive picker when no NAME is given.", "--brain TEXT", "Brain name or 'all'"],
+               "Runs an interactive picker when no NAME is given.", "--brain", "Brain name or 'all'",
+               "--json", "JSON output"],
     ("remove",): ["Usage: kluris companion remove [OPTIONS] [specmint-core|specmint-tdd|specmint-",
                   "Remove a companion opt-in from one or more brains.",
-                  "The global companion copy under ~/.kluris/companions is kept for",
-                  "--brain TEXT", "Brain name or 'all'"],
+                  "The global companion copy under ~/.kluris/companions",
+                  "--brain", "Brain name or 'all'", "--json", "JSON output"],
 }
 
 
@@ -411,7 +414,7 @@ def test_help(sandbox: Sandbox, sub):
 @pytest.mark.parametrize("damage", ["missing", "invalid"])
 @pytest.mark.parametrize("command", ["add", "remove"])
 def test_a_brain_whose_kluris_yml_does_not_read(sandbox: Sandbox, command, damage):
-    """PAR-034: v2 rewrites the brains before it, then ends in a traceback;
+    """PAR-040: v2 rewrites the brains before it, then ends in a traceback;
     v3 stops with a clean error before writing anything."""
     brains = v2_brains(sandbox, ("specmint-core", "a"))
     yml = brains / "b" / "kluris.yml"
@@ -526,7 +529,9 @@ def test_remove_confirm_with_one_enabled(sandbox: Sandbox, lines, removed):
     assert v3.startswith("  Remove specmint-tdd? [Y/n]: ")
     if "junk" in lines:
         assert "Error: invalid input\n" in v3
-    tail = "Removed companion(s) specmint-tdd from: a\n" if removed else "No companion selected. Nothing to do.\n"
+    tail = ("Removed companion(s) specmint-tdd from: a\n"
+            "Runtime companion files were kept under ~/.kluris/companions.\n"
+            if removed else "No companion selected. Nothing to do.\n")
     assert v3.endswith(tail), v3
 
 
@@ -552,7 +557,7 @@ def test_remove_picker_with_several_enabled(sandbox: Sandbox, lines, names):
         assert_same_run(sandbox, r, None)
         assert v3.endswith("No companion selected. Nothing to do.\n")
         return
-    # PAR-033: only the brains that had a removed companion change in v3.
+    # PAR-039: only the brains that had a removed companion change in v3.
     had = {"specmint-core": "a", "specmint-tdd-html": "b"}
     changed = sorted({had[n] for n in names})
     assert v3.endswith(f"Removed companion(s) {', '.join(names)} from: {', '.join(changed)}\n"

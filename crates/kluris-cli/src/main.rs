@@ -96,6 +96,15 @@ enum Command {
         json: bool,
     },
     #[command(
+        about = "Manage embedded companion playbooks per brain.",
+        override_usage = "kluris companion [OPTIONS] COMMAND [ARGS]...",
+        arg_required_else_help = true
+    )]
+    Companion {
+        #[command(subcommand)]
+        action: CompanionCommand,
+    },
+    #[command(
         args_override_self = true,
         about = "Brain maintenance — regenerate maps, update dates, auto-fix safe issues, validate remaining links."
     )]
@@ -120,6 +129,71 @@ enum Command {
         json: bool,
     },
 }
+
+#[derive(Debug, Subcommand)]
+enum CompanionCommand {
+    #[command(
+        args_override_self = true,
+        about = "List known companions, installed runtime copies, and brain opt-ins."
+    )]
+    List {
+        /// Brain name or 'all'
+        #[arg(long = "brain", value_name = "BRAIN", allow_hyphen_values = true)]
+        brain: Option<String>,
+        /// JSON output
+        #[arg(long)]
+        json: bool,
+    },
+    #[command(
+        args_override_self = true,
+        about = "Opt one or more brains into an embedded companion playbook.",
+        long_about = COMPANION_ADD_HELP
+    )]
+    Add {
+        #[arg(
+            value_name = commands::companion::NAME_CHOICES,
+            value_parser = commands::companion::parse_name
+        )]
+        name: Option<String>,
+        /// Brain name or 'all'
+        #[arg(long = "brain", value_name = "BRAIN", allow_hyphen_values = true)]
+        brain: Option<String>,
+        /// JSON output
+        #[arg(long)]
+        json: bool,
+    },
+    #[command(
+        args_override_self = true,
+        about = "Remove a companion opt-in from one or more brains.",
+        long_about = COMPANION_REMOVE_HELP
+    )]
+    Remove {
+        #[arg(
+            value_name = commands::companion::NAME_CHOICES,
+            value_parser = commands::companion::parse_name
+        )]
+        name: Option<String>,
+        /// Brain name or 'all'
+        #[arg(long = "brain", value_name = "BRAIN", allow_hyphen_values = true)]
+        brain: Option<String>,
+        /// JSON output
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+/// v2's `companion add` docstring.
+const COMPANION_ADD_HELP: &str = "Opt one or more brains into an embedded companion playbook.
+
+Runs an interactive picker when no NAME is given. Pass NAME (or use --json) \
+to skip the wizard.";
+
+/// v2's `companion remove` docstring.
+const COMPANION_REMOVE_HELP: &str = "Remove a companion opt-in from one or more brains.
+
+Runs an interactive picker listing currently-enabled companions when no \
+NAME is given. The global companion copy under ~/.kluris/companions is \
+kept for cheap reuse.";
 
 /// v2's `wake-up` docstring.
 const WAKE_UP_HELP: &str = "Compact brain snapshot for agent session bootstrap.
@@ -181,11 +255,17 @@ fn root_options(cmd: clap::Command) -> clap::Command {
 
 /// The root command with Click's surface (see [`Cli`]).
 fn command() -> clap::Command {
-    root_options(Cli::command()).mut_subcommands(|sub| {
-        sub.disable_help_flag(true)
-            .args_override_self(true)
-            .arg(help_flag())
-    })
+    root_options(Cli::command()).mut_subcommands(click_surface)
+}
+
+/// A command (and its own commands) with Click's surface: a plain `--help`
+/// flag, repeatable options, no automatic `help` command.
+fn click_surface(cmd: clap::Command) -> clap::Command {
+    cmd.disable_help_flag(true)
+        .disable_help_subcommand(true)
+        .args_override_self(true)
+        .arg(help_flag())
+        .mut_subcommands(click_surface)
 }
 
 /// What the command line asks for.
@@ -221,12 +301,14 @@ fn parse(args: &[OsString]) -> Result<Parsed, clap::Error> {
     }
 
     let matches = lenient(command()).try_get_matches_from(args)?;
-    if let Some((name, sub_matches)) = matches.subcommand()
-        && flag(sub_matches, "help")
-    {
+    if let Some(path) = help_path(&matches) {
         let mut strict = command();
         strict.build();
-        if let Some(sub) = strict.find_subcommand_mut(name) {
+        let mut sub = Some(&mut strict);
+        for name in &path {
+            sub = sub.and_then(|cmd| cmd.find_subcommand_mut(name));
+        }
+        if let Some(sub) = sub {
             return Ok(Parsed::Help(sub.render_long_help().to_string()));
         }
     }
@@ -238,6 +320,22 @@ fn parse(args: &[OsString]) -> Result<Parsed, clap::Error> {
     let cli = Cli::from_arg_matches(&matches)?;
     converted(&cli).map_err(|e| with_usage(e, &mut root, args))?;
     Ok(Parsed::Run(cli))
+}
+
+/// The command path (`["companion", "add"]`) of the outermost command
+/// given `--help`: a group's own `--help` before its command's, as Click
+/// parses a group's options before it looks at the command.
+fn help_path(matches: &ArgMatches) -> Option<Vec<String>> {
+    let mut path = Vec::new();
+    let mut matches = matches;
+    while let Some((name, sub_matches)) = matches.subcommand() {
+        path.push(name.to_string());
+        if flag(sub_matches, "help") {
+            return Some(path);
+        }
+        matches = sub_matches;
+    }
+    None
 }
 
 /// The root alone, as Click's group parses it: its own options, and the
@@ -262,6 +360,13 @@ fn first_root_token(args: &[OsString], token: &str) -> Option<usize> {
 /// the root any command name.
 fn lenient(cmd: clap::Command) -> clap::Command {
     fn relax(cmd: clap::Command) -> clap::Command {
+        if cmd.has_subcommands() {
+            // A group (`companion`): any command name parses here.
+            return cmd
+                .subcommand_required(false)
+                .allow_external_subcommands(true)
+                .mut_subcommands(relax);
+        }
         cmd.mut_args(|arg| {
             if arg.get_action().takes_values() {
                 arg.value_parser(clap::builder::ValueParser::os_string())
@@ -321,11 +426,35 @@ fn with_usage(mut err: clap::Error, root: &mut clap::Command, args: &[OsString])
     if err.kind() != ErrorKind::ValueValidation || err.get(ContextKind::Usage).is_some() {
         return err;
     }
-    let name = args.get(1).map(|a| a.to_string_lossy().into_owned());
-    if let Some(sub) = name.and_then(|n| root.find_subcommand_mut(n)) {
-        let usage = sub.render_usage();
-        err.insert(ContextKind::Usage, ContextValue::StyledStr(usage));
+    // The command path: each command name in turn (options skipped) while
+    // it names a command of the one before (`companion add`).
+    let mut path = Vec::new();
+    let mut cmd: &clap::Command = root;
+    for arg in args.iter().skip(1) {
+        let arg = arg.to_string_lossy();
+        if arg.starts_with('-') {
+            continue;
+        }
+        match cmd.find_subcommand(arg.as_ref()) {
+            Some(sub) => {
+                path.push(sub.get_name().to_string());
+                cmd = sub;
+            }
+            None => break,
+        }
     }
+    if path.is_empty() {
+        return err;
+    }
+    let mut sub = root;
+    for name in &path {
+        let Some(next) = sub.find_subcommand_mut(name) else {
+            return err;
+        };
+        sub = next;
+    }
+    let usage = sub.render_usage();
+    err.insert(ContextKind::Usage, ContextValue::StyledStr(usage));
     err
 }
 
@@ -350,6 +479,17 @@ fn run(cli: Cli) -> Result<(), CliError> {
             json,
         }),
         Command::Status { brain, json } => commands::status::run(brain.as_deref(), json),
+        Command::Companion { action } => match action {
+            CompanionCommand::List { brain, json } => {
+                commands::companion::list(brain.as_deref(), json)
+            }
+            CompanionCommand::Add { name, brain, json } => {
+                commands::companion::add(name.as_deref(), brain.as_deref(), json)
+            }
+            CompanionCommand::Remove { name, brain, json } => {
+                commands::companion::remove(name.as_deref(), brain.as_deref(), json)
+            }
+        },
         Command::Dream {
             brain,
             json,

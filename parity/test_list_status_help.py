@@ -520,7 +520,7 @@ def test_root_help_flag(sandbox: Sandbox):
     assert "--version  Show the version and exit." in v2.stdout
     for text in ("--version", "Show the version and exit.", "--help", "Show this message and exit."):
         assert text in v3.stdout, text
-    for command in HELP_TEXTS:
+    for command in [*HELP_TEXTS, "companion"]:
         line = next(line for line in v2.stdout.splitlines() if line.startswith(f"  {command} "))
         assert re.search(rf"^  {re.escape(command)} +{re.escape(line.split(maxsplit=1)[1])}$", v3.stdout, re.M), line
     assert "pack" not in v3.stdout
@@ -716,7 +716,8 @@ def test_only_the_winning_value_is_converted(sandbox, two_brains, args):
         assert outcome(v3, sandbox.root) == outcome(v2, sandbox.root)
 
 
-@pytest.mark.parametrize("args", [[], ["list"], ["status"], ["wake-up"], ["search"], ["help"]],
+@pytest.mark.parametrize("args", [[], ["list"], ["status"], ["wake-up"], ["search"], ["help"],
+                                  ["companion"], ["companion", "list"]],
                          ids=lambda a: " ".join(a) or "root")
 def test_usage_line_is_v2s(sandbox, two_brains, args):
     """Required arguments read `QUERY`, optional ones `[COMMAND]`, in help
