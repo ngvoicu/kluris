@@ -30,6 +30,7 @@ assert_cmd = "2.2"
 assert_fs = "1.1"
 predicates = "3.1"
 tempfile = "3"
+rustix = { version = "1.1.5", features = ["fs", "std"] }
 insta = "1.43"
 wiremock = "0.6.5"
 tokio = { version = "1.54", features = ["rt-multi-thread"] }

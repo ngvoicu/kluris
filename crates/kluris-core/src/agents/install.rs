@@ -289,6 +289,70 @@ pub fn remove_generated_skills_with(
     copilot_home: Option<&Path>,
     ops: &dyn FileOps,
 ) -> Vec<DestinationReport> {
+    let mut seen = Seen::default();
+    generated_skill_folders(home, copilot_home)
+        .into_iter()
+        .filter_map(|(path, role, kind)| clear_existing(path, role, kind, ops, &mut seen))
+        .collect()
+}
+
+/// The entries [`remove_generated_skills`] would remove, as it finds them
+/// now, changing nothing (the uninstall's pre-flight); and each path that
+/// could not be looked at, with why (anything but NotFound).
+pub fn generated_skill_entries(
+    home: &Path,
+    copilot_home: Option<&Path>,
+) -> (Vec<PathBuf>, Vec<(PathBuf, io::Error)>) {
+    let mut entries = Vec::new();
+    let mut errors = Vec::new();
+    let mut seen = Seen::default();
+    for (folder, _, kind) in generated_skill_folders(home, copilot_home) {
+        match fs::metadata(&folder) {
+            Ok(meta) if meta.is_dir() => {}
+            Ok(_) => continue,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
+            Err(e) => {
+                errors.push((folder, e));
+                continue;
+            }
+        }
+        if !matches!(seen.visit(&folder), Handled::New) {
+            continue;
+        }
+        let mut names = match listing(&folder) {
+            Ok(names) => names,
+            Err(e) => {
+                errors.push((folder, e));
+                continue;
+            }
+        };
+        names.sort();
+        for name in names {
+            let base = match staged_base(&name, kind) {
+                Some(base) => base,
+                None if !name.starts_with("kluris") => continue,
+                None if kind == Kind::Workflows && !name.ends_with(".md") => continue,
+                None => name.as_str(),
+            };
+            let path = folder.join(&name);
+            let owned = match kind {
+                Kind::Skills => is_owned_skill_entry(&path, base),
+                Kind::Workflows => is_owned_workflow_file(&path, base),
+            };
+            if owned {
+                entries.push(path);
+            }
+        }
+    }
+    (entries, errors)
+}
+
+/// Every folder Kluris has written skills (or Windsurf workflows) to, in
+/// the order [`remove_generated_skills`] clears them.
+fn generated_skill_folders(
+    home: &Path,
+    copilot_home: Option<&Path>,
+) -> Vec<(PathBuf, DestinationRole, Kind)> {
     let mut folders = vec![(
         under(home, registry::UNIVERSAL),
         DestinationRole::Universal,
@@ -309,11 +373,7 @@ pub fn remove_generated_skills_with(
     for rel in registry::V2_ONLY_SKILL_FOLDERS {
         folders.push((under(home, rel), DestinationRole::Migration, Kind::Skills));
     }
-    let mut seen = Seen::default();
     folders
-        .into_iter()
-        .filter_map(|(path, role, kind)| clear_existing(path, role, kind, ops, &mut seen))
-        .collect()
 }
 
 /// The folders handled so far, by physical identity.

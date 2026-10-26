@@ -187,7 +187,8 @@ fn strings(items: &[String]) -> Json {
 }
 
 /// `{"ok", "removed", "edited", "kept", "path_entries", "skills": [{"path",
-/// "removed", "kept", "failed"}], "purged", "failed"}`.
+/// "removed", "kept", "failed"}], "purged", "failed", "blocked": [{"path",
+/// "problem", "fix"}], "left"}`.
 fn report_json(report: &UninstallReport) -> Json {
     let skills = report
         .skills
@@ -210,11 +211,40 @@ fn report_json(report: &UninstallReport) -> Json {
         ("skills".into(), Json::Array(skills)),
         ("purged".into(), Json::Bool(report.purged)),
         ("failed".into(), strings(&report.failed)),
+        (
+            "blocked".into(),
+            Json::Array(
+                report
+                    .blocked
+                    .iter()
+                    .map(|b| {
+                        Json::Object(vec![
+                            ("path".into(), Json::Str(slashed(&b.path))),
+                            ("problem".into(), Json::Str(b.problem.clone())),
+                            ("fix".into(), Json::Str(b.fix.clone())),
+                        ])
+                    })
+                    .collect(),
+            ),
+        ),
+        ("left".into(), strings(&report.left)),
     ])
 }
 
 fn report_text(report: &UninstallReport, home: &Path) -> String {
     let mut out = String::new();
+    if !report.blocked.is_empty() {
+        out.push_str("Nothing was changed. Fix these, then run kluris self-uninstall again:\n");
+        for b in &report.blocked {
+            out.push_str(&format!(
+                "  {}: {}\n    fix: {}\n",
+                home_relative(&b.path, home),
+                b.problem,
+                b.fix
+            ));
+        }
+        return out;
+    }
     for path in &report.removed {
         out.push_str(&format!("Removed {}\n", home_relative(path, home)));
     }
@@ -266,6 +296,11 @@ fn report_text(report: &UninstallReport, home: &Path) -> String {
         out.push_str(
             "kluris is uninstalled. Open a new terminal so PATH no longer has ~/.kluris/bin.\n",
         );
+    } else if !report.left.is_empty() {
+        out.push_str("kluris is uninstalled, but these are left; to finish by hand:\n");
+        for todo in &report.left {
+            out.push_str(&format!("  {todo}\n"));
+        }
     } else {
         out.push_str("kluris is partly uninstalled: see FAILED above, then run it again.\n");
     }

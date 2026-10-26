@@ -638,10 +638,15 @@ fn an_rc_file_that_cannot_be_edited_stops_before_anything_is_removed() {
     let report = uninstall(&request(&h, &receipt, false), None, &mut remove_file).unwrap();
     read_only(&dotfiles, false);
     assert!(!report.ok());
+    // The pre-flight (T-119) names the folder the rewrite needs, for
+    // ~/.profile; before it, the failed edit itself did.
     assert!(
-        report.failed.iter().any(|f| f.contains(".profile")),
+        report
+            .blocked
+            .iter()
+            .any(|b| b.path == dotfiles && b.problem.contains(".profile")),
         "{:?}",
-        report.failed
+        report.blocked
     );
     for kept in [
         h.prefix.join(exe_name()),
@@ -686,7 +691,14 @@ fn an_env_script_that_cannot_be_removed_stops_before_the_binary() {
         "the binary a retry runs is kept"
     );
     assert!(h.receipt.exists());
-    h.assert_rc_files_restored();
+    // The pre-flight (T-119) stops before the rc files are edited; before
+    // it, they were.
+    assert!(
+        report.blocked.iter().any(|b| b.path == folder),
+        "{:?}",
+        report.blocked
+    );
+    assert!(report.edited.is_empty(), "{:?}", report.edited);
 
     let receipt = h.receipt();
     let report = uninstall(&request(&h, &receipt, false), None, &mut remove_file).unwrap();

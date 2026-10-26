@@ -14,7 +14,9 @@ use std::path::{Path, PathBuf};
 
 pub use super::preflight::{Blocker, Planned, preflight};
 use super::{DistEnv, Receipt, ReceiptError};
-use crate::agents::install::{DestinationReport, remove_generated_skills};
+use crate::agents::install::{
+    DestinationReport, generated_skill_entries, remove_generated_skills_with,
+};
 use crate::fileops::{FileOps, RealFs};
 
 /// The per-user PATH on Windows (`HKCU\Environment\Path`).
@@ -66,9 +68,12 @@ pub struct UninstallReport {
 }
 
 impl UninstallReport {
-    /// Nothing failed.
+    /// Nothing was in the way, nothing failed and nothing is left.
     pub fn ok(&self) -> bool {
-        self.failed.is_empty() && self.skills.iter().all(|d| d.failed.is_empty())
+        self.blocked.is_empty()
+            && self.failed.is_empty()
+            && self.left.is_empty()
+            && self.skills.iter().all(|d| d.failed.is_empty())
     }
 }
 
@@ -99,11 +104,18 @@ impl std::fmt::Display for UninstallError {
 impl std::error::Error for UninstallError {}
 
 /// Remove what the installers wrote, in an order that keeps what a retry
-/// needs (T-111):
+/// needs (T-111), once every change is checked (T-119):
 ///
 /// 0. Nothing is done unless the receipt is Kluris's
 ///    ([`Receipt::check_kluris`]); a purge that would remove a registered
 ///    brain is refused too.
+///
+/// The pre-flight then builds the whole plan from reads alone and checks
+/// it ([`preflight`]): anything in the way (a path that cannot be looked
+/// at, a folder that cannot lose an entry, an immutable flag, a read-only
+/// attribute) is listed in `blocked`, each with its fix, and nothing is
+/// changed.
+///
 /// 1. With `modify_path` (the installer set PATH up), the rc files lose the
 ///    line sourcing env.sh, unless env.sh is there and is not dist's (then it
 ///    and its lines are kept and reported). A failure stops here: env
@@ -116,15 +128,16 @@ impl std::error::Error for UninstallError {}
 ///
 /// Then the binary and the receipt, the last two things removed, once
 /// every step before has succeeded (a failure anywhere stops and keeps
-/// both): the receipt's folder is first checked to take a removal; 5. the
-/// binary, through `remove_binary` (the running one may need the
-/// platform's self-delete; one that will not go keeps the receipt), its
-/// emptied folder and under a purge what is left of `~/.kluris`; 6. the
-/// receipt.
+/// both, so a rerun picks up where this one stopped): 5. the binary,
+/// through `remove_binary` (the running one may need the platform's
+/// self-delete; one that will not go keeps the receipt), its emptied folder
+/// and under a purge what is left of `~/.kluris`; 6. the receipt. A failure
+/// once the binary is gone (a change since the pre-flight) is in `failed`,
+/// and `left` says what to remove by hand: by then no shell file sources a
+/// removed script and the PATH entry is gone.
 ///
 /// Without `modify_path` (KLURIS_NO_MODIFY_PATH=1) no rc file, env script,
-/// fish file or PATH entry is touched: the user manages PATH. A rerun after
-/// any failure picks up where this one stopped.
+/// fish file or PATH entry is touched: the user manages PATH.
 pub fn uninstall(
     req: &UninstallRequest,
     user_path: Option<&mut dyn UserPath>,
@@ -133,12 +146,12 @@ pub fn uninstall(
     uninstall_with(req, user_path, remove_binary, &RealFs)
 }
 
-/// [`uninstall`], removing and rewriting through `ops`.
+/// [`uninstall`], removing through `ops` (tests make one fail).
 pub fn uninstall_with(
     req: &UninstallRequest,
     user_path: Option<&mut dyn UserPath>,
     remove_binary: &mut dyn FnMut(&Path) -> io::Result<()>,
-    _ops: &dyn FileOps,
+    ops: &dyn FileOps,
 ) -> Result<UninstallReport, UninstallError> {
     req.receipt.check_kluris(req.env.windows).map_err(|why| {
         UninstallError::NotKluris(ReceiptError::NotKluris(req.receipt_path.to_path_buf(), why))
@@ -158,59 +171,33 @@ pub fn uninstall_with(
     }
 
     let mut report = UninstallReport::default();
+    let plan = Plan::new(req, &mut report);
+    report.blocked = plan.blocked;
+    report.blocked.extend(preflight(&plan.planned));
+    if !report.blocked.is_empty() {
+        return Ok(report);
+    }
     let prefix = req.receipt.install_prefix.as_path();
     let receipt_dir = req.receipt_path.parent().unwrap_or(Path::new(""));
-    let env_sh = receipt_dir.join("env.sh");
-    let env_fish = receipt_dir.join("env.fish");
 
     if req.receipt.modify_path {
-        let exprs = install_dir_exprs(prefix, home);
-        let sh_ours = dists_script(&env_sh, &exprs, env_sh_text, &mut report);
-        let fish_ours = dists_script(&env_fish, &exprs, env_fish_text, &mut report);
-        if !report.failed.is_empty() {
-            return Ok(report);
-        }
-
         // 1. The rc files.
-        if sh_ours {
-            let sh_lines = source_lines(".", &[&env_sh], home);
-            let zdir = req.env.zdotdir.unwrap_or(home);
-            for rc in [
-                home.join(".profile"),
-                home.join(".bashrc"),
-                home.join(".bash_profile"),
-                home.join(".bash_login"),
-                zdir.join(".zshrc"),
-                zdir.join(".zshenv"),
-            ] {
-                edit_rc(&rc, &sh_lines, false, &mut report);
-            }
-            if !report.failed.is_empty() {
-                return Ok(report);
-            }
-        }
-
-        // 2. The fish conf.d file. A failure stops here: it still sources
-        // env.fish.
-        if fish_ours {
-            let fish_lines = source_lines("source", &[&env_fish], home);
-            let fish_conf = home
-                .join(".config")
-                .join("fish")
-                .join("conf.d")
-                .join(format!("{}.env.fish", super::APP_NAME));
-            edit_rc(&fish_conf, &fish_lines, true, &mut report);
+        for (rc, remove_if_empty) in &plan.rc_files {
+            let lines = if *remove_if_empty {
+                &plan.fish_lines
+            } else {
+                &plan.sh_lines
+            };
+            edit_rc(rc, lines, *remove_if_empty, ops, &mut report);
+            // 2. A failure stops here: the files still source the scripts.
             if !report.failed.is_empty() {
                 return Ok(report);
             }
         }
 
         // 3. The env scripts and the Windows user PATH entry.
-        if fish_ours {
-            remove_file(&env_fish, &mut report);
-        }
-        if sh_ours {
-            remove_file(&env_sh, &mut report);
+        for script in &plan.scripts {
+            remove_file(script, ops, &mut report);
         }
         if let Some(user_path) = user_path {
             match user_path.read() {
@@ -238,34 +225,23 @@ pub fn uninstall_with(
     // 4. A purge: the skills, then ~/.kluris but the folder the binary is in.
     let binary = prefix.join(req.env.binary_name());
     if req.purge {
-        report.skills = remove_generated_skills(home, req.copilot_home)
+        report.skills = remove_generated_skills_with(home, req.copilot_home, ops)
             .into_iter()
             .filter(|d| !d.removed.is_empty() || !d.kept.is_empty() || !d.failed.is_empty())
             .collect();
         if !report.ok() {
             return Ok(report);
         }
-        clear_kluris_dir(&kluris_dir, prefix, &binary, &mut report);
+        clear_kluris_dir(&kluris_dir, prefix, &binary, ops, &mut report);
         if !report.ok() {
             return Ok(report);
         }
     }
 
-    // The receipt goes last, so its folder must take a removal now: one
-    // that would not is found before the binary is gone.
-    if let Err(e) = probe_removable(receipt_dir) {
-        report.failed.push(format!(
-            "cannot remove the receipt {}: {e}",
-            req.receipt_path.display()
-        ));
-        return Ok(report);
-    }
-
-    // 5. The binary, by its own name in the receipt's prefix, then its
-    // empty folder (and under a purge what is left of ~/.kluris). A binary
-    // that will not go keeps the receipt.
-    if fs::symlink_metadata(&binary).is_ok() {
-        match remove_binary(&binary) {
+    // 5. The binary, by its own name in the receipt's prefix. One that will
+    // not go keeps the receipt.
+    match fs::symlink_metadata(&binary) {
+        Ok(_) => match remove_binary(&binary) {
             Ok(()) => report.removed.push(binary),
             Err(e) => {
                 report
@@ -273,34 +249,230 @@ pub fn uninstall_with(
                     .push(format!("cannot remove {}: {e}", binary.display()));
                 return Ok(report);
             }
+        },
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+        Err(e) => {
+            report
+                .failed
+                .push(format!("cannot check {}: {e}", binary.display()));
+            return Ok(report);
         }
     }
-    remove_dir_if_empty(prefix, &mut report);
+
+    // From here on the binary is gone: what fails is left for the user to
+    // remove by hand, and the rest still goes.
+    remove_dir_if_empty(prefix, ops, &mut report);
     if req.purge {
-        if fs::symlink_metadata(&kluris_dir).is_ok() {
-            match fs::remove_dir_all(&kluris_dir) {
+        match fs::symlink_metadata(&kluris_dir) {
+            Ok(_) => match ops.remove_dir_all(&kluris_dir) {
                 Ok(()) => {
                     report.removed.push(kluris_dir);
                     report.purged = true;
                 }
-                Err(e) => report
-                    .failed
-                    .push(format!("cannot remove {}: {e}", kluris_dir.display())),
-            }
-        } else {
-            report.purged = true;
+                Err(e) => left(
+                    &mut report,
+                    format!("cannot remove {}: {e}", kluris_dir.display()),
+                    format!(
+                        "remove the folder {} and everything in it",
+                        kluris_dir.display()
+                    ),
+                ),
+            },
+            Err(e) if e.kind() == io::ErrorKind::NotFound => report.purged = true,
+            Err(e) => left(
+                &mut report,
+                format!("cannot check {}: {e}", kluris_dir.display()),
+                format!(
+                    "remove the folder {} and everything in it",
+                    kluris_dir.display()
+                ),
+            ),
         }
     }
 
     // 6. The receipt.
-    remove_file(req.receipt_path, &mut report);
-    remove_dir_if_empty(receipt_dir, &mut report);
+    if let Err(e) = remove_if_there(req.receipt_path, ops, &mut report) {
+        left(
+            &mut report,
+            format!("cannot remove {}: {e}", req.receipt_path.display()),
+            format!("remove the file {}", req.receipt_path.display()),
+        );
+    }
+    remove_dir_if_empty(receipt_dir, ops, &mut report);
     Ok(report)
+}
+
+/// A failure once the binary is gone: `message` in `failed`, and the
+/// instruction `todo` in `left`.
+fn left(report: &mut UninstallReport, message: String, todo: String) {
+    report.failed.push(message);
+    report.left.push(todo);
+}
+
+/// What the uninstall will change, worked out from reads alone.
+struct Plan {
+    /// The rc files that lose a line, each with whether it is the fish
+    /// conf.d file (which goes once only whitespace is left).
+    rc_files: Vec<(PathBuf, bool)>,
+    sh_lines: Vec<Vec<u8>>,
+    fish_lines: Vec<Vec<u8>>,
+    /// The env scripts that go: dist's own.
+    scripts: Vec<PathBuf>,
+    /// Every change, for [`preflight`].
+    planned: Vec<Planned>,
+    /// What the reads themselves found in the way.
+    blocked: Vec<Blocker>,
+}
+
+impl Plan {
+    fn new(req: &UninstallRequest, report: &mut UninstallReport) -> Plan {
+        let home = req.env.home;
+        let prefix = req.receipt.install_prefix.as_path();
+        let receipt_dir = req.receipt_path.parent().unwrap_or(Path::new(""));
+        let env_sh = receipt_dir.join("env.sh");
+        let env_fish = receipt_dir.join("env.fish");
+        let mut plan = Plan {
+            rc_files: Vec::new(),
+            sh_lines: source_lines(".", &[&env_sh], home),
+            fish_lines: source_lines("source", &[&env_fish], home),
+            scripts: Vec::new(),
+            planned: Vec::new(),
+            blocked: Vec::new(),
+        };
+
+        if req.receipt.modify_path {
+            let exprs = install_dir_exprs(prefix, home);
+            let sh = dists_script(&env_sh, &exprs, env_sh_text, report);
+            let fish = dists_script(&env_fish, &exprs, env_fish_text, report);
+            let mut rc_files = Vec::new();
+            match &sh {
+                Script::Ours { .. } => {
+                    let zdir = req.env.zdotdir.unwrap_or(home);
+                    for rc in [
+                        home.join(".profile"),
+                        home.join(".bashrc"),
+                        home.join(".bash_profile"),
+                        home.join(".bash_login"),
+                        zdir.join(".zshrc"),
+                        zdir.join(".zshenv"),
+                    ] {
+                        rc_files.push((rc, false));
+                    }
+                }
+                Script::Unreadable(e) => plan.blocked.push(Blocker::unchecked(&env_sh, e)),
+                Script::Theirs => {}
+            }
+            match &fish {
+                Script::Ours { .. } => rc_files.push((
+                    home.join(".config")
+                        .join("fish")
+                        .join("conf.d")
+                        .join(format!("{}.env.fish", super::APP_NAME)),
+                    true,
+                )),
+                Script::Unreadable(e) => plan.blocked.push(Blocker::unchecked(&env_fish, e)),
+                Script::Theirs => {}
+            }
+            for (rc, remove_if_empty) in rc_files {
+                let lines = if remove_if_empty {
+                    &plan.fish_lines
+                } else {
+                    &plan.sh_lines
+                };
+                match rc_change(&rc, lines, remove_if_empty) {
+                    Ok(None) => {}
+                    Ok(Some(change)) => {
+                        plan.planned.push(change);
+                        plan.rc_files.push((rc, remove_if_empty));
+                    }
+                    Err(e) => plan.blocked.push(Blocker::unchecked(&rc, &e)),
+                }
+            }
+            for (script, state) in [(&env_fish, &fish), (&env_sh, &sh)] {
+                if let Script::Ours { present: true } = state {
+                    plan.planned.push(Planned::Remove(script.clone()));
+                    plan.scripts.push(script.clone());
+                }
+            }
+        }
+
+        let binary = prefix.join(req.env.binary_name());
+        if req.purge {
+            let (entries, errors) = generated_skill_entries(home, req.copilot_home);
+            for entry in entries {
+                let link = fs::symlink_metadata(&entry).is_ok_and(|m| m.file_type().is_symlink());
+                plan.planned.push(if link {
+                    Planned::Remove(entry)
+                } else {
+                    Planned::RemoveTree(entry)
+                });
+            }
+            for (path, e) in errors {
+                plan.blocked.push(Blocker::unchecked(&path, &e));
+            }
+            plan.planned.push(Planned::RemoveTree(home.join(".kluris")));
+        }
+        plan.planned.push(Planned::Remove(binary.clone()));
+        plan.planned
+            .push(Planned::Remove(req.receipt_path.to_path_buf()));
+
+        // The folders that go once empty: the prefix (the binary in it) and
+        // the receipt's (the receipt and the scripts).
+        let mut going = vec![binary, req.receipt_path.to_path_buf()];
+        going.extend(plan.scripts.iter().cloned());
+        for folder in [prefix, receipt_dir] {
+            match fs::read_dir(folder) {
+                Ok(entries) => {
+                    let empties = entries
+                        .map(|e| e.map(|e| going.contains(&e.path())))
+                        .collect::<io::Result<Vec<bool>>>();
+                    match empties {
+                        Ok(all) if all.iter().all(|going| *going) => {
+                            plan.planned.push(Planned::RemoveDir(folder.to_path_buf()))
+                        }
+                        Ok(_) => {}
+                        Err(e) => plan.blocked.push(Blocker::unchecked(folder, &e)),
+                    }
+                }
+                Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+                Err(e) => plan.blocked.push(Blocker::unchecked(folder, &e)),
+            }
+        }
+        plan
+    }
+}
+
+/// The change the uninstall makes to the rc file `path`: an edit, the
+/// removal of a fish conf.d file left empty, or none (not there, not a
+/// file, no line of the installer's).
+fn rc_change(path: &Path, lines: &[Vec<u8>], remove_if_empty: bool) -> io::Result<Option<Planned>> {
+    match fs::metadata(path) {
+        Ok(meta) if meta.is_file() => {}
+        Ok(_) => return Ok(None),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e),
+    }
+    let Some(new_text) = without_lines(&fs::read(path)?, lines) else {
+        return Ok(None);
+    };
+    Ok(Some(
+        if remove_if_empty && new_text.iter().all(u8::is_ascii_whitespace) {
+            Planned::Remove(path.to_path_buf())
+        } else {
+            Planned::Edit(path.to_path_buf())
+        },
+    ))
 }
 
 /// A purge's ~/.kluris before the binary goes: every entry but the one that
 /// holds the install prefix (`~/.kluris/bin`) or is the binary itself.
-fn clear_kluris_dir(kluris_dir: &Path, prefix: &Path, binary: &Path, report: &mut UninstallReport) {
+fn clear_kluris_dir(
+    kluris_dir: &Path,
+    prefix: &Path,
+    binary: &Path,
+    ops: &dyn FileOps,
+    report: &mut UninstallReport,
+) {
     let entries = match fs::read_dir(kluris_dir) {
         Ok(entries) => entries,
         Err(e) if e.kind() == io::ErrorKind::NotFound => return,
@@ -311,15 +483,26 @@ fn clear_kluris_dir(kluris_dir: &Path, prefix: &Path, binary: &Path, report: &mu
             return;
         }
     };
-    let mut paths: Vec<PathBuf> = entries.filter_map(|e| e.ok().map(|e| e.path())).collect();
+    let mut paths = Vec::new();
+    for entry in entries {
+        match entry {
+            Ok(entry) => paths.push(entry.path()),
+            Err(e) => {
+                report
+                    .failed
+                    .push(format!("cannot read {}: {e}", kluris_dir.display()));
+                return;
+            }
+        }
+    }
     paths.sort();
     for path in paths {
         if prefix.starts_with(&path) || path == binary {
             continue;
         }
         let removed = match fs::symlink_metadata(&path) {
-            Ok(meta) if meta.is_dir() => fs::remove_dir_all(&path),
-            Ok(_) => fs::remove_file(&path),
+            Ok(meta) if meta.is_dir() => ops.remove_dir_all(&path),
+            Ok(_) => ops.remove_file(&path),
             Err(e) => Err(e),
         };
         match removed {
@@ -332,14 +515,6 @@ fn clear_kluris_dir(kluris_dir: &Path, prefix: &Path, binary: &Path, report: &mu
             }
         }
     }
-}
-
-/// Whether a file in `dir` can be removed: a probe file made and removed
-/// there (the folder's own permission decides both).
-fn probe_removable(dir: &Path) -> io::Result<()> {
-    let probe = dir.join(format!(".{}-uninstall-probe", super::APP_NAME));
-    fs::write(&probe, b"")?;
-    fs::remove_file(&probe)
 }
 
 /// How the installer names the install folder inside its env scripts:
@@ -386,30 +561,35 @@ fn env_fish_text(expr: &str) -> String {
     )
 }
 
-/// Whether the env script at `path` may go with the lines sourcing it: it
-/// is not there, or it is exactly what dist writes for one of `exprs`. One
-/// that is anything else is the user's: kept, and said in `report.kept`.
+/// What the env script at `path` is.
+enum Script {
+    /// Not there, or exactly what dist writes: it may go with the lines
+    /// sourcing it.
+    Ours { present: bool },
+    /// Anything else is the user's: kept with its lines, and said in
+    /// `report.kept`.
+    Theirs,
+    /// It could not be read.
+    Unreadable(io::Error),
+}
+
+/// Whether the env script at `path` is dist's for one of `exprs`.
 fn dists_script(
     path: &Path,
     exprs: &[String],
     text_for: fn(&str) -> String,
     report: &mut UninstallReport,
-) -> bool {
+) -> Script {
     let text = match fs::read(path) {
         Ok(text) => text,
-        Err(e) if e.kind() == io::ErrorKind::NotFound => return true,
-        Err(e) => {
-            report
-                .failed
-                .push(format!("cannot read {}: {e}", path.display()));
-            return false;
-        }
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Script::Ours { present: false },
+        Err(e) => return Script::Unreadable(e),
     };
     if exprs.iter().any(|expr| text_for(expr).as_bytes() == text) {
-        true
+        Script::Ours { present: true }
     } else {
         report.kept.push(path.to_path_buf());
-        false
+        Script::Theirs
     }
 }
 
@@ -477,9 +657,23 @@ fn source_lines(command: &str, scripts: &[&Path], home: &Path) -> Vec<Vec<u8>> {
 /// Take `lines` out of the rc file `path` ([`without_lines`]). A file left
 /// with only whitespace is removed when `remove_if_empty` (the installer's
 /// own fish conf.d file).
-fn edit_rc(path: &Path, lines: &[Vec<u8>], remove_if_empty: bool, report: &mut UninstallReport) {
-    if !fs::metadata(path).is_ok_and(|m| m.is_file()) {
-        return;
+fn edit_rc(
+    path: &Path,
+    lines: &[Vec<u8>],
+    remove_if_empty: bool,
+    ops: &dyn FileOps,
+    report: &mut UninstallReport,
+) {
+    match fs::metadata(path) {
+        Ok(meta) if meta.is_file() => {}
+        Ok(_) => return,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return,
+        Err(e) => {
+            report
+                .failed
+                .push(format!("cannot check {}: {e}", path.display()));
+            return;
+        }
     }
     let text = match fs::read(path) {
         Ok(text) => text,
@@ -494,7 +688,7 @@ fn edit_rc(path: &Path, lines: &[Vec<u8>], remove_if_empty: bool, report: &mut U
         return;
     };
     if remove_if_empty && new_text.iter().all(u8::is_ascii_whitespace) {
-        remove_file(path, report);
+        remove_file(path, ops, report);
         return;
     }
     match crate::atomic::write_atomic(path, &new_text) {
@@ -527,24 +721,54 @@ fn without_lines(text: &[u8], lines: &[Vec<u8>]) -> Option<Vec<u8>> {
     changed.then(|| kept.concat())
 }
 
-/// Remove the file (or symlink) at `path` when there is one.
-fn remove_file(path: &Path, report: &mut UninstallReport) {
-    match fs::symlink_metadata(path) {
-        Ok(m) if !m.is_dir() => match fs::remove_file(path) {
-            Ok(()) => report.removed.push(path.to_path_buf()),
-            Err(e) => report
-                .failed
-                .push(format!("cannot remove {}: {e}", path.display())),
-        },
-        _ => {}
+/// Remove the file (or symlink) at `path` when there is one; a failure is
+/// in `report.failed`.
+fn remove_file(path: &Path, ops: &dyn FileOps, report: &mut UninstallReport) {
+    if let Err(e) = remove_if_there(path, ops, report) {
+        report
+            .failed
+            .push(format!("cannot remove {}: {e}", path.display()));
     }
 }
 
-/// Remove the folder `path` when it is there and empty.
-fn remove_dir_if_empty(path: &Path, report: &mut UninstallReport) {
-    let empty = fs::read_dir(path).is_ok_and(|mut entries| entries.next().is_none());
-    if empty && fs::remove_dir(path).is_ok() {
-        report.removed.push(path.to_path_buf());
+/// Remove the file (or symlink) at `path` when there is one (not a folder).
+fn remove_if_there(path: &Path, ops: &dyn FileOps, report: &mut UninstallReport) -> io::Result<()> {
+    match fs::symlink_metadata(path) {
+        Ok(meta) if meta.is_dir() => Ok(()),
+        Ok(_) => {
+            ops.remove_file(path)?;
+            report.removed.push(path.to_path_buf());
+            Ok(())
+        }
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e),
+    }
+}
+
+/// Remove the folder `path` when it is there and empty; it goes once the
+/// binary is gone, so a failure is [`left`] to the user.
+fn remove_dir_if_empty(path: &Path, ops: &dyn FileOps, report: &mut UninstallReport) {
+    let empty = match fs::read_dir(path) {
+        Ok(mut entries) => entries.next().is_none(),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return,
+        Err(e) => {
+            return left(
+                report,
+                format!("cannot read {}: {e}", path.display()),
+                format!("remove the folder {} if it is empty", path.display()),
+            );
+        }
+    };
+    if !empty {
+        return;
+    }
+    match ops.remove_dir(path) {
+        Ok(()) => report.removed.push(path.to_path_buf()),
+        Err(e) => left(
+            report,
+            format!("cannot remove {}: {e}", path.display()),
+            format!("remove the empty folder {}", path.display()),
+        ),
     }
 }
 
@@ -578,6 +802,7 @@ mod tests {
             &rc,
             &lines(&[". \"$HOME/.config/kluris/env.sh\""]),
             false,
+            &RealFs,
             &mut report,
         );
         assert_eq!(report.failed, Vec::<String>::new());
