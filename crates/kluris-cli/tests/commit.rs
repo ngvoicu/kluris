@@ -929,7 +929,10 @@ fn commit_is_in_help() {
     let (code, doc) = b.json_env(&["help", "--json"], &[]);
     assert_eq!(code, 0);
     let commands = doc["commands"].as_array().unwrap();
-    let at = commands.len() - 3;
+    let at = commands
+        .iter()
+        .position(|c| c["name"] == "commit")
+        .expect("commit in help");
     assert_eq!(commands[at - 1]["name"], "help");
     assert_eq!(
         &commands[at],

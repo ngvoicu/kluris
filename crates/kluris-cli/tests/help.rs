@@ -43,6 +43,7 @@ const TOP_LEVEL: &[&str] = &[
     "remove",
     "doctor",
     "commit",
+    "sync",
     "self-update",
     "self-uninstall",
     "help",

@@ -1373,6 +1373,7 @@ dependencies = [
  "include_dir",
  "indexmap",
  "insta",
+ "jiff",
  "num-bigint",
  "regex",
  "rust-stemmers",

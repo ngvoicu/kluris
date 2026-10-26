@@ -308,6 +308,41 @@ regenerated maps go into the same commit, or let `kluris commit --brain
 `map.md`/`brain.md` files they change, under your git identity, and leaves
 every other change in the brain as it is.
 
+### Keep it in sync with your team
+
+```sh
+kluris sync --brain acme          # fetch, merge and push one brain
+kluris sync --brain all --json    # every brain, for scripts and agents
+```
+
+For each brain, `kluris sync` fetches its branch's upstream (it never asks
+for credentials), fast-forwards when the brain is behind, pushes when it is
+ahead, and merges when both sides have new commits:
+
+- Merged on their own: changes to different files; the generated `map.md`
+  and `brain.md` files, rebuilt from the merged brain rather than merged line
+  by line; `created` (the earlier date) and `updated` (the later one);
+  `related` and `tags`, both lists joined; edits to different parts of the
+  same neuron.
+- Left for a person: overlapping edits, a file deleted on one side and edited
+  on the other, different `parent` values, and any other frontmatter field
+  changed differently on both sides. Nothing changes then (no file, no
+  commit, no push) until the conflict is settled with `kluris resolve`.
+
+A file with uncommitted changes is never overwritten: when incoming changes
+touch one, that brain is not synced until you commit or stash it. The
+repository's `pre-merge-commit`, `post-merge` and `pre-push` hooks run
+(`--no-verify` skips `pre-merge-commit`). The brain must be the root of its
+own git repository, and git must be 2.38 or newer.
+
+With `--json`, each brain's entry has `name`, `fetched`, `merged`, `pushed`,
+`auto_merged` (neurons merged on their own), `conflicts` (each with `path`,
+`kind` (`content`, `delete_edit`, `parent` or `frontmatter`) and the `base`,
+`ours` and `theirs` blob ids), `skipped_dirty` (uncommitted files left as
+they are), `offline`, `blocked` (uncommitted files in the way) and `refused`
+(why the brain was left alone under `--brain all`, else `null`). The exit
+code is 1 when a brain has a conflict, is blocked or was refused.
+
 ### How the agent starts a session
 
 The first time the skill is used in a session, the agent runs
@@ -326,8 +361,8 @@ Each brain has its own skill (`/kluris-acme`, `/kluris-personal`), so the agent
 always knows which brain you mean. In the terminal:
 
 - With one brain registered, commands use it.
-- With several, pass `--brain NAME`. `dream`, `status`, `mri` and the
-  `companion` commands also take `--brain all`.
+- With several, pass `--brain NAME`. `dream`, `status`, `mri`, `sync` and
+  the `companion` commands also take `--brain all`.
 - Without `--brain`, an interactive terminal shows a numbered list of the
   brains to pick from, plus `all` where the command takes it.
 - With `--json`, without a terminal, or with `KLURIS_NO_PROMPT=1`, there is no
@@ -552,6 +587,7 @@ from disk or send it to a colleague.
 | `kluris dream` | Regenerate maps, fix what is safe to fix, validate links (`--brain`, `--broken-only` with `--json`) |
 | `kluris mri` | Write the brain's visual map and print its link (`--brain`, `--output`) |
 | `kluris commit` | Commit only the files you name and the maps they change (`--brain`, `--paths`, `--message`, `--no-verify`) |
+| `kluris sync` | Fetch, merge and push a brain, or every brain (`--brain`, `--no-verify`) |
 | `kluris companion list` | The companion playbooks, which are installed, and which brains use them (`--brain`) |
 | `kluris companion add <name>` | Turn a companion on for a brain (`--brain`) |
 | `kluris companion remove <name>` | Turn a companion off for a brain (`--brain`) |

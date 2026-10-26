@@ -257,6 +257,22 @@ enum Command {
         json: bool,
     },
     #[command(
+        args_override_self = true,
+        about = "Fetch, merge and push brains with their remotes.",
+        long_about = SYNC_HELP
+    )]
+    Sync {
+        /// Brain name or 'all'
+        #[arg(long = "brain", value_name = "BRAIN", allow_hyphen_values = true)]
+        brain: Option<String>,
+        /// Skip the pre-merge-commit hook
+        #[arg(long = "no-verify")]
+        no_verify: bool,
+        /// JSON output
+        #[arg(long)]
+        json: bool,
+    },
+    #[command(
         name = "self-update",
         args_override_self = true,
         about = "Update kluris to the newest release.",
@@ -400,6 +416,23 @@ copies Kluris 2 left in folders it no longer uses. This is the step after \
 an upgrade: run `kluris doctor` and everything is back in sync.
 
 Pass --no-refresh to run only the read-only checks.";
+
+/// `sync` (new in v3.1).
+const SYNC_HELP: &str = "Fetch, merge and push brains with their remotes.
+
+For each brain: fetch its branch's upstream (never prompting), then \
+fast-forward when behind, push when ahead, and when both sides have new \
+commits merge them: different files, the generated maps, dates, related and \
+tags lists, and edits to different parts of a neuron merge on their own; \
+overlapping edits, a delete against an edit, different parents and other \
+frontmatter changed on both sides are left for you, with nothing changed \
+until `kluris resolve`. A file with uncommitted changes is never \
+overwritten: if incoming changes touch one, that brain is not synced. The \
+repository's pre-merge-commit, post-merge and pre-push hooks run \
+(--no-verify skips pre-merge-commit). Needs git 2.38 or newer.
+
+  kluris sync --brain acme
+  kluris sync --brain all --json";
 
 /// `self-update` (new in v3).
 const SELF_UPDATE_HELP: &str = "Update kluris to the newest release.
@@ -861,6 +894,11 @@ fn run(cli: Cli) -> Result<(), CliError> {
             no_verify,
             json,
         }),
+        Command::Sync {
+            brain,
+            no_verify,
+            json,
+        } => commands::sync::run(brain.as_deref(), no_verify, json),
         Command::Help { command, json } => commands::help::run(command.as_deref(), json),
     }
 }

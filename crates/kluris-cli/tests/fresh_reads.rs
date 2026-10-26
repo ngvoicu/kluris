@@ -574,6 +574,19 @@ fn a_merge_in_progress_is_left_untouched() {
 }
 
 #[test]
+fn an_open_kluris_conflict_is_left_untouched() {
+    let w = World::new();
+    let m = w.mine();
+    // `kluris sync` left a conflict for `kluris resolve`.
+    let pending = m.join(".git").join("kluris-sync").join("pending.json");
+    fs::create_dir_all(pending.parent().unwrap()).unwrap();
+    fs::write(&pending, "{}").unwrap();
+    w.teammate_pushes("zebra", "zebras");
+    w.assert_untouched();
+    assert!(pending.is_file());
+}
+
+#[test]
 fn a_conflicted_merge_is_left_untouched() {
     let w = World::new();
     let m = w.mine();

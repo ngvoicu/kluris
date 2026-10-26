@@ -13,7 +13,8 @@
 //!   move a repository the user did not ask Kluris to manage.
 //! - Nothing but a clean fast-forward ever changes, and nothing fails the
 //!   read: no work tree, no upstream (or a detached HEAD), a tracked change,
-//!   a merge, rebase, cherry-pick or revert in progress, a fetch that fails
+//!   a merge, rebase, cherry-pick or revert in progress (or an open `kluris
+//!   sync` conflict), a fetch that fails
 //!   (offline, refused credentials) or a branch that diverged all end the
 //!   step quietly. No fast-forward starts with less than
 //!   [`FAST_FORWARD_RESERVE`] left: a `git merge` killed while it updates
@@ -47,13 +48,15 @@ pub const TIME_LIMIT: Duration = Duration::from_secs(3);
 /// The least time left for a fast-forward to start.
 pub const FAST_FORWARD_RESERVE: Duration = Duration::from_secs(1);
 
-/// git's markers of an operation in progress, relative to the git directory.
-const IN_PROGRESS: [&str; 5] = [
+/// The markers of an operation in progress, relative to the git directory:
+/// git's, and an open `kluris sync` conflict waiting for `kluris resolve`.
+const IN_PROGRESS: [&str; 6] = [
     "MERGE_HEAD",
     "rebase-merge",
     "rebase-apply",
     "CHERRY_PICK_HEAD",
     "REVERT_HEAD",
+    super::PENDING,
 ];
 
 /// What the step did. Never shown: the read goes on the same way.
@@ -333,7 +336,7 @@ const NO_BACKGROUND: [&str; 6] = [
 ];
 
 impl SystemGit {
-    fn bounded(
+    pub(crate) fn bounded(
         &self,
         dir: &Path,
         args: &[&str],
@@ -357,7 +360,7 @@ impl SystemGit {
     }
 
     /// [`SystemGit::bounded`], failing unless git exits 0.
-    fn checked(
+    pub(crate) fn checked(
         &self,
         dir: &Path,
         args: &[&str],
@@ -376,7 +379,7 @@ impl SystemGit {
         }
     }
 
-    fn with_no_background<'a>(args: &[&'a str]) -> Vec<&'a str> {
+    pub(crate) fn with_no_background<'a>(args: &[&'a str]) -> Vec<&'a str> {
         NO_BACKGROUND
             .iter()
             .copied()

@@ -205,7 +205,7 @@ impl SystemGit {
         cmd
     }
 
-    fn output(&self, mut cmd: Command, args: &[&str]) -> Result<Output, GitError> {
+    pub(crate) fn output(&self, mut cmd: Command, args: &[&str]) -> Result<Output, GitError> {
         let error = |code, detail| GitError {
             args: args.iter().map(|a| a.to_string()).collect(),
             code,
@@ -221,7 +221,7 @@ impl SystemGit {
     }
 
     /// Run git in `dir`; its stdout on success.
-    fn run(&self, dir: &Path, args: &[&str]) -> Result<Vec<u8>, GitError> {
+    pub(crate) fn run(&self, dir: &Path, args: &[&str]) -> Result<Vec<u8>, GitError> {
         self.output(self.command(Some(dir), args), args)
             .map(|out| out.stdout)
     }
@@ -264,7 +264,7 @@ impl SystemGit {
 
     /// Run git in `dir` (with `GIT_INDEX_FILE` when `index` is given),
     /// feeding `input` on stdin; its stdout on success.
-    fn run_input(
+    pub(crate) fn run_input(
         &self,
         dir: &Path,
         index: Option<&Path>,
@@ -528,6 +528,15 @@ pub trait Plumbing: Git {
         repo: &Repo,
         index: &StagingIndex,
         blobs: &[StagedBlob],
+    ) -> Result<(), GitError>;
+
+    /// Put blobs already in the object database into `index`, by
+    /// `(path, mode, blob id)`.
+    fn stage_entries(
+        &self,
+        repo: &Repo,
+        index: &StagingIndex,
+        entries: &[(String, String, String)],
     ) -> Result<(), GitError>;
 
     /// `git write-tree` of `index`.
@@ -886,6 +895,29 @@ impl Plumbing for SystemGit {
             self.run_with_index(&repo.dir, &index.0, &args)?;
         }
         Ok(())
+    }
+
+    fn stage_entries(
+        &self,
+        repo: &Repo,
+        index: &StagingIndex,
+        entries: &[(String, String, String)],
+    ) -> Result<(), GitError> {
+        if entries.is_empty() {
+            return Ok(());
+        }
+        let mut info = Vec::new();
+        for (rel, mode, oid) in entries {
+            // `--index-info` paths are relative to the work tree root.
+            info.extend_from_slice(format!("{mode} {oid}\t{}{rel}\0", repo.prefix).as_bytes());
+        }
+        self.run_input(
+            &repo.dir,
+            Some(&index.0),
+            &["update-index", "-z", "--index-info"],
+            info,
+        )
+        .map(drop)
     }
 
     fn write_tree(&self, repo: &Repo, index: &StagingIndex) -> Result<String, GitError> {
