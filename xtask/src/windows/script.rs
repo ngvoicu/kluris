@@ -23,7 +23,9 @@ use std::time::Duration;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 
-pub use crate::ssh_ci::outcome::{EXIT_MARK, STEP_MARK, TREE_MARK, exit_said};
+#[cfg(test)]
+pub use crate::ssh_ci::outcome::exit_said;
+pub use crate::ssh_ci::outcome::{EXIT_MARK, STEP_MARK, TREE_MARK};
 use crate::ssh_ci::plan::{self, CARGO_TEST, PARITY, RELEASE_BUILD, TOOLCHAIN, fill};
 pub use crate::ssh_ci::plan::{CI_DIR, TREE_FILE, UV_VERSION, run_id, tarball_name};
 

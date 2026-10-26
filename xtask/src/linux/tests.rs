@@ -21,7 +21,6 @@ fn words(line: &str) -> Vec<String> {
 
 fn spec<'a>(parity: bool, parity_files: &'a [String], cargo_args: &'a [String]) -> Spec<'a> {
     Spec {
-        id: ID,
         channel: "1.99.0",
         jobs: 8,
         tasks: script::TASK_LIMIT,
@@ -130,7 +129,8 @@ mod scripts {
                 ".bashrc",
                 ".profile",
                 ".cargo/env",
-                "apt",
+                "apt-get",
+                "apt install",
                 "pip install",
                 "rustup default",
                 "rustup self",
@@ -340,12 +340,19 @@ mod scripts_run {
 
     struct Ran {
         code: Option<i32>,
+        /// stdout, then stderr.
         out: String,
+        stdout: String,
     }
 
     impl Ran {
+        /// stdout's last line, where the exit line is read from.
         fn last_line(&self) -> &str {
-            self.out.lines().rev().find(|l| !l.is_empty()).unwrap_or("")
+            self.stdout
+                .lines()
+                .rev()
+                .find(|l| !l.is_empty())
+                .unwrap_or("")
         }
     }
 
@@ -406,11 +413,13 @@ mod scripts_run {
                 .current_dir(self.dir.path())
                 .output()
                 .unwrap();
-            let mut said = String::from_utf8_lossy(&out.stdout).into_owned();
+            let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+            let mut said = stdout.clone();
             said.push_str(&String::from_utf8_lossy(&out.stderr));
             Ran {
                 code: out.status.code(),
                 out: said,
+                stdout,
             }
         }
 
@@ -525,7 +534,7 @@ mod scripts_run {
         let ran = home.run(&script::bootstrap(ID, &home.layout()));
         assert_eq!(ran.code, Some(0), "{}", ran.out);
         assert!(ran.out.contains("== tree 5f54983aaaaa"), "{}", ran.out);
-        assert!(ran.out.contains(&format!("ran in ")), "{}", ran.out);
+        assert!(ran.out.contains("ran in "), "{}", ran.out);
         assert!(
             ran.out.contains(&format!(".kluris-ci/runs/{ID}")),
             "{}",
@@ -617,9 +626,11 @@ mod scripts_run {
         );
     }
 
-    fn hard_task_limit() -> u32 {
+    /// The task limit this test process has now (macOS reports no more than
+    /// it, whatever the hard limit says), so the run's cap is one it can set.
+    fn task_limit_here() -> u32 {
         let out = Command::new("sh")
-            .args(["-c", "ulimit -H -u"])
+            .args(["-c", "ulimit -u"])
             .output()
             .unwrap();
         String::from_utf8_lossy(&out.stdout)
@@ -635,7 +646,7 @@ mod scripts_run {
         let files = words("parity/test_smoke.py");
         let extra = vec!["it's".to_owned()];
         let mut spec = spec(true, &files, &extra);
-        spec.tasks = hard_task_limit();
+        spec.tasks = task_limit_here();
         home.upload(&script::run_script(&spec));
         let ran = home.run(&script::bootstrap(ID, &home.layout()));
         assert_eq!(ran.code, Some(101), "{}", ran.out);
@@ -678,7 +689,7 @@ mod scripts_run {
         tools(&home, 0);
         executable(&home.path(".cargo/bin/rustup"), "#!/bin/sh\nexit 3\n");
         let mut spec = spec(false, &[], &[]);
-        spec.tasks = hard_task_limit();
+        spec.tasks = task_limit_here();
         home.upload(&script::run_script(&spec));
         let ran = home.run(&script::bootstrap(ID, &home.layout()));
         assert_eq!(ran.code, Some(3), "{}", ran.out);
@@ -689,7 +700,7 @@ mod scripts_run {
     fn a_machine_without_rustup_is_told_about() {
         let home = Home::new();
         let mut spec = spec(false, &[], &[]);
-        spec.tasks = hard_task_limit();
+        spec.tasks = task_limit_here();
         home.upload(&script::run_script(&spec));
         let ran = home.run(&script::bootstrap(ID, &home.layout()));
         assert_eq!(ran.code, Some(1), "{}", ran.out);
@@ -715,7 +726,7 @@ mod scripts_run {
             assert!(status.success());
         }
         let mut spec = spec(false, &[], &[]);
-        spec.tasks = hard_task_limit();
+        spec.tasks = task_limit_here();
         home.upload(&script::run_script(&spec));
         let ran = home.run(&script::bootstrap(ID, &home.layout()));
         assert_eq!(ran.code, Some(0), "{}", ran.out);

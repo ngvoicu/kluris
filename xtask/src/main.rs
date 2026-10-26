@@ -25,6 +25,9 @@ Tasks:
   float-repr
       Read one f64 bit pattern (16 hex digits) per stdin line and answer each
       with Python's repr(x), a tab and json.dumps(x).
+  linux [--parity [--parity-files parity/test.py[,...]]] [-- <cargo test args>]
+      Run cargo test (and with --parity the parity harness) on zeelin, the
+      household laptop's Ubuntu, over ssh. `cargo xtask linux --help` says more.
   posix-path
       Read one JSON string per stdin line and answer each with the JSON
       string of its POSIX form, as SKILL.md writes brain paths.
@@ -69,6 +72,7 @@ fn main() -> ExitCode {
         Some("brain-dump") => brain_dump::main(&args[1..]),
         Some("config-rewrite") => config_rewrite::main(&args[1..]),
         Some("float-repr") => float_repr::main(&args[1..]),
+        Some("linux") => return linux::main(&args[1..]),
         Some("posix-path") => skills_install::posix(&args[1..]),
         Some("search-eval") => search_eval::main(&args[1..]),
         Some("skills-install") => skills_install::main(&args[1..]),
