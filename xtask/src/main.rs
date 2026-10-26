@@ -3,6 +3,7 @@
 mod brain_dump;
 mod config_rewrite;
 mod float_repr;
+mod linux;
 mod search_eval;
 mod skills_install;
 mod ssh_ci;
