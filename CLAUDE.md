@@ -23,10 +23,14 @@ Cargo.toml            # workspace: crates/kluris-core, crates/kluris-cli, xtask 
 rust-toolchain.toml   # pinned toolchain (rustfmt, clippy)
 .cargo/config.toml    # `cargo xtask ...` alias
 crates/kluris-core/   # library: every operation, typed inputs and outputs, no printing
-crates/kluris-cli/    # binary `kluris`: parses arguments, calls core, prints
+crates/kluris-cli/    # package `kluris`, binary `kluris`: parses arguments, calls core, prints
 xtask/                # dev tasks (cargo xtask; windows and linux runners share ssh_ci/)
 vendored/             # the four Specmint companion folders (unchanged from v2)
 parity/               # uv project: the v2.28.11 oracle vs the v3 binary
+dist-workspace.toml   # dist 0.33.1: targets, installers, archives (see Release)
+about.toml, about.hbs # cargo-about config and template of THIRD_PARTY_LICENSES.md
+scripts/release/      # release tooling: pinned tools, licence report, local build, installer smoke
+.github/workflows/    # ci.yml, parity.yml, release.yml (dist's own)
 ```
 
 Rules: synchronous code, no async runtime; no `unwrap()`/`expect()` on user
@@ -58,6 +62,7 @@ cargo xtask windows --machine zeewin --parity     # cargo test --workspace --no-
 cargo xtask windows --machine zeewin2 -- -p kluris-core   # extra cargo test args after --
 cargo xtask windows --parity                      # zeewin2 if free and allowed, else zeewin
 cargo xtask windows --parity --parity-files parity/test_smoke.py   # only that parity file
+cargo xtask windows --machine zeewin --installer-smoke --wrapper ../sites/kluris-site/install.ps1
 ```
 
 - **Machines.** `zeewin` (AGV-COMPUTE1, `ssh zeewin`, short of memory: builds
@@ -89,7 +94,13 @@ cargo xtask windows --parity --parity-files parity/test_smoke.py   # only that p
   folder), `cache\oracle` (`KLURIS_PARITY_ORACLE_DIR`), `cache\parity-venv`,
   `cache\uv`, and `runs\<run id>\` (the unpacked tree, its `tmp\`). PATH is
   prepended for the run's own process only. A machine without rustup (or the
-  VS Build Tools linker) is reported, not fixed.
+  VS Build Tools linker) is reported, not fixed. The one exception is
+  `--installer-smoke`, whose test is the installer's user PATH edit: the
+  smoke saves `HKCU\Environment\Path` (bytes and registry type,
+  `scripts\release\user-path.ps1`, into `runs\<id>\user-path.saved`),
+  writes it back however it ends (the run does again after a step ended past
+  its bound, and so does the stop) and compares it byte for byte; the system
+  PATH is only read. kluris.exe and the receipt go to a sandbox profile.
 - **Bounds and cleanup.** The run is in a job object: at most 64 processes,
   all ended when the run ends. Each step has its own bound (toolchain 30 min,
   cargo-test 90, release-build 60, parity 90; a step past it is ended, status
@@ -122,6 +133,7 @@ the stop are shared with `windows` in `xtask/src/ssh_ci/`):
 cargo xtask linux --parity                        # cargo test --workspace --no-fail-fast, then parity
 cargo xtask linux -- -p kluris-core               # extra cargo test args after --
 cargo xtask linux --parity --parity-files parity/test_smoke.py   # only that parity file
+cargo xtask linux --installer-smoke --wrapper ../sites/kluris-site/install.sh
 ```
 
 - **The machine.** `ssh zeelin` (10.6.0.6:22, user `zee`, bash; 16 threads,
@@ -178,6 +190,47 @@ cargo xtask linux --parity --parity-files parity/test_smoke.py   # only that par
   `wslpath -w`; `parity/test_mri.py` expects that form on a WSL host), so
   behaviour only native Linux shows is first covered by GitHub's Ubuntu
   runners at release.
+
+## Release (dist)
+
+Kluris 3 ships from GitHub Releases only (no PyPI, crates.io, Homebrew or
+npm; both crates are `publish = false`), built by dist 0.33.1 from
+`dist-workspace.toml`: eight targets (macOS arm64/x86_64, Linux x86_64 and
+aarch64 as gnu and static musl, Windows x86_64/arm64), tar.gz/zip archives
+with a `.sha256` each and one `sha256.sum`, GitHub attestations, and
+`kluris-installer.sh` / `kluris-installer.ps1` into `~/.kluris/bin` (no
+updater: `kluris self-update`). dist names everything after the Cargo
+package, hence the package `kluris`.
+
+- **Archives** hold `kluris`, `LICENSE`, `README.md`,
+  `THIRD_PARTY_NOTICES.md` (ported code) and `THIRD_PARTY_LICENSES.md` (the
+  crates built into `kluris`, from cargo-about). Auto-includes are off: dist
+  resolves the crate's `license-file = "../../LICENSE"` from the wrong folder.
+  After a dependency change run `scripts/release/licenses.sh` (CI runs it
+  with `--check`; a crate under a license not in `about.toml` fails it).
+- **What the installers do** (0.33.1, read from the generated scripts): the
+  shell one checks the archive's SHA-256, writes `~/.config/kluris/env.sh`
+  and `env.fish` beside the receipt `~/.config/kluris/kluris-receipt.json`,
+  and adds `. "$HOME/.config/kluris/env.sh"` to `~/.profile` and `~/.zshrc`
+  (or the existing bash/zsh rc files) plus fish's `conf.d/kluris.env.fish`;
+  the PowerShell one checks no checksum, prepends to `HKCU\Environment\Path`
+  as REG_EXPAND_SZ and writes the receipt to `%LOCALAPPDATA%\kluris\`.
+- **release.yml is generated:** change `dist-workspace.toml`, then
+  `dist generate`; `dist plan` fails while it is stale.
+- **Tools** (`scripts/release/tool.sh dist|cargo-about|actionlint`): the
+  pinned prebuilt binary, its SHA-256 checked, in `target/tools/`; nothing is
+  installed globally.
+- **Checks** (ci.yml runs each): `dist plan --output-format=json` through
+  `scripts/release/check_dist_plan.py`; `scripts/release/build-local.sh`
+  (`.ps1` on Windows) builds this machine's release in release.yml's order
+  (the archive's manifest beside it, so the shell installer embeds its
+  SHA-256) into `target/distrib`; `scripts/release/installer-smoke.sh
+  [--wrapper <site install.sh>] target/distrib` (`.ps1` on Windows) installs
+  it from a local server in a sandbox HOME, and checks the rc lines, a fresh
+  login shell, `kluris --version` and `kluris doctor --json`.
+- **Site wrappers** live in `../sites/kluris-site` (`install.sh`,
+  `install.ps1`): thin pass-throughs to `releases/latest/download/` or
+  `releases/download/v$KLURIS_VERSION/`; a push there deploys the site.
 
 ## Parity rule
 
