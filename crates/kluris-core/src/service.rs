@@ -260,17 +260,26 @@ fn windows_quoted(path: &Path) -> Result<String, ServiceError> {
     Ok(format!("\"{text}\""))
 }
 
-/// `base` then `parts`, joined with `\` (Task Scheduler paths, the same on
-/// any OS the definition is rendered on).
-fn windows_join(base: &Path, parts: &[&str]) -> PathBuf {
+/// `base` then `parts`, joined with `separator`: a definition names the
+/// paths of the OS it is for (`/` for launchd and systemd, `\` for Task
+/// Scheduler), the same whatever OS renders it.
+fn joined(base: &Path, parts: &[&str], separator: char) -> PathBuf {
     let mut text = base.display().to_string();
     for part in parts {
-        if !text.ends_with('\\') {
-            text.push('\\');
+        if !text.ends_with(separator) {
+            text.push(separator);
         }
         text.push_str(part);
     }
     PathBuf::from(text)
+}
+
+fn unix_join(base: &Path, parts: &[&str]) -> PathBuf {
+    joined(base, parts, '/')
+}
+
+fn windows_join(base: &Path, parts: &[&str]) -> PathBuf {
+    joined(base, parts, '\\')
 }
 
 fn comment(brain: &str) -> String {
@@ -293,13 +302,11 @@ impl ServiceEnv {
     /// folder.
     pub fn location(&self) -> PathBuf {
         match self.manager {
-            Manager::Launchd => self.home.join("Library").join("LaunchAgents"),
-            Manager::Systemd => self
-                .xdg_config_home
-                .clone()
-                .unwrap_or_else(|| self.home.join(".config"))
-                .join("systemd")
-                .join("user"),
+            Manager::Launchd => unix_join(&self.home, &["Library", "LaunchAgents"]),
+            Manager::Systemd => match &self.xdg_config_home {
+                Some(config) => unix_join(config, &["systemd", "user"]),
+                None => unix_join(&self.home, &[".config", "systemd", "user"]),
+            },
             Manager::TaskScheduler => PathBuf::from(TASK_FOLDER),
         }
     }
@@ -307,8 +314,11 @@ impl ServiceEnv {
     /// The file that defines the brain's service (none for a task).
     pub fn definition(&self, brain: &str) -> Option<PathBuf> {
         match self.manager {
-            Manager::Launchd => Some(self.location().join(format!("{}.plist", self.name(brain)))),
-            Manager::Systemd => Some(self.location().join(self.name(brain))),
+            Manager::Launchd => Some(unix_join(
+                &self.location(),
+                &[&format!("{}.plist", self.name(brain))],
+            )),
+            Manager::Systemd => Some(unix_join(&self.location(), &[&self.name(brain)])),
             Manager::TaskScheduler => None,
         }
     }
@@ -317,13 +327,7 @@ impl ServiceEnv {
     pub fn log(&self, brain: &str) -> Option<PathBuf> {
         let file = format!("sync-{brain}.log");
         match self.manager {
-            Manager::Launchd => Some(
-                self.home
-                    .join("Library")
-                    .join("Logs")
-                    .join("kluris")
-                    .join(file),
-            ),
+            Manager::Launchd => Some(unix_join(&self.home, &["Library", "Logs", "kluris", &file])),
             Manager::Systemd => None,
             Manager::TaskScheduler => Some(windows_join(
                 self.local_app_data.as_deref()?,

@@ -635,6 +635,7 @@ impl World {
     }
 
     /// A teammate's clone at `<home>/mate` commits `rel` and pushes.
+    #[cfg_attr(not(unix), allow(dead_code))]
     fn teammate_pushes(&self, rel: &str) {
         let mate = self.home().join("mate");
         if !mate.exists() {
