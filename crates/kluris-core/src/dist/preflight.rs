@@ -446,6 +446,8 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
+    // Windows only: clearing the attribute is all set_readonly(false) does.
+    #[allow(clippy::permissions_set_readonly_false)]
     fn a_read_only_attribute_blocks() {
         let (dir, _) = clear();
         let env_sh = dir.path().join("env.sh");
