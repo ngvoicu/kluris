@@ -6,14 +6,13 @@ edition.workspace = true
 rust-version.workspace = true
 license-file.workspace = true
 repository.workspace = true
+build = "build.rs"
 # Kluris 3 ships from GitHub Releases, never crates.io
 publish = false
 
 # dist builds packages that publish; this one ships through dist
 [package.metadata.dist]
 dist = true
-
-build = "build.rs"
 
 [[bin]]
 name = "kluris"
