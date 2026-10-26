@@ -27,8 +27,10 @@
 #    carries the new binary's `doctor` report; `kluris --version` names it;
 # 5. `kluris self-uninstall --yes --json` removes kluris.exe, the receipt and
 #    the user PATH entry, and nothing else: every other file is
-#    byte-identical to before it; the user PATH's text is the one from before
-#    the install (dist writes it back as REG_EXPAND_SZ, whatever its type was).
+#    byte-identical to before it; the user PATH is the installed one without
+#    exactly that entry. Whether that is the text from before the install is
+#    reported: dist's Add-Path writes the value back without its empty
+#    entries (`-split ';' -ne ''`) and as REG_EXPAND_SZ, whatever it was.
 #
 # Exits 0 when every check passes and the PATH comparison holds, 1 otherwise.
 param(
@@ -176,6 +178,7 @@ try {
     $userNow = Read-Environment ([Microsoft.Win32.Registry]::CurrentUser) 'Environment'
     Step "the user PATH as dist writes it ($($userNow.Kind)), first entry: $(($userNow.Text -split ';')[0])"
     $installed = Inventory
+    $userInstalled = $userNow
 
     # 2. What the uninstall must keep.
     $null = New-Item -ItemType Directory -Force -Path (Join-Path $sandbox 'brains')
@@ -238,12 +241,24 @@ try {
     }
     foreach ($path in $after.Keys) { if (-not $before.ContainsKey($path)) { $problems += "new after the uninstall: $path" } }
     $userAfter = Read-Environment ([Microsoft.Win32.Registry]::CurrentUser) 'Environment'
-    if ($userAfter.Text -cne $userBefore.Text) { $problems += "the user PATH text after the uninstall is not the one from before the install" }
+    $installedEntries = @($userInstalled.Text -split ';')
+    $owed = ($installedEntries | Select-Object -Skip 1) -join ';'
+    if ($installedEntries[0] -ne $bin) { $problems += "the installed user PATH did not start with $bin" }
+    if ($userAfter.Text -cne $owed) { $problems += 'the user PATH after the uninstall is not the installed one without its first entry' }
     $machineNow = Read-Environment ([Microsoft.Win32.Registry]::LocalMachine) $machineKey
     if ($machineNow.Kind -ne $machineBefore.Kind -or $machineNow.Text -cne $machineBefore.Text) { $problems += 'the system PATH changed' }
     if ($problems.Count) { throw ($problems -join '; ') }
     Step "removed exactly $($ours -join ', ') and the user PATH entry; kept $($after.Count) files byte-identical (config, companion, skills, brain)"
-    Step "the user PATH text is the one from before the install; its type went $($userBefore.Kind) -> $($userAfter.Kind) (dist's installer writes REG_EXPAND_SZ)"
+    Step "the user PATH is the installed one without exactly $bin; its type went $($userBefore.Kind) -> $($userAfter.Kind) (dist's installer writes REG_EXPAND_SZ)"
+    $empties = @($userBefore.Text -split ';' | Where-Object { $_ -eq '' }).Count
+    if ($userAfter.Text -ceq $userBefore.Text) {
+        Step 'the user PATH text is the one from before the install'
+    } elseif ((@($userBefore.Text -split ';' | Where-Object { $_ -ne '' }) -join ';') -ceq $userAfter.Text) {
+        Step "the user PATH text differs from before the install by its $empties empty entries alone (trailing ';' included), which dist's installer dropped"
+    } else {
+        $problems += 'the user PATH after the uninstall differs from before the install by more than the empty entries dist drops'
+        throw ($problems -join '; ')
+    }
     foreach ($d in @('.kluris\bin', 'AppData\Local\kluris')) { if (Test-Path -LiteralPath (Join-Path $sandbox $d)) { Step "left folder: $d" } }
 } catch {
     $failure = $_
