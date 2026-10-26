@@ -26,12 +26,14 @@ use base64::engine::general_purpose::STANDARD;
 #[cfg(test)]
 pub use crate::ssh_ci::outcome::exit_said;
 pub use crate::ssh_ci::outcome::{EXIT_MARK, STEP_MARK, TREE_MARK};
+#[cfg(test)]
+pub use crate::ssh_ci::plan::run_id;
 use crate::ssh_ci::plan::{
     self, CARGO_TEST, CLIPPY, INSTALLER_SMOKE, LIFECYCLE, LIFECYCLE_NEW, LIFECYCLE_OLD, PARITY,
     PUBLISHED_SMOKE, PYTHON, RELEASE_BUILD, RELEASE_DIST, RELEASE_VERSIONS, SMOKE_PYTHON,
     TOOLCHAIN, WRAPPER_DIR, fill,
 };
-pub use crate::ssh_ci::plan::{CI_DIR, TREE_FILE, UV_VERSION, run_id, tarball_name};
+pub use crate::ssh_ci::plan::{CI_DIR, TREE_FILE, UV_VERSION, tarball_name};
 
 /// ConsensFlow's copy folder under the profile, whose lock Kluris shares: one
 /// run of either project per machine at a time.
@@ -203,6 +205,7 @@ pub fn run_script(spec: &Spec) -> String {
             ("uv_version", UV_VERSION),
             ("uv_url", UV_URL),
             ("uv_sha256", UV_SHA256),
+            ("id", spec.id),
         ],
     );
     let (test_step, after) = if spec.clippy {
@@ -424,7 +427,7 @@ function Invoke-Step([string]$name, [int]$minutes, [string]$exe, [string]$line) 
   } catch { Write-Output "«step_mark»${name}: could not start: $($_.Exception.Message)" }
   $state.last = $code
   if ($code -ne 0 -and $state.failed -eq 0) { $state.failed = $code }
-  Write-Output "«step_mark»$name exit $code $([int]((Get-Date) - $started).TotalSeconds)s"
+  Write-Output "«step_mark»$name exit $code $([int]((Get-Date) - $started).TotalSeconds)s «id»"
 }
 Invoke-Step 'toolchain' «toolchain_minutes» $rustup «toolchain»
 if ($state.failed) { Exit-Run $state.failed }
@@ -447,7 +450,7 @@ if (-not (Test-Path -LiteralPath $uv -PathType Leaf)) {
   } catch { Write-Output "== step uv: could not fetch uv «uv_version»: $($_.Exception.Message)" } finally { Remove-Item -LiteralPath $zip -Force -ErrorAction SilentlyContinue }
   $code = if (Test-Path -LiteralPath $uv -PathType Leaf) { 0 } else { 1 }
   if ($code -and -not $state.failed) { $state.failed = $code }
-  Write-Output "== step uv exit $code $([int]((Get-Date) - $started).TotalSeconds)s"
+  Write-Output "== step uv exit $code $([int]((Get-Date) - $started).TotalSeconds)s «id»"
 }
 "##;
 

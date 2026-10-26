@@ -102,6 +102,7 @@ pub fn main(args: &[String]) -> ExitCode {
         out: &mut stdout.lock(),
         err: &mut stderr.lock(),
         stop: &|| stopped.load(Ordering::SeqCst),
+        id: crate::ssh_ci::plan::run_id(),
         channel,
         pack: &mut pack,
         root,
