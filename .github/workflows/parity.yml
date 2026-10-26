@@ -1,0 +1,55 @@
+# The parity suite on the three OSes: the frozen Kluris v2.28.11 oracle
+# (parity/oracle.lock, hash-pinned) against a release build of Kluris 3.
+# The oracle's venv points into uv's managed Python, so both are cached
+# together, keyed on the OS, the architecture and oracle.lock's hash.
+
+name: Parity
+
+on:
+  pull_request:
+  push:
+    branches: [main, v3]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: parity-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  parity:
+    name: parity (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+      - uses: astral-sh/setup-uv@v10.3.0
+        with:
+          version: "0.12.8"
+      - name: cache the oracle venv and uv's Python
+        uses: actions/cache@v6
+        with:
+          path: |
+            ${{ runner.temp }}/kluris-oracle
+            ${{ runner.temp }}/uv-python
+          key: parity-oracle-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('parity/oracle.lock') }}
+      - run: cargo build --release --package kluris
+      - name: parity suite
+        env:
+          KLURIS_PARITY_ORACLE_DIR: ${{ runner.temp }}/kluris-oracle
+          UV_PYTHON_INSTALL_DIR: ${{ runner.temp }}/uv-python
+          UV_PYTHON_PREFERENCE: only-managed
+          KLURIS_V3_BIN: ${{ github.workspace }}/target/release/kluris${{ runner.os == 'Windows' && '.exe' || '' }}
+        run: uv run --project parity --locked pytest parity -q

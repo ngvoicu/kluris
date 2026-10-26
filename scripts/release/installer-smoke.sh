@@ -28,6 +28,9 @@
 #
 # The local server and the JSON checks run on KLURIS_SMOKE_PYTHON (default
 # python3). Exits 0 when every check passes, 1 at the first failure.
+#
+# The rc-file lines and the messages name $HOME and ~ as text, unexpanded.
+# shellcheck disable=SC2016,SC2088
 set -eu
 
 wrapper=""
