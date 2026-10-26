@@ -12,7 +12,7 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
-use super::{DistEnv, Receipt};
+use super::{DistEnv, Receipt, ReceiptError};
 use crate::agents::install::{DestinationReport, remove_generated_skills};
 
 /// The per-user PATH on Windows (`HKCU\Environment\Path`).
@@ -70,6 +70,9 @@ impl UninstallReport {
 pub enum UninstallError {
     /// A purge would remove these registered brains (they are in `~/.kluris`).
     BrainsInsideKluris(Vec<String>),
+    /// The receipt is not the one dist writes for Kluris
+    /// ([`ReceiptError::NotKluris`]): it authorises nothing.
+    NotKluris(ReceiptError),
 }
 
 impl std::fmt::Display for UninstallError {
@@ -81,22 +84,41 @@ impl std::fmt::Display for UninstallError {
                  Move them out of ~/.kluris (or run without --purge); nothing was removed.",
                 names.join(", ")
             ),
+            UninstallError::NotKluris(err) => write!(f, "{err}"),
         }
     }
 }
 
 impl std::error::Error for UninstallError {}
 
-/// Remove what the installers wrote. The binaries go through
-/// `remove_binary` (the running one may need the platform's self-delete);
-/// the user PATH through `user_path` when given (Windows). Failures are
-/// reported and the rest goes on; only a purge that would remove a brain
-/// stops before anything is touched.
+/// Remove what the installers wrote, in an order that keeps what a retry
+/// needs (T-111):
+///
+/// 0. Nothing is done unless the receipt is Kluris's
+///    ([`Receipt::check_kluris`]); a purge that would remove a registered
+///    brain is refused too.
+/// 1. With `modify_path` (the installer set PATH up), the rc files lose the
+///    line sourcing env.sh, unless env.sh is there and is not dist's (then it
+///    and its lines are kept and reported). A failure stops here: env
+///    scripts, receipt and binary all stay.
+/// 2. The fish conf.d file loses its line (the same rule for env.fish), the
+///    env scripts dist wrote go, and on Windows the user PATH entry. A
+///    failure stops before the binary. A purge's skills go here too.
+/// 3. The binary, through `remove_binary` (the running one may need the
+///    platform's self-delete). A failure stops: the receipt stays.
+/// 4. A purge's `~/.kluris`, then last the receipt.
+///
+/// Without `modify_path` (KLURIS_NO_MODIFY_PATH=1) no rc file, env script,
+/// fish file or PATH entry is touched: the user manages PATH. A rerun after
+/// any failure picks up where this one stopped.
 pub fn uninstall(
     req: &UninstallRequest,
     user_path: Option<&mut dyn UserPath>,
     remove_binary: &mut dyn FnMut(&Path) -> io::Result<()>,
 ) -> Result<UninstallReport, UninstallError> {
+    req.receipt.check_kluris(req.env.windows).map_err(|why| {
+        UninstallError::NotKluris(ReceiptError::NotKluris(req.receipt_path.to_path_buf(), why))
+    })?;
     let home = req.env.home;
     let kluris_dir = home.join(".kluris");
     if req.purge {
@@ -117,80 +139,92 @@ pub fn uninstall(
     let env_sh = receipt_dir.join("env.sh");
     let env_fish = receipt_dir.join("env.fish");
 
-    // rc files: the sh line in each, the fish line in the conf.d file.
-    let sh_lines = source_lines(".", &[&env_sh], home);
-    let zdir = req.env.zdotdir.unwrap_or(home);
-    let rc_files = [
-        home.join(".profile"),
-        home.join(".bashrc"),
-        home.join(".bash_profile"),
-        home.join(".bash_login"),
-        zdir.join(".zshrc"),
-        zdir.join(".zshenv"),
-    ];
-    for rc in &rc_files {
-        edit_rc(rc, &sh_lines, false, &mut report);
-    }
-    let fish_lines = source_lines("source", &[&env_fish], home);
-    let fish_conf = home
-        .join(".config")
-        .join("fish")
-        .join("conf.d")
-        .join(format!("{}.env.fish", super::APP_NAME));
-    edit_rc(&fish_conf, &fish_lines, true, &mut report);
+    if req.receipt.modify_path {
+        let exprs = install_dir_exprs(prefix, home);
+        let sh_ours = dists_script(&env_sh, &exprs, env_sh_text, &mut report);
+        let fish_ours = dists_script(&env_fish, &exprs, env_fish_text, &mut report);
+        if !report.failed.is_empty() {
+            return Ok(report);
+        }
 
-    for script in [&env_sh, &env_fish] {
-        remove_file(script, &mut report);
-    }
+        // 1. The rc files.
+        if sh_ours {
+            let sh_lines = source_lines(".", &[&env_sh], home);
+            let zdir = req.env.zdotdir.unwrap_or(home);
+            for rc in [
+                home.join(".profile"),
+                home.join(".bashrc"),
+                home.join(".bash_profile"),
+                home.join(".bash_login"),
+                zdir.join(".zshrc"),
+                zdir.join(".zshenv"),
+            ] {
+                edit_rc(&rc, &sh_lines, false, &mut report);
+            }
+            if !report.failed.is_empty() {
+                return Ok(report);
+            }
+        }
 
-    if let Some(user_path) = user_path {
-        match user_path.read() {
-            Ok(Some(value)) => {
-                if let Some((new_value, removed)) = remove_path_entry(&value, prefix) {
-                    match user_path.write(&new_value) {
-                        Ok(()) => report.path_entries.extend(removed),
-                        Err(e) => report
-                            .failed
-                            .push(format!("cannot update the user PATH: {e}")),
+        // 2. The fish file, the env scripts, the user PATH entry.
+        if fish_ours {
+            let fish_lines = source_lines("source", &[&env_fish], home);
+            let fish_conf = home
+                .join(".config")
+                .join("fish")
+                .join("conf.d")
+                .join(format!("{}.env.fish", super::APP_NAME));
+            edit_rc(&fish_conf, &fish_lines, true, &mut report);
+            remove_file(&env_fish, &mut report);
+        }
+        if sh_ours {
+            remove_file(&env_sh, &mut report);
+        }
+        if let Some(user_path) = user_path {
+            match user_path.read() {
+                Ok(Some(value)) => {
+                    if let Some((new_value, removed)) = remove_path_entry(&value, prefix) {
+                        match user_path.write(&new_value) {
+                            Ok(()) => report.path_entries.extend(removed),
+                            Err(e) => report
+                                .failed
+                                .push(format!("cannot update the user PATH: {e}")),
+                        }
                     }
                 }
+                Ok(None) => {}
+                Err(e) => report
+                    .failed
+                    .push(format!("cannot read the user PATH: {e}")),
             }
-            Ok(None) => {}
-            Err(e) => report
-                .failed
-                .push(format!("cannot read the user PATH: {e}")),
         }
     }
-
     if req.purge {
         report.skills = remove_generated_skills(home, req.copilot_home)
             .into_iter()
             .filter(|d| !d.removed.is_empty() || !d.kept.is_empty() || !d.failed.is_empty())
             .collect();
     }
+    if !report.ok() {
+        return Ok(report);
+    }
 
-    remove_file(req.receipt_path, &mut report);
-    remove_dir_if_empty(receipt_dir, &mut report);
-
-    let binaries = if req.receipt.binaries.is_empty() {
-        vec![req.env.binary_name()]
-    } else {
-        req.receipt.binaries.clone()
-    };
-    for name in binaries {
-        let path = prefix.join(name);
-        if fs::symlink_metadata(&path).is_err() {
-            continue;
-        }
-        match remove_binary(&path) {
-            Ok(()) => report.removed.push(path),
-            Err(e) => report
-                .failed
-                .push(format!("cannot remove {}: {e}", path.display())),
+    // 3. The binary: the one the receipt's prefix holds, by its own name.
+    let binary = prefix.join(req.env.binary_name());
+    if fs::symlink_metadata(&binary).is_ok() {
+        match remove_binary(&binary) {
+            Ok(()) => report.removed.push(binary),
+            Err(e) => {
+                report
+                    .failed
+                    .push(format!("cannot remove {}: {e}", binary.display()));
+                return Ok(report);
+            }
         }
     }
     remove_dir_if_empty(prefix, &mut report);
 
+    // 4. A purge's ~/.kluris, then the receipt.
     if req.purge && fs::symlink_metadata(&kluris_dir).is_ok() {
         match fs::remove_dir_all(&kluris_dir) {
             Ok(()) => {
@@ -204,7 +238,80 @@ pub fn uninstall(
     } else if req.purge {
         report.purged = true;
     }
+    remove_file(req.receipt_path, &mut report);
+    remove_dir_if_empty(receipt_dir, &mut report);
     Ok(report)
+}
+
+/// How the installer names the install folder inside its env scripts:
+/// `$HOME/<rest>` under HOME (its `replace_home`), else the folder itself.
+fn install_dir_exprs(prefix: &Path, home: &Path) -> Vec<String> {
+    let mut exprs = Vec::new();
+    if let Ok(rel) = prefix.strip_prefix(home) {
+        let rel: Vec<String> = rel
+            .components()
+            .map(|c| c.as_os_str().to_string_lossy().into_owned())
+            .collect();
+        exprs.push(format!("$HOME/{}", rel.join("/")));
+    }
+    exprs.push(prefix.to_string_lossy().into_owned());
+    exprs
+}
+
+/// dist 0.33.1's env.sh for the install folder `expr`
+/// (`write_env_script_sh`).
+fn env_sh_text(expr: &str) -> String {
+    format!(
+        "#!/bin/sh\n\
+         # add binaries to PATH if they aren't added yet\n\
+         # affix colons on either side of $PATH to simplify matching\n\
+         case \":${{PATH}}:\" in\n    \
+         *:\"{expr}\":*)\n        \
+         ;;\n    \
+         *)\n        \
+         # Prepending path in case a system-installed binary needs to be overridden\n        \
+         export PATH=\"{expr}:$PATH\"\n        \
+         ;;\n\
+         esac\n"
+    )
+}
+
+/// dist 0.33.1's env.fish for the install folder `expr`
+/// (`write_env_script_fish`).
+fn env_fish_text(expr: &str) -> String {
+    format!(
+        "if not contains \"{expr}\" $PATH\n    \
+         # Prepending path in case a system-installed binary needs to be overridden\n    \
+         set -x PATH \"{expr}\" $PATH\n\
+         end\n"
+    )
+}
+
+/// Whether the env script at `path` may go with the lines sourcing it: it
+/// is not there, or it is exactly what dist writes for one of `exprs`. One
+/// that is anything else is the user's: kept, and said in `report.kept`.
+fn dists_script(
+    path: &Path,
+    exprs: &[String],
+    text_for: fn(&str) -> String,
+    report: &mut UninstallReport,
+) -> bool {
+    let text = match fs::read(path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return true,
+        Err(e) => {
+            report
+                .failed
+                .push(format!("cannot read {}: {e}", path.display()));
+            return false;
+        }
+    };
+    if exprs.iter().any(|expr| text_for(expr).as_bytes() == text) {
+        true
+    } else {
+        report.kept.push(path.to_path_buf());
+        false
+    }
 }
 
 /// `value` (a `;`-separated PATH) without the entries naming `prefix`, and

@@ -2,6 +2,11 @@
 //! `{"binaries":["kluris"],...,"install_prefix":"<dir>","modify_path":true,
 //! ...,"version":"3.0.0"}` (the shell installer ends it with `\n`, the
 //! PowerShell one with `\r\n`).
+//!
+//! A receipt says what `self-uninstall` removes and what `self-update`
+//! replaces, so [`Receipt::read`] accepts only Kluris's own, as dist 0.33.1
+//! writes it ([`Receipt::check_kluris`]); anything else is
+//! [`ReceiptError::NotKluris`] and no command changes anything.
 
 use std::fmt;
 use std::fs;
@@ -9,6 +14,8 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use serde_json::{Map, Value};
+
+use super::{APP_NAME, REPO_NAME, REPO_OWNER};
 
 /// A receipt as read.
 #[derive(Debug, Clone, PartialEq)]
@@ -36,6 +43,8 @@ pub enum ReceiptError {
     Unreadable(PathBuf, String),
     /// Not a receipt: not JSON, or no `install_prefix` / `version`.
     Invalid(PathBuf, String),
+    /// A receipt, but not the one dist writes for Kluris: why.
+    NotKluris(PathBuf, String),
 }
 
 impl fmt::Display for ReceiptError {
@@ -48,6 +57,11 @@ impl fmt::Display for ReceiptError {
             ReceiptError::Invalid(p, e) => {
                 write!(f, "The install receipt {} is not valid: {e}", p.display())
             }
+            ReceiptError::NotKluris(p, why) => write!(
+                f,
+                "The receipt at {} is not a Kluris install receipt; nothing was changed ({why}).",
+                p.display()
+            ),
         }
     }
 }
@@ -55,7 +69,8 @@ impl fmt::Display for ReceiptError {
 impl std::error::Error for ReceiptError {}
 
 impl Receipt {
-    /// Read the receipt at `path`.
+    /// Read the receipt at `path`: Kluris's own for this platform
+    /// ([`Receipt::check_kluris`]), or an error.
     pub fn read(path: &Path) -> Result<Receipt, ReceiptError> {
         let text = match fs::read_to_string(path) {
             Ok(text) => text,
@@ -64,7 +79,69 @@ impl Receipt {
             }
             Err(e) => return Err(ReceiptError::Unreadable(path.to_path_buf(), e.to_string())),
         };
-        Receipt::parse(&text).map_err(|e| ReceiptError::Invalid(path.to_path_buf(), e))
+        let receipt =
+            Receipt::parse(&text).map_err(|e| ReceiptError::Invalid(path.to_path_buf(), e))?;
+        receipt
+            .check_kluris(cfg!(windows))
+            .map_err(|why| ReceiptError::NotKluris(path.to_path_buf(), why))?;
+        Ok(receipt)
+    }
+
+    /// Whether this is the receipt dist 0.33.1's installers write for Kluris
+    /// (`windows`: the PowerShell installer's), field by field; the first
+    /// that is not says why. `source` kluris/kluris/ngvoicu/github,
+    /// `provider.source` cargo-dist, `binaries` exactly `["kluris"]`
+    /// (`["kluris.exe"]`), no cdylibs, cstaticlibs or aliases, the flat
+    /// layout, an absolute `install_prefix`, a boolean `modify_path`. Then
+    /// the one file a receipt names is `<install_prefix>/kluris(.exe)`.
+    pub fn check_kluris(&self, windows: bool) -> Result<(), String> {
+        let f = &self.fields;
+        let text = |v: Option<&Value>| v.and_then(Value::as_str).map(str::to_string);
+        let source = f.get("source");
+        for (key, want) in [
+            ("app_name", APP_NAME),
+            ("name", REPO_NAME),
+            ("owner", REPO_OWNER),
+            ("release_type", "github"),
+        ] {
+            if text(source.and_then(|s| s.get(key))).as_deref() != Some(want) {
+                return Err(format!("source.{key} is not \"{want}\""));
+            }
+        }
+        if text(f.get("provider").and_then(|p| p.get("source"))).as_deref() != Some("cargo-dist") {
+            return Err("provider.source is not \"cargo-dist\"".into());
+        }
+        let exe = if windows {
+            format!("{APP_NAME}.exe")
+        } else {
+            APP_NAME.to_string()
+        };
+        match f.get("binaries") {
+            Some(Value::Array(items)) if items.len() == 1 && items[0].as_str() == Some(&exe) => {}
+            _ => return Err(format!("binaries is not [\"{exe}\"]")),
+        }
+        for key in ["cdylibs", "cstaticlibs"] {
+            match f.get(key) {
+                None => {}
+                Some(Value::Array(items)) if items.is_empty() => {}
+                _ => return Err(format!("{key} is not empty")),
+            }
+        }
+        match f.get("binary_aliases") {
+            None => {}
+            Some(Value::Object(aliases)) if aliases.is_empty() => {}
+            _ => return Err("binary_aliases is not empty".into()),
+        }
+        if text(f.get("install_layout")).as_deref() != Some("flat") {
+            return Err("install_layout is not \"flat\"".into());
+        }
+        if !matches!(f.get("modify_path"), Some(Value::Bool(_))) {
+            return Err("modify_path is not true or false".into());
+        }
+        if !is_absolute(&self.install_prefix.to_string_lossy(), windows) {
+            return Err("install_prefix is not an absolute path".into());
+        }
+        Ok(())
     }
 
     /// Parse a receipt's text.
@@ -125,6 +202,20 @@ impl Receipt {
             let _ = fs::remove_file(&tmp);
         })
     }
+}
+
+/// `path` is absolute on that platform: `/...` on Unix; `C:\...` (or
+/// `C:/...`) or a `\\server\share` path on Windows.
+fn is_absolute(path: &str, windows: bool) -> bool {
+    if !windows {
+        return path.starts_with('/');
+    }
+    let bytes = path.as_bytes();
+    let drive = bytes.len() >= 3
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && matches!(bytes[2], b'\\' | b'/');
+    drive || path.starts_with("\\\\")
 }
 
 /// A file name with no folder part (`kluris`, `kluris.exe`): a receipt never

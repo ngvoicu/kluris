@@ -186,7 +186,7 @@ fn strings(items: &[String]) -> Json {
     Json::Array(items.iter().map(|s| Json::Str(s.clone())).collect())
 }
 
-/// `{"ok", "removed", "edited", "path_entries", "skills": [{"path",
+/// `{"ok", "removed", "edited", "kept", "path_entries", "skills": [{"path",
 /// "removed", "kept", "failed"}], "purged", "failed"}`.
 fn report_json(report: &UninstallReport) -> Json {
     let skills = report
@@ -205,6 +205,7 @@ fn report_json(report: &UninstallReport) -> Json {
         ("ok".into(), Json::Bool(report.ok())),
         ("removed".into(), paths_json(&report.removed)),
         ("edited".into(), paths_json(&report.edited)),
+        ("kept".into(), paths_json(&report.kept)),
         ("path_entries".into(), strings(&report.path_entries)),
         ("skills".into(), Json::Array(skills)),
         ("purged".into(), Json::Bool(report.purged)),
@@ -220,6 +221,12 @@ fn report_text(report: &UninstallReport, home: &Path) -> String {
     for path in &report.edited {
         out.push_str(&format!(
             "Took the kluris PATH line out of {}\n",
+            home_relative(path, home)
+        ));
+    }
+    for path in &report.kept {
+        out.push_str(&format!(
+            "Kept {} and the lines that source it: it is not the file the installer wrote\n",
             home_relative(path, home)
         ));
     }
