@@ -30,6 +30,8 @@ V2_COMMANDS = [
 V2_KEPT = [c for c in V2_COMMANDS if c != "pack"]
 # Commands new in v3, after v2's (PAR-064: no v2 counterpart).
 V3_ONLY = [
+    # PAR-071: v3.1's git auto-sync.
+    ("commit", "Commit approved brain files and the maps they change (--paths)"),
     ("self-update", "Update kluris to the newest release (--check only looks)"),
     ("self-uninstall", "Remove the installed kluris (--purge: also ~/.kluris and Kluris skills)"),
 ]

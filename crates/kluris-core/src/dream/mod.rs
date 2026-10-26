@@ -299,6 +299,21 @@ pub fn regenerate_maps<S: BrainStore>(store: &mut S, options: &DreamOptions) -> 
     skipped_files(skipped)
 }
 
+/// Steps 5 and 6 alone (every directory's `map.md`, twice, then
+/// `brain.md`), computed over the brain as it is and not applied: the change
+/// set, and the files that could not be read or rewritten. `kluris commit`
+/// applies the part of it its paths call for.
+pub(crate) fn map_changes<S: BrainStore>(
+    store: &S,
+    options: &DreamOptions,
+) -> (ChangeSet, BTreeMap<String, String>) {
+    let order = maps::map_order(store.dirs());
+    let mut ws = workspace::Workspace::new(store);
+    maps::generate_maps(&mut ws, &order, options.today);
+    maps::generate_brain_md(&mut ws, options.name, options.description, options.today);
+    ws.into_change_set()
+}
+
 /// Run dream on a brain: remove the temp files an interrupted write left
 /// (PAR-069), compute every write, apply them as one change set, and
 /// validate the result.

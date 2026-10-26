@@ -1,5 +1,6 @@
 //! One module per command: call `kluris-core`, print the result.
 
+pub mod commit;
 pub mod companion;
 pub mod create;
 pub mod doctor;

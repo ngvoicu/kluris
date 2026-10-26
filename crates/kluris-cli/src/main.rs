@@ -225,6 +225,35 @@ enum Command {
         json: bool,
     },
     #[command(
+        args_override_self = true,
+        about = "Commit approved brain files and the maps they change.",
+        long_about = COMMIT_HELP
+    )]
+    Commit {
+        /// Specific brain
+        #[arg(long = "brain", value_name = "BRAIN", allow_hyphen_values = true)]
+        brain: Option<String>,
+        /// Brain-relative files written or deleted, comma-separated
+        #[arg(
+            long = "paths",
+            value_name = "PATHS",
+            allow_hyphen_values = true,
+            required = true
+        )]
+        paths: String,
+        /// Commit message (default: kluris: update <paths>)
+        #[arg(
+            short = 'm',
+            long = "message",
+            value_name = "MSG",
+            allow_hyphen_values = true
+        )]
+        message: Option<String>,
+        /// JSON output
+        #[arg(long)]
+        json: bool,
+    },
+    #[command(
         name = "self-update",
         args_override_self = true,
         about = "Update kluris to the newest release.",
@@ -395,6 +424,19 @@ companions, the agent skills and every brain.
 --purge also removes ~/.kluris and every Kluris-written agent skill, after \
 asking (--yes skips the question; it is required when not interactive). \
 Brains are never removed.";
+
+/// `commit` (new in v3.1).
+const COMMIT_HELP: &str = "Commit approved brain files and the maps they change.
+
+Commits only the given files (written or deleted, relative to the brain) and \
+the map.md/brain.md files the map step regenerates because of them. Every \
+other changed file is left as it is, staged or not, and listed as left \
+uncommitted. The author is your git identity; the message ends with a \
+Kluris-Approved-By trailer (git user.name) and, when KLURIS_AGENT is set, a \
+Co-Authored-By trailer naming the agent.
+
+  kluris commit --brain acme --paths knowledge/auth.md,knowledge/oauth.md
+  kluris commit --brain acme --paths old.md -m \"Remove the old note\" --json";
 
 /// v2's `wake-up` docstring.
 const WAKE_UP_HELP: &str = "Compact brain snapshot for agent session bootstrap.
@@ -800,6 +842,17 @@ fn run(cli: Cli) -> Result<(), CliError> {
         Command::SelfUninstall { purge, yes, json } => {
             commands::self_uninstall::run(purge, yes, json)
         }
+        Command::Commit {
+            brain,
+            paths,
+            message,
+            json,
+        } => commands::commit::run(&commands::commit::Options {
+            brain: brain.as_deref(),
+            paths: &paths,
+            message: message.as_deref(),
+            json,
+        }),
         Command::Help { command, json } => commands::help::run(command.as_deref(), json),
     }
 }

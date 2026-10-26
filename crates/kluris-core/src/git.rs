@@ -15,7 +15,7 @@
 //!   repo root runs v2's exact commands (`git log -- .` there would drop
 //!   empty commits).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -232,6 +232,45 @@ impl SystemGit {
         (!value.is_empty()).then_some(value)
     }
 
+    /// v2's identity fallback on `cmd`: when git config (as seen from `dir`)
+    /// lacks `user.name` or `user.email`, the author is `kluris
+    /// <kluris@local>` and the committer the author, each variable only when
+    /// the environment does not set it already.
+    fn identity_fallback(&self, dir: &Path, cmd: &mut Command) {
+        let configured = self.config_value(dir, "user.name").is_some()
+            && self.config_value(dir, "user.email").is_some();
+        if configured {
+            return;
+        }
+        let mut set = |key: &str, default: OsString| {
+            let value = self.env_var(key).unwrap_or(default);
+            cmd.env(key, &value);
+            value
+        };
+        let name = set(IDENTITY_FALLBACK[0].0, IDENTITY_FALLBACK[0].1.into());
+        let email = set(IDENTITY_FALLBACK[1].0, IDENTITY_FALLBACK[1].1.into());
+        set("GIT_COMMITTER_NAME", name);
+        set("GIT_COMMITTER_EMAIL", email);
+    }
+
+    /// Run git in `dir` with `GIT_INDEX_FILE` set; its stdout on success.
+    fn run_with_index(&self, dir: &Path, index: &Path, args: &[&str]) -> Result<Vec<u8>, GitError> {
+        let mut cmd = self.command(Some(dir), args);
+        cmd.env("GIT_INDEX_FILE", index);
+        self.output(cmd, args).map(|out| out.stdout)
+    }
+
+    /// A path `git rev-parse --git-path` names, made absolute.
+    fn git_path(&self, dir: &Path, name: &str) -> Result<PathBuf, GitError> {
+        let out = self.run(dir, &["rev-parse", "--git-path", name])?;
+        let path = PathBuf::from(String::from_utf8_lossy(&out).trim_end_matches(['\n', '\r']));
+        Ok(if path.is_absolute() {
+            path
+        } else {
+            dir.join(path)
+        })
+    }
+
     /// Whether the repo is a fresh one: `HEAD` names a branch (`git
     /// symbolic-ref`, which fails on a broken ref), no ref exists at all and
     /// the object database holds no commit. That is where git's own log says
@@ -298,19 +337,7 @@ impl Git for SystemGit {
     fn commit(&self, dir: &Path, message: &str) -> Result<(), GitError> {
         let args = ["commit", "-m", message];
         let mut cmd = self.command(Some(dir), &args);
-        let configured = self.config_value(dir, "user.name").is_some()
-            && self.config_value(dir, "user.email").is_some();
-        if !configured {
-            let mut set = |key: &str, default: OsString| {
-                let value = self.env_var(key).unwrap_or(default);
-                cmd.env(key, &value);
-                value
-            };
-            let name = set(IDENTITY_FALLBACK[0].0, IDENTITY_FALLBACK[0].1.into());
-            let email = set(IDENTITY_FALLBACK[1].0, IDENTITY_FALLBACK[1].1.into());
-            set("GIT_COMMITTER_NAME", name);
-            set("GIT_COMMITTER_EMAIL", email);
-        }
+        self.identity_fallback(dir, &mut cmd);
         self.output(cmd, &args).map(drop)
     }
 
@@ -361,6 +388,357 @@ impl Git for SystemGit {
         let args = ["--version"];
         let out = self.output(self.command(None, &args), &args)?;
         Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+    }
+}
+
+/// A commit author: `git var GIT_AUTHOR_IDENT` without its date.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Identity {
+    pub name: String,
+    pub email: String,
+}
+
+/// A git operation left half done in the work tree, which a commit made now
+/// would finish or corrupt.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InProgress {
+    Merge,
+    Rebase,
+    CherryPick,
+    Revert,
+}
+
+impl fmt::Display for InProgress {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            InProgress::Merge => "merge",
+            InProgress::Rebase => "rebase",
+            InProgress::CherryPick => "cherry-pick",
+            InProgress::Revert => "revert",
+        })
+    }
+}
+
+/// The marker each [`InProgress`] leaves in the git directory.
+const IN_PROGRESS_MARKERS: [(&str, InProgress); 5] = [
+    ("MERGE_HEAD", InProgress::Merge),
+    ("rebase-merge", InProgress::Rebase),
+    ("rebase-apply", InProgress::Rebase),
+    ("CHERRY_PICK_HEAD", InProgress::CherryPick),
+    ("REVERT_HEAD", InProgress::Revert),
+];
+
+/// The git plumbing `commit` (and next `sync`) builds commits with, without
+/// touching the user's index until a commit is made. Every path is relative
+/// to the brain directory and `/`-separated, and is taken literally (no
+/// pathspec magic: `[draft].md` is that file, not a glob).
+pub trait Plumbing: Git {
+    /// The commit `HEAD` names; `None` on a branch with no commit yet.
+    fn head(&self, repo: &Repo) -> Result<Option<String>, GitError>;
+
+    /// The merge, rebase, cherry-pick or revert the work tree is in the
+    /// middle of, found by the markers in its git directory (a worktree's
+    /// or a nested repo's own, wherever `.git` points).
+    fn in_progress(&self, repo: &Repo) -> Result<Option<InProgress>, GitError>;
+
+    /// Which of `paths` are files in `rev` (a commit or a tree).
+    fn tracked(
+        &self,
+        repo: &Repo,
+        rev: &str,
+        paths: &[String],
+    ) -> Result<BTreeSet<String>, GitError>;
+
+    /// The tree of `base` (none: empty) with `paths` taken from the work
+    /// tree as `git add -A` takes them (a missing file is removed), built in
+    /// a temporary index: the user's index is not touched.
+    fn stage_tree(
+        &self,
+        repo: &Repo,
+        base: Option<&str>,
+        paths: &[String],
+    ) -> Result<String, GitError>;
+
+    /// The tree of a commit.
+    fn tree_of(&self, repo: &Repo, rev: &str) -> Result<String, GitError>;
+
+    /// Which of `paths` differ between two trees.
+    fn changed(
+        &self,
+        repo: &Repo,
+        from: &str,
+        to: &str,
+        paths: &[String],
+    ) -> Result<BTreeSet<String>, GitError>;
+
+    /// The identity a commit made now is authored by, with v2's fallback
+    /// (`kluris <kluris@local>`) when git config has none.
+    fn author(&self, repo: &Repo) -> Result<Identity, GitError>;
+
+    /// A git config value as seen from the brain; `None` when unset or
+    /// empty.
+    fn config(&self, repo: &Repo, key: &str) -> Option<String>;
+
+    /// A commit of `tree` on `parents` (`git commit-tree`), authored as
+    /// [`Plumbing::author`] says. No hooks run.
+    fn commit_tree(
+        &self,
+        repo: &Repo,
+        tree: &str,
+        parents: &[&str],
+        message: &str,
+    ) -> Result<String, GitError>;
+
+    /// Move `HEAD` (the branch it names) to `new` only if it is still at
+    /// `old` (`None`: only if it has no commit yet), recording `reason` in
+    /// the reflog.
+    fn update_head(
+        &self,
+        repo: &Repo,
+        new: &str,
+        old: Option<&str>,
+        reason: &str,
+    ) -> Result<(), GitError>;
+
+    /// Set the user's index entries of `paths` to `rev`'s (`git reset -q
+    /// <rev> -- <paths>`); every other entry stays as it is.
+    fn reset_paths(&self, repo: &Repo, rev: &str, paths: &[String]) -> Result<(), GitError>;
+
+    /// Every path in the brain with a change git would commit or an
+    /// untracked file it would add (`git status`, ignored files left out),
+    /// sorted.
+    fn dirty(&self, repo: &Repo) -> Result<Vec<String>, GitError>;
+}
+
+/// A temporary index file, removed (with a lock git may have left) when
+/// dropped.
+struct TempIndex(PathBuf);
+
+impl Drop for TempIndex {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+        let mut lock = self.0.clone().into_os_string();
+        lock.push(".lock");
+        let _ = std::fs::remove_file(lock);
+    }
+}
+
+/// `git <args> -- <paths>` with every path taken literally.
+fn with_paths<'a>(args: &[&'a str], paths: &'a [String]) -> Vec<&'a str> {
+    let mut all = vec!["--literal-pathspecs"];
+    all.extend_from_slice(args);
+    all.push("--");
+    all.extend(paths.iter().map(String::as_str));
+    all
+}
+
+/// NUL-separated names, the empty ones dropped.
+fn nul_names(out: &[u8]) -> impl Iterator<Item = String> + '_ {
+    out.split(|b| *b == 0)
+        .filter(|name| !name.is_empty())
+        .map(|name| String::from_utf8_lossy(name).into_owned())
+}
+
+/// One hash on a line of its own.
+fn hash_line(out: &[u8]) -> String {
+    String::from_utf8_lossy(out).trim().to_string()
+}
+
+/// `Name <email> <time> <zone>` from `git var GIT_AUTHOR_IDENT`.
+fn parse_ident(text: &str) -> Option<Identity> {
+    let open = text.rfind('<')?;
+    let close = open + text[open..].find('>')?;
+    Some(Identity {
+        name: text[..open].trim().to_string(),
+        email: text[open + 1..close].to_string(),
+    })
+}
+
+/// `git status --porcelain -z` records: `XY path`, and for a rename or copy
+/// `XY to` then `from`. Paths are relative to the work tree root.
+fn parse_porcelain(out: &[u8]) -> Vec<String> {
+    let mut paths = Vec::new();
+    let mut fields = out.split(|b| *b == 0);
+    while let Some(field) = fields.next() {
+        if field.len() < 4 {
+            continue;
+        }
+        let (x, y) = (field[0], field[1]);
+        paths.push(String::from_utf8_lossy(&field[3..]).into_owned());
+        if matches!(x, b'R' | b'C') || matches!(y, b'R' | b'C') {
+            fields.next();
+        }
+    }
+    paths
+}
+
+impl Plumbing for SystemGit {
+    fn head(&self, repo: &Repo) -> Result<Option<String>, GitError> {
+        match self.run(&repo.dir, &["rev-parse", "-q", "--verify", "HEAD^{commit}"]) {
+            Ok(out) => Ok(Some(hash_line(&out))),
+            Err(err) => match self.run(&repo.dir, &["symbolic-ref", "-q", "HEAD"]) {
+                // A branch with no commit yet: `HEAD` names a ref that is
+                // not there.
+                Ok(_)
+                    if self
+                        .run(&repo.dir, &["rev-parse", "-q", "--verify", "HEAD"])
+                        .is_err() =>
+                {
+                    Ok(None)
+                }
+                _ => Err(err),
+            },
+        }
+    }
+
+    fn in_progress(&self, repo: &Repo) -> Result<Option<InProgress>, GitError> {
+        for (marker, what) in IN_PROGRESS_MARKERS {
+            if self.git_path(&repo.dir, marker)?.exists() {
+                return Ok(Some(what));
+            }
+        }
+        Ok(None)
+    }
+
+    fn tracked(
+        &self,
+        repo: &Repo,
+        rev: &str,
+        paths: &[String],
+    ) -> Result<BTreeSet<String>, GitError> {
+        if paths.is_empty() {
+            return Ok(BTreeSet::new());
+        }
+        let args = with_paths(&["ls-tree", "-r", "-z", "--name-only", rev], paths);
+        let out = self.run(&repo.dir, &args)?;
+        Ok(nul_names(&out).collect())
+    }
+
+    fn stage_tree(
+        &self,
+        repo: &Repo,
+        base: Option<&str>,
+        paths: &[String],
+    ) -> Result<String, GitError> {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.subsec_nanos());
+        let name = format!("kluris-commit-{}-{nanos}.index", std::process::id());
+        let index = TempIndex(self.git_path(&repo.dir, &name)?);
+        if let Some(base) = base {
+            self.run_with_index(&repo.dir, &index.0, &["read-tree", base])?;
+        }
+        if !paths.is_empty() {
+            let args = with_paths(&["add", "-A"], paths);
+            self.run_with_index(&repo.dir, &index.0, &args)?;
+        }
+        let out = self.run_with_index(&repo.dir, &index.0, &["write-tree"])?;
+        Ok(hash_line(&out))
+    }
+
+    fn tree_of(&self, repo: &Repo, rev: &str) -> Result<String, GitError> {
+        let spec = format!("{rev}^{{tree}}");
+        let out = self.run(&repo.dir, &["rev-parse", "--verify", &spec])?;
+        Ok(hash_line(&out))
+    }
+
+    fn changed(
+        &self,
+        repo: &Repo,
+        from: &str,
+        to: &str,
+        paths: &[String],
+    ) -> Result<BTreeSet<String>, GitError> {
+        if paths.is_empty() {
+            return Ok(BTreeSet::new());
+        }
+        let args = with_paths(
+            &[
+                "diff-tree",
+                "-r",
+                "-z",
+                "--name-only",
+                "--relative",
+                from,
+                to,
+            ],
+            paths,
+        );
+        let out = self.run(&repo.dir, &args)?;
+        Ok(nul_names(&out).collect())
+    }
+
+    fn author(&self, repo: &Repo) -> Result<Identity, GitError> {
+        let args = ["var", "GIT_AUTHOR_IDENT"];
+        let mut cmd = self.command(Some(&repo.dir), &args);
+        self.identity_fallback(&repo.dir, &mut cmd);
+        let out = self.output(cmd, &args)?;
+        let text = String::from_utf8_lossy(&out.stdout);
+        parse_ident(text.trim()).ok_or_else(|| GitError {
+            args: args.iter().map(|a| a.to_string()).collect(),
+            code: Some(0),
+            detail: format!("unexpected identity {:?}", text.trim()),
+        })
+    }
+
+    fn config(&self, repo: &Repo, key: &str) -> Option<String> {
+        self.config_value(&repo.dir, key)
+    }
+
+    fn commit_tree(
+        &self,
+        repo: &Repo,
+        tree: &str,
+        parents: &[&str],
+        message: &str,
+    ) -> Result<String, GitError> {
+        let mut args = vec!["commit-tree", tree];
+        for parent in parents {
+            args.extend(["-p", parent]);
+        }
+        args.extend(["-m", message]);
+        let mut cmd = self.command(Some(&repo.dir), &args);
+        self.identity_fallback(&repo.dir, &mut cmd);
+        let out = self.output(cmd, &args)?;
+        Ok(hash_line(&out.stdout))
+    }
+
+    fn update_head(
+        &self,
+        repo: &Repo,
+        new: &str,
+        old: Option<&str>,
+        reason: &str,
+    ) -> Result<(), GitError> {
+        let args = ["update-ref", "-m", reason, "HEAD", new, old.unwrap_or("")];
+        self.run(&repo.dir, &args).map(drop)
+    }
+
+    fn reset_paths(&self, repo: &Repo, rev: &str, paths: &[String]) -> Result<(), GitError> {
+        if paths.is_empty() {
+            return Ok(());
+        }
+        let args = with_paths(&["reset", "-q", rev], paths);
+        self.run(&repo.dir, &args).map(drop)
+    }
+
+    fn dirty(&self, repo: &Repo) -> Result<Vec<String>, GitError> {
+        let args = [
+            "status",
+            "--porcelain",
+            "-z",
+            "--untracked-files=all",
+            "--",
+            ".",
+        ];
+        let out = self.run(&repo.dir, &args)?;
+        let mut paths: Vec<String> = parse_porcelain(&out)
+            .into_iter()
+            .filter_map(|path| path.strip_prefix(&repo.prefix).map(str::to_string))
+            .collect();
+        paths.sort();
+        paths.dedup();
+        Ok(paths)
     }
 }
 
@@ -426,6 +804,23 @@ mod tests {
         assert_eq!(commits[1].subject, "");
         assert_eq!(commits[1].date, "2026-01-02T00:00:00+02:00");
         assert!(parse_log("").is_empty());
+    }
+
+    #[test]
+    fn parse_ident_and_porcelain() {
+        assert_eq!(
+            parse_ident("Ana Tester <ana@example.com> 1793037949 +0200"),
+            Some(Identity {
+                name: "Ana Tester".into(),
+                email: "ana@example.com".into()
+            })
+        );
+        assert_eq!(parse_ident("no email"), None);
+        let out = b" M a.md\0?? sub/new \xc3\xa9.md\0R  to.md\0from.md\0D  gone.md\0";
+        assert_eq!(
+            parse_porcelain(out),
+            ["a.md", "sub/new é.md", "to.md", "gone.md"]
+        );
     }
 
     #[test]
