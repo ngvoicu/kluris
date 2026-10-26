@@ -29,6 +29,15 @@ const TYPE_PROMPT: &str =
 const NOT_A_TYPE: &str =
     "is not one of 'product-group', 'personal', 'product', 'research', 'blank'.";
 
+/// `path` without Windows' `\\?\` prefix, as git and Kluris print paths
+/// (and as git needs `GIT_CONFIG_GLOBAL`).
+fn plain(path: PathBuf) -> PathBuf {
+    match path.to_str().and_then(|p| p.strip_prefix(r"\\?\")) {
+        Some(rest) if !rest.starts_with("UNC") => PathBuf::from(rest),
+        _ => path,
+    }
+}
+
 /// A sandbox: HOME, the config and a working directory, with git pinned to
 /// an empty global config and a fixed identity.
 struct Env {
@@ -41,7 +50,7 @@ struct Env {
 impl Env {
     fn new() -> Env {
         let tmp = TempDir::new().unwrap();
-        let root = fs::canonicalize(tmp.path()).unwrap();
+        let root = plain(fs::canonicalize(tmp.path()).unwrap());
         let home = root.join("home");
         let work = root.join("work");
         fs::create_dir_all(&home).unwrap();
