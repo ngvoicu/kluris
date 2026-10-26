@@ -429,3 +429,40 @@ fn link_checking_ignores_code_other_schemes_and_titles_and_decodes_paths() {
     // A missing image stays broken, as in v2.
     assert_eq!(targets, ["./nopic.png", "./missing.md"], "{doc}");
 }
+
+#[cfg(unix)]
+#[test]
+fn an_unwritable_neuron_is_skipped_and_its_fix_not_counted() {
+    use std::os::unix::fs::PermissionsExt;
+    let home = Home::new().brain(
+        "demo",
+        &[
+            ("lobe/locked.md", NO_PARENT.as_bytes()),
+            ("lobe/open.md", NO_PARENT.as_bytes()),
+        ],
+    );
+    let locked = home.path("demo", "lobe/locked.md");
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o444)).unwrap();
+    if fs::OpenOptions::new().write(true).open(&locked).is_ok() {
+        return; // running as root: nothing is unwritable
+    }
+    let (code, doc) = home.json(&["dream", "--json"]);
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o644)).unwrap();
+    assert_eq!(code, 1, "{doc}");
+    assert_eq!(home.text("demo", "lobe/locked.md"), NO_PARENT);
+    assert!(
+        home.text("demo", "lobe/open.md")
+            .contains("parent: ./map.md")
+    );
+    let skipped = doc["skipped"].as_array().unwrap();
+    assert_eq!(skipped.len(), 1, "{doc}");
+    assert_eq!(skipped[0]["file"], "lobe/locked.md");
+    let error = skipped[0]["error"].as_str().unwrap();
+    assert!(error.starts_with("cannot write the file: "), "{error}");
+    assert!(
+        !error.contains(home.dir.path().to_str().unwrap()),
+        "{error}"
+    );
+    // Only the fix that was written is counted, as v2's date pass counts.
+    assert_eq!(doc["fixes"]["parents_inferred"], 1);
+}

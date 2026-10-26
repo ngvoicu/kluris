@@ -27,13 +27,13 @@ fn same_day(updated: Option<&Value>, day: &str) -> bool {
     }
 }
 
-/// Apply the git dates; returns how many neurons were written.
+/// Apply the git dates; returns the neurons written, one entry each.
 pub(crate) fn sync_dates<S: BrainStore>(
     ws: &mut Workspace<'_, S>,
     neurons: &[Neuron],
     dates: &FileDates,
-) -> usize {
-    let mut written = 0;
+) -> Vec<String> {
+    let mut written = Vec::new();
     for neuron in neurons {
         let Some(fm) = ws.read_for_write(&neuron.rel) else {
             continue;
@@ -59,7 +59,7 @@ pub(crate) fn sync_dates<S: BrainStore>(
             meta.insert(key.to_string(), Value::Str(value));
         }
         ws.write(&neuron.rel, Some(&fm), &meta, &fm.body);
-        written += 1;
+        written.push(neuron.rel.clone());
     }
     written
 }

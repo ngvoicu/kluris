@@ -27,10 +27,10 @@ mod maps;
 mod sync_dates;
 mod workspace;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 
 use crate::brain::deprecation::{DeprecationIssue, detect_deprecation_issues};
-use crate::brain::store::BrainStore;
+use crate::brain::store::{BrainStore, ReadError};
 use crate::git::Git;
 use crate::yaml::Date;
 
@@ -214,8 +214,25 @@ fn sync<S: BrainStore>(
         skipped.entry(rel).or_insert(reason);
     }
     let applied = store.apply(&changes);
-    for failed in applied.failed {
-        skipped.entry(failed.rel).or_insert(failed.error);
+    // A fix counts only when its file was written (v2's date pass counts
+    // after the write).
+    let failed: HashSet<&str> = applied.failed.iter().map(|f| f.rel.as_str()).collect();
+    let landed = |rels: &[String]| {
+        rels.iter()
+            .filter(|rel| {
+                !store
+                    .real_rel(rel)
+                    .is_some_and(|real| failed.contains(real.as_str()))
+            })
+            .count()
+    };
+    let dates_updated = landed(&dates_updated);
+    let parents_inferred = landed(&parents_inferred);
+    let reverse_synapses_added = landed(&reverse_synapses_added);
+    for failed in &applied.failed {
+        skipped
+            .entry(failed.rel.clone())
+            .or_insert(failed.error.clone());
     }
     Sync {
         dates_updated,
@@ -236,9 +253,12 @@ pub fn dream<S: BrainStore>(store: &mut S, git: &impl Git, options: &DreamOption
     let validation = linker::validate(&*store, &mut skipped);
     let deprecation = detect_deprecation_issues(&*store);
     for neuron in deprecation.skipped {
-        skipped
-            .entry(neuron.rel)
-            .or_insert(neuron.error.to_string());
+        // The reason alone, with no absolute path.
+        let reason = match neuron.error {
+            ReadError::File(e) => e.problem.to_string(),
+            ReadError::Sandbox(e) => e.to_string(),
+        };
+        skipped.entry(neuron.rel).or_insert(reason);
     }
     DreamReport {
         fixes: sync.fixes(validation.orphans.len()),

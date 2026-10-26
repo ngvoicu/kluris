@@ -262,7 +262,8 @@ One entry per difference, under its own heading:
 - Command: `kluris dream` (with and without `--json`, `--broken-only`, `--brain all`)
 - Differs:
   - Dream does not rewrite a neuron whose frontmatter does not parse: invalid YAML, a non-string key, a YAML neuron's `#---` block. It also leaves one that is not UTF-8, cannot be read or cannot be written. The other files are processed.
-  - The validators and the deprecation check skip that file too, so it gets no other report (PAR-007).
+  - The validators skip that file too, so it gets no other report. The deprecation check skips a markdown neuron that does not read (PAR-007), and reads a YAML neuron whose block does not parse as having no metadata, as v2 does, so it reports nothing for it.
+  - A fix whose write fails is not counted in `fixes` (`dates_updated`, `parents_inferred`, `reverse_synapses_added`), as v2's date pass counts only after the write; the file is in `skipped` with `cannot write the file: <reason>`.
   - A skipped file makes the brain unhealthy: `healthy: false` and exit 1, like v2's exit 1.
   - With `--json`, both the full and the `--broken-only` output end, after v2's keys, with `"skipped": [{"brain", "file", "error"}]`. The key is there only when a file was skipped. `file` is `/`-joined; `error` is the reason with no absolute path (`invalid frontmatter: ...`, `the file is not valid UTF-8`).
   - Without `--json`, each brain's report is followed by one line on stderr per skipped file: `Skipped <file>: <reason>`, or under `--brain all` `Skipped <brain>: <file>: <reason>`.
@@ -270,7 +271,7 @@ One entry per difference, under its own heading:
   - For a YAML neuron whose block does not parse, v2 exits 0 and writes a second `#---` block above the old one.
   - A markdown neuron behind a UTF-8 BOM is read with its frontmatter (PAR-010) and rewritten with its BOM and one frontmatter block. v2 sees no frontmatter there and prepends a second block.
 - Decision: SPEC decision log 2026-10-25 (a neuron whose frontmatter does not parse is skipped and reported by `dream`) and 2026-10-26 (dream uses a parse-failed flag for YAML neurons); interview-01 #4 (BOM duplicate frontmatter; one bad neuron crashing dream); SPEC decision 2026-10-27 (tracebacks); the chief's answer in T-94 (m-4524: `{brain, file, error}`, the stderr lines, unhealthy)
-- Tests: `crates/kluris-cli/tests/dream_resilience.rs::{malformed_files_are_skipped_reported_and_left_alone, broken_only_lists_the_skipped_files_too, text_mode_prints_one_skipped_line_per_file_on_stderr, skipped_lines_name_the_brain_under_brain_all, no_skipped_key_when_nothing_was_skipped, a_bom_file_keeps_its_bom_and_gets_one_block}`, `crates/kluris-core/tests/dream.rs::every_write_is_listed_once_and_a_neuron_that_does_not_parse_is_skipped`, `parity/test_dream.py::{test_malformed_neuron_v2_crashes_v3_skips_and_reports, test_yaml_neuron_whose_block_does_not_parse, test_bom_file_keeps_one_block}`
+- Tests: `crates/kluris-cli/tests/dream_resilience.rs::{malformed_files_are_skipped_reported_and_left_alone, an_unwritable_neuron_is_skipped_and_its_fix_not_counted, broken_only_lists_the_skipped_files_too, text_mode_prints_one_skipped_line_per_file_on_stderr, skipped_lines_name_the_brain_under_brain_all, no_skipped_key_when_nothing_was_skipped, a_bom_file_keeps_its_bom_and_gets_one_block}`, `crates/kluris-core/tests/dream.rs::every_write_is_listed_once_and_a_neuron_that_does_not_parse_is_skipped`, `parity/test_dream.py::{test_malformed_neuron_v2_crashes_v3_skips_and_reports, test_yaml_neuron_whose_block_does_not_parse, test_bom_file_keeps_one_block}`
 
 ### PAR-039: `companion remove` rewrites only the brains that had the companion
 - Command: `kluris companion remove [NAME] [--brain NAME|all] [--json]`

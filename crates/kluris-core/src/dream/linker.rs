@@ -49,12 +49,13 @@ fn relpath(source: &str, target: &str) -> String {
 }
 
 /// Step 2 (`fix_missing_frontmatter`): every neuron below the root without a
-/// `parent` key gets `parent: ./map.md`. Returns how many.
+/// `parent` key gets `parent: ./map.md`. Returns the neurons written, one
+/// entry each.
 pub(crate) fn fix_missing_parents<S: BrainStore>(
     ws: &mut Workspace<'_, S>,
     neurons: &[Neuron],
-) -> usize {
-    let mut fixed = 0;
+) -> Vec<String> {
+    let mut fixed = Vec::new();
     for neuron in neurons.iter().filter(|n| n.rel.contains('/')) {
         let Some(fm) = ws.read_for_write(&neuron.rel) else {
             continue;
@@ -65,7 +66,7 @@ pub(crate) fn fix_missing_parents<S: BrainStore>(
         let mut meta = converged(&fm.meta);
         meta.insert("parent".into(), Value::Str("./map.md".into()));
         ws.write(&neuron.rel, Some(&fm), &meta, &fm.body);
-        fixed += 1;
+        fixed.push(neuron.rel.clone());
     }
     fixed
 }
@@ -75,11 +76,12 @@ pub(crate) fn fix_missing_parents<S: BrainStore>(
 /// source's path relative to the target's directory to the target's
 /// `related` (a `related` that is not a list is replaced). Sources in the
 /// store's neuron order (PAR-008); each target is read again for every link,
-/// so it collects all its reverse links in one run. Returns how many.
+/// so it collects all its reverse links in one run. Returns the target of
+/// each link added.
 pub(crate) fn fix_reverse_links<S: BrainStore>(
     ws: &mut Workspace<'_, S>,
     neurons: &[Neuron],
-) -> usize {
+) -> Vec<String> {
     // v2's `{neuron.resolve(): neuron}`: one entry per file, the last walked
     // path of it, at the first one's position.
     let mut by_file: IndexMap<PathBuf, &Neuron> = IndexMap::new();
@@ -88,7 +90,7 @@ pub(crate) fn fix_reverse_links<S: BrainStore>(
             by_file.insert(resolved, neuron);
         }
     }
-    let mut fixed = 0;
+    let mut fixed = Vec::new();
     let sources: Vec<(PathBuf, &Neuron)> = by_file.iter().map(|(k, v)| (k.clone(), *v)).collect();
     for (source_file, source) in sources {
         let Some(fm) = ws.read_for_write(&source.rel) else {
@@ -122,7 +124,7 @@ pub(crate) fn fix_reverse_links<S: BrainStore>(
             let mut meta = converged(&target_fm.meta);
             meta.insert("related".into(), Value::Seq(items));
             ws.write(&target.rel, Some(&target_fm), &meta, &target_fm.body);
-            fixed += 1;
+            fixed.push(target.rel.clone());
         }
     }
     fixed

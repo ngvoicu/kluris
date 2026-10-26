@@ -332,7 +332,9 @@ impl BrainStore for LocalGitStore {
             }
             match fs::write(self.join(&write.rel), &write.contents) {
                 Ok(()) => applied.written.push(write.rel.clone()),
-                Err(e) => applied.failed.push(failed(e.to_string())),
+                Err(e) => applied
+                    .failed
+                    .push(failed(format!("cannot write the file: {e}"))),
             }
         }
         *self = LocalGitStore::open(&self.root);
