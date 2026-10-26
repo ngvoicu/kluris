@@ -1,3 +1,4 @@
 # Byte-exact fixtures: never convert line endings on checkout.
 crates/kluris-core/tests/fixtures/** -text
 crates/kluris-core/templates/** -text
+crates/kluris-core/tests/snapshots/** -text

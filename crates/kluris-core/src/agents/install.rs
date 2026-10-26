@@ -287,8 +287,18 @@ fn write_folder(
 
     for (name, staging) in staged {
         let target = dest.path.join(name);
-        match place(&dest.path, name, &staging, &target) {
-            Ok(()) => dest.written.push(name.to_string()),
+        let aside = dest.path.join(format!(".{name}.old"));
+        match place(name, &staging, &target, &aside) {
+            Ok(()) => {
+                dest.written.push(name.to_string());
+                // The new skill is in place; only the old copy is left over.
+                if exists(&aside)
+                    && let Err(e) = remove_entry(&aside)
+                {
+                    dest.failed
+                        .push(format!("cannot remove {}: {e}", aside.display()));
+                }
+            }
             Err(message) => {
                 let _ = remove_entry(&staging);
                 dest.failed.push(message);
@@ -315,10 +325,10 @@ fn stage(staging: &Path, text: &str) -> io::Result<()> {
     Ok(())
 }
 
-/// Move `staging` to `target`. An existing Kluris-written `target` is moved
-/// aside first and removed once the new one is in place (restored if the
-/// move fails); any other entry at `target` is left as it is.
-fn place(folder: &Path, name: &str, staging: &Path, target: &Path) -> Result<(), String> {
+/// Move `staging` to `target`. An existing Kluris-written `target` is first
+/// moved to `aside` (restored if the move fails; the caller removes it once
+/// the new one is in place); any other entry at `target` is left as it is.
+fn place(name: &str, staging: &Path, target: &Path, aside: &Path) -> Result<(), String> {
     if !exists(target) {
         return fs::rename(staging, target)
             .map_err(|e| format!("cannot move {} into place: {e}", target.display()));
@@ -329,16 +339,14 @@ fn place(folder: &Path, name: &str, staging: &Path, target: &Path) -> Result<(),
             target.display()
         ));
     }
-    let aside = folder.join(format!(".{name}.old"));
-    if exists(&aside) {
-        remove_entry(&aside).map_err(|e| format!("cannot remove {}: {e}", aside.display()))?;
+    if exists(aside) {
+        remove_entry(aside).map_err(|e| format!("cannot remove {}: {e}", aside.display()))?;
     }
-    fs::rename(target, &aside).map_err(|e| format!("cannot replace {}: {e}", target.display()))?;
-    if let Err(e) = fs::rename(staging, target) {
-        let _ = fs::rename(&aside, target);
-        return Err(format!("cannot move {} into place: {e}", target.display()));
-    }
-    remove_entry(&aside).map_err(|e| format!("cannot remove {}: {e}", aside.display()))
+    fs::rename(target, aside).map_err(|e| format!("cannot replace {}: {e}", target.display()))?;
+    fs::rename(staging, target).map_err(|e| {
+        let _ = fs::rename(aside, target);
+        format!("cannot move {} into place: {e}", target.display())
+    })
 }
 
 /// Remove the Kluris-written `kluris*` entries of `dest.path` whose names
