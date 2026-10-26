@@ -2004,6 +2004,9 @@ fn install_and_uninstall_through_the_binary() {
 #[test]
 #[ignore = "installs a real per-user service on this machine"]
 fn real_service_round_trip() {
+    for line in end_round_trip_processes() {
+        eprintln!("ended a leftover of an earlier round trip: {line}");
+    }
     let w = World::new();
     let name = format!("kluris-rt-{}", std::process::id());
     // The brain under the throwaway name.
@@ -2085,10 +2088,50 @@ fn real_service_round_trip() {
     let (_, out, _) = real(&["doctor", "--no-refresh", "--json"]);
     assert!(!out.contains(&format!("sync-service:{name}")), "{out}");
     std::thread::sleep(Duration::from_secs(2));
-    assert!(
-        !watch_process_running(&name),
-        "a watch for {name} is still running"
-    );
+    if watch_process_running(&name) {
+        let left = end_round_trip_processes();
+        panic!("a watch for {name} was still running, now ended: {left:#?}");
+    }
+}
+
+/// The processes earlier round trips left (`--brain kluris-rt-<pid>` on
+/// their command line), ended, each printed as `pid ppid name command`.
+fn end_round_trip_processes() -> Vec<String> {
+    let out = if cfg!(windows) {
+        StdCommand::new("powershell")
+            .args([
+                "-NoProfile",
+                "-Command",
+                "Get-CimInstance Win32_Process | Where-Object { $_.ProcessId -ne $PID -and $_.CommandLine -like '*--watch --brain kluris-rt-*' } | ForEach-Object { \"$($_.ProcessId) $($_.ParentProcessId) $($_.Name) $($_.CommandLine)\"; Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }",
+            ])
+            .output()
+    } else {
+        StdCommand::new("sh")
+            .args([
+                "-c",
+                "ps -A -o pid=,ppid=,args= | grep -e '--watch --brain kluris-rt-' | grep -v grep | while read pid ppid args; do echo \"$pid $ppid $args\"; kill \"$pid\"; done",
+            ])
+            .output()
+    };
+    out.map(|o| {
+        String::from_utf8_lossy(&o.stdout)
+            .lines()
+            .filter(|l| !l.trim().is_empty())
+            .map(str::to_string)
+            .collect()
+    })
+    .unwrap_or_default()
+}
+
+/// Ends what earlier round trips left running; run it alone through the
+/// runner when a round trip failed: `-- --test watch -- --ignored
+/// end_round_trip_leftovers --nocapture`.
+#[test]
+#[ignore = "ends processes of earlier real round trips on this machine"]
+fn end_round_trip_leftovers() {
+    for line in end_round_trip_processes() {
+        eprintln!("ended: {line}");
+    }
 }
 
 /// Whether a `kluris sync --watch --brain <name>` process is running.
