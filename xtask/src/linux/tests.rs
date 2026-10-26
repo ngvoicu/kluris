@@ -629,7 +629,8 @@ mod scripts_run {
     /// The task limit this test process has now (macOS reports no more than
     /// it, whatever the hard limit says), so the run's cap is one it can set.
     fn task_limit_here() -> u32 {
-        let out = Command::new("sh")
+        // bash, as the scripts: dash (Ubuntu's sh) has no `ulimit -u`.
+        let out = Command::new("bash")
             .args(["-c", "ulimit -u"])
             .output()
             .unwrap();
