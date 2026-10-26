@@ -74,6 +74,100 @@ nothing is documented, say so plainly: "Nothing documented about X yet."
 Do not stretch a loose match into an answer.
 """
 
+# v3.1's write flow (PAR-078): reads pull on their own, sync before a write,
+# `kluris commit` + `kluris sync` after it instead of v2's `git add -A`
+# reminder, and sync/commit/resolve among the CLI commands.
+V2_REFRESH = """\
+this skill's remember/learn intents, `kluris dream{flag}`,
+or direct file edits the user tells you about.
+
+If the `kluris` CLI is unavailable"""
+
+V3_REFRESH = """\
+this skill's remember/learn intents, `kluris dream{flag}`,
+a `kluris sync{flag}` that reports `merged`,
+or direct file edits the user tells you about.
+
+You do not need to pull the brain: `kluris wake-up` and `kluris search` fetch
+the teammates' pushed changes on their own (at most once a minute) and bring
+the brain up to date when nothing local is in the way. Setting
+`KLURIS_NO_AUTO_SYNC=1` turns this off.
+
+If the `kluris` CLI is unavailable"""
+
+V2_WRITING_RULES = "## Writing rules\n\n### Approval protocol\n"
+
+V3_WRITING_RULES = """\
+## Writing rules
+
+### Sync before you write
+
+Before you write, change, or delete any brain file, run
+`kluris sync{flag} --json` and read the brain's entry in `brains[]`:
+- `conflicts[]` is not empty: this brain and a teammate's push changed the
+  same thing. STOP and show the human each conflict: its `path`, its `kind`
+  (`content`, `delete_edit`, `parent`, or `frontmatter`), and what each side
+  changed. The conflict's `base`, `ours`, and `theirs` are blob ids: read
+  them with `git -C {path} show <id>`, or compare with
+  `git -C {path} diff <base> <ours>` and `git -C {path} diff <base> <theirs>`
+  (a `null` side deleted the file). Ask which version to keep, or propose a
+  merged text and apply the approval protocol to it. Then settle each path
+  with `kluris resolve{flag} <path> --ours`, `--theirs`, or
+  `--file <merged file>`; the last one commits the merge and pushes it.
+  Brain files never contain conflict markers, so never edit a file to
+  resolve a conflict. If `kluris resolve` says the conflict is stale, run
+  `kluris resolve{flag} --abort` and sync again.
+- `blocked[]` is not empty: those files have uncommitted changes that the
+  incoming changes would overwrite. Ask the human to commit or stash them,
+  then sync again.
+- `refused` is set or `offline` is true: tell the human, then go on with the
+  local brain.
+
+### Approval protocol
+"""
+
+V2_COMMIT_REMINDER = """\
+   on. Then remind them to commit with git (`cd {path} && git add -A && git commit`)
+   if the brain uses git.
+"""
+
+V3_COMMIT_STEP = """\
+   on.
+7. **Commit and share what you wrote.** Once the human approved and the
+   files are written, commit exactly those files with
+   `kluris commit{flag} --paths <every brain-relative path you wrote or deleted, comma-separated> --json`,
+   with `KLURIS_AGENT` set to your agent's name (for example
+   `KLURIS_AGENT="Claude Code"`) so the commit credits you. It commits those
+   files and the `map.md`/`brain.md` files they change, under the human's git
+   identity, and nothing else. Then run `kluris sync{flag} --json` and report
+   the `commit` and whether it was `pushed`. If sync reports `conflicts[]` or
+   `blocked[]`, handle them as in "Sync before you write". If a git hook
+   stops the commit, show its output to the human and fix what it reports;
+   never pass `--no-verify` unless the human asks for it. A brain inside a
+   larger git repository (sync refuses it): commit with `kluris commit`, then
+   push with git the way the team normally does. A brain without git: skip
+   this step.
+"""
+
+V2_CLI_TAIL = """\
+- `kluris mri{flag}` -- generate interactive visualization
+
+Sync, commit, and branch operations go through `git` directly -- kluris
+brains are plain git repos. Use `git -C {path} push / pull / status /
+checkout` as you would with any other repo.
+"""
+
+V3_CLI_TAIL = """\
+- `kluris mri{flag}` -- generate interactive visualization
+- `kluris sync{flag} --json` -- fetch, merge, and push the brain; reports `conflicts[]`, `blocked[]`, `refused`, and `offline`
+- `kluris commit{flag} --paths <a.md,b.md> --json` -- commit exactly those files and the maps they change
+- `kluris resolve{flag} <path> --ours|--theirs|--file <merged file> --json` -- settle a sync conflict path by path (`--abort` drops it)
+
+Branch operations and anything else go through `git` directly -- kluris
+brains are plain git repos. Use `git -C {path} status / log / checkout`
+as you would with any other repo.
+"""
+
 FOREIGN_SKILL = "---\nname: kluris-notes\ndescription: My own notes about kluris\n---\n\n# Notes\n"
 
 # Folders v2 wrote and v3 clears, relative to HOME.
@@ -106,7 +200,17 @@ def _v2_to_v3(v2: str, brain: str) -> str:
     flag = f" --brain {brain}"
     out = _replace_once(v2, "a list of `{{brain, file, target}}` entries.", "a list of `{brain, file, target}` entries.")
     out = _replace_once(out, "\n---\n\n# Brain: ", f"\n---\n\n{MARKER}\n\n# Brain: ")
-    return _replace_once(out, V2_SEARCH_ADVICE.format(flag=flag), V3_SEARCH_ADVICE.format(flag=flag))
+    out = _replace_once(out, V2_SEARCH_ADVICE.format(flag=flag), V3_SEARCH_ADVICE.format(flag=flag))
+    start = out.index("The brain lives at `") + len("The brain lives at `")
+    path = out[start:out.index("`", start)]
+
+    def fill(text: str) -> str:
+        return text.replace("{flag}", flag).replace("{path}", path)
+
+    for old, new in [(V2_REFRESH, V3_REFRESH), (V2_WRITING_RULES, V3_WRITING_RULES),
+                     (V2_COMMIT_REMINDER, V3_COMMIT_STEP), (V2_CLI_TAIL, V3_CLI_TAIL)]:
+        out = _replace_once(out, fill(old), fill(new))
+    return out
 
 
 def _oracle_ok(sandbox: Sandbox, args: list[str]) -> dict:

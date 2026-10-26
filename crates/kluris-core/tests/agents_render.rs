@@ -9,7 +9,11 @@
 //!    target}` (interview-01 #4, PAR entry "SKILL.md placeholder fixes");
 //! 2. a marker comment follows the frontmatter (interview-01 #6);
 //! 3. the "Search" paragraph of research-05 §6 replaces v2's search advice
-//!    in "Query first -- never guess" (SPEC decision 2026-10-24, search).
+//!    in "Query first -- never guess" (SPEC decision 2026-10-24, search);
+//! 4. v3.1's write flow (SPEC Phase 7, items 49/50): reads note the fresh
+//!    reads, a "Sync before you write" section, `kluris commit` and `kluris
+//!    sync` after an approved write instead of v2's `git add -A && git
+//!    commit` reminder, and `sync`/`commit`/`resolve` in "CLI commands".
 //!
 //! Each change must match exactly once, so a template edit that moves or
 //! drops one fails here instead of passing silently.
@@ -136,6 +140,111 @@ nothing is documented, say so plainly: \"Nothing documented about X yet.\"
 Do not stretch a loose match into an answer.
 ";
 
+/// v2's wake-up refresh rule and the fallback paragraph after it.
+const V2_REFRESH: &str = "\
+this skill's remember/learn intents, `kluris dream{flag}`,
+or direct file edits the user tells you about.
+
+If the `kluris` CLI is unavailable";
+
+/// A merging sync refreshes the snapshot too; reads pull on their own.
+const V3_REFRESH: &str = "\
+this skill's remember/learn intents, `kluris dream{flag}`,
+a `kluris sync{flag}` that reports `merged`,
+or direct file edits the user tells you about.
+
+You do not need to pull the brain: `kluris wake-up` and `kluris search` fetch
+the teammates' pushed changes on their own (at most once a minute) and bring
+the brain up to date when nothing local is in the way. Setting
+`KLURIS_NO_AUTO_SYNC=1` turns this off.
+
+If the `kluris` CLI is unavailable";
+
+const V2_WRITING_RULES: &str = "## Writing rules\n\n### Approval protocol\n";
+
+/// "Sync before you write", ahead of the approval protocol.
+const V3_WRITING_RULES: &str = "\
+## Writing rules
+
+### Sync before you write
+
+Before you write, change, or delete any brain file, run
+`kluris sync{flag} --json` and read the brain's entry in `brains[]`:
+- `conflicts[]` is not empty: this brain and a teammate's push changed the
+  same thing. STOP and show the human each conflict: its `path`, its `kind`
+  (`content`, `delete_edit`, `parent`, or `frontmatter`), and what each side
+  changed. The conflict's `base`, `ours`, and `theirs` are blob ids: read
+  them with `git -C {path} show <id>`, or compare with
+  `git -C {path} diff <base> <ours>` and `git -C {path} diff <base> <theirs>`
+  (a `null` side deleted the file). Ask which version to keep, or propose a
+  merged text and apply the approval protocol to it. Then settle each path
+  with `kluris resolve{flag} <path> --ours`, `--theirs`, or
+  `--file <merged file>`; the last one commits the merge and pushes it.
+  Brain files never contain conflict markers, so never edit a file to
+  resolve a conflict. If `kluris resolve` says the conflict is stale, run
+  `kluris resolve{flag} --abort` and sync again.
+- `blocked[]` is not empty: those files have uncommitted changes that the
+  incoming changes would overwrite. Ask the human to commit or stash them,
+  then sync again.
+- `refused` is set or `offline` is true: tell the human, then go on with the
+  local brain.
+
+### Approval protocol
+";
+
+/// v2's step 6 ends with a `git add -A && git commit` reminder.
+const V2_COMMIT_REMINDER: &str = "\
+   on. Then remind them to commit with git (`cd {path} && git add -A && git commit`)
+   if the brain uses git.
+";
+
+/// Step 7: `kluris commit` the approved files, then `kluris sync`.
+const V3_COMMIT_STEP: &str = "\
+   on.
+7. **Commit and share what you wrote.** Once the human approved and the
+   files are written, commit exactly those files with
+   `kluris commit{flag} --paths <every brain-relative path you wrote or deleted, comma-separated> --json`,
+   with `KLURIS_AGENT` set to your agent's name (for example
+   `KLURIS_AGENT=\"Claude Code\"`) so the commit credits you. It commits those
+   files and the `map.md`/`brain.md` files they change, under the human's git
+   identity, and nothing else. Then run `kluris sync{flag} --json` and report
+   the `commit` and whether it was `pushed`. If sync reports `conflicts[]` or
+   `blocked[]`, handle them as in \"Sync before you write\". If a git hook
+   stops the commit, show its output to the human and fix what it reports;
+   never pass `--no-verify` unless the human asks for it. A brain inside a
+   larger git repository (sync refuses it): commit with `kluris commit`, then
+   push with git the way the team normally does. A brain without git: skip
+   this step.
+";
+
+/// v2's last "CLI commands" lines: sync and commit through plain git.
+const V2_CLI_TAIL: &str = "\
+- `kluris mri{flag}` -- generate interactive visualization
+
+Sync, commit, and branch operations go through `git` directly -- kluris
+brains are plain git repos. Use `git -C {path} push / pull / status /
+checkout` as you would with any other repo.
+";
+
+const V3_CLI_TAIL: &str = "\
+- `kluris mri{flag}` -- generate interactive visualization
+- `kluris sync{flag} --json` -- fetch, merge, and push the brain; reports `conflicts[]`, `blocked[]`, `refused`, and `offline`
+- `kluris commit{flag} --paths <a.md,b.md> --json` -- commit exactly those files and the maps they change
+- `kluris resolve{flag} <path> --ours|--theirs|--file <merged file> --json` -- settle a sync conflict path by path (`--abort` drops it)
+
+Branch operations and anything else go through `git` directly -- kluris
+brains are plain git repos. Use `git -C {path} status / log / checkout`
+as you would with any other repo.
+";
+
+/// The brain path as v2 wrote it (`The brain lives at `<path>` (`).
+fn brain_path_of(v2: &str) -> String {
+    let start =
+        v2.find("The brain lives at `").expect("brain path line") + "The brain lives at `".len();
+    let end = start + v2[start..].find('`').expect("closing backtick");
+    v2[start..end].to_string()
+}
+
 fn replace_once(text: &str, from: &str, to: &str, what: &str) -> String {
     let n = text.matches(from).count();
     assert_eq!(n, 1, "{what}: expected exactly one match, found {n}");
@@ -157,12 +266,28 @@ fn v2_to_v3(v2: &str, brain_name: &str) -> String {
         &format!("\n---\n\n{MARKER_LINE}\n\n# Brain: "),
         "marker",
     );
-    replace_once(
+    let out = replace_once(
         &out,
         &V2_SEARCH_ADVICE.replace("{flag}", &flag),
         &V3_SEARCH_ADVICE.replace("{flag}", &flag),
         "search advice",
-    )
+    );
+    let path = brain_path_of(v2);
+    let fill = |text: &str| text.replace("{flag}", &flag).replace("{path}", &path);
+    let out = replace_once(&out, &fill(V2_REFRESH), &fill(V3_REFRESH), "fresh reads");
+    let out = replace_once(
+        &out,
+        &fill(V2_WRITING_RULES),
+        &fill(V3_WRITING_RULES),
+        "sync before you write",
+    );
+    let out = replace_once(
+        &out,
+        &fill(V2_COMMIT_REMINDER),
+        &fill(V3_COMMIT_STEP),
+        "commit step",
+    );
+    replace_once(&out, &fill(V2_CLI_TAIL), &fill(V3_CLI_TAIL), "CLI commands")
 }
 
 /// The first line that differs, for a readable failure.
@@ -275,6 +400,38 @@ fn search_paragraph_names_the_search_json_keys() {
         "read its `replaced_by`",
     ] {
         assert!(got.contains(needle), "missing {needle:?}");
+    }
+}
+
+/// v3.1's write flow: sync before writing, `kluris commit` and `kluris
+/// sync` after, conflicts settled with `kluris resolve`, no `git add -A`.
+#[test]
+fn the_write_flow_syncs_commits_and_resolves() {
+    for case in cases() {
+        let got = render_skill(&case.input());
+        let b = &case.brain_name;
+        for needle in [
+            format!("`kluris sync --brain {b} --json`"),
+            format!("`kluris commit --brain {b} --paths "),
+            format!("`kluris resolve --brain {b} <path> --ours`"),
+            format!("`kluris resolve --brain {b} --abort`"),
+            "`KLURIS_AGENT=\"Claude Code\"`".to_string(),
+            "`KLURIS_NO_AUTO_SYNC=1`".to_string(),
+            "never pass `--no-verify` unless the human asks for it".to_string(),
+            "Brain files never contain conflict markers".to_string(),
+            "### Sync before you write".to_string(),
+            "a `kluris sync --brain ".to_string(),
+        ] {
+            assert!(
+                got.contains(&needle),
+                "case {}: missing {needle:?}",
+                case.name
+            );
+        }
+        assert!(!got.contains("git add -A"), "case {}", case.name);
+        assert!(!got.contains("push / pull"), "case {}", case.name);
+        // The approval protocol itself is unchanged.
+        assert!(got.contains("5. STOP. NEVER write until the human explicitly approves."));
     }
 }
 

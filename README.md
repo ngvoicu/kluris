@@ -273,6 +273,12 @@ Then have it learn the project:
 for everything worth keeping, one at a time. Use it at the end of a working
 session.
 
+Before it writes, the agent syncs the brain with your team; after you approve,
+it commits exactly the files it wrote with `kluris commit` and pushes them with
+`kluris sync`. If a teammate changed the same thing, it shows you both
+versions, asks which to keep (or proposes a merge), and settles it with
+`kluris resolve`.
+
 ### Use the brain while coding
 
 ```text

@@ -27,7 +27,13 @@ The wake-up output is your compact brain index:
 
 Re-run `kluris wake-up{brain_flag_hint_inline} --json` only after the brain changes:
 this skill's remember/learn intents, `kluris dream{brain_flag_hint_inline}`,
+a `kluris sync{brain_flag_hint_inline}` that reports `merged`,
 or direct file edits the user tells you about.
+
+You do not need to pull the brain: `kluris wake-up` and `kluris search` fetch
+the teammates' pushed changes on their own (at most once a minute) and bring
+the brain up to date when nothing local is in the way. Setting
+`KLURIS_NO_AUTO_SYNC=1` turns this off.
 
 If the `kluris` CLI is unavailable, the brain is still a plain filesystem tree
 at `{brain_path}`. Read `brain.md`, `glossary.md`, and each relevant lobe's
@@ -497,6 +503,29 @@ CURRENT WORKING DIRECTORY (the project), not the brain itself.
 
 ## Writing rules
 
+### Sync before you write
+
+Before you write, change, or delete any brain file, run
+`kluris sync{brain_flag_hint_inline} --json` and read the brain's entry in `brains[]`:
+- `conflicts[]` is not empty: this brain and a teammate's push changed the
+  same thing. STOP and show the human each conflict: its `path`, its `kind`
+  (`content`, `delete_edit`, `parent`, or `frontmatter`), and what each side
+  changed. The conflict's `base`, `ours`, and `theirs` are blob ids: read
+  them with `git -C {brain_path} show <id>`, or compare with
+  `git -C {brain_path} diff <base> <ours>` and `git -C {brain_path} diff <base> <theirs>`
+  (a `null` side deleted the file). Ask which version to keep, or propose a
+  merged text and apply the approval protocol to it. Then settle each path
+  with `kluris resolve{brain_flag_hint_inline} <path> --ours`, `--theirs`, or
+  `--file <merged file>`; the last one commits the merge and pushes it.
+  Brain files never contain conflict markers, so never edit a file to
+  resolve a conflict. If `kluris resolve` says the conflict is stale, run
+  `kluris resolve{brain_flag_hint_inline} --abort` and sync again.
+- `blocked[]` is not empty: those files have uncommitted changes that the
+  incoming changes would overwrite. Ask the human to commit or stash them,
+  then sync again.
+- `refused` is set or `offline` is true: tell the human, then go on with the
+  local brain.
+
 ### Approval protocol
 
 For Learn, Remember, and Create flows:
@@ -517,8 +546,21 @@ For Learn, Remember, and Create flows:
    reference the neuron you just wrote, surface them to the user in plain
    language and propose fixes in the same turn -- don't wait for the user to
    notice. If the output is clean, tell the user "dream is clean" and move
-   on. Then remind them to commit with git (`cd {brain_path} && git add -A && git commit`)
-   if the brain uses git.
+   on.
+7. **Commit and share what you wrote.** Once the human approved and the
+   files are written, commit exactly those files with
+   `kluris commit{brain_flag_hint_inline} --paths <every brain-relative path you wrote or deleted, comma-separated> --json`,
+   with `KLURIS_AGENT` set to your agent's name (for example
+   `KLURIS_AGENT="Claude Code"`) so the commit credits you. It commits those
+   files and the `map.md`/`brain.md` files they change, under the human's git
+   identity, and nothing else. Then run `kluris sync{brain_flag_hint_inline} --json` and report
+   the `commit` and whether it was `pushed`. If sync reports `conflicts[]` or
+   `blocked[]`, handle them as in "Sync before you write". If a git hook
+   stops the commit, show its output to the human and fix what it reports;
+   never pass `--no-verify` unless the human asks for it. A brain inside a
+   larger git repository (sync refuses it): commit with `kluris commit`, then
+   push with git the way the team normally does. A brain without git: skip
+   this step.
 
 Other writing rules:
 - Never create `.md`, `.yml`, or `.yaml` neurons directly at the brain root.
@@ -587,8 +629,11 @@ These are terminal commands, not skill actions:
 - `kluris dream{brain_flag_hint_inline}` -- regenerate maps, auto-fix safe issues, and validate links
 - `kluris status{brain_flag_hint_inline}` -- show brain tree, recent changes, and counts
 - `kluris mri{brain_flag_hint_inline}` -- generate interactive visualization
+- `kluris sync{brain_flag_hint_inline} --json` -- fetch, merge, and push the brain; reports `conflicts[]`, `blocked[]`, `refused`, and `offline`
+- `kluris commit{brain_flag_hint_inline} --paths <a.md,b.md> --json` -- commit exactly those files and the maps they change
+- `kluris resolve{brain_flag_hint_inline} <path> --ours|--theirs|--file <merged file> --json` -- settle a sync conflict path by path (`--abort` drops it)
 
-Sync, commit, and branch operations go through `git` directly -- kluris
-brains are plain git repos. Use `git -C {brain_path} push / pull / status /
-checkout` as you would with any other repo.
+Branch operations and anything else go through `git` directly -- kluris
+brains are plain git repos. Use `git -C {brain_path} status / log / checkout`
+as you would with any other repo.
 
