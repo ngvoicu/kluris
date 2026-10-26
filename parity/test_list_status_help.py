@@ -28,7 +28,7 @@ V2_COMMANDS = [
 ]
 # v2's commands Kluris 3 keeps, in v2's order.
 V2_KEPT = [c for c in V2_COMMANDS if c != "pack"]
-# Commands new in v3, after v2's (PAR-056: no v2 counterpart).
+# Commands new in v3, after v2's (PAR-064: no v2 counterpart).
 V3_ONLY = [
     ("self-update", "Update kluris to the newest release (--check only looks)"),
     ("self-uninstall", "Remove the installed kluris (--purge: also ~/.kluris and Kluris skills)"),
@@ -477,7 +477,7 @@ def test_help_for_one_command(sandbox: Sandbox, command):
 
 @pytest.mark.parametrize(("command", "desc"), V3_ONLY)
 def test_help_for_a_v3_only_command(sandbox: Sandbox, command, desc):
-    """PAR-056: v2 has no such command."""
+    """PAR-064: v2 has no such command."""
     r = run(sandbox, "help", command)
     v2, v3 = r["v2"], r["v3"]
     assert v2.code == 1 and v2.stderr == f"Error: Unknown command: {command}\n"
@@ -560,7 +560,7 @@ def test_root_help_flag(sandbox: Sandbox):
         line = next(line for line in v2.stdout.splitlines() if line.startswith(f"  {command} "))
         assert re.search(rf"^  {re.escape(command)} +{re.escape(line.split(maxsplit=1)[1])}$", v3.stdout, re.M), line
     assert "pack" not in v3.stdout
-    for command, _ in V3_ONLY:  # PAR-056
+    for command, _ in V3_ONLY:  # PAR-064
         assert command not in v2.stdout
         assert re.search(rf"^  {re.escape(command)} +\S", v3.stdout, re.M), command
 

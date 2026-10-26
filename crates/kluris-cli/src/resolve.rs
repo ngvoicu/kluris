@@ -64,13 +64,6 @@ impl DistPaths {
     }
 }
 
-/// Whether a prompt may be shown: not `--json`, `KLURIS_NO_PROMPT` not
-/// exactly `1`, and stdin a terminal (the resolver's rule).
-pub fn interactive(as_json: bool) -> bool {
-    let no_prompt = std::env::var_os("KLURIS_NO_PROMPT").is_some_and(|v| v == "1");
-    !as_json && !no_prompt && io::stdin().is_terminal()
-}
-
 /// `COPILOT_HOME`, when set and non-empty.
 pub fn copilot_home() -> Option<PathBuf> {
     std::env::var_os("COPILOT_HOME")

@@ -4,6 +4,7 @@
 use std::io::{self, BufRead, Write};
 use std::path::{Path, PathBuf};
 
+use kluris_core::companions::prompt::Aborted;
 use kluris_core::config::read_global_config;
 use kluris_core::dist::{
     Receipt, ReceiptError, UninstallReport, UninstallRequest, UserPath, uninstall,
@@ -13,7 +14,8 @@ use kluris_core::doctor::{home_relative, slashed};
 use crate::error::CliError;
 use crate::output::human;
 use crate::output::json::{self, Json};
-use crate::resolve::{AbortOnInterrupt, DistPaths, config_path, copilot_home, interactive};
+use crate::prompt;
+use crate::resolve::{DistPaths, config_path, copilot_home};
 
 pub fn run(purge: bool, yes: bool, as_json: bool) -> Result<(), CliError> {
     let paths = DistPaths::from_env()?;
@@ -24,21 +26,21 @@ pub fn run(purge: bool, yes: bool, as_json: bool) -> Result<(), CliError> {
     let receipt = Receipt::read(&receipt_path).map_err(|e| refusal(&e))?;
 
     if purge && !yes {
-        if !interactive(as_json) {
+        if !prompt::can_prompt(as_json) {
             return Err(CliError::new(
                 "--purge removes ~/.kluris (config.yml, companions) and every Kluris-written \
                  skill; pass --yes to confirm when not running interactively.",
             ));
         }
-        let guard = AbortOnInterrupt::install();
-        let confirmed = confirm(
-            "Remove ~/.kluris (config.yml, companions) and every Kluris-written agent skill? \
-             Your brains are kept.",
-            &mut io::stdin().lock(),
-            &mut io::stdout().lock(),
-        );
-        drop(guard);
-        if !confirmed? {
+        let confirmed = prompt::ask(|input, output| {
+            confirm(
+                "Remove ~/.kluris (config.yml, companions) and every Kluris-written agent \
+                 skill? Your brains are kept.",
+                input,
+                output,
+            )
+        })?;
+        if !confirmed {
             return Err(CliError::aborted());
         }
     }
@@ -148,12 +150,13 @@ fn refusal(err: &ReceiptError) -> CliError {
 }
 
 /// Click's `confirm` with a `[y/N]` default: `y`/`yes` or `n`/`no` (any
-/// case), empty for no; anything else asks again; end of input aborts.
+/// case), empty for no (a purge is not undone); anything else asks again;
+/// end of input aborts.
 fn confirm(
     question: &str,
     input: &mut impl BufRead,
     output: &mut impl Write,
-) -> Result<bool, CliError> {
+) -> Result<bool, Aborted> {
     loop {
         let _ = write!(output, "{question} [y/N]: ");
         let _ = output.flush();
@@ -161,7 +164,7 @@ fn confirm(
         match input.read_line(&mut line) {
             Ok(0) | Err(_) => {
                 let _ = writeln!(output);
-                return Err(CliError::aborted());
+                return Err(Aborted);
             }
             Ok(_) => {}
         }
@@ -258,7 +261,7 @@ fn report_text(report: &UninstallReport, home: &Path) -> String {
 mod tests {
     use super::*;
 
-    fn ask(input: &str) -> (Result<bool, CliError>, String) {
+    fn ask(input: &str) -> (Result<bool, Aborted>, String) {
         let mut out = Vec::new();
         let answer = confirm("Go?", &mut io::Cursor::new(input.as_bytes()), &mut out);
         (answer, String::from_utf8(out).unwrap())
@@ -280,7 +283,7 @@ mod tests {
         let (answer, out) = ask("maybe\ny\n");
         assert_eq!(answer, Ok(true));
         assert_eq!(out, "Go? [y/N]: Error: invalid input\nGo? [y/N]: ");
-        assert_eq!(ask("").0, Err(CliError::aborted()));
-        assert_eq!(ask("maybe\n").0, Err(CliError::aborted()));
+        assert_eq!(ask("").0, Err(Aborted));
+        assert_eq!(ask("maybe\n").0, Err(Aborted));
     }
 }
