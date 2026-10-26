@@ -358,13 +358,16 @@ impl SystemGit {
     }
 }
 
-fn not_utf8(args: &[&str]) -> FreshError {
+/// git exited 0 with output this step cannot use.
+fn unreadable(args: &[&str], why: &str) -> FreshError {
     FreshError::Failed(GitError {
         args: args.iter().map(|a| a.to_string()).collect(),
         code: Some(0),
-        detail: "the output is not UTF-8".into(),
+        detail: why.into(),
     })
 }
+
+const NOT_UTF8: &str = "the output is not UTF-8";
 
 impl FreshGit for SystemGit {
     fn git_paths(
@@ -381,14 +384,14 @@ impl FreshGit for SystemGit {
         if !done.status.success() {
             return Ok(None);
         }
-        let text = String::from_utf8(done.stdout).map_err(|_| not_utf8(&args))?;
+        let text = String::from_utf8(done.stdout).map_err(|_| unreadable(&args, NOT_UTF8))?;
         let mut lines = text.lines();
         if lines.next() != Some("true") {
             return Ok(None);
         }
         let paths: Vec<PathBuf> = lines.map(|line| dir.join(line)).collect();
         if paths.len() != names.len() {
-            return Err(not_utf8(&args));
+            return Err(unreadable(&args, "not one path per name"));
         }
         Ok(Some(paths))
     }
@@ -398,14 +401,15 @@ impl FreshGit for SystemGit {
         if !head.status.success() {
             return Ok(None);
         }
-        let branch = String::from_utf8(head.stdout).map_err(|_| not_utf8(&["symbolic-ref"]))?;
+        let branch =
+            String::from_utf8(head.stdout).map_err(|_| unreadable(&["symbolic-ref"], NOT_UTF8))?;
         let args = [
             "for-each-ref",
             "--format=%(upstream:remotename)%00%(upstream)",
             branch.trim(),
         ];
         let out = self.checked(dir, &args, &[], deadline)?;
-        let text = String::from_utf8(out).map_err(|_| not_utf8(&args))?;
+        let text = String::from_utf8(out).map_err(|_| unreadable(&args, NOT_UTF8))?;
         let line = text.lines().next().unwrap_or_default();
         let Some((remote, refname)) = line.split_once('\0') else {
             return Ok(None);
