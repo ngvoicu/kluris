@@ -24,7 +24,7 @@ rust-toolchain.toml   # pinned toolchain (rustfmt, clippy)
 .cargo/config.toml    # `cargo xtask ...` alias
 crates/kluris-core/   # library: every operation, typed inputs and outputs, no printing
 crates/kluris-cli/    # binary `kluris`: parses arguments, calls core, prints
-xtask/                # dev tasks (cargo xtask)
+xtask/                # dev tasks (cargo xtask; windows and linux runners share ssh_ci/)
 vendored/             # the four Specmint companion folders (unchanged from v2)
 parity/               # uv project: the v2.28.11 oracle vs the v3 binary
 ```
@@ -110,6 +110,69 @@ cargo xtask windows --parity --parity-files parity/test_smoke.py   # only that p
   (repeatable, needs `--parity`) runs `pytest` on those files alone instead
   of the whole suite: each must be a `parity/*.py` file in this worktree,
   checked before anything is sent.
+
+## Linux machine (`cargo xtask linux`)
+
+The same tests and parity harness run on `zeelin`, the household laptop's
+Ubuntu 26.04 under WSL2 (the same laptop as zeewin2), over ssh
+(`xtask/src/linux.rs` has the whole design; the upload, the streamed run and
+the stop are shared with `windows` in `xtask/src/ssh_ci/`):
+
+```bash
+cargo xtask linux --parity                        # cargo test --workspace --no-fail-fast, then parity
+cargo xtask linux -- -p kluris-core               # extra cargo test args after --
+cargo xtask linux --parity --parity-files parity/test_smoke.py   # only that parity file
+```
+
+- **The machine.** `ssh zeelin` (10.6.0.6:22, user `zee`, bash; 16 threads,
+  27 GiB). It answers only while WSL runs (a scheduled task keeps it up while
+  the owner is logged in). It is poker-lab's compute box first. Facts:
+  zeespirevpn-sme (`devices/agvlaptop.md`) and consensflow-sme
+  (`operations/test-machines.md`). Builds run with 8 jobs.
+- **Refused with 75, nothing sent**, by a bounded probe (5 s to connect, 30 s
+  in all) and again by the bootstrap under its lock: zeelin not answering
+  ("zeelin not running": it is never started from here; an ssh that connected
+  but could not say is an error, 1), poker-lab's `~/.compile-lock/owner`
+  present, a run holding zeewin2 (its record
+  `/mnt/c/Users/AGV/consensflow-build/.windows-run.id`, written by ConsensFlow's
+  and Kluris's `cargo xtask windows`, or `/mnt/c/Users/AGV` out of sight), and
+  Kluris's own one-run lock `~/.kluris-ci/.linux-run.lock` held (`flock -n`,
+  the holder's id and process in `.linux-run.id` beside it). Each refusal
+  names the holder. The other projects' locks are only looked at: never
+  taken, broken or waited on. They are checked when the run starts: a
+  poker-lab job or a Windows run that starts later runs beside it.
+- **What goes.** The same tarball as for Windows (HEAD, or a `git stash
+  create` commit with the uncommitted tracked changes; not `target/`,
+  `parity/.oracle/`, `parity/.venv/`), by scp to
+  `~/.kluris-ci/incoming/<run id>.tgz`.
+- **Nothing outside `~/.kluris-ci/` changes.** No `sudo`, no system packages,
+  no shell profiles, nothing of poker-lab's. `tools/rustup` (`RUSTUP_HOME`:
+  the tree's pinned toolchain, installed by the user's own
+  `~/.cargo/bin/rustup` called by full path; `~/.cargo/env` is never read),
+  `tools/cargo` (`CARGO_HOME`), `tools/uv-0.12.8/uv` (fetched once, SHA-256
+  checked), `tools/python` (uv's managed CPython), `cache/target`
+  (`CARGO_TARGET_DIR`), `cache/oracle` (`KLURIS_PARITY_ORACLE_DIR`),
+  `cache/parity-venv`, `cache/uv`, `cache/xdg`, and `runs/<run id>/` (the
+  unpacked tree, its `tmp/` as `TMPDIR`). PATH changes for the run's own
+  process only. A zeelin without rustup is reported, not fixed.
+- **Bounds and cleanup.** The bootstrap runs in a session of its own
+  (`setsid`) under `set -euo pipefail`; its `trap` ends every other process of
+  the session and removes the tarball and the record however the run ends,
+  and the lock goes with its descriptor. `ulimit -u 1024` caps the user's
+  tasks while the run goes (Linux counts threads and every process of `zee`,
+  so it is a ceiling against runaway forks, not the Windows job's 64). Each
+  step has the Windows bounds (toolchain 30 min, cargo-test 90, release-build
+  60, parity 90) under `timeout` (TERM, then KILL 30 s later; status 124), and
+  the whole run one more. Ctrl-C (130), the bound (124) and a lost
+  connection send the stop, which ends the run's session only if the record
+  names that run. Run folders and tarballs older than a day are swept by the
+  next run, under the lock.
+- **The answer.** As on Windows: the output streams back, the status is the
+  run's last line `== exit N`, then a summary line `linux: zeelin run <id>
+  tree <commit>: <step> <status> (<time>), ...; exit N`.
+- **Parity on Linux.** v2.28.11 runs there as the oracle (the hash-pinned
+  universal `parity/oracle.lock`) against the release `kluris`
+  (`KLURIS_V3_BIN`); `--parity-files` as for Windows.
 
 ## Parity rule
 
