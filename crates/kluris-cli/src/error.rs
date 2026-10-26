@@ -135,6 +135,10 @@ fn usage_message(err: &clap::Error) -> String {
         }
         ErrorKind::UnknownArgument => {
             if let Some(arg) = context(ContextKind::InvalidArg) {
+                if !arg.starts_with('-') {
+                    // A positional beyond the last one (clap names the first).
+                    return format!("Got unexpected extra argument ({arg})");
+                }
                 let option = arg.split_once('=').map_or(arg.as_str(), |(o, _)| o);
                 return format!("No such option '{option}'.");
             }

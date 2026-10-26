@@ -1,13 +1,11 @@
 //! `kluris list [--json]`.
 
-use std::io::{self, Write};
-
 use kluris_core::config::global_config_path;
 use kluris_core::list::{BrainListing, list_brains};
 
 use crate::error::CliError;
+use crate::output::human::{self, Painter};
 use crate::output::json::{self, Json};
-use crate::output::table;
 
 pub fn run(as_json: bool) -> Result<(), CliError> {
     let path = global_config_path(
@@ -25,7 +23,7 @@ pub fn run(as_json: bool) -> Result<(), CliError> {
     } else {
         human(&brains)
     };
-    let _ = io::stdout().write_all(text.as_bytes());
+    human::print(&text);
     Ok(())
 }
 
@@ -69,7 +67,8 @@ fn human(brains: &[BrainListing]) -> String {
             ]
         })
         .collect();
-    table::render(
+    human::table(
+        Painter::stdout(),
         "Registered Brains",
         &["Name", "Path", "Description", "Companions"],
         &rows,
