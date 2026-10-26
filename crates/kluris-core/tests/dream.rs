@@ -878,3 +878,26 @@ fn a_skipped_path_is_never_written() {
         }
     }
 }
+
+/// `create`'s regeneration writes over its own scaffold map even when it does
+/// not parse (v2's product type writes `description: Sub-folder per project:
+/// ...` unquoted), as v2's `_run_dream_on_brain` does; dream keeps such a map.
+#[test]
+fn create_regenerates_its_own_unparseable_scaffold_map() {
+    let map = "---\nauto_generated: true\nparent: ../brain.md\ndescription: Sub-folder per project: branches\nupdated: 2026-10-26\n---\n# Projects\n\nSub-folder per project: branches\n";
+    let b = Brain::new(&[("glossary.md", GLOSSARY), ("projects/map.md", map)]);
+    let mut store = LocalGitStore::open(&b.root);
+    let skipped = kluris_core::dream::regenerate_maps(
+        &mut store,
+        &DreamOptions {
+            name: "demo",
+            description: "A demo brain",
+            today: today(),
+        },
+    );
+    assert_eq!(skipped, []);
+    assert_eq!(
+        b.text("projects/map.md"),
+        "---\nauto_generated: true\ndescription: 'Sub-folder per project: branches'\nparent: ../brain.md\nsiblings: []\nupdated: '2026-10-26'\n---\n\n# Projects\n\nSub-folder per project: branches\n\nup [brain.md](../brain.md)\n\n## Contents\n\n(empty)\n"
+    );
+}

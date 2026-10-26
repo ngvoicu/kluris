@@ -35,7 +35,7 @@ import pytest
 from harness import IS_WINDOWS, PARITY_DIR, Sandbox, normalize, oracle_kluris, snapshot_tree
 from runs import clear_runs, parse_exact, same_words, write_config
 from test_dream import (
-    D2, Step, commit, compare_trees, frozen, healthy_brain, init, is_pruned, neuron, register, rich_brain, run_steps,
+    D2, Step, assert_v2_traceback, commit, compare_trees, frozen, healthy_brain, init, is_pruned, neuron, register, rich_brain, run_steps,
     write, _registered_brains, changed,
 )
 
@@ -514,3 +514,36 @@ def test_registered_brains(tmp_path, oracle):
             failures.append(f"{name}: {exc}")
     print("\n" + "\n".join(report))
     assert not failures, "\n".join(failures)
+
+
+# --- write safety (review T-103) -------------------------------------------------
+
+
+def test_preflight_skipped_files_are_reported(sandbox):
+    """PAR-065 (with PAR-046): v2's preflight raises on a neuron it cannot
+    read; v3 leaves it alone, writes the page and reports it as dream does:
+    ``skipped`` after v2's keys in its brain's entry, and dream's stderr line.
+    A brain with nothing skipped keeps v2's shape."""
+    calm = healthy_brain(sandbox)
+    write(calm, {"projects/bad.md": "---\ntitle: Foo: bar\n---\n\n# Bad\n"})
+    commit(sandbox, calm, "bad", D2)
+    rich = mri_brain(sandbox)
+    register(sandbox, [calm, rich])
+    before = frozen(sandbox)
+    out = run_steps(sandbox, ["brains/calm", "brains/rich"], [Step(["mri", "--json", "--brain", "all"]),
+                                                              Step(["mri", "--brain", "all"])])
+    assert_v2_traceback(out["v2"][0], "line 2, column 11")
+    r3 = out["v3"][0].result
+    assert r3.code == 0, r3.stderr
+    assert r3.tree["brains/calm/projects/bad.md"] == before["brains/calm/projects/bad.md"]
+    doc = parse_exact(r3.stdout, sandbox.root, "v3")
+    calm_entry, rich_entry = doc["brains"]
+    assert list(calm_entry) == ["name", "output_path", "preflight_fixes", "nodes", "edges", "skipped"]
+    assert [list(s) for s in calm_entry["skipped"]] == [["brain", "file", "error"]]
+    assert calm_entry["skipped"][0]["file"] == "projects/bad.md"
+    assert calm_entry["skipped"][0]["error"].startswith("invalid frontmatter: ")
+    assert list(rich_entry) == ["name", "output_path", "preflight_fixes", "nodes", "edges"]
+    text = out["v3"][1].result
+    assert text.code == 0
+    assert text.stderr.startswith("Skipped calm: projects/bad.md: invalid frontmatter: "), text.stderr
+    assert len(text.stderr.splitlines()) == 1

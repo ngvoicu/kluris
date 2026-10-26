@@ -31,6 +31,10 @@ pub(crate) struct Workspace<'a, S: BrainStore> {
     pending: BTreeMap<String, String>,
     /// Files left alone, with why.
     pub(crate) skipped: BTreeMap<String, String>,
+    /// Every structure file was written by this run (a new brain's
+    /// scaffold), so one that does not parse is regenerated, as v2 does,
+    /// rather than kept.
+    pub(crate) own_structure: bool,
 }
 
 fn is_yaml(rel: &str) -> bool {
@@ -82,6 +86,15 @@ impl<'a, S: BrainStore> Workspace<'a, S> {
             store,
             pending: BTreeMap::new(),
             skipped: BTreeMap::new(),
+            own_structure: false,
+        }
+    }
+
+    /// A workspace over a brain `create` has just scaffolded.
+    pub(crate) fn for_new_brain(store: &'a S) -> Workspace<'a, S> {
+        Workspace {
+            own_structure: true,
+            ..Workspace::new(store)
         }
     }
 

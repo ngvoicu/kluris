@@ -230,6 +230,7 @@ def run_steps(sb: Sandbox, brains: list[str], steps: list[Step], env: dict | Non
                     for rel in brains:
                         commit(sb, sb.work / rel, "between dreams", step.commit)
                     continue
+                prev = snapshot_tree(sb.work)
                 proc = subprocess.run(
                     [*_exe(side), *step.args], env=_env(sb, env or {}), cwd=str(sb.work),
                     stdin=subprocess.DEVNULL, capture_output=True, timeout=300,
@@ -239,11 +240,28 @@ def run_steps(sb: Sandbox, brains: list[str], steps: list[Step], env: dict | Non
                     proc.returncode, _decode(proc.stdout, f"stdout of `{what}`"),
                     _decode(proc.stderr, f"stderr of `{what}`"), snapshot_tree(sb.work),
                 )
+                if side == "v3":
+                    assert_skipped_untouched(result, prev, brains)
                 got.append(Outcome(result, porcelain(sb, brains)))
             outcomes[side] = got
         finally:
             sb.stash(side)
     return outcomes
+
+
+def assert_skipped_untouched(result: Result, prev: dict[str, bytes], brains: list[str]) -> None:
+    """The write-safety invariant, over every scenario (decision 2026-10-26,
+    review T-103): a file v3 reports in ``skipped`` keeps its bytes."""
+    try:
+        doc = json.loads(result.stdout)
+    except ValueError:
+        return
+    items = [s for b in doc.get("brains", [doc]) if isinstance(b, dict) for s in b.get("skipped", [])]
+    for item in items:
+        for rel in brains:
+            if Path(rel).name == item["brain"]:
+                key = f"{rel}/{item['file']}"
+                assert result.tree.get(key) == prev.get(key), f"v3 changed skipped {key}"
 
 
 # --- comparing ----------------------------------------------------------------
@@ -830,3 +848,85 @@ def test_registered_brains(tmp_path, oracle):
                       f"{len(differ)} differ between them: {differ}")
     print("\n" + "\n".join(report))
     assert not failures, "\n".join(failures)
+
+
+# --- write safety (review T-103) -------------------------------------------------
+
+
+MALFORMED_MAP = "---\nrelated: [\n---\n\n# Projects\n\nKeep this.\n"
+
+
+@pytest.mark.parametrize("rel,bad,error", [
+    ("projects/map.md", MALFORMED_MAP, "line 3, column 1"),
+    ("brain.md", "---\nupdated: [\n---\n\n# calm\n\nMy own words.\n", "line 3, column 1"),
+    ("projects/map.md", b"---\nupdated: '2026-01-01'\n---\n\n# Caf\xe9\n", "UnicodeDecodeError"),
+], ids=["map-invalid-yaml", "brain-md-invalid-yaml", "map-not-utf8"])
+def test_unreadable_structure_file_is_kept(sandbox, rel, bad, error):
+    """PAR-038: v2 ends in a traceback on a ``map.md``/``brain.md`` it cannot
+    read; v3 keeps the file byte for byte, reports it, and writes the rest."""
+    resilience_brain(sandbox, {rel: bad, "projects/fix-me.md": NO_PARENT})
+    register(sandbox, [sandbox.work / "brains" / "calm"])
+    before = frozen(sandbox)
+    v2, v3 = both(sandbox)
+    assert_v2_traceback(v2, error)
+    assert v2.result.tree[f"brains/calm/{rel}"] == before[f"brains/calm/{rel}"]
+    doc = parse_exact(v3.result.stdout, sandbox.root, "v3")
+    assert v3.result.code == 1 and doc["healthy"] is False
+    assert rel in [s["file"] for s in doc["skipped"]]
+    assert v3.result.tree[f"brains/calm/{rel}"] == before[f"brains/calm/{rel}"]
+    assert b"parent: ./map.md" in v3.result.tree["brains/calm/projects/fix-me.md"]
+
+
+NOT_UTF8_YAML = b"#---\n# parent: ./map.md\n# title: Spec\n# updated: '2026-01-01'\n#---\nopenapi: 3.0.0\ninfo: invalid-\xff-byte\n"
+
+
+def test_yaml_neuron_that_is_not_utf8(sandbox):
+    """PAR-038: v2 refreshes the date of a YAML neuron that is not UTF-8 and
+    writes U+FFFD over the bytes it could not decode (exit 0, healthy); v3
+    leaves the file byte for byte and reports it."""
+    resilience_brain(sandbox, {"projects/spec.yml": NOT_UTF8_YAML})
+    register(sandbox, [sandbox.work / "brains" / "calm"])
+    v2, v3 = both(sandbox)
+    assert v2.result.code == 0
+    assert "\ufffd".encode() in v2.result.tree["brains/calm/projects/spec.yml"]
+    assert v3.result.tree["brains/calm/projects/spec.yml"] == NOT_UTF8_YAML
+    doc = parse_exact(v3.result.stdout, sandbox.root, "v3")
+    assert v3.result.code == 1 and doc["healthy"] is False
+    assert doc["skipped"] == [{"brain": "calm", "file": "projects/spec.yml", "error": "the file is not valid UTF-8"}]
+    assert doc["dates_updated"] == 0
+
+
+@pytest.mark.skipif(IS_WINDOWS, reason="RLIMIT_FSIZE is POSIX")
+def test_a_write_cut_short_keeps_the_original(sandbox):
+    """PAR-066: under a 1,024-byte file-size limit, v2's in-place write
+    truncates the neuron; v3 leaves it whole and reports it."""
+    import resource
+    import signal
+
+    large = NO_PARENT + "Lorem ipsum dolor sit amet.\n" * 800
+    resilience_brain(sandbox, {"projects/large.md": large})
+    register(sandbox, [sandbox.work / "brains" / "calm"])
+
+    def limit() -> None:
+        signal.signal(signal.SIGXFSZ, signal.SIG_IGN)
+        resource.setrlimit(resource.RLIMIT_FSIZE, (1024, 1024))
+
+    trees, outs = {}, {}
+    for side in ("v2", "v3"):
+        sandbox.checkout()
+        try:
+            proc = subprocess.run([*_exe(side), "dream", "--json"], env=_env(sandbox, {}), cwd=str(sandbox.work),
+                                  stdin=subprocess.DEVNULL, capture_output=True, timeout=300, preexec_fn=limit)
+            outs[side] = proc
+            trees[side] = snapshot_tree(sandbox.work)
+        finally:
+            sandbox.stash(side)
+    key = "brains/calm/projects/large.md"
+    assert outs["v2"].returncode == 1
+    assert len(trees["v2"][key]) == 1024  # v2 damage
+    assert trees["v3"][key] == large.encode()
+    doc = json.loads(outs["v3"].stdout)
+    assert outs["v3"].returncode == 1
+    item = next(s for s in doc["skipped"] if s["file"] == "projects/large.md")
+    assert item["error"].startswith("cannot write the file: ")
+    assert not [rel for rel in trees["v3"] if "kluris-tmp" in rel]

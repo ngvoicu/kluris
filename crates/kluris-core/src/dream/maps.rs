@@ -9,7 +9,9 @@
 use super::workspace::{Read, Workspace};
 use crate::brain::store::{BrainStore, DirEntry};
 use crate::brain::walk::is_pruned_dir;
-use crate::frontmatter::{has_yaml_opt_in_head, py_splitlines, universal_newlines};
+use crate::frontmatter::{
+    Frontmatter, has_yaml_opt_in_head, line_ending, py_splitlines, universal_newlines,
+};
 use crate::pycase;
 use crate::yaml::{Date, Map, Value, date_iso, is_py_space};
 
@@ -154,10 +156,20 @@ fn write_if_changed<S: BrainStore>(
     today: Date,
 ) {
     let old = if ws.exists(rel) {
-        // A structure file that does not read holds what a person wrote
-        // there: it is kept as it is and reported, never regenerated.
         match ws.read(rel, Read::Lenient) {
             Ok(fm) => Some(fm),
+            // `create`'s own scaffold map can itself not parse (v2 writes a
+            // lobe description with `: ` unquoted); v2 regenerates it, and so
+            // does Kluris 3, keeping its line endings.
+            Err(_) if ws.own_structure => ws.text(rel).map(|text| Frontmatter {
+                meta: Map::new(),
+                body: String::new(),
+                line_ending: line_ending(&text),
+                had_bom: text.starts_with('\u{feff}'),
+                body_line: 0,
+            }),
+            // Anywhere else a structure file that does not read holds what a
+            // person wrote there: it is kept as it is and reported.
             Err(error) => {
                 ws.skip(rel, error);
                 return;

@@ -280,11 +280,12 @@ fn apply_unless_skipped<S: BrainStore>(
 
 /// v2's `_run_dream_on_brain`, what `create` runs on a new brain: every
 /// directory's `map.md`, twice, then `brain.md` (steps 5 and 6 alone, no
-/// dates or link fixes), as one change set. Returns the files it could not
+/// dates or link fixes), as one change set. Every structure file there is
+/// the scaffold's own, so one that does not parse is regenerated as in v2. Returns the files it could not
 /// read or write.
 pub fn regenerate_maps<S: BrainStore>(store: &mut S, options: &DreamOptions) -> Vec<SkippedFile> {
     let order = maps::map_order(store.dirs());
-    let mut ws = workspace::Workspace::new(&*store);
+    let mut ws = workspace::Workspace::for_new_brain(&*store);
     maps::generate_maps(&mut ws, &order, options.today);
     maps::generate_brain_md(&mut ws, options.name, options.description, options.today);
     let (changes, mut skipped) = ws.into_change_set();

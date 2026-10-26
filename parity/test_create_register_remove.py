@@ -1030,3 +1030,41 @@ def test_root_help_lists_the_new_commands(sandbox: Sandbox):
         assert r["v2"].code == r["v3"].code == 0
         for word in words:
             assert word in r["v2"].stdout and word in r["v3"].stdout, (command, word)
+
+
+# --- write safety (review T-103) -------------------------------------------------
+
+
+@pytest.mark.skipif(IS_WINDOWS, reason="POSIX directory modes")
+def test_create_into_a_directory_that_cannot_be_listed(sandbox: Sandbox):
+    """PAR-067: v2 stops with a ``PermissionError`` traceback when it cannot
+    list an existing target; v3 refuses with a clean error. Neither writes."""
+    demo = sandbox.work / "brains" / "demo"
+    demo.mkdir(parents=True)
+    (demo / "README.md").write_text("my own readme\n", encoding="utf-8")
+    sandbox.freeze()
+    results = {}
+    for side in ("v2", "v3"):
+        sandbox.checkout()
+        target = sandbox.work / "brains" / "demo"
+        target.chmod(0o300)
+        try:
+            if os.access(target, os.R_OK):
+                pytest.skip("running as root: every directory can be listed")
+            proc = subprocess.run(
+                [*_exe(side), "create", "demo", "--path", "brains", "--type", "blank", "--no-git", "--json"],
+                env=_env(sandbox, {}), cwd=str(sandbox.work), stdin=subprocess.DEVNULL,
+                capture_output=True, timeout=120,
+            )
+        finally:
+            target.chmod(0o755)
+        results[side] = (proc, snapshot_tree(sandbox.work))
+        sandbox.stash(f"{side}-{time.monotonic_ns()}")
+    (p2, t2), (p3, t3) = results["v2"], results["v3"]
+    assert p2.returncode == 1 and p2.stdout == b"" and b"PermissionError" in p2.stderr
+    doc = json.loads(p3.stdout)
+    assert p3.returncode == 1 and doc["ok"] is False
+    assert doc["error"].startswith(str(sandbox.work / "brains" / "demo") + " cannot be listed: ")
+    assert [rel for rel in t3 if rel.startswith("brains/")] == ["brains/demo/README.md"]
+    assert t3["brains/demo/README.md"] == t2["brains/demo/README.md"] == b"my own readme\n"
+    assert not (sandbox.work / "home" / ".kluris" / "config.yml").exists()
