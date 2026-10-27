@@ -30,10 +30,11 @@ this skill's remember/learn intents, `kluris dream{brain_flag_hint_inline}`,
 a `kluris sync{brain_flag_hint_inline}` that reports `merged`,
 or direct file edits the user tells you about.
 
-You do not need to pull the brain: `kluris wake-up` and `kluris search` fetch
-the teammates' pushed changes on their own (at most once a minute) and bring
-the brain up to date when nothing local is in the way. Setting
-`KLURIS_NO_AUTO_SYNC=1` turns this off.
+`kluris wake-up` and `kluris search` read the brain as it is on disk; they
+fetch the teammates' pushes (at most once a minute) without changing any
+file. To bring the teammates' changes in, run `kluris sync{brain_flag_hint_inline} --json`.
+The write flow below does it before every write; run it also when the user
+asks for the team's latest. `KLURIS_NO_AUTO_SYNC=1` turns the fetch off.
 
 If the `kluris` CLI is unavailable, the brain is still a plain filesystem tree
 at `{brain_path}`. Read `brain.md`, `glossary.md`, and each relevant lobe's

@@ -21,7 +21,15 @@ from pathlib import Path
 import pytest
 
 from harness import IS_WINDOWS, PARITY_DIR, Sandbox, normalize, oracle_kluris, run_both
-from runs import assert_wake_up_equal, clear_runs, parse_exact, run_v2_after_pull, same_words, team_brain, write_config
+from runs import (
+    assert_wake_up_equal,
+    clear_runs,
+    fetched_teammates_push,
+    parse_exact,
+    same_words,
+    team_brain,
+    write_config,
+)
 
 WORKSPACE = PARITY_DIR.parent
 FIXTURES = WORKSPACE / "crates" / "kluris-core" / "tests" / "fixtures" / "brains"
@@ -371,17 +379,23 @@ def test_fresh_read_with_nothing_new_is_v2s_output(sandbox):
         clear_runs(sandbox)
 
 
-def test_fresh_read_shows_a_teammates_push(sandbox):
-    # A teammate pushed after the brain was cloned: v3 fast-forwards before
-    # reading, so its output is v2's on a brain pulled by hand, with no key
-    # added, and its brain is that pulled brain.
+def test_fresh_read_fetches_a_teammates_push_and_reads_the_brain_as_it_is(sandbox):
+    # A teammate pushed after the brain was cloned: v3 fetches the push (its
+    # remote-tracking ref moves) and reads the brain as it is on disk, so its
+    # output and its brain are v2's.
     team_brain(sandbox, teammate_pushed=True)
     sandbox.freeze()
-    r = run_both(sandbox, ["wake-up", "--json"])
-    pulled = run_v2_after_pull(sandbox, ["wake-up", "--json"])
-    assert parse_exact(r["v2"].stdout, sandbox.root, "v2")["total_neurons"] == 1
-    assert_wake_up_equal(pulled, r["v3"], sandbox.root)
-    assert r["v3"].stderr == ""
-    assert r["v3"].tree == pulled.tree
-    assert "brains/team/k/zebra.md" in r["v3"].tree
-    assert "brains/team/k/zebra.md" not in r["v2"].tree
+    for args in (["wake-up", "--json"], ["wake-up"]):
+        r = run_both(sandbox, args)
+        if "--json" in args:
+            assert_wake_up_equal(r["v2"], r["v3"], sandbox.root)
+            assert parse_exact(r["v3"].stdout, sandbox.root, "v3")["total_neurons"] == 1
+        else:
+            assert r["v3"].code == r["v2"].code == 0
+            same_words(r["v2"].stdout, r["v3"].stdout, sandbox.root)
+        assert r["v3"].stderr == ""
+        assert r["v3"].tree == r["v2"].tree
+        assert "brains/team/k/zebra.md" not in r["v3"].tree
+        assert fetched_teammates_push(sandbox, "v3")
+        assert not fetched_teammates_push(sandbox, "v2")
+        clear_runs(sandbox)

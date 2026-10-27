@@ -1,5 +1,5 @@
 //! Git auto-sync (SPEC Phase 7). `commit` commits approved paths with the
-//! maps they change; `fresh` brings a brain up to date before `wake-up` and
+//! maps they change; `fresh` fetches a brain's upstream before `wake-up` and
 //! `search` read it; [`sync`] fetches, merges and pushes a brain.
 //!
 //! [`sync`], for one brain at the root of its own git repo:

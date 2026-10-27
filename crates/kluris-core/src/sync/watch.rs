@@ -37,7 +37,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use super::SyncReport;
-use super::fresh::{FreshError, IN_PROGRESS, prompt_env};
+use super::fresh::{FreshError, prompt_env};
 use super::plumbing::SyncGit;
 use crate::git::{Git, Plumbing, SystemGit};
 
@@ -52,6 +52,17 @@ pub const RETRY_FIRST: Duration = Duration::from_secs(60);
 
 /// The longest wait between two of those syncs (the wait doubles).
 pub const RETRY_MAX: Duration = Duration::from_secs(600);
+
+/// The markers of an operation in progress, relative to the git directory:
+/// git's, and an open `kluris sync` conflict waiting for `kluris resolve`.
+const IN_PROGRESS: [&str; 6] = [
+    "MERGE_HEAD",
+    "rebase-merge",
+    "rebase-apply",
+    "CHERRY_PICK_HEAD",
+    "REVERT_HEAD",
+    super::PENDING,
+];
 
 /// The time a probe of one brain may take.
 pub const PROBE_TIME_LIMIT: Duration = Duration::from_secs(15);

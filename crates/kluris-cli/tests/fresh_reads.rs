@@ -1,7 +1,8 @@
-//! Fresh reads: before reading, `wake-up` and `search` fetch the brain and
-//! fast-forward its branch, at most once a minute, within 3 s, never failing
-//! the read and never changing anything but a clean fast-forward (SPEC Phase
-//! 7, TEST-K3-49). Real git: a bare remote and two clones in a temp dir.
+//! Fresh reads: before reading, `wake-up` and `search` fetch the brain's
+//! upstream, at most once a minute, within 3 s, and then read the brain as
+//! it is on disk: HEAD, the index and the work tree never change, and the
+//! read never fails (SPEC Phase 7, TEST-K3-49). Real git: a bare remote and
+//! two clones in a temp dir.
 
 use std::io::{Read, Write};
 use std::net::TcpListener;
@@ -340,60 +341,499 @@ fn auth_server() -> u16 {
     port
 }
 
-#[test]
-fn a_teammates_push_becomes_visible_to_wake_up_and_search() {
-    let w = World::new();
-    assert_eq!(w.wake_up()["total_neurons"], 1);
-    assert!(w.stamp().is_file(), "the fetch is stamped");
+impl World {
+    /// My clone's view of the remote branch (moved by a fetch).
+    fn tracked_remote(&self) -> String {
+        self.git(&self.mine(), &["rev-parse", "refs/remotes/origin/main"])
+    }
 
-    w.teammate_pushes("zebra", "zebras");
-    fs::remove_file(w.stamp()).unwrap();
-    let doc = w.wake_up();
-    assert_eq!(doc["total_neurons"], 2);
-    assert_eq!(w.head(), w.remote_head());
+    /// The teammate rewrites `k/jwt.md` and pushes.
+    fn teammate_changes_jwt(&self) {
+        let t = self.teammate();
+        self.write(
+            &t,
+            "k/jwt.md",
+            "---\nparent: map.md\nupdated: 2026-03-02\n---\n# JWT tokens\n\nWe sign and rotate every JWT.\n",
+        );
+        self.commit(&t, "rotate");
+        self.git(&t, &["push", "-q"]);
+    }
 
-    w.teammate_pushes("okapi", "okapis");
-    fs::remove_file(w.stamp()).unwrap();
-    assert_eq!(w.search_files("okapis"), ["k/okapi.md"]);
-    assert_eq!(w.head(), w.remote_head());
+    /// HEAD, the raw index, `index.lock` and every path of my clone, read
+    /// without running anything that could write the index.
+    fn exact(&self) -> Exact {
+        let mut paths = Vec::new();
+        let mut stack = vec![self.mine()];
+        while let Some(dir) = stack.pop() {
+            for entry in fs::read_dir(&dir).unwrap() {
+                let path = entry.unwrap().path();
+                if path.file_name().is_some_and(|n| n == ".git") {
+                    continue;
+                }
+                let meta = fs::symlink_metadata(&path).unwrap();
+                let content = if meta.file_type().is_symlink() {
+                    let target = fs::read_link(&path).unwrap();
+                    format!("<link {}>", target.display()).into_bytes()
+                } else if meta.is_dir() {
+                    stack.push(path.clone());
+                    b"<dir>".to_vec()
+                } else {
+                    fs::read(&path).unwrap()
+                };
+                paths.push((path, permission_bits(&meta), content));
+            }
+        }
+        paths.sort();
+        let git_dir = self.mine().join(".git");
+        Exact {
+            head: self.head(),
+            index: sha256_hex(&fs::read(git_dir.join("index")).unwrap()),
+            index_lock: fs::symlink_metadata(git_dir.join("index.lock")).is_ok(),
+            paths,
+        }
+    }
+
+    /// With the teammate's push waiting upstream, `wake-up` and `search`
+    /// (JSON and text) each fetch it (the remote-tracking ref moves to the
+    /// teammate's commit), print what they print for the brain as it is on
+    /// disk, and leave HEAD, the index's bytes, `index.lock` and every path
+    /// of my clone (bytes, permission bits, link targets) exactly as they were.
+    fn assert_fetched_and_left_as_it_was(&self) {
+        let before = self.exact();
+        let behind = self.tracked_remote();
+        assert_ne!(behind, self.remote_head(), "no push waits upstream");
+        for args in [
+            &["wake-up", "--json"][..],
+            &["search", "jwt", "--json"],
+            &["wake-up"],
+            &["search", "jwt"],
+        ] {
+            self.git(
+                &self.mine(),
+                &["update-ref", "refs/remotes/origin/main", &behind],
+            );
+            let _ = fs::remove_file(self.stamp());
+            let out = self.run(args);
+            assert_eq!(
+                self.tracked_remote(),
+                self.remote_head(),
+                "{args:?} did not fetch"
+            );
+            assert_eq!(
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&self.baseline(args).stdout),
+                "{args:?}"
+            );
+        }
+        assert_eq!(self.exact(), before);
+    }
+}
+
+/// What a read must leave exactly as it was.
+#[derive(Debug, PartialEq, Eq)]
+struct Exact {
+    head: String,
+    /// The SHA-256 of `.git/index`'s raw bytes.
+    index: String,
+    index_lock: bool,
+    /// Each path outside `.git`: its permission bits, and its bytes, link
+    /// target or `<dir>`.
+    paths: Vec<(PathBuf, u32, Vec<u8>)>,
+}
+
+/// The whole mode on Unix; read-only or not elsewhere.
+#[cfg(unix)]
+fn permission_bits(meta: &fs::Metadata) -> u32 {
+    use std::os::unix::fs::PermissionsExt;
+    meta.permissions().mode()
+}
+
+#[cfg(not(unix))]
+fn permission_bits(meta: &fs::Metadata) -> u32 {
+    u32::from(meta.permissions().readonly())
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(bytes)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
 }
 
 #[test]
-fn a_fast_forward_prints_nothing_more() {
+fn a_teammates_push_is_read_after_kluris_sync() {
     let w = World::new();
     w.teammate_pushes("zebra", "zebras");
-    let out = w.run(&["wake-up"]);
-    let after = w.baseline(&["wake-up"]);
+    let head = w.head();
+    assert_eq!(w.wake_up()["total_neurons"], 1, "the brain as it is");
+    assert!(w.search_files("zebras").is_empty());
+    assert_eq!(w.tracked_remote(), w.remote_head(), "fetched");
+    assert_eq!(w.head(), head, "not pulled");
+
+    let out = w
+        .kluris()
+        .args(["sync", "--brain", "team", "--json"])
+        .output()
+        .unwrap();
     assert_eq!(
-        out.stdout, after.stdout,
-        "text output as for the local brain"
+        out.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
     );
-    w.teammate_pushes("okapi", "okapis");
-    fs::remove_file(w.stamp()).unwrap();
-    let out = w.run(&["search", "okapis"]);
-    let after = w.baseline(&["search", "okapis"]);
-    assert_eq!(out.stdout, after.stdout);
+    let doc: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(doc["brains"][0]["merged"], true, "{doc}");
+    assert_eq!(w.head(), w.remote_head());
+    assert_eq!(w.wake_up()["total_neurons"], 2);
+    assert_eq!(w.search_files("zebras"), ["k/zebra.md"]);
+}
+
+#[test]
+fn a_clean_tree_is_fetched_and_left_as_it_was() {
+    let w = World::new();
+    w.teammate_pushes("zebra", "zebras");
+    w.assert_fetched_and_left_as_it_was();
+}
+
+#[test]
+fn a_new_untracked_file_at_an_incoming_path_is_kept() {
+    let w = World::new();
+    w.teammate_pushes("zebra", "zebras");
+    w.write(&w.mine(), "k/zebra.md", "# my own zebra draft\n");
+    w.assert_fetched_and_left_as_it_was();
+}
+
+#[test]
+fn a_new_ignored_file_at_an_incoming_path_is_kept() {
+    let w = World::new();
+    w.teammate_pushes("zebra", "zebras");
+    let m = w.mine();
+    fs::write(m.join(".git").join("info").join("exclude"), "k/zebra.md\n").unwrap();
+    w.write(&m, "k/zebra.md", "# my ignored zebra draft\n");
+    w.git(&m, &["check-ignore", "-q", "k/zebra.md"]);
+    w.assert_fetched_and_left_as_it_was();
+}
+
+#[test]
+fn an_uncommitted_edit_to_an_incoming_file_is_kept() {
+    let w = World::new();
+    w.teammate_changes_jwt();
+    w.write(
+        &w.mine(),
+        "k/jwt.md",
+        "---\nparent: map.md\nupdated: 2026-04-01\n---\n# JWT mine\n\nmy jwt edit\n",
+    );
+    w.assert_fetched_and_left_as_it_was();
+}
+
+#[test]
+fn a_live_git_holding_index_lock_keeps_it_and_finishes() {
+    let w = World::new();
+    w.teammate_pushes("zebra", "zebras");
+    let m = w.mine();
+    let note = w.root().join("held.md");
+    fs::write(&note, "# held\n").unwrap();
+    let blob = w.git(&m, &["hash-object", "-w", &note.display().to_string()]);
+    let mut cmd = std::process::Command::new("git");
+    cmd.args(["update-index", "--index-info"])
+        .current_dir(&m)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    w.hermetic(&mut cmd);
+    let mut writer = cmd.spawn().unwrap();
+    let lock = m.join(".git").join("index.lock");
+    let until = Instant::now() + Duration::from_secs(10);
+    while !lock.exists() && Instant::now() < until {
+        thread::sleep(Duration::from_millis(20));
+    }
+    assert!(lock.exists(), "the writer never took index.lock");
+
+    w.assert_fetched_and_left_as_it_was();
+
+    assert!(lock.exists(), "the live writer's lock is gone");
+    let mut stdin = writer.stdin.take().unwrap();
+    stdin
+        .write_all(format!("100644 {blob}\tk/held.md\n").as_bytes())
+        .unwrap();
+    drop(stdin);
+    let out = writer.wait_with_output().unwrap();
+    assert!(
+        out.status.success(),
+        "the writer failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(!lock.exists());
+    assert_eq!(w.git(&m, &["ls-files", "k/held.md"]), "k/held.md");
+}
+
+#[test]
+fn an_incoming_case_alias_of_a_tracked_file_is_kept() {
+    // On a case-insensitive file system (macOS, Windows) the incoming
+    // `notes/A.md` is the same file as the tracked `notes/a.md`.
+    let w = World::new();
+    let t = w.teammate();
+    let m = w.mine();
+    w.write(&t, "notes/a.md", "# a\n\nlower case\n");
+    w.commit(&t, "a");
+    w.git(&t, &["push", "-q"]);
+    w.git(&m, &["pull", "-q", "--ff-only"]);
+    // A case-insensitive work tree cannot hold both: the teammate's commit
+    // is made with plumbing.
+    let upper = w.root().join("upper.md");
+    fs::write(&upper, "# A\n\nupper case, a different file\n").unwrap();
+    let blob = w.git(&t, &["hash-object", "-w", &upper.display().to_string()]);
+    w.git(
+        &t,
+        &[
+            "update-index",
+            "--add",
+            "--cacheinfo",
+            &format!("100644,{blob},notes/A.md"),
+        ],
+    );
+    w.git(&t, &["commit", "-q", "-m", "A"]);
+    w.git(&t, &["push", "-q"]);
+    w.assert_fetched_and_left_as_it_was();
+}
+
+#[test]
+fn an_lf_file_under_core_autocrlf_is_kept() {
+    let w = World::new();
+    let m = w.mine();
+    w.teammate_changes_jwt();
+    w.git(&m, &["config", "core.autocrlf", "true"]);
+    assert!(!fs::read(m.join("k/jwt.md")).unwrap().contains(&b'\r'));
+    w.assert_fetched_and_left_as_it_was();
+}
+
+#[test]
+fn a_skip_worktree_entry_is_kept() {
+    let w = World::new();
+    let m = w.mine();
+    w.teammate_changes_jwt();
+    w.git(&m, &["update-index", "--skip-worktree", "k/jwt.md"]);
+    w.write(&m, "k/jwt.md", "# my jwt, hidden from git\n");
+    w.assert_fetched_and_left_as_it_was();
+}
+
+#[test]
+fn an_assume_unchanged_entry_is_kept() {
+    let w = World::new();
+    let m = w.mine();
+    w.teammate_changes_jwt();
+    w.git(&m, &["update-index", "--assume-unchanged", "k/jwt.md"]);
+    w.assert_fetched_and_left_as_it_was();
+}
+
+#[cfg(unix)]
+#[test]
+fn an_owner_only_file_is_kept() {
+    use std::os::unix::fs::PermissionsExt;
+    let w = World::new();
+    w.teammate_changes_jwt();
+    fs::set_permissions(w.mine().join("k/jwt.md"), fs::Permissions::from_mode(0o600)).unwrap();
+    w.assert_fetched_and_left_as_it_was();
+}
+
+#[cfg(unix)]
+#[test]
+fn an_executable_file_under_core_filemode_false_is_kept() {
+    let w = World::new();
+    let m = w.mine();
+    w.teammate_changes_jwt();
+    w.git(&m, &["config", "core.filemode", "false"]);
+    make_executable(&m.join("k/jwt.md"));
+    w.assert_fetched_and_left_as_it_was();
+}
+
+/// Every `*.lock` file under `dir`.
+#[cfg(unix)]
+fn lock_files(dir: &Path) -> Vec<PathBuf> {
+    let mut found = Vec::new();
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        for entry in fs::read_dir(&dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                stack.push(path);
+            } else if path.extension().is_some_and(|e| e == "lock") {
+                found.push(path);
+            }
+        }
+    }
+    found
+}
+
+/// Unix: on Windows the fetch's job is terminated, which gives git no
+/// chance to remove its locks (PAR-073).
+#[cfg(unix)]
+#[test]
+fn a_fetch_stopped_while_it_holds_a_ref_lock_leaves_no_lock() {
+    // A `reference-transaction` hook that sleeps once the refs are locked
+    // (`prepared`) keeps the fetch past the 3 s.
+    let w = World::new();
+    w.teammate_pushes("zebra", "zebras");
+    let m = w.mine();
+    let prepared = w.root().join("prepared");
+    let hook = m.join(".git").join("hooks").join("reference-transaction");
+    fs::write(
+        &hook,
+        format!(
+            "#!/bin/sh\nif [ \"$1\" = prepared ]; then\n  touch '{}'\n  sleep 30\nfi\n",
+            prepared.display().to_string().replace('\\', "/")
+        ),
+    )
+    .unwrap();
+    make_executable(&hook);
+    let started = Instant::now();
+    w.run(&["wake-up", "--json"]);
+    assert!(started.elapsed() < Duration::from_secs(6));
+    assert!(
+        prepared.exists(),
+        "the fetch never locked a ref: the test proves nothing"
+    );
+    fs::remove_file(&hook).unwrap();
+    assert_eq!(lock_files(&m.join(".git")), Vec::<PathBuf>::new());
+    // The next fetch and sync work.
+    w.git(&m, &["fetch", "-q"]);
+    assert_eq!(w.tracked_remote(), w.remote_head());
+    let out = w
+        .kluris()
+        .args(["sync", "--brain", "team", "--json"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(0));
+    assert_eq!(w.head(), w.remote_head());
+}
+
+#[cfg(unix)]
+#[test]
+fn every_git_a_fresh_read_runs_has_optional_locks_off() {
+    let w = World::new();
+    w.teammate_pushes("zebra", "zebras");
+    let bin = w.root().join("bin");
+    fs::create_dir_all(&bin).unwrap();
+    let log = w.root().join("git.log");
+    let git = bin.join("git");
+    fs::write(
+        &git,
+        format!(
+            "#!/bin/sh\nprintf '%s|%s\\n' \"${{GIT_OPTIONAL_LOCKS-unset}}\" \"$*\" >> '{}'\nexec '{}' \"$@\"\n",
+            log.display(),
+            real_git()
+        ),
+    )
+    .unwrap();
+    make_executable(&git);
+    let path = std::env::join_paths(std::iter::once(bin).chain(std::env::split_paths(
+        &std::env::var_os("PATH").unwrap_or_default(),
+    )))
+    .unwrap();
+    for args in [&["wake-up", "--json"][..], &["search", "jwt", "--json"]] {
+        let _ = fs::remove_file(w.stamp());
+        let out = w.kluris().args(args).env("PATH", &path).output().unwrap();
+        assert_eq!(out.status.code(), Some(0));
+    }
+    assert_eq!(w.tracked_remote(), w.remote_head(), "fetched");
+    let text = fs::read_to_string(&log).unwrap();
+    // The fresh read's own commands (what else wake-up and search run is
+    // not this step's).
+    let fresh: Vec<&str> = text
+        .lines()
+        .filter(|line| {
+            [
+                "--is-inside-work-tree",
+                "symbolic-ref",
+                "for-each-ref",
+                "core.sshCommand",
+                "fetch",
+            ]
+            .iter()
+            .any(|word| line.contains(word))
+        })
+        .collect();
+    assert!(fresh.iter().any(|l| l.contains("fetch")), "{text}");
+    assert!(fresh.len() >= 10, "{text}");
+    for line in fresh {
+        assert!(line.starts_with("0|"), "{line}\n{text}");
+    }
+}
+
+#[cfg(unix)]
+fn real_git() -> String {
+    let out = std::process::Command::new("sh")
+        .args(["-c", "command -v git"])
+        .output()
+        .unwrap();
+    let real = String::from_utf8(out.stdout).unwrap().trim().to_string();
+    assert!(!real.is_empty());
+    real
 }
 
 #[test]
 fn the_brain_is_fetched_at_most_once_a_minute() {
     let w = World::new();
     w.wake_up();
+    let seen = w.tracked_remote();
     w.teammate_pushes("zebra", "zebras");
-    assert_eq!(w.wake_up()["total_neurons"], 1, "fetched seconds ago");
-    assert!(w.search_files("zebras").is_empty());
+    w.wake_up();
+    assert_eq!(w.tracked_remote(), seen, "fetched seconds ago");
+    w.search_files("zebras");
+    assert_eq!(w.tracked_remote(), seen);
     // Well inside the minute: kluris's clock runs a little after the test's.
     w.set_stamp_age(50);
-    assert_eq!(w.wake_up()["total_neurons"], 1);
+    w.wake_up();
+    assert_eq!(w.tracked_remote(), seen);
     w.set_stamp_age(61);
-    assert_eq!(w.wake_up()["total_neurons"], 2);
+    w.wake_up();
+    assert_eq!(w.tracked_remote(), w.remote_head());
     w.teammate_pushes("okapi", "okapis");
     w.set_stamp_age(-3600);
+    w.search_files("okapis");
     assert_eq!(
-        w.search_files("okapis"),
-        ["k/okapi.md"],
+        w.tracked_remote(),
+        w.remote_head(),
         "a stamp from the future does not throttle"
     );
+}
+
+#[test]
+fn turned_off_by_the_variable_and_by_kluris_yml() {
+    let w = World::new();
+    w.teammate_pushes("zebra", "zebras");
+    let behind = w.tracked_remote();
+    let out = w
+        .kluris()
+        .args(["wake-up", "--json"])
+        .env("KLURIS_NO_AUTO_SYNC", "1")
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(0));
+    assert_eq!(w.tracked_remote(), behind);
+    assert!(!w.stamp().exists());
+
+    w.write(
+        &w.mine(),
+        "kluris.yml",
+        "name: team\nsync:\n  auto_fetch: false\n",
+    );
+    w.wake_up();
+    w.search_files("zebras");
+    assert_eq!(w.tracked_remote(), behind);
+    assert!(!w.stamp().exists());
+
+    // Any other value of the variable leaves it on.
+    w.write(&w.mine(), "kluris.yml", "name: team\n");
+    let out = w
+        .kluris()
+        .args(["wake-up", "--json"])
+        .env("KLURIS_NO_AUTO_SYNC", "0")
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(0));
+    assert_eq!(w.tracked_remote(), w.remote_head());
 }
 
 #[test]
@@ -518,36 +958,7 @@ fn a_detached_head_is_left_alone() {
 }
 
 #[test]
-fn a_dirty_tree_is_left_untouched() {
-    let w = World::new();
-    w.teammate_pushes("zebra", "zebras");
-    // An unstaged change to a tracked file.
-    w.write(
-        &w.mine(),
-        "k/jwt.md",
-        "---\nupdated: 2026-04-01\n---\n# JWT mine\n",
-    );
-    w.assert_untouched();
-    // The same change staged.
-    w.git(&w.mine(), &["add", "k/jwt.md"]);
-    w.assert_untouched();
-}
-
-#[test]
-fn an_untracked_file_does_not_block_and_is_kept() {
-    let w = World::new();
-    w.teammate_pushes("zebra", "zebras");
-    w.write(&w.mine(), "k/draft.md", "# my draft about jwt\n");
-    w.wake_up();
-    assert_eq!(w.head(), w.remote_head());
-    assert_eq!(
-        fs::read_to_string(w.mine().join("k/draft.md")).unwrap(),
-        "# my draft about jwt\n"
-    );
-}
-
-#[test]
-fn a_merge_in_progress_is_left_untouched() {
+fn a_merge_in_progress_is_fetched_and_left_untouched() {
     let w = World::new();
     let m = w.mine();
     w.git(&m, &["checkout", "-q", "-b", "side"]);
@@ -571,10 +982,11 @@ fn a_merge_in_progress_is_left_untouched() {
     w.teammate_pushes("zebra", "zebras");
     w.assert_untouched();
     assert!(m.join(".git").join("MERGE_HEAD").is_file());
+    assert_eq!(w.tracked_remote(), w.remote_head(), "fetched");
 }
 
 #[test]
-fn an_open_kluris_conflict_is_left_untouched() {
+fn an_open_kluris_conflict_is_fetched_and_left_untouched() {
     let w = World::new();
     let m = w.mine();
     // `kluris sync` left a conflict for `kluris resolve`.
@@ -584,10 +996,11 @@ fn an_open_kluris_conflict_is_left_untouched() {
     w.teammate_pushes("zebra", "zebras");
     w.assert_untouched();
     assert!(pending.is_file());
+    assert_eq!(w.tracked_remote(), w.remote_head(), "fetched");
 }
 
 #[test]
-fn a_conflicted_merge_is_left_untouched() {
+fn a_conflicted_merge_is_fetched_and_left_untouched() {
     let w = World::new();
     let m = w.mine();
     w.write(
@@ -617,19 +1030,21 @@ fn a_conflicted_merge_is_left_untouched() {
     }
     assert_eq!(w.snapshot(), before);
     assert!(m.join(".git").join("MERGE_HEAD").is_file());
+    assert_eq!(w.tracked_remote(), w.remote_head(), "fetched");
 }
 
 #[test]
-fn a_rebase_in_progress_is_left_untouched() {
+fn a_rebase_in_progress_is_fetched_and_left_untouched() {
     let w = World::new();
     w.teammate_pushes("zebra", "zebras");
     // git's own marker of a stopped rebase (as `git rebase -i` leaves it).
     fs::create_dir_all(w.mine().join(".git").join("rebase-merge")).unwrap();
     w.assert_untouched();
+    assert_eq!(w.tracked_remote(), w.remote_head(), "fetched");
 }
 
 #[test]
-fn a_diverged_branch_is_left_untouched() {
+fn a_diverged_branch_is_fetched_and_left_untouched() {
     let w = World::new();
     w.write(&w.mine(), "k/mine.md", "# mine\n");
     w.commit(&w.mine(), "mine");
@@ -637,43 +1052,7 @@ fn a_diverged_branch_is_left_untouched() {
     w.assert_untouched();
     let merge_base = w.git(&w.mine(), &["merge-base", "HEAD", "origin/main"]);
     assert_ne!(w.head(), merge_base, "still my own commit on top");
-}
-
-#[test]
-fn turned_off_by_the_variable_and_by_kluris_yml() {
-    let w = World::new();
-    w.teammate_pushes("zebra", "zebras");
-    let before = w.head();
-    let out = w
-        .kluris()
-        .args(["wake-up", "--json"])
-        .env("KLURIS_NO_AUTO_SYNC", "1")
-        .output()
-        .unwrap();
-    assert_eq!(out.status.code(), Some(0));
-    assert_eq!(w.head(), before);
-    assert!(!w.stamp().exists());
-
-    w.write(
-        &w.mine(),
-        "kluris.yml",
-        "name: team\nsync:\n  auto_fetch: false\n",
-    );
-    assert_eq!(w.wake_up()["total_neurons"], 1);
-    assert!(w.search_files("zebras").is_empty());
-    assert_eq!(w.head(), before);
-    assert!(!w.stamp().exists());
-
-    // Any other value of the variable leaves it on.
-    w.write(&w.mine(), "kluris.yml", "name: team\n");
-    let out = w
-        .kluris()
-        .args(["wake-up", "--json"])
-        .env("KLURIS_NO_AUTO_SYNC", "0")
-        .output()
-        .unwrap();
-    assert_eq!(out.status.code(), Some(0));
-    assert_eq!(w.head(), w.remote_head());
+    assert_eq!(w.tracked_remote(), w.remote_head(), "fetched");
 }
 
 #[test]
@@ -876,791 +1255,4 @@ fn a_brain_nested_in_a_larger_repo_is_never_moved() {
         !mine.join(".git").join("kluris-sync").exists(),
         "no stamp in the outer repo"
     );
-}
-
-impl World {
-    /// My clone's view of the remote branch (moved by a fetch).
-    fn tracked_remote(&self) -> String {
-        self.git(&self.mine(), &["rev-parse", "refs/remotes/origin/main"])
-    }
-
-    /// Fetched, not moved, nothing half done: HEAD where it was, the remote
-    /// branch up to date, no `index.lock`, no change of any kind in the tree.
-    fn assert_fetched_only(&self, head_before: &str) {
-        assert_eq!(self.head(), head_before, "HEAD moved");
-        assert_eq!(self.tracked_remote(), self.remote_head(), "not fetched");
-        assert!(
-            !self.mine().join(".git").join("index.lock").exists(),
-            "a stale index.lock"
-        );
-        assert_eq!(
-            self.git(
-                &self.mine(),
-                &["status", "--porcelain", "--untracked-files=all"]
-            ),
-            "",
-            "the tree changed"
-        );
-    }
-}
-
-#[test]
-fn a_slow_checkout_filter_never_leaves_a_half_done_fast_forward() {
-    // The review's repro (T-145 probes/slow_checkout): a smudge filter that
-    // takes 6 s on an incoming file. The read must not stop git halfway.
-    let w = World::new();
-    w.git(&w.mine(), &["config", "filter.slow.smudge", "sleep 6; cat"]);
-    w.git(&w.mine(), &["config", "filter.slow.clean", "cat"]);
-    let t = w.teammate();
-    w.write(&t, ".gitattributes", "k/z.md filter=slow\n");
-    w.write(
-        &t,
-        "k/jwt.md",
-        "---\nparent: map.md\nupdated: 2026-03-02\n---\n# REMOTE NEW\n",
-    );
-    w.write(&t, "k/z.md", "# slow checkout\n");
-    w.commit(&t, "new remote files");
-    w.git(&t, &["push", "-q"]);
-    let before = w.head();
-    let jwt = fs::read(w.mine().join("k/jwt.md")).unwrap();
-    let base = w.baseline(&["wake-up", "--json"]);
-    let started = Instant::now();
-    let out = w.run(&["wake-up", "--json"]);
-    assert!(
-        started.elapsed() < Duration::from_secs(4),
-        "{:?}",
-        started.elapsed()
-    );
-    assert_eq!(out.stdout, base.stdout);
-    w.assert_fetched_only(&before);
-    assert_eq!(fs::read(w.mine().join("k/jwt.md")).unwrap(), jwt);
-    assert!(!w.mine().join("k/z.md").exists());
-}
-
-/// Git LFS's driver as `git lfs install` configures it.
-fn configure_lfs_driver(w: &World) {
-    for (key, value) in [
-        ("filter.lfs.clean", "git-lfs clean -- %f"),
-        ("filter.lfs.smudge", "git-lfs smudge -- %f"),
-        ("filter.lfs.process", "git-lfs filter-process"),
-        ("filter.lfs.required", "true"),
-    ] {
-        w.git(&w.mine(), &["config", key, value]);
-    }
-}
-
-/// The teammate commits a `.gitattributes` with `line` and pushes.
-fn teammate_pushes_attributes(w: &World, line: &str) {
-    let t = w.teammate();
-    w.write(&t, ".gitattributes", line);
-    w.commit(&t, "attributes");
-    w.git(&t, &["push", "-q"]);
-}
-
-#[test]
-fn a_configured_driver_no_attribute_names_does_not_block() {
-    // Git for Windows' system config and a global `git lfs install` define
-    // `filter.lfs.*` for every repository; with nothing assigning it, no
-    // filter runs, and the fast-forward goes ahead.
-    let w = World::new();
-    configure_lfs_driver(&w);
-    w.teammate_pushes("zebra", "zebras");
-    assert_eq!(w.wake_up()["total_neurons"], 2);
-    assert_eq!(w.head(), w.remote_head());
-}
-
-#[test]
-fn an_attribute_naming_a_configured_driver_leaves_only_the_fetch() {
-    let w = World::new();
-    configure_lfs_driver(&w);
-    teammate_pushes_attributes(&w, "*.bin filter=lfs diff=lfs merge=lfs -text\n");
-    w.teammate_pushes("zebra", "zebras");
-    let before = w.head();
-    assert!(w.search_files("zebras").is_empty());
-    w.assert_fetched_only(&before);
-}
-
-#[test]
-fn an_attribute_without_a_driver_does_not_block() {
-    // `filter=lfs` with no `filter.lfs.*` anywhere runs nothing.
-    let w = World::new();
-    teammate_pushes_attributes(&w, "*.bin filter=lfs diff=lfs merge=lfs -text\n");
-    w.teammate_pushes("zebra", "zebras");
-    assert_eq!(w.search_files("zebras"), ["k/zebra.md"]);
-    assert_eq!(w.head(), w.remote_head());
-}
-
-#[test]
-fn an_attribute_in_info_attributes_counts_when_its_driver_is_configured() {
-    let w = World::new();
-    let info = w.mine().join(".git").join("info").join("attributes");
-    fs::write(&info, "k/*.md filter=slow\n").unwrap();
-    w.teammate_pushes("zebra", "zebras");
-    let before = w.head();
-    // No driver: nothing would run, so it moves.
-    w.wake_up();
-    assert_eq!(w.head(), w.remote_head());
-    // With the driver configured it would run: only the fetch.
-    w.git(&w.mine(), &["config", "filter.slow.smudge", "cat"]);
-    w.teammate_pushes("okapi", "okapis");
-    fs::remove_file(w.stamp()).unwrap();
-    let moved = w.head();
-    assert_ne!(moved, before);
-    w.wake_up();
-    w.assert_fetched_only(&moved);
-}
-
-#[test]
-fn an_attribute_in_the_core_attributes_file_counts_when_its_driver_is_configured() {
-    let w = World::new();
-    let file = w.root().join("my-attributes");
-    fs::write(&file, "*.md filter=slow\n").unwrap();
-    w.git(
-        &w.mine(),
-        &[
-            "config",
-            "core.attributesFile",
-            &file.display().to_string().replace('\\', "/"),
-        ],
-    );
-    w.git(&w.mine(), &["config", "filter.slow.clean", "cat"]);
-    w.teammate_pushes("zebra", "zebras");
-    let before = w.head();
-    w.wake_up();
-    w.assert_fetched_only(&before);
-}
-
-/// The teammate pushes `n` new neurons in one commit.
-fn teammate_pushes_many(w: &World, n: usize) {
-    let t = w.teammate();
-    for i in 0..n {
-        w.write(&t, &format!("k/many/n{i}.md"), &format!("# n{i}\n"));
-    }
-    w.commit(&t, "many");
-    w.git(&t, &["push", "-q"]);
-}
-
-#[test]
-fn up_to_200_incoming_files_are_fast_forwarded() {
-    let w = World::new();
-    teammate_pushes_many(&w, 200);
-    w.wake_up();
-    assert_eq!(w.head(), w.remote_head());
-}
-
-#[test]
-fn more_than_200_incoming_files_leave_only_the_fetch() {
-    let w = World::new();
-    teammate_pushes_many(&w, 201);
-    let before = w.head();
-    w.wake_up();
-    w.assert_fetched_only(&before);
-}
-
-#[test]
-fn an_ignored_file_where_the_incoming_tree_writes_is_kept() {
-    // The review's repro (T-145 probes/fresh_ignored): my ignored draft at a
-    // path a teammate starts tracking is never replaced.
-    let w = World::new();
-    let m = w.mine();
-    fs::write(m.join(".git").join("info").join("exclude"), "private/\n").unwrap();
-    w.write(&m, "private/draft.md", "MY DRAFT\n");
-    let t = w.teammate();
-    w.write(&t, "private/draft.md", "TEAM_VERSION\n");
-    w.write(&t, "k/other.md", "# other\n");
-    w.commit(&t, "team draft");
-    w.git(&t, &["push", "-q"]);
-    let before = w.head();
-    w.wake_up();
-    assert_eq!(
-        fs::read_to_string(m.join("private/draft.md")).unwrap(),
-        "MY DRAFT\n"
-    );
-    assert_eq!(w.head(), before, "HEAD moved");
-    assert_eq!(w.tracked_remote(), w.remote_head(), "not fetched");
-    assert!(!m.join("k/other.md").exists());
-    assert!(!m.join(".git").join("index.lock").exists());
-}
-
-#[test]
-fn an_ignored_file_where_the_incoming_tree_needs_a_folder_is_kept() {
-    let w = World::new();
-    let m = w.mine();
-    fs::write(m.join(".git").join("info").join("exclude"), "/notes\n").unwrap();
-    w.write(&m, "notes", "MY NOTES FILE\n");
-    let t = w.teammate();
-    w.write(&t, "notes/a.md", "# a\n");
-    w.commit(&t, "notes folder");
-    w.git(&t, &["push", "-q"]);
-    let before = w.head();
-    w.wake_up();
-    assert_eq!(
-        fs::read_to_string(m.join("notes")).unwrap(),
-        "MY NOTES FILE\n"
-    );
-    assert_eq!(w.head(), before);
-}
-
-#[test]
-fn a_started_fast_forward_runs_to_its_end() {
-    // A post-merge hook keeps git busy past the 3 s: the fast-forward is
-    // never killed once it has started.
-    let w = World::new();
-    let m = w.mine();
-    let done = w.root().join("hook-done");
-    let hook = m.join(".git").join("hooks").join("post-merge");
-    fs::write(
-        &hook,
-        format!(
-            "#!/bin/sh\nsleep 4\necho done > '{}'\n",
-            done.display().to_string().replace('\\', "/")
-        ),
-    )
-    .unwrap();
-    #[cfg(unix)]
-    make_executable(&hook);
-    w.teammate_pushes("zebra", "zebras");
-    let started = Instant::now();
-    let doc = w.wake_up();
-    assert!(started.elapsed() >= Duration::from_secs(4));
-    assert_eq!(doc["total_neurons"], 2);
-    assert_eq!(w.head(), w.remote_head());
-    assert!(done.exists(), "the merge was killed before its hook ended");
-    assert!(!m.join(".git").join("index.lock").exists());
-}
-
-#[test]
-fn the_machines_own_system_git_config_does_not_block_the_fast_forward() {
-    // Git for Windows' system gitconfig defines `filter.lfs.*`; with no
-    // attribute assigning it, a read on that machine must still move.
-    let w = World::new();
-    w.teammate_pushes("zebra", "zebras");
-    let out = w
-        .kluris()
-        .args(["wake-up", "--json"])
-        .env_remove("GIT_CONFIG_NOSYSTEM")
-        .output()
-        .unwrap();
-    assert_eq!(out.status.code(), Some(0));
-    let doc: Value = serde_json::from_slice(&out.stdout).unwrap();
-    assert_eq!(doc["total_neurons"], 2);
-    assert_eq!(w.head(), w.remote_head());
-}
-
-/// HEAD, the index's bytes and every file of my clone outside `.git` (with
-/// untracked and ignored files), read without running anything that could
-/// refresh the index.
-type RawSnapshot = (String, Vec<u8>, Vec<(PathBuf, Vec<u8>)>);
-
-impl World {
-    fn raw_snapshot(&self) -> RawSnapshot {
-        let mut files = Vec::new();
-        let mut stack = vec![self.mine()];
-        while let Some(dir) = stack.pop() {
-            for entry in fs::read_dir(&dir).unwrap() {
-                let path = entry.unwrap().path();
-                if path.file_name().is_some_and(|n| n == ".git") {
-                    continue;
-                }
-                if path.is_dir() {
-                    files.push((path.clone(), b"<dir>".to_vec()));
-                    stack.push(path);
-                } else {
-                    let bytes = fs::read(&path).unwrap();
-                    files.push((path, bytes));
-                }
-            }
-        }
-        files.sort();
-        let index = fs::read(self.mine().join(".git").join("index")).unwrap();
-        (self.head(), index, files)
-    }
-
-    /// A failing, required smudge filter in my clone's config only.
-    fn configure_failing_required_filter(&self) {
-        let m = self.mine();
-        self.git(&m, &["config", "filter.required.smudge", "exit 1"]);
-        self.git(&m, &["config", "filter.required.clean", "cat"]);
-        self.git(&m, &["config", "filter.required.required", "true"]);
-    }
-
-    /// The teammate changes `k/jwt.md` (checked out before `k/z.md`) and adds
-    /// `k/z.md`, and pushes.
-    fn teammate_pushes_a_change_and_z(&self) {
-        let t = self.teammate();
-        self.write(
-            &t,
-            "k/jwt.md",
-            "---\nparent: map.md\nupdated: 2026-03-02\n---\n# INCOMING JWT\n",
-        );
-        self.write(&t, "k/z.md", "# FILTERED Z\n");
-        self.commit(&t, "change and z");
-        self.git(&t, &["push", "-q"]);
-    }
-
-    /// A read changes nothing at all: the raw snapshot is the same after it
-    /// (taken before anything else runs git), and the fetch happened.
-    fn assert_read_changes_nothing(&self) {
-        let before = self.raw_snapshot();
-        let base = self.baseline(&["wake-up", "--json"]);
-        let out = self.run(&["wake-up", "--json"]);
-        let after = self.raw_snapshot();
-        assert_eq!(after.0, before.0, "HEAD moved");
-        assert_eq!(after.1, before.1, "the index changed");
-        assert_eq!(after.2, before.2, "the work tree changed");
-        assert_eq!(out.stdout, base.stdout);
-        assert_eq!(self.tracked_remote(), self.remote_head(), "not fetched");
-    }
-}
-
-#[test]
-fn an_untracked_gitattributes_naming_a_failing_required_filter_changes_nothing() {
-    // T-150 F150-4 (probes/r_filter_required_failure): the attribute is in
-    // the work tree only, where git's checkout reads it.
-    let w = World::new();
-    w.configure_failing_required_filter();
-    w.write(&w.mine(), ".gitattributes", "k/z.md filter=required\n");
-    w.teammate_pushes_a_change_and_z();
-    w.assert_read_changes_nothing();
-}
-
-#[test]
-fn an_ignored_gitattributes_naming_a_failing_required_filter_changes_nothing() {
-    let w = World::new();
-    w.configure_failing_required_filter();
-    fs::write(
-        w.mine().join(".git").join("info").join("exclude"),
-        ".gitattributes\n",
-    )
-    .unwrap();
-    w.write(&w.mine(), ".gitattributes", "k/z.md filter=required\n");
-    w.teammate_pushes_a_change_and_z();
-    w.assert_read_changes_nothing();
-}
-
-#[test]
-fn a_gitattributes_in_a_subfolder_naming_a_failing_required_filter_changes_nothing() {
-    let w = World::new();
-    w.configure_failing_required_filter();
-    w.write(&w.mine(), "k/.gitattributes", "z.md filter=required\n");
-    w.teammate_pushes_a_change_and_z();
-    w.assert_read_changes_nothing();
-}
-
-#[test]
-fn a_failing_post_merge_hook_leaves_a_complete_fast_forward() {
-    // git runs post-merge after HEAD, the index and the tree are updated,
-    // and ignores its status: the fast-forward is whole.
-    let w = World::new();
-    let hook = w.mine().join(".git").join("hooks").join("post-merge");
-    fs::write(&hook, "#!/bin/sh\nexit 1\n").unwrap();
-    #[cfg(unix)]
-    make_executable(&hook);
-    w.teammate_pushes("zebra", "zebras");
-    assert_eq!(w.wake_up()["total_neurons"], 2);
-    assert_eq!(w.head(), w.remote_head());
-    assert_eq!(
-        w.git(
-            &w.mine(),
-            &["status", "--porcelain", "--untracked-files=all"]
-        ),
-        ""
-    );
-}
-
-#[cfg(unix)]
-#[test]
-fn a_folder_git_cannot_write_into_changes_nothing() {
-    // git cannot replace k/jwt.md in a read-only k/, so a fast-forward
-    // would stop halfway (the analogue of a locked file).
-    use std::os::unix::fs::PermissionsExt;
-    let w = World::new();
-    let t = w.teammate();
-    w.write(&t, "a.md", "# a, checked out first\n");
-    w.write(
-        &t,
-        "k/jwt.md",
-        "---\nparent: map.md\nupdated: 2026-03-02\n---\n# INCOMING JWT\n",
-    );
-    w.commit(&t, "a and jwt");
-    w.git(&t, &["push", "-q"]);
-    let k = w.mine().join("k");
-    fs::set_permissions(&k, fs::Permissions::from_mode(0o555)).unwrap();
-    let before = w.raw_snapshot();
-    let out = w.kluris().args(["wake-up", "--json"]).output().unwrap();
-    let after = w.raw_snapshot();
-    fs::set_permissions(&k, fs::Permissions::from_mode(0o755)).unwrap();
-    assert_eq!(out.status.code(), Some(0));
-    assert_eq!(after, before);
-    assert_eq!(w.tracked_remote(), w.remote_head(), "not fetched");
-}
-
-#[cfg(windows)]
-#[test]
-fn a_path_too_long_for_windows_changes_nothing() {
-    // Without core.longpaths, git for Windows cannot check out a path of
-    // 260 characters or more and stops halfway.
-    let w = World::new();
-    let t = w.teammate();
-    let mine_len = w.mine().display().to_string().encode_utf16().count();
-    let rel = format!("k/{}.md", "l".repeat(260usize.saturating_sub(mine_len)));
-    w.write(&t, "a.md", "# a, checked out first\n");
-    w.write(&t, &rel, "# long\n");
-    w.git(&t, &["-c", "core.longpaths=true", "add", "-A"]);
-    w.git(
-        &t,
-        &["-c", "core.longpaths=true", "commit", "-q", "-m", "long"],
-    );
-    w.git(&t, &["-c", "core.longpaths=true", "push", "-q"]);
-    w.assert_read_changes_nothing();
-}
-
-/// The real git, for a fake one to pass calls on to.
-#[cfg(unix)]
-fn real_git() -> String {
-    let out = std::process::Command::new("sh")
-        .args(["-c", "command -v git"])
-        .output()
-        .unwrap();
-    let real = String::from_utf8(out.stdout).unwrap().trim().to_string();
-    assert!(!real.is_empty());
-    real
-}
-
-/// A PATH whose first `git` runs `on_merge` (a shell snippet, with `$REAL`
-/// the real git and `$REF` the merged ref) for `merge --ff-only <ref>`, runs
-/// `on_checkout_index` for `checkout-index`, and passes every other call
-/// to the real git.
-#[cfg(unix)]
-fn fake_git_path(w: &World, on_merge: &str, on_checkout_index: &str) -> std::ffi::OsString {
-    // An empty `then` is a shell syntax error.
-    let on_merge = if on_merge.is_empty() { ":" } else { on_merge };
-    let on_checkout_index = if on_checkout_index.is_empty() {
-        ":"
-    } else {
-        on_checkout_index
-    };
-    let bin = w.root().join("bin");
-    fs::create_dir_all(&bin).unwrap();
-    let git = bin.join("git");
-    fs::write(
-        &git,
-        format!(
-            "#!/bin/sh\nREAL='{real}'\nff=\nci=\nfor a in \"$@\"; do\n  REF=$a\n  [ \"$a\" = --ff-only ] && ff=1\n  [ \"$a\" = checkout-index ] && ci=1\ndone\nif [ -n \"$ff\" ]; then\n{on_merge}\nfi\nif [ -n \"$ci\" ]; then\n{on_checkout_index}\nfi\nexec \"$REAL\" \"$@\"\n",
-            real = real_git()
-        ),
-    )
-    .unwrap();
-    make_executable(&git);
-    std::env::join_paths(std::iter::once(bin).chain(std::env::split_paths(
-        &std::env::var_os("PATH").unwrap_or_default(),
-    )))
-    .unwrap()
-}
-
-/// HEAD, the index's entries (`git ls-files -s`: mode, blob, stage, path)
-/// and every file and folder of my clone outside `.git`, with the bytes or
-/// link target of each file: what a rollback must restore (the index file's
-/// own bytes carry stat data a checkout refreshes).
-#[cfg(unix)]
-type LogicalSnapshot = (String, String, Vec<(PathBuf, Vec<u8>)>);
-
-#[cfg(unix)]
-impl World {
-    fn logical_snapshot(&self) -> LogicalSnapshot {
-        let (head, _, files) = self.raw_snapshot();
-        let index = self.git(&self.mine(), &["ls-files", "-s"]);
-        (head, index, files)
-    }
-}
-
-/// The line a rolled-back fast-forward prints.
-#[cfg(unix)]
-const ROLLED_BACK: &str = "kluris: team could not be updated from its remote; nothing changed. Run `kluris sync --brain team` to see why\n";
-
-#[cfg(unix)]
-#[test]
-fn a_fast_forward_git_refuses_is_reported_as_nothing_changed() {
-    // git fails the fast-forward before writing anything: nothing to undo.
-    let w = World::new();
-    let path = fake_git_path(&w, "echo 'error: simulated' >&2; exit 1", "");
-    w.teammate_pushes("zebra", "zebras");
-    for args in [
-        &["wake-up", "--json"][..],
-        &["wake-up"],
-        &["search", "jwt", "--json"],
-        &["search", "jwt"],
-    ] {
-        let _ = fs::remove_file(w.stamp());
-        let before = w.logical_snapshot();
-        let base = w.baseline(args);
-        let out = w.kluris().args(args).env("PATH", &path).output().unwrap();
-        assert_eq!(out.status.code(), Some(0), "{args:?}");
-        assert_eq!(out.stdout, base.stdout, "{args:?}");
-        assert_eq!(
-            String::from_utf8_lossy(&out.stderr),
-            ROLLED_BACK,
-            "{args:?}"
-        );
-        assert_eq!(w.logical_snapshot(), before, "{args:?}");
-    }
-}
-
-/// The teammate changes `k/jwt.md`, adds `k/newdir/new.md` and deletes
-/// `glossary.md`, and pushes.
-#[cfg(unix)]
-fn teammate_changes_adds_and_deletes(w: &World) {
-    let t = w.teammate();
-    w.write(
-        &t,
-        "k/jwt.md",
-        "---\nparent: map.md\nupdated: 2026-03-02\n---\n# INCOMING JWT\n",
-    );
-    w.write(&t, "k/newdir/new.md", "# new\n");
-    fs::remove_file(t.join("glossary.md")).unwrap();
-    w.commit(&t, "change, add, delete");
-    w.git(&t, &["push", "-q"]);
-}
-
-/// What a fast-forward stopped partway leaves: one file changed in the
-/// tree and the index, a new file in a new folder, a file deleted, a stale
-/// `index.lock`; then git exits 1.
-#[cfg(unix)]
-const PARTIAL_MERGE: &str = "\"$REAL\" show \"$REF:k/jwt.md\" > k/jwt.md && \"$REAL\" update-index k/jwt.md && mkdir -p k/newdir && \"$REAL\" show \"$REF:k/newdir/new.md\" > k/newdir/new.md && \"$REAL\" update-index --add k/newdir/new.md && rm glossary.md && : > .git/index.lock; echo 'error: simulated' >&2; exit 1";
-
-#[cfg(unix)]
-#[test]
-fn a_fast_forward_that_stops_partway_is_rolled_back() {
-    let w = World::new();
-    let path = fake_git_path(&w, PARTIAL_MERGE, "");
-    teammate_changes_adds_and_deletes(&w);
-    let before = w.logical_snapshot();
-    let base = w.baseline(&["wake-up", "--json"]);
-    let out = w
-        .kluris()
-        .args(["wake-up", "--json"])
-        .env("PATH", &path)
-        .output()
-        .unwrap();
-    assert_eq!(out.status.code(), Some(0));
-    assert_eq!(out.stdout, base.stdout);
-    assert_eq!(String::from_utf8_lossy(&out.stderr), ROLLED_BACK);
-    assert_eq!(w.logical_snapshot(), before, "not rolled back");
-    assert!(!w.mine().join(".git").join("index.lock").exists());
-    assert_eq!(w.tracked_remote(), w.remote_head(), "not fetched");
-    // The next sync finishes the update.
-    let _ = fs::remove_file(w.stamp());
-    let out = w
-        .kluris()
-        .args(["sync", "--brain", "team", "--json"])
-        .output()
-        .unwrap();
-    assert_eq!(
-        out.status.code(),
-        Some(0),
-        "{}",
-        String::from_utf8_lossy(&out.stdout)
-    );
-    assert_eq!(w.head(), w.remote_head());
-}
-
-#[cfg(unix)]
-#[test]
-fn a_rollback_that_fails_names_the_paths_left_changed() {
-    let w = World::new();
-    let path = fake_git_path(&w, PARTIAL_MERGE, "echo 'error: simulated' >&2; exit 1");
-    teammate_changes_adds_and_deletes(&w);
-    let out = w
-        .kluris()
-        .args(["wake-up", "--json"])
-        .env("PATH", &path)
-        .output()
-        .unwrap();
-    assert_eq!(out.status.code(), Some(0));
-    assert_eq!(
-        String::from_utf8_lossy(&out.stderr),
-        "kluris: team was only partly updated from its remote (glossary.md, k/jwt.md); run `kluris sync --brain team` to finish\n"
-    );
-}
-
-/// A driver named `name` whose smudge marks that it ran and fails, assigned
-/// to `pattern` in `info/attributes`; the teammate changes `k/jwt.md` and
-/// adds `path`. Returns the marker.
-fn assign_a_marking_driver(w: &World, name: &str, pattern: &str, path: &str) -> PathBuf {
-    let marker = w.root().join(format!("ran-{}", name.replace('#', "h")));
-    let m = w.mine();
-    let shown = marker.display().to_string().replace('\\', "/");
-    w.git(
-        &m,
-        &[
-            "config",
-            &format!("filter.{name}.smudge"),
-            &format!("touch '{shown}'; exit 1"),
-        ],
-    );
-    w.git(&m, &["config", &format!("filter.{name}.clean"), "cat"]);
-    w.git(&m, &["config", &format!("filter.{name}.required"), "true"]);
-    fs::write(
-        m.join(".git").join("info").join("attributes"),
-        format!("{pattern} filter={name}\n"),
-    )
-    .unwrap();
-    let t = w.teammate();
-    w.write(
-        &t,
-        "k/jwt.md",
-        "---\nparent: map.md\nupdated: 2026-03-02\n---\n# INCOMING JWT\n",
-    );
-    w.write(&t, path, "# filtered\n");
-    w.commit(&t, "change and add");
-    w.git(&t, &["push", "-q"]);
-    marker
-}
-
-#[test]
-fn drivers_named_like_attribute_states_are_still_drivers() {
-    // `set`, `unset` and `unspecified` are also git's names for attribute
-    // states; with a driver of that name configured, the value is the driver.
-    for name in ["set", "unset", "unspecified"] {
-        let w = World::new();
-        let marker = assign_a_marking_driver(&w, name, "k/z.md", "k/z.md");
-        w.assert_read_changes_nothing();
-        assert!(!marker.exists(), "the {name} filter ran");
-    }
-}
-
-#[test]
-fn a_filter_on_a_path_starting_with_a_hash_is_seen() {
-    let w = World::new();
-    let marker = assign_a_marking_driver(&w, "slow", "\"#Inbox/z.md\"", "#Inbox/z.md");
-    w.assert_read_changes_nothing();
-    assert!(!marker.exists(), "the filter ran");
-}
-
-/// Sets macOS file flags (`chflags`) and clears them however the test ends.
-#[cfg(target_os = "macos")]
-struct Flagged(Vec<(PathBuf, &'static str)>);
-
-#[cfg(target_os = "macos")]
-impl Flagged {
-    fn set(path: &Path, flag: &'static str) -> Flagged {
-        let mut f = Flagged(Vec::new());
-        f.add(path, flag);
-        f
-    }
-
-    fn add(&mut self, path: &Path, flag: &'static str) {
-        let ok = std::process::Command::new("chflags")
-            .arg(flag)
-            .arg(path)
-            .status()
-            .unwrap()
-            .success();
-        assert!(ok, "chflags {flag}");
-        self.0.push((path.to_path_buf(), flag));
-    }
-
-    fn clear(&mut self) {
-        for (path, flag) in self.0.drain(..).rev() {
-            let _ = std::process::Command::new("chflags")
-                .arg(format!("no{flag}"))
-                .arg(&path)
-                .status();
-        }
-    }
-}
-
-#[cfg(target_os = "macos")]
-impl Drop for Flagged {
-    fn drop(&mut self) {
-        self.clear();
-    }
-}
-
-/// The teammate changes `k/a.md` (checked out first) and `k/jwt.md`, adds
-/// `k/new.md`, and pushes.
-#[cfg(target_os = "macos")]
-fn teammate_changes_two_and_adds(w: &World) {
-    let t = w.teammate();
-    w.write(&t, "k/a.md", "# a\n");
-    w.commit(&t, "a");
-    w.git(&t, &["push", "-q"]);
-    w.git(&w.mine(), &["pull", "-q", "--ff-only"]);
-    w.write(&t, "k/a.md", "# INCOMING A\n");
-    w.write(
-        &t,
-        "k/jwt.md",
-        "---\nparent: map.md\nupdated: 2026-03-02\n---\n# INCOMING JWT\n",
-    );
-    w.write(&t, "k/new.md", "# new\n");
-    w.commit(&t, "change two, add one");
-    w.git(&t, &["push", "-q"]);
-}
-
-#[cfg(target_os = "macos")]
-#[test]
-fn an_immutable_or_append_only_file_or_folder_changes_nothing() {
-    // T-155 F155-1: git cannot replace a flagged file, or write in a
-    // flagged folder, and would stop partway.
-    for (target, flag) in [
-        ("k/jwt.md", "uchg"),
-        ("k/jwt.md", "uappnd"),
-        ("k", "uchg"),
-        ("k", "uappnd"),
-    ] {
-        let w = World::new();
-        teammate_changes_two_and_adds(&w);
-        let mut flagged = Flagged::set(&w.mine().join(target), flag);
-        w.assert_read_changes_nothing();
-        flagged.clear();
-        // With the flag gone, sync updates the brain.
-        let out = w
-            .kluris()
-            .args(["sync", "--brain", "team", "--json"])
-            .output()
-            .unwrap();
-        assert_eq!(
-            out.status.code(),
-            Some(0),
-            "{target} {flag}: {}",
-            String::from_utf8_lossy(&out.stdout)
-        );
-        assert_eq!(w.head(), w.remote_head(), "{target} {flag}");
-    }
-}
-
-#[cfg(windows)]
-#[test]
-fn a_file_another_program_holds_open_changes_nothing() {
-    // Another program has a file the fast-forward replaces open without
-    // sharing: git could not replace it and would stop partway.
-    use std::os::windows::fs::OpenOptionsExt;
-    let w = World::new();
-    let t = w.teammate();
-    w.write(&t, "data.txt", "one\n");
-    w.commit(&t, "data");
-    w.git(&t, &["push", "-q"]);
-    w.git(&w.mine(), &["pull", "-q", "--ff-only"]);
-    // The index must know data.txt's stat data, so git's status does not
-    // need to read it (a just-written file is "racily clean").
-    thread::sleep(Duration::from_secs(2));
-    w.git(&w.mine(), &["update-index", "-q", "--really-refresh"]);
-    w.write(&t, "data.txt", "two\n");
-    w.write(&t, "a.md", "# a, checked out first\n");
-    w.commit(&t, "change data");
-    w.git(&t, &["push", "-q"]);
-    let before = w.raw_snapshot();
-    let held = fs::OpenOptions::new()
-        .read(true)
-        .share_mode(0)
-        .open(w.mine().join("data.txt"))
-        .unwrap();
-    let base = w.baseline(&["wake-up", "--json"]);
-    let out = w.kluris().args(["wake-up", "--json"]).output().unwrap();
-    drop(held);
-    assert_eq!(out.status.code(), Some(0));
-    assert_eq!(out.stdout, base.stdout);
-    assert_eq!(String::from_utf8_lossy(&out.stderr), "");
-    assert_eq!(w.raw_snapshot(), before, "a byte changed");
-    assert_eq!(w.tracked_remote(), w.remote_head(), "not fetched");
 }

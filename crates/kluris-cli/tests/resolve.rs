@@ -107,6 +107,56 @@ fn resolving_path_by_path_then_committing_and_pushing() {
 }
 
 #[test]
+fn a_read_during_an_open_conflict_fetches_and_resolve_still_finishes() {
+    // The conflict records its two commits: a fresh read's fetch moving the
+    // remote-tracking ref changes nothing it settles.
+    let mut h = Home::new();
+    let root = h.two_conflicts_and_more();
+    let pending = root.join(".git").join("kluris-sync").join("pending.json");
+    let recorded = fs::read(&pending).unwrap();
+    let head = h.git(&root, &["rev-parse", "HEAD"]).trim().to_string();
+    let mut wake_up = std::process::Command::new(assert_cmd::cargo::cargo_bin!("kluris"));
+    h.hermetic(&mut wake_up);
+    let out = wake_up
+        .env_remove("KLURIS_NO_AUTO_SYNC")
+        .args(["wake-up", "--brain", "alpha", "--json"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(0));
+    let mate = h.teammate("alpha");
+    let remote = h.git(&mate, &["rev-parse", "HEAD"]).trim().to_string();
+    let tracked = h.git(&root, &["rev-parse", "refs/remotes/origin/main"]);
+    assert_eq!(tracked.trim(), remote, "fetched");
+    assert_eq!(h.git(&root, &["rev-parse", "HEAD"]).trim(), head);
+    assert_eq!(fs::read(&pending).unwrap(), recorded);
+
+    for (rel, side) in [
+        ("notes/first.md", "--theirs"),
+        ("notes/second.md", "--ours"),
+    ] {
+        let (code, doc) = h.json(&["resolve", "--brain", "alpha", rel, side, "--json"]);
+        assert_eq!(code, 0, "{doc}");
+        if rel == "notes/second.md" {
+            assert_eq!(doc["committed"], true, "{doc}");
+            assert_eq!(doc["pushed"], true, "{doc}");
+        }
+    }
+    assert!(h.read(&root, "notes/first.md").contains("Three, theirs."));
+    assert!(h.read(&root, "notes/second.md").contains("Three, ours."));
+    assert!(h.read(&root, "notes/third.md").contains("# Third"));
+    assert!(!pending.exists());
+}
+
+impl Home {
+    /// [`two_conflicts`], then the teammate pushes `notes/third.md`.
+    fn two_conflicts_and_more(&mut self) -> std::path::PathBuf {
+        let root = two_conflicts(self);
+        self.teammate_pushes("alpha", "notes/third.md", &neuron("Third", BODY));
+        root
+    }
+}
+
+#[test]
 fn text_output_one_line_per_call() {
     let mut h = Home::new();
     two_conflicts(&mut h);

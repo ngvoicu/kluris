@@ -1,10 +1,13 @@
-//! Running a program with a deadline: past it the program is killed with
+//! Running a program with a deadline: past it the program is stopped with
 //! every process it started (no orphan), and the caller goes on.
 //!
 //! The program runs in a process group of its own on Unix and in a job
 //! object on Windows, so a timeout ends the whole tree (git's
 //! `git-remote-https`, `ssh` and `upload-pack` included) and a normal exit
-//! ends whatever the program left running.
+//! ends whatever the program left running. On Unix a timeout sends the
+//! group TERM first and KILL once the program has exited or half a second
+//! has passed, so git removes the lock files it holds; on Windows the job
+//! is terminated at once.
 
 use std::io::{self, Read};
 use std::process::{Command, ExitStatus, Stdio};
@@ -28,25 +31,14 @@ pub struct Finished {
 pub enum RunError {
     /// The program could not be started.
     Spawn(io::Error),
-    /// The deadline passed; the program and its children were killed.
+    /// The deadline passed; the program and its children were stopped.
     TimedOut,
 }
 
-/// Run `cmd` with stdin closed and its output captured, killing it and its
-/// children once `deadline` passes. Whatever the program leaves running when
-/// it exits is killed too.
-pub fn run_until(cmd: Command, deadline: Instant) -> Result<Finished, RunError> {
-    run(cmd, Some(deadline))
-}
-
-/// [`run_until`] without a deadline: for work that must never be stopped
-/// halfway (a checkout), the program runs to its end. Whatever it leaves
-/// running when it exits is still killed.
-pub fn run_to_end(cmd: Command) -> Result<Finished, RunError> {
-    run(cmd, None)
-}
-
-fn run(mut cmd: Command, deadline: Option<Instant>) -> Result<Finished, RunError> {
+/// Run `cmd` with stdin closed and its output captured, stopping it and its
+/// children once `deadline` passes (see the module documentation). Whatever
+/// the program leaves running when it exits is killed.
+pub fn run_until(mut cmd: Command, deadline: Instant) -> Result<Finished, RunError> {
     cmd.stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -79,7 +71,16 @@ fn run(mut cmd: Command, deadline: Option<Instant>) -> Result<Finished, RunError
                 stderr: std::mem::take(err),
             });
         }
-        if deadline.is_some_and(|d| Instant::now() >= d) {
+        if Instant::now() >= deadline {
+            if status.is_none() {
+                // A program asked to stop first cleans up (git removes its
+                // lock files on TERM); then whatever is left is killed.
+                tree.interrupt();
+                let grace = Instant::now() + tree::GRACE;
+                while child.try_wait().ok().flatten().is_none() && Instant::now() < grace {
+                    thread::sleep(POLL);
+                }
+            }
             tree.end();
             if status.is_none() {
                 let _ = child.kill();
@@ -115,8 +116,12 @@ fn drain(pipe: Option<impl Read + Send + 'static>) -> Receiver<Vec<u8>> {
 mod tree {
     use std::os::unix::process::CommandExt;
     use std::process::{Child, Command};
+    use std::time::Duration;
 
     use rustix::process::{Pid, Signal, kill_process_group};
+
+    /// How long a stopped program has to exit after TERM before KILL.
+    pub const GRACE: Duration = Duration::from_millis(500);
 
     /// The program leads a new process group.
     pub fn isolate(cmd: &mut Command) {
@@ -129,6 +134,13 @@ mod tree {
     impl Tree {
         pub fn adopt(child: &Child) -> Tree {
             Tree(i32::try_from(child.id()).ok().and_then(Pid::from_raw))
+        }
+
+        /// Ask every process in the group to stop (TERM).
+        pub fn interrupt(&self) {
+            if let Some(pid) = self.0 {
+                let _ = kill_process_group(pid, Signal::TERM);
+            }
         }
 
         /// Kill every process left in the group. The group's id cannot be
@@ -146,6 +158,7 @@ mod tree {
 mod tree {
     use std::os::windows::io::AsRawHandle;
     use std::process::{Child, Command};
+    use std::time::Duration;
 
     use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
     use windows_sys::Win32::System::JobObjects::{
@@ -153,6 +166,9 @@ mod tree {
         JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
         SetInformationJobObject, TerminateJobObject,
     };
+
+    /// No grace: a job has no signal to ask its processes to stop with.
+    pub const GRACE: Duration = Duration::ZERO;
 
     /// Nothing to set before the start: the job is joined right after it.
     pub fn isolate(_: &mut Command) {}
@@ -187,6 +203,9 @@ mod tree {
                 Tree(Some(job))
             }
         }
+
+        /// Nothing: [`Tree::end`] terminates the job.
+        pub fn interrupt(&self) {}
 
         /// Kill every process left in the job.
         pub fn end(&self) {
@@ -263,6 +282,55 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn past_the_deadline_the_tree_gets_term_first() {
+        // git removes its lock files on TERM: the program's TERM handler
+        // runs before anything is killed.
+        let dir = tempfile::TempDir::new().unwrap();
+        let cleaned = dir.path().join("cleaned");
+        let script = format!(
+            "trap 'echo x > \"{}\"; exit 143' TERM; sleep 30 & wait",
+            cleaned.display()
+        );
+        let started = Instant::now();
+        let result = run_until(sh(&script), started + Duration::from_millis(300));
+        assert!(matches!(result, Err(RunError::TimedOut)), "{result:?}");
+        assert!(cleaned.exists(), "the program was killed without a TERM");
+        assert!(started.elapsed() < Duration::from_secs(2));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_tree_that_ignores_term_is_killed_half_a_second_later() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let pid_file = dir.path().join("pid");
+        let script = format!(
+            "trap '' TERM; sleep 30 & echo $! > '{}'; wait",
+            pid_file.display()
+        );
+        let started = Instant::now();
+        let result = run_until(sh(&script), started + Duration::from_millis(300));
+        assert!(matches!(result, Err(RunError::TimedOut)), "{result:?}");
+        let took = started.elapsed();
+        assert!(took >= Duration::from_millis(750), "no grace: {took:?}");
+        assert!(took < Duration::from_secs(2), "{took:?}");
+        let pid = std::fs::read_to_string(&pid_file).unwrap();
+        let alive = || {
+            Command::new("kill")
+                .args(["-0", pid.trim()])
+                .stderr(Stdio::null())
+                .status()
+                .unwrap()
+                .success()
+        };
+        let until = Instant::now() + Duration::from_secs(2);
+        while alive() && Instant::now() < until {
+            thread::sleep(Duration::from_millis(20));
+        }
+        assert!(!alive(), "the child {pid} outlived the kill");
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn a_child_left_holding_the_pipe_does_not_hold_the_caller() {
         // The program exits at once; its background child keeps stdout open.
         let started = Instant::now();
@@ -304,16 +372,6 @@ mod tests {
             !dir.path().join("survived").exists(),
             "the grandchild outlived the deadline"
         );
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn without_a_deadline_the_program_runs_to_its_end() {
-        let started = Instant::now();
-        let done = run_to_end(sh("sleep 1; echo finished")).unwrap();
-        assert!(started.elapsed() >= Duration::from_secs(1));
-        assert_eq!(done.stdout, b"finished\n");
-        assert!(done.status.success());
     }
 
     #[test]

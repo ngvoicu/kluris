@@ -74,9 +74,10 @@ nothing is documented, say so plainly: "Nothing documented about X yet."
 Do not stretch a loose match into an answer.
 """
 
-# v3.1's write flow (PAR-078): reads pull on their own, sync before a write,
-# `kluris commit` + `kluris sync` after it instead of v2's `git add -A`
-# reminder, and sync/commit/resolve among the CLI commands.
+# v3.1's write flow (PAR-078): reads only fetch and `kluris sync` brings
+# teammates' changes in, sync before a write, `kluris commit` + `kluris sync`
+# after it instead of v2's `git add -A` reminder, and sync/commit/resolve
+# among the CLI commands.
 V2_REFRESH = """\
 this skill's remember/learn intents, `kluris dream{flag}`,
 or direct file edits the user tells you about.
@@ -88,10 +89,11 @@ this skill's remember/learn intents, `kluris dream{flag}`,
 a `kluris sync{flag}` that reports `merged`,
 or direct file edits the user tells you about.
 
-You do not need to pull the brain: `kluris wake-up` and `kluris search` fetch
-the teammates' pushed changes on their own (at most once a minute) and bring
-the brain up to date when nothing local is in the way. Setting
-`KLURIS_NO_AUTO_SYNC=1` turns this off.
+`kluris wake-up` and `kluris search` read the brain as it is on disk; they
+fetch the teammates' pushes (at most once a minute) without changing any
+file. To bring the teammates' changes in, run `kluris sync{flag} --json`.
+The write flow below does it before every write; run it also when the user
+asks for the team's latest. `KLURIS_NO_AUTO_SYNC=1` turns the fetch off.
 
 If the `kluris` CLI is unavailable"""
 

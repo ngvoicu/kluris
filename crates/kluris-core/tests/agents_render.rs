@@ -147,16 +147,17 @@ or direct file edits the user tells you about.
 
 If the `kluris` CLI is unavailable";
 
-/// A merging sync refreshes the snapshot too; reads pull on their own.
+/// A merging sync refreshes the snapshot too; reads fetch, `kluris sync` brings changes in.
 const V3_REFRESH: &str = "\
 this skill's remember/learn intents, `kluris dream{flag}`,
 a `kluris sync{flag}` that reports `merged`,
 or direct file edits the user tells you about.
 
-You do not need to pull the brain: `kluris wake-up` and `kluris search` fetch
-the teammates' pushed changes on their own (at most once a minute) and bring
-the brain up to date when nothing local is in the way. Setting
-`KLURIS_NO_AUTO_SYNC=1` turns this off.
+`kluris wake-up` and `kluris search` read the brain as it is on disk; they
+fetch the teammates' pushes (at most once a minute) without changing any
+file. To bring the teammates' changes in, run `kluris sync{flag} --json`.
+The write flow below does it before every write; run it also when the user
+asks for the team's latest. `KLURIS_NO_AUTO_SYNC=1` turns the fetch off.
 
 If the `kluris` CLI is unavailable";
 

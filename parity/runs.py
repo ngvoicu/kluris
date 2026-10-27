@@ -273,7 +273,7 @@ def team_brain(sb: Sandbox, *, teammate_pushed: bool) -> Path:
     """A bare remote under ``work/``, a teammate's clone, and the clone that
     is registered as the brain ``team`` (its branch tracks the remote's
     ``main``). With ``teammate_pushed`` the teammate pushes ``k/zebra.md``
-    after the brain was cloned, so only a fresh read sees it. Not frozen."""
+    after the brain was cloned, so it waits upstream. Not frozen."""
     remote, teammate, brain = sb.work / "remote.git", sb.work / "teammate", sb.work / "brains" / "team"
     git(sb, sb.work, "init", "-q", "--bare", "-b", "main", str(remote))
     git(sb, sb.work, "clone", "-q", str(remote), str(teammate))
@@ -295,14 +295,10 @@ def team_brain(sb: Sandbox, *, teammate_pushed: bool) -> Path:
     return brain
 
 
-def run_v2_after_pull(sb: Sandbox, args: list[str]) -> Result:
-    """v2 on a copy of the frozen state whose brain was first brought up to
-    date by hand (``git pull --ff-only``): what a v3 fresh read must show."""
-    sb.checkout()
-    try:
-        git(sb, sb.work / "brains" / "team", "pull", "-q", "--ff-only")
-        result = _run_v2(args, sb.env)
-        result.tree = snapshot_tree(sb.work)
-    finally:
-        sb.stash("v2-pulled")
-    return result
+def fetched_teammates_push(sb: Sandbox, side: str) -> bool:
+    """Whether the brain in the finished tree of ``side`` (``"v2"`` or
+    ``"v3"``, kept by ``harness.run_both``) has the teammate's push in its
+    remote-tracking ref ``refs/remotes/origin/main``."""
+    tree = sb.root / side
+    tracked = git(sb, tree / "brains" / "team", "rev-parse", "refs/remotes/origin/main")
+    return tracked == git(sb, tree / "remote.git", "rev-parse", "main")
