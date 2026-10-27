@@ -107,7 +107,7 @@ Before you write, change, or delete any brain file, run
 - `conflicts[]` is not empty: this brain and a teammate's push changed the
   same thing (or a conflict is already open: then `refused` says so too).
   STOP and show the human each conflict: its `path`, its `kind` (`content`,
-  `delete_edit`, `parent`, `frontmatter`, `structure`, or `ambiguous-base`),
+  `delete_edit`, `parent`, `frontmatter`, `structure`, or `ambiguous_base`),
   and what each side changed. The conflict's `base`, `ours`, and `theirs` are blob ids: read
   them with `git -C {path} show <id>`, or compare with
   `git -C {path} diff <base> <ours>` and `git -C {path} diff <base> <theirs>`

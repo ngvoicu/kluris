@@ -559,7 +559,7 @@ fn a_windows_style_path_names_the_conflict() {
     assert_completed(&w, &r);
 }
 
-// --- structural and ambiguous-base conflicts (T-146) ----------------------------------
+// --- structural and ambiguous_base conflicts (T-146) ----------------------------------
 
 /// Ours adds `notes/topic.md` and edits `notes/first.md`; theirs adds
 /// `notes/topic.md/child.md` and edits the same line of `notes/first.md`.

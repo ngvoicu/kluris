@@ -82,7 +82,7 @@ impl ConflictKind {
             ConflictKind::Parent => "parent",
             ConflictKind::Frontmatter => "frontmatter",
             ConflictKind::Structure => "structure",
-            ConflictKind::AmbiguousBase => "ambiguous-base",
+            ConflictKind::AmbiguousBase => "ambiguous_base",
         }
     }
 }
@@ -356,7 +356,7 @@ impl Pending {
             "parent" => Some(ConflictKind::Parent),
             "frontmatter" => Some(ConflictKind::Frontmatter),
             "structure" => Some(ConflictKind::Structure),
-            "ambiguous-base" => Some(ConflictKind::AmbiguousBase),
+            "ambiguous_base" => Some(ConflictKind::AmbiguousBase),
             _ => None,
         };
         let mut conflicts = Vec::new();

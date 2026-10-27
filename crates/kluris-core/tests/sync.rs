@@ -630,7 +630,7 @@ fn criss_cross(w: &World) -> (String, String, String) {
 }
 
 /// With several merge bases nothing is decided field by field: a neuron
-/// changed on both sides goes to a person (`ambiguous-base`), even when the
+/// changed on both sides goes to a person (`ambiguous_base`), even when the
 /// edits do not overlap (decision of T-146, replacing the first-base rule).
 #[test]
 fn a_criss_cross_history_sends_a_neuron_changed_on_both_sides_to_a_person() {
@@ -1010,6 +1010,37 @@ fn auto_merges_never_write_markers_and_keep_every_change() {
         assert!(
             text.contains(&format!("updated: '{updated}'\n")),
             "case {case}:\n{text}"
+        );
+    }
+}
+
+/// Every conflict kind is spelled one way: lowercase words joined by `_`.
+#[test]
+fn conflict_kinds_are_lowercase_with_underscores() {
+    let kinds = [
+        ConflictKind::Content,
+        ConflictKind::DeleteEdit,
+        ConflictKind::Parent,
+        ConflictKind::Frontmatter,
+        ConflictKind::Structure,
+        ConflictKind::AmbiguousBase,
+    ];
+    let names: Vec<&str> = kinds.iter().map(|k| k.as_str()).collect();
+    assert_eq!(
+        names,
+        [
+            "content",
+            "delete_edit",
+            "parent",
+            "frontmatter",
+            "structure",
+            "ambiguous_base"
+        ]
+    );
+    for name in names {
+        assert!(
+            name.chars().all(|c| c.is_ascii_lowercase() || c == '_'),
+            "{name}"
         );
     }
 }

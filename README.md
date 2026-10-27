@@ -351,7 +351,7 @@ own git repository, and git must be 2.38 or newer.
 With `--json`, each brain's entry has `name`, `fetched`, `merged`, `pushed`,
 `auto_merged` (neurons merged on their own), `conflicts` (each with `path`,
 `kind` (`content`, `delete_edit`, `parent`, `frontmatter`, `structure` or
-`ambiguous-base`) and the `base`, `ours` and `theirs` blob ids, `null` where
+`ambiguous_base`) and the `base`, `ours` and `theirs` blob ids, `null` where
 a side has no file there), `skipped_dirty` (uncommitted files left as they
 are), `offline`, `blocked` (uncommitted files in the way) and `refused` (why
 the brain was left alone: an open conflict, listed in `conflicts`, or under

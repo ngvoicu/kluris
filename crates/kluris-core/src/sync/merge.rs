@@ -200,7 +200,7 @@ pub fn merge_commits<G: SyncGit>(
     // A criss-cross history has several merge bases. merge-tree merges with
     // a virtual base of them all, but no single base says who changed what:
     // with several, every path changed on both sides goes to a person
-    // (`ambiguous-base`) and only one-sided changes merge, as merge-tree
+    // (`ambiguous_base`) and only one-sided changes merge, as merge-tree
     // has them (decision of T-146, replacing the first-base rule).
     let bases = git.merge_bases(repo, ours, theirs)?;
     let ambiguous = bases.len() > 1;
