@@ -87,6 +87,10 @@ pub enum ResolveError {
     Structure {
         path: String,
     },
+    /// A structural conflict whose sides' files git does not name.
+    Unmappable {
+        path: String,
+    },
     /// `HEAD` is not the commit the conflict was found on.
     Stale {
         head: Option<String>,
@@ -118,6 +122,10 @@ impl fmt::Display for ResolveError {
             ResolveError::Structure { path } => write!(
                 f,
                 "{path} is a file on one side and a directory on the other; keep one side's whole structure with --ours or --theirs (a --file says nothing about the directory); nothing was recorded"
+            ),
+            ResolveError::Unmappable { path } => write!(
+                f,
+                "{path}: git names no file on either side, so no choice can be mapped to files; nothing was recorded (drop the conflict with `kluris resolve --abort` and settle it with git)"
             ),
             ResolveError::Stale { head, ours } => write!(
                 f,
@@ -237,6 +245,15 @@ pub fn resolve<G: SyncGit>(
     let Some(conflict) = pending.conflicts.iter().find(|c| c.path == rel) else {
         return Err(ResolveError::NotConflicted(rel));
     };
+    // A structural conflict where git names no file on any side cannot be
+    // mapped to a choice of files: refused, nothing recorded.
+    if conflict.kind == ConflictKind::Structure
+        && conflict.base.is_none()
+        && conflict.ours.is_none()
+        && conflict.theirs.is_none()
+    {
+        return Err(ResolveError::Unmappable { path: rel });
+    }
     // A file for a file/directory conflict would say nothing about the
     // directory: only a whole side settles it.
     if conflict.kind == ConflictKind::Structure && matches!(request.choice, Choice::File(_)) {
@@ -359,6 +376,7 @@ fn finish<G: SyncGit>(
         git,
         repo,
         &index,
+        &tree,
         [&pending.ours, &pending.theirs],
         &message,
         request.sync.no_verify,

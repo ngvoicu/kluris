@@ -331,7 +331,9 @@ ahead, and merges when both sides have new commits:
   and `brain.md` files, rebuilt from the merged brain rather than merged line
   by line; `created` (the earlier date) and `updated` (the later one);
   `related` and `tags`, both lists joined; edits to different parts of the
-  same neuron.
+  same neuron; a file one side adds in a folder the other side renamed,
+  which moves into the renamed folder (renaming a folder never drops a
+  teammate's file).
 - Left for a person: overlapping edits, a file deleted on one side and edited
   on the other, different `parent` values, any other frontmatter field
   changed differently on both sides, a file on one side where the other has
@@ -345,7 +347,9 @@ A file with uncommitted changes is never overwritten, nor is an untracked or
 ignored file where an incoming file lands: that brain is not synced until you
 commit, stash or move it. The repository's `pre-merge-commit`,
 `prepare-commit-msg`, `commit-msg`, `post-merge` and `pre-push` hooks run
-(`--no-verify` skips `pre-merge-commit` and `commit-msg`). The brain must be the root of its
+(`--no-verify` skips `pre-merge-commit` and `commit-msg`); a merge hook may
+change the message, but one that stages files into the merge stops it, with
+nothing merged. The brain must be the root of its
 own git repository, and git must be 2.38 or newer.
 
 With `--json`, each brain's entry has `name`, `fetched`, `merged`, `pushed`,

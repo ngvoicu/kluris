@@ -746,3 +746,23 @@ fn the_message_hooks_run_for_the_resolved_merge() {
         "kluris: sync (resolved)\n\nKluris-Sync: resolved\nKluris-Resolved-By: Ana Tester\nPrepared: yes\n\n"
     );
 }
+
+#[test]
+fn a_hook_that_changes_the_resolved_merge_is_refused() {
+    for hook in ["pre-merge-commit", "prepare-commit-msg", "commit-msg"] {
+        let w = World::new();
+        content_conflict(&w);
+        w.hook(&w.ours, hook, "git add -A");
+        let head = w.head(&w.ours);
+        let remote = w.remote_head();
+        match resolve_with(&w, "notes/first.md", Choice::Theirs) {
+            Err(ResolveError::Sync(e @ SyncError::HookChangedMerge { .. })) => {
+                assert!(e.to_string().contains(hook), "{e}")
+            }
+            other => panic!("{hook}: {other:?}"),
+        }
+        assert_eq!((w.head(&w.ours), w.remote_head()), (head, remote), "{hook}");
+        assert!(pending(&w).exists());
+        assert_eq!(w.status(&w.ours), "");
+    }
+}

@@ -1044,3 +1044,85 @@ fn conflict_kinds_are_lowercase_with_underscores() {
         );
     }
 }
+
+// --- T-152: a folder rename never drops a teammate's file; hooks never undo the merge --
+
+/// Both clones hold `old/a.md` and `old/b.md`; the renamer moves `old/` to
+/// `new/`, the adder adds `old/c.md`. Returns the added blob.
+fn folder_rename_and_add(w: &World, ours_renames: bool) -> String {
+    for name in ["a", "b"] {
+        w.write(
+            &w.ours,
+            &format!("old/{name}.md"),
+            &neuron("", &format!("# Old {name}\n")),
+        );
+    }
+    w.commit(&w.ours, &["old/a.md", "old/b.md"]);
+    w.run(&w.ours, &["push", "-q"]);
+    w.run(&w.theirs, &["pull", "-q", "--ff-only"]);
+    let (renamer, adder) = if ours_renames {
+        (&w.ours, &w.theirs)
+    } else {
+        (&w.theirs, &w.ours)
+    };
+    w.run(renamer, &["mv", "old", "new"]);
+    w.run(renamer, &["commit", "-q", "-m", "rename the lobe"]);
+    w.write(
+        adder,
+        "old/c.md",
+        &neuron("", "# Team approved new neuron\n"),
+    );
+    w.run(adder, &["add", "old/c.md"]);
+    w.run(adder, &["commit", "-q", "-m", "a neuron in the old lobe"]);
+    w.run(&w.theirs, &["push", "-q"]);
+    w.run(adder, &["rev-parse", "HEAD:old/c.md"])
+        .trim()
+        .to_string()
+}
+
+#[test]
+fn a_file_added_in_a_folder_the_other_side_renamed_follows_the_rename() {
+    for ours_renames in [true, false] {
+        let w = World::new();
+        let blob = folder_rename_and_add(&w, ours_renames);
+        let r = w.sync().unwrap();
+        assert!(
+            r.merged && r.pushed && r.conflicts.is_empty(),
+            "{ours_renames}: {r:?}"
+        );
+        let tree = w.run(&w.ours, &["ls-tree", "-r", "HEAD"]);
+        assert!(
+            tree.contains(&format!("{blob}\tnew/c.md")),
+            "{ours_renames}: {tree}"
+        );
+        assert!(!tree.contains("old/"), "{ours_renames}: {tree}");
+        assert_eq!(w.remote_head(), w.head(&w.ours));
+        assert!(w.read(&w.ours, "new/map.md").contains("c.md"));
+        assert_eq!(w.status(&w.ours), "");
+    }
+}
+
+/// A hook that stages anything into the merge (here `git add -A`, which
+/// stages the old work tree over the incoming files) is refused, with
+/// nothing committed or pushed.
+#[test]
+fn a_hook_that_changes_the_merge_is_refused() {
+    for hook in ["pre-merge-commit", "prepare-commit-msg", "commit-msg"] {
+        let w = World::new();
+        w.theirs_push(
+            &[("ideas/idea.md", &neuron("", "# Idea, remote approved\n"))],
+            &[],
+        );
+        w.ours_commit(&[("notes/second.md", &neuron("", "# Second\n"))], &[]);
+        w.hook(&w.ours, hook, "git add -A");
+        let before = w.snapshot();
+        match w.sync() {
+            Err(e @ SyncError::HookChangedMerge { .. }) => {
+                assert!(e.to_string().contains(hook), "{e}");
+                assert!(e.to_string().contains("nothing was merged"), "{e}");
+            }
+            other => panic!("{hook}: {other:?}"),
+        }
+        assert_eq!(w.snapshot(), before, "{hook}");
+    }
+}

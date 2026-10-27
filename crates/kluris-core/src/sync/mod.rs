@@ -149,6 +149,10 @@ pub enum SyncError {
         name: &'static str,
         code: i32,
     },
+    /// A hook changed the merged index (staged files over the merge).
+    HookChangedMerge {
+        name: &'static str,
+    },
     /// The merge landed locally but the push was refused.
     Push(String),
     /// Every push was rejected because the remote kept moving.
@@ -183,6 +187,10 @@ impl fmt::Display for SyncError {
             SyncError::Hook { name, code } => write!(
                 f,
                 "the {name} hook failed (exit {code}); nothing was merged"
+            ),
+            SyncError::HookChangedMerge { name } => write!(
+                f,
+                "the {name} hook changed the merge; nothing was merged (a merge hook may change the message, not the files)"
             ),
             SyncError::Push(detail) => {
                 write!(f, "merged locally, but the push was refused: {detail}")
@@ -235,6 +243,28 @@ fn exists_on_disk(root: &Path, rel: &str) -> bool {
         .split('/')
         .fold(root.to_path_buf(), |p, part| p.join(part));
     fs::symlink_metadata(path).is_ok()
+}
+
+/// Whether every part of `rel` is on disk under exactly that name (Unicode
+/// normalization aside): on a case-insensitive file system (macOS,
+/// Windows) `notes/Keep.md` also "exists" when only `notes/keep.md` does.
+fn exactly_on_disk(root: &Path, rel: &str) -> bool {
+    use unicode_normalization::UnicodeNormalization;
+    let mut dir = root.to_path_buf();
+    for part in rel.split('/') {
+        let want: String = part.nfc().collect();
+        let Ok(entries) = fs::read_dir(&dir) else {
+            return false;
+        };
+        let found = entries
+            .flatten()
+            .any(|e| e.file_name().to_string_lossy().nfc().collect::<String>() == want);
+        if !found {
+            return false;
+        }
+        dir = dir.join(part);
+    }
+    true
 }
 
 fn opt(value: &Option<String>) -> Json {
@@ -416,12 +446,38 @@ pub(crate) fn blocked_paths<G: SyncGit>(
     let dirty: BTreeSet<&String> = dirty.iter().collect();
     let incoming = git.diff_names(repo, ours, target)?;
     let tracked = git.tracked(repo, ours, &incoming)?;
-    Ok(incoming
-        .into_iter()
-        .filter(|path| {
-            dirty.contains(path) || (!tracked.contains(path) && exists_on_disk(root, path))
-        })
-        .collect())
+    // A new path whose only match on disk is a case variant of a tracked
+    // file the same change moves or removes (a case-only rename, of a file
+    // or a folder) is that file, not something in the way.
+    let mut ours_files: Option<Vec<String>> = None;
+    let mut blocked = Vec::new();
+    for path in &incoming {
+        let in_the_way = if dirty.contains(path) {
+            true
+        } else if tracked.contains(path) || !exists_on_disk(root, path) {
+            false
+        } else if exactly_on_disk(root, path) {
+            true
+        } else {
+            if ours_files.is_none() {
+                ours_files = Some(
+                    git.tree_entries(repo, ours)?
+                        .into_iter()
+                        .map(|e| e.rel)
+                        .collect(),
+                );
+            }
+            let lower = path.to_lowercase();
+            !ours_files
+                .iter()
+                .flatten()
+                .any(|f| f != path && f.to_lowercase() == lower && incoming.contains(f))
+        };
+        if in_the_way {
+            blocked.push(path.clone());
+        }
+    }
+    Ok(blocked)
 }
 
 /// Why sync leaves a brain with an open conflict alone (its entry also
@@ -448,17 +504,29 @@ fn gate<G: SyncGit>(
 /// `prepare-commit-msg` (with `merge`) and `commit-msg` (unless
 /// `no_verify`) on a message file, against the merged index; the message is
 /// what they leave there, cleaned up as `git commit` does. A failing hook
-/// stops it with nothing committed.
+/// stops it with nothing committed, and so does a hook that changes the
+/// merged index (`merged_tree`): the hooks see the old work tree, so an
+/// ordinary `git add -A` would stage it over the incoming files (decision
+/// of T-152). A message hook may change the message, never the files.
 pub(crate) fn commit_merge<G: SyncGit>(
     git: &G,
     repo: &crate::git::Repo,
     index: &crate::git::StagingIndex,
+    merged_tree: &str,
     parents: [&str; 2],
     message: &str,
     no_verify: bool,
 ) -> Result<String, SyncError> {
+    let unchanged = |name: &'static str| -> Result<(), SyncError> {
+        if git.write_tree(repo, index)? == merged_tree {
+            Ok(())
+        } else {
+            Err(SyncError::HookChangedMerge { name })
+        }
+    };
     if !no_verify {
         gate(git, repo, index, "pre-merge-commit", &[])?;
+        unchanged("pre-merge-commit")?;
     }
     let file = git.git_dir_path(repo, &format!("KLURIS_MERGE_MSG-{}", std::process::id()))?;
     fs::write(&file, message).map_err(|e| SyncError::Pending(e.to_string()))?;
@@ -466,8 +534,10 @@ pub(crate) fn commit_merge<G: SyncGit>(
         // Hooks are shell scripts (Git for Windows' sh too): `/` separators.
         let arg = file.to_string_lossy().replace('\\', "/");
         gate(git, repo, index, "prepare-commit-msg", &[&arg, "merge"])?;
+        unchanged("prepare-commit-msg")?;
         if !no_verify {
             gate(git, repo, index, "commit-msg", &[&arg])?;
+            unchanged("commit-msg")?;
         }
         let text = fs::read(&file).map_err(|e| SyncError::Pending(e.to_string()))?;
         let message = commit::cleanup_message(&String::from_utf8_lossy(&text));
@@ -475,9 +545,7 @@ pub(crate) fn commit_merge<G: SyncGit>(
             return Err(SyncError::EmptyMessage);
         }
         fs::write(&file, &message).map_err(|e| SyncError::Pending(e.to_string()))?;
-        // The hooks may have changed the index, as with git merge.
-        let tree = git.write_tree(repo, index)?;
-        Ok(git.commit_tree(repo, &tree, &parents, &file)?)
+        Ok(git.commit_tree(repo, merged_tree, &parents, &file)?)
     })();
     let _ = fs::remove_file(&file);
     made
@@ -599,6 +667,7 @@ pub fn sync<G: SyncGit>(
                         git,
                         &repo,
                         &index,
+                        &target,
                         [&ours, &theirs],
                         MESSAGE,
                         request.no_verify,

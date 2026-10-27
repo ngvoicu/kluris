@@ -2,14 +2,14 @@
 //! the current branch's upstream, merge bases, the in-memory merge, the
 //! fast-forward that moves the branch and work tree, and the push.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::process::Stdio;
 use std::time::Instant;
 
 use super::fresh::{FreshError, FreshGit, prompt_env};
 use super::merge::TextMerger;
-use crate::git::{GitError, Plumbing, Repo, SystemGit};
+use crate::git::{GitError, Plumbing, Repo, SystemGit, TreeEntry};
 
 /// Where the current branch pulls from and pushes to.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -29,6 +29,65 @@ pub struct MergeTree {
     pub tree: String,
     /// The paths git could not merge, brain-relative.
     pub conflicted: BTreeSet<String>,
+    /// What each side has at a conflicted path, as git's index stages say
+    /// (after rename detection): `[base, ours, theirs]`.
+    pub stages: BTreeMap<String, [Option<TreeEntry>; 3]>,
+    /// git's conflict messages: the paths each concerns and its type
+    /// (`CONFLICT (directory rename suggested)`, ...).
+    pub messages: Vec<(Vec<String>, String)>,
+}
+
+/// `git merge-tree --write-tree -z` output: the tree; then, with conflicts,
+/// `<mode> <oid> <stage>\t<path>` records, an empty field, and messages of
+/// `<count>`, that many paths, a type and a text.
+fn parse_merge_tree(out: &[u8]) -> MergeTree {
+    let mut fields = out
+        .split(|b| *b == 0)
+        .map(|f| String::from_utf8_lossy(f).into_owned());
+    let tree = fields.next().unwrap_or_default();
+    let mut stages: BTreeMap<String, [Option<TreeEntry>; 3]> = BTreeMap::new();
+    for field in fields.by_ref() {
+        if field.is_empty() {
+            break;
+        }
+        let Some((head, path)) = field.split_once('\t') else {
+            continue;
+        };
+        let mut parts = head.split(' ');
+        let (Some(mode), Some(oid), Some(stage)) = (parts.next(), parts.next(), parts.next())
+        else {
+            continue;
+        };
+        let Some(slot) = stage
+            .parse::<usize>()
+            .ok()
+            .and_then(|n| n.checked_sub(1))
+            .filter(|n| *n < 3)
+        else {
+            continue;
+        };
+        stages.entry(path.to_string()).or_default()[slot] = Some(TreeEntry {
+            rel: path.to_string(),
+            mode: mode.to_string(),
+            oid: oid.to_string(),
+        });
+    }
+    let mut messages = Vec::new();
+    while let Some(count) = fields.next() {
+        let Ok(count) = count.parse::<usize>() else {
+            break;
+        };
+        let paths: Vec<String> = fields.by_ref().take(count).collect();
+        let kind = fields.next().unwrap_or_default();
+        let _text = fields.next();
+        messages.push((paths, kind));
+    }
+    MergeTree {
+        tree,
+        conflicted: stages.keys().cloned().collect(),
+        stages,
+        messages,
+    }
 }
 
 /// How a push ended.
@@ -154,15 +213,7 @@ impl SyncGit for SystemGit {
     }
 
     fn merge_tree(&self, repo: &Repo, ours: &str, theirs: &str) -> Result<MergeTree, GitError> {
-        let args = [
-            "merge-tree",
-            "--write-tree",
-            "-z",
-            "--name-only",
-            "--no-messages",
-            ours,
-            theirs,
-        ];
+        let args = ["merge-tree", "--write-tree", "-z", ours, theirs];
         let out = self
             .command(Some(&repo.dir), &args)
             .output()
@@ -179,12 +230,7 @@ impl SyncGit for SystemGit {
                 detail: String::from_utf8_lossy(&out.stderr).trim().to_string(),
             });
         }
-        let mut names = nul_separated(&out.stdout).into_iter();
-        let tree = names.next().unwrap_or_default();
-        Ok(MergeTree {
-            tree,
-            conflicted: names.collect(),
-        })
+        Ok(parse_merge_tree(&out.stdout))
     }
 
     fn diff_names(&self, repo: &Repo, from: &str, to: &str) -> Result<Vec<String>, GitError> {
@@ -331,6 +377,27 @@ fn merge_files(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn merge_tree_output_keeps_stages_and_messages() {
+        let clean = parse_merge_tree(b"abc\0");
+        assert_eq!(clean.tree, "abc");
+        assert!(clean.stages.is_empty() && clean.messages.is_empty());
+        let out = b"t1\x00100644 aaa 3\tnew/c.md\0\x002\0new/c.md\0old/c.md\0CONFLICT (directory rename suggested)\0text\0";
+        let m = parse_merge_tree(out);
+        assert_eq!(m.tree, "t1");
+        let s = &m.stages["new/c.md"];
+        assert!(s[0].is_none() && s[1].is_none());
+        assert_eq!(s[2].as_ref().map(|e| e.oid.as_str()), Some("aaa"));
+        assert_eq!(
+            m.messages,
+            [(
+                vec!["new/c.md".to_string(), "old/c.md".to_string()],
+                "CONFLICT (directory rename suggested)".to_string()
+            )]
+        );
+        assert!(m.conflicted.contains("new/c.md"));
+    }
 
     #[test]
     fn a_rejected_push_is_told_apart_from_a_refused_one() {
