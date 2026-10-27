@@ -11,7 +11,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use kluris_core::git::GitError;
 use kluris_core::sync::fresh::{
     Fresh, FreshError, FreshGit, FreshRequest, MAX_FAST_FORWARD_FILES, STAMP, Upstream, WorkTree,
-    fresh_read, ignored_in_the_way, prompt_env,
+    filter_would_run, fresh_read, ignored_in_the_way, prompt_env,
 };
 use tempfile::TempDir;
 
@@ -532,4 +532,66 @@ fn too_many_incoming_files_leave_only_the_fetch() {
     git.incoming = files(MAX_FAST_FORWARD_FILES);
     assert_eq!(fresh_read(&git, &request(&brain)), Fresh::FastForwarded);
     assert_eq!(MAX_FAST_FORWARD_FILES, 200);
+}
+
+#[test]
+fn a_filter_counts_only_when_an_attribute_names_a_configured_driver() {
+    let keys = |items: &[&str]| items.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+    let lfs = keys(&[
+        "filter.lfs.clean",
+        "filter.lfs.smudge",
+        "filter.lfs.process",
+        "filter.lfs.required",
+    ]);
+    let attrs = |text: &str| vec![text.to_string()];
+    // A driver nothing names, and a name with no driver: nothing runs.
+    assert!(!filter_would_run(&[], &lfs));
+    assert!(!filter_would_run(&attrs("*.png binary\n"), &lfs));
+    assert!(!filter_would_run(&attrs("*.bin filter=lfs\n"), &[]));
+    assert!(!filter_would_run(
+        &attrs("*.bin filter=lfs\n"),
+        &keys(&["filter.lfs.required"])
+    ));
+    // A named, configured driver runs: smudge, clean or process.
+    assert!(filter_would_run(
+        &attrs("*.bin filter=lfs diff=lfs -text\n"),
+        &lfs
+    ));
+    for key in ["filter.x.smudge", "filter.x.clean", "filter.x.process"] {
+        assert!(
+            filter_would_run(&attrs("a filter=x\n"), &keys(&[key])),
+            "{key}"
+        );
+    }
+    // Names with dots, macros, and an attribute among several sources.
+    assert!(filter_would_run(
+        &attrs("a filter=a.b\n"),
+        &keys(&["filter.a.b.smudge"])
+    ));
+    assert!(filter_would_run(
+        &attrs("[attr]big filter=x\n*.bin big\n"),
+        &keys(&["filter.x.clean"])
+    ));
+    assert!(filter_would_run(
+        &[String::new(), "k/* filter=x\n".into()],
+        &keys(&["filter.x.clean"])
+    ));
+    // Unset or negated, commented out, another name: not this driver.
+    for text in [
+        "a -filter\n",
+        "a !filter\n",
+        "# a filter=x\n",
+        "a filter=y\n",
+        "a myfilter=x\n",
+    ] {
+        assert!(
+            !filter_would_run(&attrs(text), &keys(&["filter.x.smudge"])),
+            "{text:?}"
+        );
+    }
+    // Config keys are case-insensitive in their section and variable.
+    assert!(filter_would_run(
+        &attrs("a filter=x\n"),
+        &keys(&["filter.x.Smudge"])
+    ));
 }

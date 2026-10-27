@@ -937,35 +937,96 @@ fn a_slow_checkout_filter_never_leaves_a_half_done_fast_forward() {
     assert!(!w.mine().join("k/z.md").exists());
 }
 
+/// Git LFS's driver as `git lfs install` configures it.
+fn configure_lfs_driver(w: &World) {
+    for (key, value) in [
+        ("filter.lfs.clean", "git-lfs clean -- %f"),
+        ("filter.lfs.smudge", "git-lfs smudge -- %f"),
+        ("filter.lfs.process", "git-lfs filter-process"),
+        ("filter.lfs.required", "true"),
+    ] {
+        w.git(&w.mine(), &["config", key, value]);
+    }
+}
+
+/// The teammate commits a `.gitattributes` with `line` and pushes.
+fn teammate_pushes_attributes(w: &World, line: &str) {
+    let t = w.teammate();
+    w.write(&t, ".gitattributes", line);
+    w.commit(&t, "attributes");
+    w.git(&t, &["push", "-q"]);
+}
+
 #[test]
-fn any_configured_filter_leaves_only_the_fetch() {
-    // Git LFS and other filter drivers live in git config; a fast-forward
-    // through them can be slow, so the next `kluris sync` does it.
+fn a_configured_driver_no_attribute_names_does_not_block() {
+    // Git for Windows' system config and a global `git lfs install` define
+    // `filter.lfs.*` for every repository; with nothing assigning it, no
+    // filter runs, and the fast-forward goes ahead.
     let w = World::new();
-    w.git(
-        &w.mine(),
-        &["config", "filter.lfs.process", "git-lfs filter-process"],
-    );
+    configure_lfs_driver(&w);
+    w.teammate_pushes("zebra", "zebras");
+    assert_eq!(w.wake_up()["total_neurons"], 2);
+    assert_eq!(w.head(), w.remote_head());
+}
+
+#[test]
+fn an_attribute_naming_a_configured_driver_leaves_only_the_fetch() {
+    let w = World::new();
+    configure_lfs_driver(&w);
+    teammate_pushes_attributes(&w, "*.bin filter=lfs diff=lfs merge=lfs -text\n");
     w.teammate_pushes("zebra", "zebras");
     let before = w.head();
-    w.wake_up();
+    assert!(w.search_files("zebras").is_empty());
     w.assert_fetched_only(&before);
 }
 
 #[test]
-fn a_filter_attribute_in_the_incoming_tree_leaves_only_the_fetch() {
+fn an_attribute_without_a_driver_does_not_block() {
+    // `filter=lfs` with no `filter.lfs.*` anywhere runs nothing.
     let w = World::new();
-    let t = w.teammate();
-    w.write(
-        &t,
-        ".gitattributes",
-        "*.bin filter=lfs diff=lfs merge=lfs -text\n",
-    );
-    w.commit(&t, "lfs attributes");
-    w.git(&t, &["push", "-q"]);
+    teammate_pushes_attributes(&w, "*.bin filter=lfs diff=lfs merge=lfs -text\n");
+    w.teammate_pushes("zebra", "zebras");
+    assert_eq!(w.search_files("zebras"), ["k/zebra.md"]);
+    assert_eq!(w.head(), w.remote_head());
+}
+
+#[test]
+fn an_attribute_in_info_attributes_counts_when_its_driver_is_configured() {
+    let w = World::new();
+    let info = w.mine().join(".git").join("info").join("attributes");
+    fs::write(&info, "k/*.md filter=slow\n").unwrap();
     w.teammate_pushes("zebra", "zebras");
     let before = w.head();
-    assert!(w.search_files("zebras").is_empty());
+    // No driver: nothing would run, so it moves.
+    w.wake_up();
+    assert_eq!(w.head(), w.remote_head());
+    // With the driver configured it would run: only the fetch.
+    w.git(&w.mine(), &["config", "filter.slow.smudge", "cat"]);
+    w.teammate_pushes("okapi", "okapis");
+    fs::remove_file(w.stamp()).unwrap();
+    let moved = w.head();
+    assert_ne!(moved, before);
+    w.wake_up();
+    w.assert_fetched_only(&moved);
+}
+
+#[test]
+fn an_attribute_in_the_core_attributes_file_counts_when_its_driver_is_configured() {
+    let w = World::new();
+    let file = w.root().join("my-attributes");
+    fs::write(&file, "*.md filter=slow\n").unwrap();
+    w.git(
+        &w.mine(),
+        &[
+            "config",
+            "core.attributesFile",
+            &file.display().to_string().replace('\\', "/"),
+        ],
+    );
+    w.git(&w.mine(), &["config", "filter.slow.clean", "cat"]);
+    w.teammate_pushes("zebra", "zebras");
+    let before = w.head();
+    w.wake_up();
     w.assert_fetched_only(&before);
 }
 
@@ -1066,4 +1127,22 @@ fn a_started_fast_forward_runs_to_its_end() {
     assert_eq!(w.head(), w.remote_head());
     assert!(done.exists(), "the merge was killed before its hook ended");
     assert!(!m.join(".git").join("index.lock").exists());
+}
+
+#[test]
+fn the_machines_own_system_git_config_does_not_block_the_fast_forward() {
+    // Git for Windows' system gitconfig defines `filter.lfs.*`; with no
+    // attribute assigning it, a read on that machine must still move.
+    let w = World::new();
+    w.teammate_pushes("zebra", "zebras");
+    let out = w
+        .kluris()
+        .args(["wake-up", "--json"])
+        .env_remove("GIT_CONFIG_NOSYSTEM")
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(0));
+    let doc: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(doc["total_neurons"], 2);
+    assert_eq!(w.head(), w.remote_head());
 }

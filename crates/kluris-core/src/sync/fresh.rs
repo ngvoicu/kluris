@@ -23,9 +23,9 @@
 //!   and `index.lock` behind); it runs to its end. So it starts only when it
 //!   is cheap and safe, and otherwise the read keeps just the fetch and the
 //!   next `kluris sync` moves the branch: not with less than
-//!   [`FAST_FORWARD_RESERVE`] left, not when any checkout filter is
-//!   configured or set (`filter.*` in git config, Git LFS included, or
-//!   `filter=` in a `.gitattributes` of `HEAD` or the upstream), not for
+//!   [`FAST_FORWARD_RESERVE`] left, not when a checkout filter would run
+//!   ([`filter_would_run`]: an attribute assigns `filter=<name>` and git
+//!   has a driver for that name), not for
 //!   more than [`MAX_FAST_FORWARD_FILES`] incoming files, and not when an
 //!   ignored file is where the incoming tree writes (checked right before
 //!   it; `--no-overwrite-ignore` makes git refuse one that appears after).
@@ -175,8 +175,10 @@ pub trait FreshGit {
     /// to `to` writes or removes.
     fn incoming(&self, dir: &Path, to: &str, deadline: Instant) -> Result<Vec<String>, FreshError>;
 
-    /// Whether a checkout filter could run: any `filter.*` git config (Git
-    /// LFS included), or `filter=` in a `.gitattributes` of `HEAD` or `to`.
+    /// Whether a checkout filter would run ([`filter_would_run`]): an
+    /// attribute assigns `filter=<name>` (a `.gitattributes` of `HEAD` or
+    /// `to`, `<git dir>/info/attributes`, the `core.attributesFile`) and git
+    /// config, in any scope, has a smudge, clean or process driver for it.
     fn uses_filters(&self, dir: &Path, to: &str, deadline: Instant) -> Result<bool, FreshError>;
 
     /// The work tree's ignored files, a wholly ignored folder as `dir/`.
@@ -314,6 +316,45 @@ fn step(git: &impl FreshGit, req: &FreshRequest, deadline: Instant) -> Result<Fr
     }
     git.fast_forward(dir, theirs).map_err(ended)?;
     Ok(Fresh::FastForwarded)
+}
+
+/// Whether a checkout filter would run: one of the attribute texts assigns
+/// `filter=<name>` (in any line, a `[attr]` macro included; `#` lines are
+/// comments) and the git config keys (`git config --name-only`) define
+/// `filter.<name>.smudge`, `.clean` or `.process` for that name. A driver
+/// nothing names, and a name with no driver, run nothing.
+pub fn filter_would_run(attributes: &[String], config_keys: &[String]) -> bool {
+    let drivers = filter_drivers(config_keys);
+    if drivers.is_empty() {
+        return false;
+    }
+    attributes.iter().flat_map(|text| text.lines()).any(|line| {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            return false;
+        }
+        line.split_whitespace()
+            .skip(1)
+            .filter_map(|token| token.strip_prefix("filter="))
+            .any(|name| drivers.contains(&name))
+    })
+}
+
+/// The filter names the git config keys define a smudge, clean or process
+/// driver for (`filter.<name>.<variable>`; the section and the variable
+/// are case-insensitive, the name is not).
+fn filter_drivers(config_keys: &[String]) -> Vec<&str> {
+    config_keys
+        .iter()
+        .filter_map(|key| {
+            let (section, rest) = key.split_once('.')?;
+            let (name, variable) = rest.rsplit_once('.')?;
+            let runs = ["smudge", "clean", "process"]
+                .iter()
+                .any(|v| variable.eq_ignore_ascii_case(v));
+            (section.eq_ignore_ascii_case("filter") && runs).then_some(name)
+        })
+        .collect()
 }
 
 /// Whether an ignored file or folder (`dir/`) is where the `incoming` paths
@@ -577,16 +618,20 @@ impl FreshGit for SystemGit {
     }
 
     fn uses_filters(&self, dir: &Path, to: &str, deadline: Instant) -> Result<bool, FreshError> {
-        let config = ["config", "--get-regexp", r"^filter\."];
+        let config = ["config", "-z", "--name-only", "--get-regexp", r"^filter\."];
         let done = self.bounded(dir, &config, &[], deadline)?;
-        match done.status.code() {
-            Some(0) => return Ok(true),
-            Some(1) => {}
+        let keys = match done.status.code() {
+            Some(0) => nul_separated(&done.stdout, &config)?,
+            Some(1) => return Ok(false),
             code => return Err(failed(&config, code, &done.stderr)),
+        };
+        if filter_drivers(&keys).is_empty() {
+            return Ok(false);
         }
+        let mut attributes = Vec::new();
         let grep = [
             "grep",
-            "-q",
+            "-h",
             "-I",
             "-e",
             "filter=",
@@ -597,10 +642,16 @@ impl FreshGit for SystemGit {
         ];
         let done = self.bounded(dir, &grep, &[], deadline)?;
         match done.status.code() {
-            Some(0) => Ok(true),
-            Some(1) => Ok(false),
-            code => Err(failed(&grep, code, &done.stderr)),
+            Some(0) => attributes.push(String::from_utf8_lossy(&done.stdout).into_owned()),
+            Some(1) => {}
+            code => return Err(failed(&grep, code, &done.stderr)),
         }
+        for file in self.attribute_files(dir, deadline)? {
+            if let Ok(bytes) = fs::read(&file) {
+                attributes.push(String::from_utf8_lossy(&bytes).into_owned());
+            }
+        }
+        Ok(filter_would_run(&attributes, &keys))
     }
 
     fn ignored(&self, dir: &Path, deadline: Instant) -> Result<Vec<String>, FreshError> {
@@ -644,6 +695,39 @@ impl FreshGit for SystemGit {
         } else {
             Err(failed(&args, done.status.code(), &done.stderr))
         }
+    }
+}
+
+impl SystemGit {
+    /// The attribute files outside the trees: `<git dir>/info/attributes`
+    /// and the `core.attributesFile` (when unset, git's default,
+    /// `$XDG_CONFIG_HOME/git/attributes` or `~/.config/git/attributes`).
+    fn attribute_files(&self, dir: &Path, deadline: Instant) -> Result<Vec<PathBuf>, FreshError> {
+        let info = ["rev-parse", "--git-path", "info/attributes"];
+        let out = self.checked(dir, &info, &[], deadline)?;
+        let info = String::from_utf8(out).map_err(|_| unreadable(&info, NOT_UTF8))?;
+        let mut files = vec![dir.join(info.trim_end_matches(['\r', '\n']))];
+        let global = ["config", "--path", "--get", "core.attributesFile"];
+        let done = self.bounded(dir, &global, &[], deadline)?;
+        match done.status.code() {
+            Some(0) => {
+                let path =
+                    String::from_utf8(done.stdout).map_err(|_| unreadable(&global, NOT_UTF8))?;
+                files.push(dir.join(path.trim_end_matches(['\r', '\n'])));
+            }
+            Some(1) => {
+                let xdg = self.env_var("XDG_CONFIG_HOME").filter(|v| !v.is_empty());
+                let home = self.env_var("HOME").filter(|v| !v.is_empty());
+                let base = xdg
+                    .map(PathBuf::from)
+                    .or_else(|| home.map(|h| PathBuf::from(h).join(".config")));
+                if let Some(base) = base {
+                    files.push(base.join("git").join("attributes"));
+                }
+            }
+            code => return Err(failed(&global, code, &done.stderr)),
+        }
+        Ok(files)
     }
 }
 
