@@ -10,7 +10,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use kluris_core::git::GitError;
 use kluris_core::sync::fresh::{
-    Fresh, FreshError, FreshGit, FreshRequest, STAMP, Upstream, WorkTree, fresh_read, prompt_env,
+    Fresh, FreshError, FreshGit, FreshRequest, MAX_FAST_FORWARD_FILES, STAMP, Upstream, WorkTree,
+    fresh_read, ignored_in_the_way, prompt_env,
 };
 use tempfile::TempDir;
 
@@ -26,6 +27,12 @@ struct FakeGit {
     fetch_takes: Duration,
     /// `(ancestor, descendant)` pairs that are ancestors.
     ancestors: Vec<(&'static str, &'static str)>,
+    /// The paths the fast-forward would write.
+    incoming: Vec<String>,
+    /// Whether a checkout filter is configured or set for a path.
+    filters: bool,
+    /// Ignored files and folders (`dir/`) of the work tree.
+    ignored: Vec<String>,
     calls: RefCell<Vec<String>>,
     deadlines: RefCell<Vec<Instant>>,
 }
@@ -45,6 +52,9 @@ impl FakeGit {
             fetch: Ok(()),
             fetch_takes: Duration::ZERO,
             ancestors: vec![("HEAD", "refs/remotes/origin/main")],
+            incoming: vec!["k/new.md".into()],
+            filters: false,
+            ignored: Vec::new(),
             calls: RefCell::new(Vec::new()),
             deadlines: RefCell::new(Vec::new()),
         }
@@ -105,8 +115,29 @@ impl FreshGit for FakeGit {
         Ok(self.ancestors.contains(&(ancestor, descendant)))
     }
 
-    fn fast_forward(&self, _dir: &Path, to: &str, deadline: Instant) -> Result<(), FreshError> {
-        self.log(&format!("fast_forward {to}"), deadline);
+    fn incoming(
+        &self,
+        _dir: &Path,
+        to: &str,
+        deadline: Instant,
+    ) -> Result<Vec<String>, FreshError> {
+        self.log(&format!("incoming {to}"), deadline);
+        Ok(self.incoming.clone())
+    }
+
+    fn uses_filters(&self, _dir: &Path, to: &str, deadline: Instant) -> Result<bool, FreshError> {
+        self.log(&format!("uses_filters {to}"), deadline);
+        Ok(self.filters)
+    }
+
+    fn ignored(&self, _dir: &Path, deadline: Instant) -> Result<Vec<String>, FreshError> {
+        self.log("ignored", deadline);
+        Ok(self.ignored.clone())
+    }
+
+    /// No deadline: once started, a fast-forward runs to its end.
+    fn fast_forward(&self, _dir: &Path, to: &str) -> Result<(), FreshError> {
+        self.calls.borrow_mut().push(format!("fast_forward {to}"));
         Ok(())
     }
 }
@@ -405,4 +436,100 @@ fn prompts_are_turned_off_without_overriding_the_users_ssh_command() {
     // An empty variable is not a setting.
     let empty = |k: &str| (k == "GIT_SSH_COMMAND").then(OsString::new);
     assert_eq!(prompt_env(empty, false).len(), 4);
+}
+
+#[test]
+fn the_ignored_check_comes_right_before_the_fast_forward() {
+    let tmp = TempDir::new().unwrap();
+    let git = FakeGit::behind(&tmp);
+    assert_eq!(
+        fresh_read(&git, &request(&brain(&tmp))),
+        Fresh::FastForwarded
+    );
+    let calls = git.calls();
+    let n = calls.len();
+    assert_eq!(calls[n - 2], "ignored", "{calls:?}");
+    assert_eq!(calls[n - 1], "fast_forward refs/remotes/origin/main");
+}
+
+#[test]
+fn an_ignored_file_in_the_way_stops_the_fast_forward() {
+    let tmp = TempDir::new().unwrap();
+    let mut git = FakeGit::behind(&tmp);
+    git.incoming = vec!["k/new.md".into(), "private/draft.md".into()];
+    git.ignored = vec!["private/draft.md".into(), "build/".into()];
+    assert_eq!(
+        fresh_read(&git, &request(&brain(&tmp))),
+        Fresh::IgnoredInTheWay
+    );
+    assert!(!git.calls().iter().any(|c| c.starts_with("fast_forward")));
+    // Ignored files elsewhere do not.
+    let mut git = FakeGit::behind(&tmp);
+    git.ignored = vec!["private/draft.md".into(), "build/".into()];
+    let _ = fs::remove_file(git.stamp());
+    assert_eq!(
+        fresh_read(&git, &request(&brain(&tmp))),
+        Fresh::FastForwarded
+    );
+}
+
+#[test]
+fn a_path_is_in_the_way_of_itself_its_folders_and_its_contents() {
+    let ignored = |items: &[&str]| items.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+    let incoming = |items: &[&str]| items.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+    // The same path.
+    assert!(ignored_in_the_way(
+        &ignored(&["a/b.md"]),
+        &incoming(&["a/b.md"])
+    ));
+    // An ignored folder the incoming file goes into.
+    assert!(ignored_in_the_way(
+        &ignored(&["a/"]),
+        &incoming(&["a/b.md"])
+    ));
+    assert!(ignored_in_the_way(
+        &ignored(&["a/b/"]),
+        &incoming(&["a/b/c/d.md"])
+    ));
+    // An ignored file where the incoming tree needs a folder.
+    assert!(ignored_in_the_way(&ignored(&["a"]), &incoming(&["a/b.md"])));
+    // An ignored file inside a folder the incoming tree writes as a file.
+    assert!(ignored_in_the_way(&ignored(&["a/b.md"]), &incoming(&["a"])));
+    assert!(ignored_in_the_way(&ignored(&["a/b/"]), &incoming(&["a"])));
+    // Names that only share a prefix are not in the way.
+    assert!(!ignored_in_the_way(&ignored(&["a"]), &incoming(&["ab.md"])));
+    assert!(!ignored_in_the_way(
+        &ignored(&["a/"]),
+        &incoming(&["ab/c.md"])
+    ));
+    assert!(!ignored_in_the_way(&ignored(&["ab.md"]), &incoming(&["a"])));
+    assert!(!ignored_in_the_way(&ignored(&[]), &incoming(&["a/b.md"])));
+}
+
+#[test]
+fn a_configured_filter_leaves_only_the_fetch() {
+    let tmp = TempDir::new().unwrap();
+    let mut git = FakeGit::behind(&tmp);
+    git.filters = true;
+    assert_eq!(fresh_read(&git, &request(&brain(&tmp))), Fresh::Filtered);
+    let calls = git.calls();
+    assert!(calls.iter().any(|c| c == "fetch origin"), "{calls:?}");
+    assert!(!calls.iter().any(|c| c.starts_with("fast_forward")));
+}
+
+#[test]
+fn too_many_incoming_files_leave_only_the_fetch() {
+    let tmp = TempDir::new().unwrap();
+    let brain = brain(&tmp);
+    let files = |n: usize| (0..n).map(|i| format!("k/n{i}.md")).collect::<Vec<_>>();
+    let mut git = FakeGit::behind(&tmp);
+    git.incoming = files(MAX_FAST_FORWARD_FILES + 1);
+    assert_eq!(fresh_read(&git, &request(&brain)), Fresh::TooBig);
+    assert!(git.calls().iter().any(|c| c == "fetch origin"));
+    assert!(!git.calls().iter().any(|c| c.starts_with("fast_forward")));
+    let mut git = FakeGit::behind(&tmp);
+    let _ = fs::remove_file(git.stamp());
+    git.incoming = files(MAX_FAST_FORWARD_FILES);
+    assert_eq!(fresh_read(&git, &request(&brain)), Fresh::FastForwarded);
+    assert_eq!(MAX_FAST_FORWARD_FILES, 200);
 }

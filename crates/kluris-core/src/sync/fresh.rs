@@ -16,9 +16,20 @@
 //!   a merge, rebase, cherry-pick or revert in progress (or an open `kluris
 //!   sync` conflict), a fetch that fails
 //!   (offline, refused credentials) or a branch that diverged all end the
-//!   step quietly. No fast-forward starts with less than
-//!   [`FAST_FORWARD_RESERVE`] left: a `git merge` killed while it updates
-//!   the work tree would leave `index.lock` behind.
+//!   step quietly.
+//! - The time limit covers only what can be abandoned safely: the fetch and
+//!   the read-only checks. A fast-forward, once started, is never killed (a
+//!   `git merge` stopped while it updates the work tree leaves a mixed tree
+//!   and `index.lock` behind); it runs to its end. So it starts only when it
+//!   is cheap and safe, and otherwise the read keeps just the fetch and the
+//!   next `kluris sync` moves the branch: not with less than
+//!   [`FAST_FORWARD_RESERVE`] left, not when any checkout filter is
+//!   configured or set (`filter.*` in git config, Git LFS included, or
+//!   `filter=` in a `.gitattributes` of `HEAD` or the upstream), not for
+//!   more than [`MAX_FAST_FORWARD_FILES`] incoming files, and not when an
+//!   ignored file is where the incoming tree writes (checked right before
+//!   it; `--no-overwrite-ignore` makes git refuse one that appears after).
+//!   It runs without autostash.
 //! - Never a prompt: [`prompt_env`] for the fetch.
 //! - Off with `KLURIS_NO_AUTO_SYNC=1` or `sync: {auto_fetch: false}` in the
 //!   brain's `kluris.yml`.
@@ -34,7 +45,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use crate::atomic;
 use crate::config::read_brain_config;
 use crate::git::{GitError, SystemGit};
-use crate::process::{Finished, RunError, run_until};
+use crate::process::{Finished, RunError, run_to_end, run_until};
 
 /// The stamp of the last fetch, relative to the git directory.
 pub const STAMP: &str = "kluris-sync/last-fetch";
@@ -47,6 +58,10 @@ pub const TIME_LIMIT: Duration = Duration::from_secs(3);
 
 /// The least time left for a fast-forward to start.
 pub const FAST_FORWARD_RESERVE: Duration = Duration::from_secs(1);
+
+/// The most files a fresh read's fast-forward may write; past it the next
+/// `kluris sync` moves the branch.
+pub const MAX_FAST_FORWARD_FILES: usize = 200;
 
 /// The markers of an operation in progress, relative to the git directory:
 /// git's, and an open `kluris sync` conflict waiting for `kluris resolve`.
@@ -84,6 +99,12 @@ pub enum Fresh {
     UpToDate,
     /// Both sides have commits the other lacks.
     Diverged,
+    /// Fetched only: a checkout filter is configured or set.
+    Filtered,
+    /// Fetched only: more than [`MAX_FAST_FORWARD_FILES`] incoming files.
+    TooBig,
+    /// Fetched only: an ignored file is where the incoming tree writes.
+    IgnoredInTheWay,
     /// The branch moved to its upstream.
     FastForwarded,
     /// Another git step failed.
@@ -150,8 +171,21 @@ pub trait FreshGit {
         deadline: Instant,
     ) -> Result<bool, FreshError>;
 
-    /// Fast-forward the current branch and work tree to `to`, or fail.
-    fn fast_forward(&self, dir: &Path, to: &str, deadline: Instant) -> Result<(), FreshError>;
+    /// The paths that differ between `HEAD` and `to`: what a fast-forward
+    /// to `to` writes or removes.
+    fn incoming(&self, dir: &Path, to: &str, deadline: Instant) -> Result<Vec<String>, FreshError>;
+
+    /// Whether a checkout filter could run: any `filter.*` git config (Git
+    /// LFS included), or `filter=` in a `.gitattributes` of `HEAD` or `to`.
+    fn uses_filters(&self, dir: &Path, to: &str, deadline: Instant) -> Result<bool, FreshError>;
+
+    /// The work tree's ignored files, a wholly ignored folder as `dir/`.
+    fn ignored(&self, dir: &Path, deadline: Instant) -> Result<Vec<String>, FreshError>;
+
+    /// Fast-forward the current branch and work tree to `to`, or fail,
+    /// never over an ignored file and without autostash. No deadline: once
+    /// started it runs to its end.
+    fn fast_forward(&self, dir: &Path, to: &str) -> Result<(), FreshError>;
 }
 
 /// One fresh read of the brain at `brain`.
@@ -257,6 +291,13 @@ fn step(git: &impl FreshGit, req: &FreshRequest, deadline: Instant) -> Result<Fr
     {
         return Ok(Fresh::Diverged);
     }
+    let incoming = git.incoming(dir, theirs, deadline).map_err(ended)?;
+    if incoming.len() > MAX_FAST_FORWARD_FILES {
+        return Ok(Fresh::TooBig);
+    }
+    if git.uses_filters(dir, theirs, deadline).map_err(ended)? {
+        return Ok(Fresh::Filtered);
+    }
     if deadline.saturating_duration_since(Instant::now()) < FAST_FORWARD_RESERVE {
         return Ok(Fresh::TimedOut);
     }
@@ -267,8 +308,29 @@ fn step(git: &impl FreshGit, req: &FreshRequest, deadline: Instant) -> Result<Fr
     if git.has_tracked_changes(dir, deadline).map_err(ended)? {
         return Ok(Fresh::Dirty);
     }
-    git.fast_forward(dir, theirs, deadline).map_err(ended)?;
+    let ignored = git.ignored(dir, deadline).map_err(ended)?;
+    if ignored_in_the_way(&ignored, &incoming) {
+        return Ok(Fresh::IgnoredInTheWay);
+    }
+    git.fast_forward(dir, theirs).map_err(ended)?;
     Ok(Fresh::FastForwarded)
+}
+
+/// Whether an ignored file or folder (`dir/`) is where the `incoming` paths
+/// go: the same path, a folder an incoming file goes into, a file where an
+/// incoming file needs a folder, or a file inside a folder that becomes an
+/// incoming file. All paths are `/`-separated from the work tree root.
+pub fn ignored_in_the_way(ignored: &[String], incoming: &[String]) -> bool {
+    let under = |path: &str, folder: &str| {
+        path.strip_prefix(folder)
+            .is_some_and(|rest| rest.starts_with('/'))
+    };
+    ignored.iter().any(|entry| {
+        let entry = entry.trim_end_matches('/');
+        incoming
+            .iter()
+            .any(|path| path == entry || under(path, entry) || under(entry, path))
+    })
 }
 
 fn unix_seconds(time: SystemTime) -> u64 {
@@ -498,8 +560,106 @@ impl FreshGit for SystemGit {
         }
     }
 
-    fn fast_forward(&self, dir: &Path, to: &str, deadline: Instant) -> Result<(), FreshError> {
-        let args = SystemGit::with_no_background(&["merge", "--ff-only", "--quiet", to]);
-        self.checked(dir, &args, &[], deadline).map(drop)
+    fn incoming(&self, dir: &Path, to: &str, deadline: Instant) -> Result<Vec<String>, FreshError> {
+        let args = [
+            "-c",
+            "core.quotePath=false",
+            "diff",
+            "--name-only",
+            "-z",
+            "--no-renames",
+            "HEAD",
+            to,
+            "--",
+        ];
+        let out = self.checked(dir, &args, &[], deadline)?;
+        nul_separated(&out, &args)
     }
+
+    fn uses_filters(&self, dir: &Path, to: &str, deadline: Instant) -> Result<bool, FreshError> {
+        let config = ["config", "--get-regexp", r"^filter\."];
+        let done = self.bounded(dir, &config, &[], deadline)?;
+        match done.status.code() {
+            Some(0) => return Ok(true),
+            Some(1) => {}
+            code => return Err(failed(&config, code, &done.stderr)),
+        }
+        let grep = [
+            "grep",
+            "-q",
+            "-I",
+            "-e",
+            "filter=",
+            "HEAD",
+            to,
+            "--",
+            ":(glob)**/.gitattributes",
+        ];
+        let done = self.bounded(dir, &grep, &[], deadline)?;
+        match done.status.code() {
+            Some(0) => Ok(true),
+            Some(1) => Ok(false),
+            code => Err(failed(&grep, code, &done.stderr)),
+        }
+    }
+
+    fn ignored(&self, dir: &Path, deadline: Instant) -> Result<Vec<String>, FreshError> {
+        let args = [
+            "-c",
+            "core.quotePath=false",
+            "ls-files",
+            "-z",
+            "--others",
+            "--ignored",
+            "--exclude-standard",
+            "--directory",
+        ];
+        let out = self.checked(dir, &args, &[], deadline)?;
+        nul_separated(&out, &args)
+    }
+
+    fn fast_forward(&self, dir: &Path, to: &str) -> Result<(), FreshError> {
+        let args = SystemGit::with_no_background(&[
+            "-c",
+            "merge.autostash=false",
+            "merge",
+            "--ff-only",
+            "--no-overwrite-ignore",
+            "--quiet",
+            to,
+        ]);
+        let done = match run_to_end(self.command(Some(dir), &args)) {
+            Ok(done) => done,
+            Err(RunError::Spawn(e)) => {
+                return Err(FreshError::Failed(GitError {
+                    args: args.iter().map(|a| a.to_string()).collect(),
+                    code: None,
+                    detail: e.to_string(),
+                }));
+            }
+            Err(RunError::TimedOut) => return Err(FreshError::TimedOut),
+        };
+        if done.status.success() {
+            Ok(())
+        } else {
+            Err(failed(&args, done.status.code(), &done.stderr))
+        }
+    }
+}
+
+/// git exited `code`, which this step does not expect.
+fn failed(args: &[&str], code: Option<i32>, stderr: &[u8]) -> FreshError {
+    FreshError::Failed(GitError {
+        args: args.iter().map(|a| a.to_string()).collect(),
+        code,
+        detail: String::from_utf8_lossy(stderr).trim().to_string(),
+    })
+}
+
+/// NUL-terminated paths, as `-z` prints them.
+fn nul_separated(out: &[u8], args: &[&str]) -> Result<Vec<String>, FreshError> {
+    out.split(|b| *b == 0)
+        .filter(|item| !item.is_empty())
+        .map(|item| String::from_utf8(item.to_vec()).map_err(|_| unreadable(args, NOT_UTF8)))
+        .collect()
 }

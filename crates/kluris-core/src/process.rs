@@ -35,7 +35,18 @@ pub enum RunError {
 /// Run `cmd` with stdin closed and its output captured, killing it and its
 /// children once `deadline` passes. Whatever the program leaves running when
 /// it exits is killed too.
-pub fn run_until(mut cmd: Command, deadline: Instant) -> Result<Finished, RunError> {
+pub fn run_until(cmd: Command, deadline: Instant) -> Result<Finished, RunError> {
+    run(cmd, Some(deadline))
+}
+
+/// [`run_until`] without a deadline: for work that must never be stopped
+/// halfway (a checkout), the program runs to its end. Whatever it leaves
+/// running when it exits is still killed.
+pub fn run_to_end(cmd: Command) -> Result<Finished, RunError> {
+    run(cmd, None)
+}
+
+fn run(mut cmd: Command, deadline: Option<Instant>) -> Result<Finished, RunError> {
     cmd.stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -68,7 +79,7 @@ pub fn run_until(mut cmd: Command, deadline: Instant) -> Result<Finished, RunErr
                 stderr: std::mem::take(err),
             });
         }
-        if Instant::now() >= deadline {
+        if deadline.is_some_and(|d| Instant::now() >= d) {
             tree.end();
             if status.is_none() {
                 let _ = child.kill();
@@ -293,6 +304,16 @@ mod tests {
             !dir.path().join("survived").exists(),
             "the grandchild outlived the deadline"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn without_a_deadline_the_program_runs_to_its_end() {
+        let started = Instant::now();
+        let done = run_to_end(sh("sleep 1; echo finished")).unwrap();
+        assert!(started.elapsed() >= Duration::from_secs(1));
+        assert_eq!(done.stdout, b"finished\n");
+        assert!(done.status.success());
     }
 
     #[test]

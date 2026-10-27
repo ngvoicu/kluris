@@ -877,3 +877,193 @@ fn a_brain_nested_in_a_larger_repo_is_never_moved() {
         "no stamp in the outer repo"
     );
 }
+
+impl World {
+    /// My clone's view of the remote branch (moved by a fetch).
+    fn tracked_remote(&self) -> String {
+        self.git(&self.mine(), &["rev-parse", "refs/remotes/origin/main"])
+    }
+
+    /// Fetched, not moved, nothing half done: HEAD where it was, the remote
+    /// branch up to date, no `index.lock`, no change of any kind in the tree.
+    fn assert_fetched_only(&self, head_before: &str) {
+        assert_eq!(self.head(), head_before, "HEAD moved");
+        assert_eq!(self.tracked_remote(), self.remote_head(), "not fetched");
+        assert!(
+            !self.mine().join(".git").join("index.lock").exists(),
+            "a stale index.lock"
+        );
+        assert_eq!(
+            self.git(
+                &self.mine(),
+                &["status", "--porcelain", "--untracked-files=all"]
+            ),
+            "",
+            "the tree changed"
+        );
+    }
+}
+
+#[test]
+fn a_slow_checkout_filter_never_leaves_a_half_done_fast_forward() {
+    // The review's repro (T-145 probes/slow_checkout): a smudge filter that
+    // takes 6 s on an incoming file. The read must not stop git halfway.
+    let w = World::new();
+    w.git(&w.mine(), &["config", "filter.slow.smudge", "sleep 6; cat"]);
+    w.git(&w.mine(), &["config", "filter.slow.clean", "cat"]);
+    let t = w.teammate();
+    w.write(&t, ".gitattributes", "k/z.md filter=slow\n");
+    w.write(
+        &t,
+        "k/jwt.md",
+        "---\nparent: map.md\nupdated: 2026-03-02\n---\n# REMOTE NEW\n",
+    );
+    w.write(&t, "k/z.md", "# slow checkout\n");
+    w.commit(&t, "new remote files");
+    w.git(&t, &["push", "-q"]);
+    let before = w.head();
+    let jwt = fs::read(w.mine().join("k/jwt.md")).unwrap();
+    let base = w.baseline(&["wake-up", "--json"]);
+    let started = Instant::now();
+    let out = w.run(&["wake-up", "--json"]);
+    assert!(
+        started.elapsed() < Duration::from_secs(4),
+        "{:?}",
+        started.elapsed()
+    );
+    assert_eq!(out.stdout, base.stdout);
+    w.assert_fetched_only(&before);
+    assert_eq!(fs::read(w.mine().join("k/jwt.md")).unwrap(), jwt);
+    assert!(!w.mine().join("k/z.md").exists());
+}
+
+#[test]
+fn any_configured_filter_leaves_only_the_fetch() {
+    // Git LFS and other filter drivers live in git config; a fast-forward
+    // through them can be slow, so the next `kluris sync` does it.
+    let w = World::new();
+    w.git(
+        &w.mine(),
+        &["config", "filter.lfs.process", "git-lfs filter-process"],
+    );
+    w.teammate_pushes("zebra", "zebras");
+    let before = w.head();
+    w.wake_up();
+    w.assert_fetched_only(&before);
+}
+
+#[test]
+fn a_filter_attribute_in_the_incoming_tree_leaves_only_the_fetch() {
+    let w = World::new();
+    let t = w.teammate();
+    w.write(
+        &t,
+        ".gitattributes",
+        "*.bin filter=lfs diff=lfs merge=lfs -text\n",
+    );
+    w.commit(&t, "lfs attributes");
+    w.git(&t, &["push", "-q"]);
+    w.teammate_pushes("zebra", "zebras");
+    let before = w.head();
+    assert!(w.search_files("zebras").is_empty());
+    w.assert_fetched_only(&before);
+}
+
+/// The teammate pushes `n` new neurons in one commit.
+fn teammate_pushes_many(w: &World, n: usize) {
+    let t = w.teammate();
+    for i in 0..n {
+        w.write(&t, &format!("k/many/n{i}.md"), &format!("# n{i}\n"));
+    }
+    w.commit(&t, "many");
+    w.git(&t, &["push", "-q"]);
+}
+
+#[test]
+fn up_to_200_incoming_files_are_fast_forwarded() {
+    let w = World::new();
+    teammate_pushes_many(&w, 200);
+    w.wake_up();
+    assert_eq!(w.head(), w.remote_head());
+}
+
+#[test]
+fn more_than_200_incoming_files_leave_only_the_fetch() {
+    let w = World::new();
+    teammate_pushes_many(&w, 201);
+    let before = w.head();
+    w.wake_up();
+    w.assert_fetched_only(&before);
+}
+
+#[test]
+fn an_ignored_file_where_the_incoming_tree_writes_is_kept() {
+    // The review's repro (T-145 probes/fresh_ignored): my ignored draft at a
+    // path a teammate starts tracking is never replaced.
+    let w = World::new();
+    let m = w.mine();
+    fs::write(m.join(".git").join("info").join("exclude"), "private/\n").unwrap();
+    w.write(&m, "private/draft.md", "MY DRAFT\n");
+    let t = w.teammate();
+    w.write(&t, "private/draft.md", "TEAM_VERSION\n");
+    w.write(&t, "k/other.md", "# other\n");
+    w.commit(&t, "team draft");
+    w.git(&t, &["push", "-q"]);
+    let before = w.head();
+    w.wake_up();
+    assert_eq!(
+        fs::read_to_string(m.join("private/draft.md")).unwrap(),
+        "MY DRAFT\n"
+    );
+    assert_eq!(w.head(), before, "HEAD moved");
+    assert_eq!(w.tracked_remote(), w.remote_head(), "not fetched");
+    assert!(!m.join("k/other.md").exists());
+    assert!(!m.join(".git").join("index.lock").exists());
+}
+
+#[test]
+fn an_ignored_file_where_the_incoming_tree_needs_a_folder_is_kept() {
+    let w = World::new();
+    let m = w.mine();
+    fs::write(m.join(".git").join("info").join("exclude"), "/notes\n").unwrap();
+    w.write(&m, "notes", "MY NOTES FILE\n");
+    let t = w.teammate();
+    w.write(&t, "notes/a.md", "# a\n");
+    w.commit(&t, "notes folder");
+    w.git(&t, &["push", "-q"]);
+    let before = w.head();
+    w.wake_up();
+    assert_eq!(
+        fs::read_to_string(m.join("notes")).unwrap(),
+        "MY NOTES FILE\n"
+    );
+    assert_eq!(w.head(), before);
+}
+
+#[test]
+fn a_started_fast_forward_runs_to_its_end() {
+    // A post-merge hook keeps git busy past the 3 s: the fast-forward is
+    // never killed once it has started.
+    let w = World::new();
+    let m = w.mine();
+    let done = w.root().join("hook-done");
+    let hook = m.join(".git").join("hooks").join("post-merge");
+    fs::write(
+        &hook,
+        format!(
+            "#!/bin/sh\nsleep 4\necho done > '{}'\n",
+            done.display().to_string().replace('\\', "/")
+        ),
+    )
+    .unwrap();
+    #[cfg(unix)]
+    make_executable(&hook);
+    w.teammate_pushes("zebra", "zebras");
+    let started = Instant::now();
+    let doc = w.wake_up();
+    assert!(started.elapsed() >= Duration::from_secs(4));
+    assert_eq!(doc["total_neurons"], 2);
+    assert_eq!(w.head(), w.remote_head());
+    assert!(done.exists(), "the merge was killed before its hook ended");
+    assert!(!m.join(".git").join("index.lock").exists());
+}

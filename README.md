@@ -427,6 +427,20 @@ after the brain changes. To see what the agent sees:
 kluris wake-up --brain acme
 ```
 
+Before they read, `kluris wake-up` and `kluris search` bring the brain up to
+date with your team, at most once a minute and silently: they fetch the
+branch's upstream and, when your branch is only behind it, fast-forward it.
+The fetch and the checks take at most 3 seconds; a fast-forward, once
+started, always finishes, so it starts only when it is quick and safe. The
+read keeps just the fetch, and your next `kluris sync` brings the changes in,
+when a checkout filter is set up (Git LFS, or any `filter.*` in git config or
+`filter=` in a `.gitattributes`), when more than 200 files changed, or when a
+file you ignore is where an incoming file goes. A brain with local edits, a
+merge or rebase in progress, an open sync conflict, a branch that diverged or
+no upstream is read as it is, and a brain inside another project's repository
+is never fetched. Turn it off with `KLURIS_NO_AUTO_SYNC=1` or, for one brain,
+`sync: {auto_fetch: false}` in its `kluris.yml`.
+
 ## Several brains
 
 Each brain has its own skill (`/kluris-acme`, `/kluris-personal`), so the agent
@@ -705,6 +719,8 @@ agents:
 companions: []       # see "Specmint companions"
 search:
   language: en       # en or ro; detected when absent
+sync:
+  auto_fetch: true   # false: wake-up and search read without fetching
 ```
 
 Trim `agents.commands_for` to the agents you use and run `kluris doctor`. The
@@ -716,6 +732,7 @@ shared `~/.agents/skills/` folder always gets every brain's skill.
 |----------|--------|
 | `KLURIS_CONFIG` | Use this file instead of `~/.kluris/config.yml` |
 | `KLURIS_NO_PROMPT=1` | Never prompt; commands that need a choice stop and say what to pass |
+| `KLURIS_NO_AUTO_SYNC=1` | `wake-up` and `search` read without fetching the brain first |
 | `COPILOT_HOME` | Also install the skills into `$COPILOT_HOME/skills` |
 | `KLURIS_GITHUB_TOKEN` | A GitHub token for `self-update` |
 | `KLURIS_VERSION` | The release the install scripts install |
