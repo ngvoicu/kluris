@@ -9,7 +9,8 @@ use std::io::Write;
 use std::path::Path;
 use std::time::Duration;
 
-use super::outcome::{STOPPED, Said, TIMED_OUT, answer, exit_said, say, summary};
+use super::outcome::{REFUSED, STOPPED, Said, TIMED_OUT, answer, exit_said, say, summary};
+use super::queue::{Pace, Queues};
 use super::runner::{Call, Runner, Stream, Streamed};
 
 const UPLOAD_BOUND: Duration = Duration::from_secs(10 * 60);
@@ -39,8 +40,15 @@ pub struct Ctx<'a> {
     pub channel: String,
     /// Writes the tarball (with the run script in it) and answers the commit.
     pub pack: &'a mut dyn FnMut(&Path, &str) -> Result<String, String>,
-    /// The worktree, for the `--parity-files` check before anything is sent.
+    /// The worktree, for the `--parity-files` check before anything is sent,
+    /// and its folder's name for the run's ticket.
     pub root: &'a Path,
+    /// The machines' queues ([`super::queue`]): none where no folder is known.
+    pub queues: Option<Queues>,
+    /// The clock and the pauses of the wait for a turn.
+    pub pace: &'a mut dyn Pace,
+    /// The command as it was typed, for the run's ticket.
+    pub command: String,
 }
 
 /// The machine a run goes to, as its lines name it.
@@ -69,11 +77,30 @@ pub struct Run<'a> {
     pub cleanup: &'a str,
 }
 
-/// Sends the tarball at `tarball`, then the bootstrap, and answers the status
-/// this command ends with.
-pub fn go(ctx: &mut Ctx, remote: Remote, tarball: &Path, run: Run) -> Result<i32, String> {
+/// How a run sent to its machine ended.
+#[derive(Debug, PartialEq, Eq)]
+pub struct Sent {
+    /// The status this command ends with.
+    pub code: i32,
+    /// The bootstrap refused the run with 75 before unpacking anything (the
+    /// machine's own lock, or a check under it), and what it said: the run
+    /// may wait on for its turn.
+    pub refused: Option<String>,
+}
+
+impl From<i32> for Sent {
+    fn from(code: i32) -> Self {
+        Self {
+            code,
+            refused: None,
+        }
+    }
+}
+
+/// Sends the tarball at `tarball`, then the bootstrap, and answers how it ended.
+pub fn go(ctx: &mut Ctx, remote: Remote, tarball: &Path, run: Run) -> Result<Sent, String> {
     if (ctx.stop)() {
-        return Ok(STOPPED);
+        return Ok(STOPPED.into());
     }
     let upload = Call::new(
         "scp",
@@ -102,11 +129,11 @@ pub fn go(ctx: &mut Ctx, remote: Remote, tarball: &Path, run: Run) -> Result<i32
         )?;
         let cleaned = remove_upload(ctx, remote, run.tarball_name, run.cleanup);
         say(ctx.err, &format!("{}: {cleaned}", remote.task))?;
-        return Ok(1);
+        return Ok(1.into());
     }
     if (ctx.stop)() {
         end_there(ctx, remote, run.stop);
-        return Ok(STOPPED);
+        return Ok(STOPPED.into());
     }
 
     let mut args: Vec<String> = ["-o", "BatchMode=yes"].map(str::to_owned).to_vec();
@@ -178,7 +205,15 @@ pub fn go(ctx: &mut Ctx, remote: Remote, tarball: &Path, run: Run) -> Result<i32
         ctx.err,
         &summary(remote.task, remote.name, run.id, run.commit, &said, code),
     )?;
-    Ok(code)
+    // The machine said 75 itself before it said a tree: its bootstrap refused
+    // the run before anything was unpacked.
+    let exit = said.last_line.as_deref().and_then(exit_said);
+    let refused = (exit == Some(REFUSED) && said.tree.is_none()).then(|| {
+        said.before_last
+            .clone()
+            .unwrap_or_else(|| format!("{} refused the run with {REFUSED}", remote.name))
+    });
+    Ok(Sent { code, refused })
 }
 
 /// Removes what a failed upload left of the run's tarball there with the

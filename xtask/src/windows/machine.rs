@@ -1,8 +1,8 @@
 //! The two Windows machines, and whether a run may go to one now.
 //!
 //! - **zeewin** (AGV-COMPUTE1, `ssh zeewin`): the old PC, short of memory, so
-//!   its builds run with fewer jobs. Nothing is asked of it before a run: its
-//!   lock refuses a run while another goes on.
+//!   its builds run with fewer jobs. Nothing is asked of it at the head of its
+//!   queue: its lock refuses a run while another goes on, and the run waits on.
 //! - **zeewin2** (the ASUS laptop's Windows, `ssh zeewin2`): the owner's laptop
 //!   and poker-lab's compute box. A run is refused (75) while poker-lab's
 //!   `~/.compile-lock/owner` exists on the laptop's Ubuntu (`ssh zeelin`; one
@@ -11,10 +11,13 @@
 //!   (`~/.kluris-ci/.linux-run.lock`, asked with `flock -n` as `cargo xtask
 //!   linux` asks it; the holder from `.linux-run.id` beside it), and while C:
 //!   has under [`FLOOR_GIB`] free. The locks are only looked at: never held,
-//!   broken or waited on.
+//!   broken or waited on; a refused run waits in the queue
+//!   ([`crate::ssh_ci::queue`]) and asks again.
 //!
-//! With no `--machine` a run goes to zeewin2 while it is allowed and no run of
-//! Kluris or ConsensFlow holds it, else to zeewin.
+//! With no `--machine` a run goes, as ConsensFlow's runner sends its own, to
+//! zeewin2 while no live run is queued for it (the queue is asked first, and
+//! alone), it is allowed and no run of Kluris or ConsensFlow holds it, else to
+//! zeewin.
 
 use std::time::Duration;
 
@@ -23,6 +26,7 @@ use super::remote::{Call, Captured, Runner};
 use super::script;
 use crate::linux::script::{LOCK as LINUX_LOCK, OWNER as LINUX_OWNER};
 use crate::ssh_ci::plan::CI_DIR;
+use crate::ssh_ci::queue::{Look, Queues, queued_words};
 
 /// The least C: of zeewin2 must have free for a run, in GiB.
 pub const FLOOR_GIB: u64 = 50;
@@ -87,6 +91,14 @@ pub enum Ready {
 /// Whether a run may go to `machine` now. A machine that could not say is the error.
 pub fn ready(machine: &Machine, runner: &mut dyn Runner) -> Result<Ready, String> {
     Ok(look(machine, runner)?.0)
+}
+
+/// [`ready`], as the run at the head of the machine's queue asks it.
+pub fn look_ready(machine: &Machine, runner: &mut dyn Runner) -> Result<Look, String> {
+    Ok(match ready(machine, runner)? {
+        Ready::Go(notes) => Look::Go(notes),
+        Ready::Refused(why) => Look::Busy(why),
+    })
 }
 
 /// [`ready`], and the holder of the shared lock if a run holds it.
@@ -241,13 +253,22 @@ fn state(machine: &Machine, runner: &mut dyn Runner) -> Result<State, String> {
     Ok(State { free_gib, holder })
 }
 
-/// The machine a run goes to with no `--machine`, and the line that says which and why.
-pub fn choose(runner: &mut dyn Runner) -> (Machine, String) {
+/// The machine a run goes to with no `--machine`, and the line that says
+/// which and why: as ConsensFlow's runner chooses, zeewin2 while it is free
+/// (no live run in its queue, which is asked first and alone, and then
+/// [`look`] allowing it with no run holding its lock), else zeewin, where the
+/// run then queues whatever zeewin's queue holds.
+pub fn choose(runner: &mut dyn Runner, queues: Option<&Queues>, now_ms: i64) -> (Machine, String) {
     let laptop = Machine::named(Name::Zeewin2);
-    let why = match look(&laptop, runner) {
-        Ok((Ready::Go(_), None)) => return (laptop, "windows: on zeewin2".into()),
-        Ok((Ready::Go(_), Some(holder))) => format!("a run holds its lock ({holder})"),
-        Ok((Ready::Refused(why), _)) | Err(why) => why,
+    let queued = queues.map_or(0, |queues| queues.depth(laptop.name, now_ms));
+    let why = if queued > 0 {
+        queued_words(queued)
+    } else {
+        match look(&laptop, runner) {
+            Ok((Ready::Go(_), None)) => return (laptop, "windows: on zeewin2".into()),
+            Ok((Ready::Go(_), Some(holder))) => format!("a run holds its lock ({holder})"),
+            Ok((Ready::Refused(why), _)) | Err(why) => why,
+        }
     };
     (
         Machine::named(Name::Zeewin),

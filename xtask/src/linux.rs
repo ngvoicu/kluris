@@ -3,32 +3,45 @@
 //! way `cargo xtask windows` runs them on zeewin and zeewin2.
 //!
 //! ```text
-//! cargo xtask linux [--parity [--parity-files f.py[,...]]] [-- <extra cargo test args>]
+//! cargo xtask linux [--wait MINUTES] [--parity [--parity-files f.py[,...]]] [-- <extra cargo test args>]
 //! ```
 //!
 //! A run, in order:
 //!
-//! 1. The probe ([`script::probe`]), one bounded ssh that sends nothing: zeelin
-//!    not answering ends the command with 75 ("zeelin not running"; it is never
-//!    started from here), and so does any of the three locks held, named:
+//! 1. The turn ([`crate::ssh_ci::queue`]): zeelin is the laptop zeewin2 is, so
+//!    the run takes a ticket in zeewin2's folder of the queue every runner on
+//!    this Mac shares with ConsensFlow's (`~/.cf-windows-queues/zeewin2`, or
+//!    `CF_WINDOWS_QUEUES`): it waits behind the zeewin2 runs of either project
+//!    that came first, and those that come later wait behind it. It waits up
+//!    to `--wait MINUTES` (60, at most a day), saying where it stands each
+//!    minute, then ends with 75; `--wait 0` asks once and takes no ticket (75
+//!    at once if zeelin is busy or a run is queued). The run holds its ticket
+//!    until it ends, however it ends.
+//! 2. The probe at the head of the queue ([`script::probe`]), one bounded ssh
+//!    that sends nothing: zeelin not answering ends the command with 75 at
+//!    once ("zeelin not running"; it is never started from here, nor waited
+//!    on), and any of the three locks held, named, makes the run wait on:
 //!    poker-lab's `~/.compile-lock/owner` (zeelin is poker-lab's compute box
 //!    first), the record of a run holding zeewin2 (the same laptop's Windows,
 //!    `/mnt/c/Users/AGV/consensflow-build/.windows-run.id`, written by
 //!    ConsensFlow's and Kluris's `cargo xtask windows`), and Kluris's own
 //!    one-run lock `~/.kluris-ci/.linux-run.lock`. Locks are only looked at:
-//!    never taken (but Kluris's own), broken or waited on.
-//! 2. The tarball ([`crate::ssh_ci::pack`]): `git archive` of HEAD, or of a
+//!    never taken (but Kluris's own) or broken; the run waits in the queue,
+//!    never on another project's lock.
+//! 3. The tarball ([`crate::ssh_ci::pack`]): `git archive` of HEAD, or of a
 //!    `git stash create` commit when tracked files have uncommitted changes,
 //!    with the run script beside the files, sent by scp to
 //!    `~/.kluris-ci/incoming/<run id>.tgz` (removed there at once when the
 //!    upload fails).
-//! 3. The bootstrap ([`script::bootstrap`]), in a session of its own: Kluris's
+//! 4. The bootstrap ([`script::bootstrap`]), in a session of its own: Kluris's
 //!    lock taken with `flock -n` for the whole run, the three locks asked again
-//!    under it (75 at once while one is held), the run's record written, the
+//!    under it (75 at once while one is held: the run goes back to its place in
+//!    the queue and waits on, or with `--wait 0` the command ends with 75), the
+//!    run's record written, the
 //!    tarball unpacked into `~/.kluris-ci/runs/<run id>` and the run script
 //!    sourced. Its `trap` ends every other process of the run's session and
 //!    removes the tarball and the record, however the run ends.
-//! 4. The run script: `ulimit -u` caps the user's tasks while the run goes,
+//! 5. The run script: `ulimit -u` caps the user's tasks while the run goes,
 //!    run folders and tarballs older than a day are swept, then each step under
 //!    `timeout`: the tree's Rust toolchain into Kluris's own `RUSTUP_HOME`
 //!    (with the user's `~/.cargo/bin/rustup` by its full path), `cargo test
@@ -36,7 +49,7 @@
 //!    hash checked), a release `kluris` and the parity harness with
 //!    `KLURIS_V3_BIN` pointing at it. Everything lives under `~/.kluris-ci/`;
 //!    PATH changes for the run's own process only, and no profile is touched.
-//! 5. The output streams back as it comes; the status is the run's last line
+//! 6. The output streams back as it comes; the status is the run's last line
 //!    (`== exit N`), and a summary line says each step's. A run stopped here
 //!    (Ctrl-C: 130), past its bound (124) or whose connection was lost is ended
 //!    there by the stop script.
@@ -53,7 +66,7 @@ use std::process::ExitCode;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use crate::ssh_ci::{pack, runner};
+use crate::ssh_ci::{pack, queue, runner};
 use options::Parsed;
 
 /// `cargo xtask linux <args>`.
@@ -84,6 +97,8 @@ pub fn main(args: &[String]) -> ExitCode {
             return ExitCode::from(1);
         }
     }
+    let stop = || stopped.load(Ordering::SeqCst);
+    let mut pace = queue::Real::new(&stop);
     let stdout = io::stdout();
     let stderr = io::stderr();
     let files = match options.wrapper.as_deref().map(options::wrapper_file) {
@@ -101,11 +116,18 @@ pub fn main(args: &[String]) -> ExitCode {
         runner: &mut runner::System,
         out: &mut stdout.lock(),
         err: &mut stderr.lock(),
-        stop: &|| stopped.load(Ordering::SeqCst),
+        stop: &stop,
         id: crate::ssh_ci::plan::run_id(),
         channel,
         pack: &mut pack,
         root,
+        queues: queue::Queues::of_env(),
+        pace: &mut pace,
+        command: ["cargo xtask linux".to_owned()]
+            .into_iter()
+            .chain(args.iter().cloned())
+            .collect::<Vec<_>>()
+            .join(" "),
     };
     let code = run::linux(&options, &mut ctx);
     ExitCode::from(u8::try_from(code).unwrap_or(1))

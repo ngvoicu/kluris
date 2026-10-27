@@ -339,7 +339,7 @@ $other = if ($holder) { try { Get-Process -Id $holder -ErrorAction Stop | Where-
 if (-not $lock -or $other) {
   $of = @(Get-Content $owner -ErrorAction SilentlyContinue)
   $who = if ($of[0] -like 'kluris-*') { "a Kluris run ($($of[0]), process $($of[1]))" } elseif ($of[0]) { "a ConsensFlow run ($($of[0]), process $($of[1]))" } elseif ($other) { "process $($other.Id)" } else { 'a run that left no record' }
-  Write-Output "The machine's one-run lock is held by $who$(if ($why) { " (the lock could not be opened: $why)" }): one run at a time, not waiting."
+  Write-Output "The machine's one-run lock is held by $who$(if ($why) { " (the lock could not be opened: $why)" }): one run at a time."
   Exit-Run 75
 }
 Set-Content -Path $running -Value $PID

@@ -1,22 +1,30 @@
-//! The words of `cargo xtask linux` ([`crate::ssh_ci::words`]): `--parity`,
+//! The words of `cargo xtask linux` ([`crate::ssh_ci::words`]): `--wait
+//! MINUTES`, `--parity`,
 //! `--parity-files`, `--installer-smoke`, `--wrapper`, `--published`,
 //! `--unpinned`, `--help`, and after `--` the extra arguments of `cargo test`. There is one machine, so no
 //! `--machine`.
 
 use crate::ssh_ci::words;
 
-pub const USAGE: &str = "usage: cargo xtask linux [--parity [--parity-files parity/test.py[,...]]] [-- <cargo test args>]
-       cargo xtask linux --installer-smoke [--wrapper <site install.sh>]
-       cargo xtask linux --installer-smoke --published <version> [--unpinned]
-       cargo xtask linux --clippy
+pub const USAGE: &str = "usage: cargo xtask linux [--wait MINUTES] [--parity [--parity-files parity/test.py[,...]]] [-- <cargo test args>]
+       cargo xtask linux [--wait MINUTES] --installer-smoke [--wrapper <site install.sh>]
+       cargo xtask linux [--wait MINUTES] --installer-smoke --published <version> [--unpinned]
+       cargo xtask linux [--wait MINUTES] --clippy
 
 Runs `cargo test --workspace` (and with --parity the parity harness against a
 release kluris) on zeelin, the household laptop's Ubuntu (WSL2), over ssh, on
 this worktree as it is now (HEAD plus uncommitted tracked changes).
 --parity-files narrows the parity step to the parity/*.py files it names; each
-must be in this tree. The command ends with 75, having run nothing, while
-zeelin is not running, while poker-lab's lock or a run on zeewin2 (the same
-laptop) holds it, and while another run holds its one-run lock.
+must be in this tree.
+
+zeelin is the laptop zeewin2 is, so a run waits for its turn in zeewin2's
+queue, first come first served with every runner on this Mac (ConsensFlow's
+too: ~/.cf-windows-queues/zeewin2, or $CF_WINDOWS_QUEUES/zeewin2), up to
+--wait MINUTES (60 unless given, at most 1440), saying each minute where it
+stands, then 75. At the head of the queue zeelin is asked: poker-lab's lock,
+a run on zeewin2 and Kluris's own one-run lock make it wait on; zeelin not
+running ends the command with 75 at once, never waited on. --wait 0 asks once
+and ends with 75 if zeelin is busy or a run is queued.
 
 --clippy runs no tests: `cargo clippy --workspace --all-targets -- -D
 warnings`, ci.yml's gate, on zeelin.
@@ -52,6 +60,9 @@ pub struct Options {
     /// With `--published`: no `KLURIS_VERSION`, so the wrapper installs
     /// GitHub's latest release, which must be the one `--published` names.
     pub unpinned: bool,
+    /// How long the run waits for its turn at a busy machine, in minutes
+    /// (`--wait`); 0 asks once and is refused at once.
+    pub wait: u32,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -73,6 +84,7 @@ pub fn parse(args: &[String]) -> Result<Parsed, String> {
         clippy: words.clippy,
         published: words.published,
         unpinned: words.unpinned,
+        wait: words.wait,
     }))
 }
 

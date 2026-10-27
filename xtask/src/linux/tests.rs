@@ -10,7 +10,8 @@ use std::time::Duration;
 use super::options::{self, Options, Parsed};
 use super::run::{self, Ctx};
 use super::script::{self, Layout, Spec};
-use crate::ssh_ci::fake::{Answer, Fake, said, timed_out};
+use crate::ssh_ci::fake::{Answer, Clock, Fake, NOW, said, tickets, timed_out};
+use crate::ssh_ci::queue::{Queues, Who};
 use crate::ssh_ci::runner::{Captured, Stream, Streamed};
 
 const ID: &str = "kluris-0000abcd-12345678";
@@ -87,6 +88,7 @@ mod words_of_the_command {
                 clippy: false,
                 published: None,
                 unpinned: false,
+                wait: 60,
             }
         );
     }
@@ -213,6 +215,36 @@ mod words_of_the_command {
             words("parity/test_smoke.py parity/test_dream.py")
         );
         assert_eq!(options.cargo_args, words("-p kluris-core -- --nocapture"));
+    }
+
+    #[test]
+    fn wait_is_the_minutes_of_a_turn_an_hour_unless_given_at_most_a_day() {
+        assert_eq!(run_of("").wait, 60);
+        assert_eq!(run_of("--wait 0").wait, 0);
+        assert_eq!(run_of("--wait=15 --clippy").wait, 15);
+        assert_eq!(run_of("--wait 1440").wait, 1440);
+        for (line, says) in [
+            (
+                "--wait 1441",
+                "--wait is the minutes to wait for a turn, 0 to 1440: 1441",
+            ),
+            (
+                "--wait=-1",
+                "--wait is the minutes to wait for a turn, 0 to 1440: -1",
+            ),
+            (
+                "--wait soon",
+                "--wait is the minutes to wait for a turn, 0 to 1440: soon",
+            ),
+            (
+                "--wait",
+                "--wait takes the minutes to wait for a turn, 0 to 1440",
+            ),
+            ("--wait 1 --wait 2", "--wait is given once"),
+        ] {
+            let refused = options::parse(&words(line)).expect_err(line);
+            assert_eq!(refused, says, "{line:?}");
+        }
     }
 
     #[test]
@@ -1066,16 +1098,42 @@ mod runs {
         err: String,
         fake: Fake,
         scripts: Vec<String>,
+        /// The run's queues, a folder of the test's own.
+        queues: tempfile::TempDir,
+        pauses: Vec<u64>,
+        /// zeewin2's queue each time the tree was packed: after the wait,
+        /// while the run holds its place.
+        held: Vec<Vec<String>>,
     }
 
     fn ran_in(root: &Path, options: Options, answers: Vec<Answer>) -> Ran {
+        ran_queued(
+            root,
+            options,
+            answers,
+            tempfile::tempdir().unwrap(),
+            Clock::default(),
+        )
+    }
+
+    /// A run whose queues are `queues` and whose clock is `clock`.
+    fn ran_queued(
+        root: &Path,
+        options: Options,
+        answers: Vec<Answer>,
+        queues: tempfile::TempDir,
+        mut clock: Clock,
+    ) -> Ran {
         let mut fake = Fake::new(answers);
         let mut out = Vec::new();
         let mut err = Vec::new();
         let mut scripts = Vec::new();
+        let mut held = Vec::new();
+        let folder = queues.path().to_path_buf();
         let code = {
             let mut pack = |tarball: &Path, run_script: &str| -> Result<String, String> {
                 scripts.push(run_script.to_owned());
+                held.push(tickets(&folder, "zeewin2"));
                 fs::write(tarball, b"tarball").map_err(|e| e.to_string())?;
                 Ok("5f54983aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into())
             };
@@ -1088,6 +1146,9 @@ mod runs {
                 channel: "1.99.0".into(),
                 pack: &mut pack,
                 root,
+                queues: Some(Queues::at(&folder, Duration::from_secs(3600))),
+                pace: &mut clock,
+                command: "cargo xtask linux".into(),
             };
             run::linux(&options, &mut ctx)
         };
@@ -1097,6 +1158,9 @@ mod runs {
             err: String::from_utf8(err).unwrap(),
             fake,
             scripts,
+            queues,
+            pauses: clock.pauses,
+            held,
         }
     }
 
@@ -1114,6 +1178,7 @@ mod runs {
             clippy: false,
             published: None,
             unpinned: false,
+            wait: 0,
         }
     }
 
@@ -1301,7 +1366,7 @@ mod runs {
     fn zeewin2_busy_and_its_own_lock_held_are_75() {
         for line in [
             "the laptop is busy: a Kluris run (kluris-0000cf2a-be059375, process 62120) holds zeewin2",
-            "zeelin's one-run lock is held by a Kluris run (kluris-1-2, process 7): one run at a time, not waiting",
+            "zeelin's one-run lock is held by a Kluris run (kluris-1-2, process 7): one run at a time",
         ] {
             let ran = ran(
                 plain(false),
@@ -1360,6 +1425,7 @@ mod runs {
             clippy: false,
             published: None,
             unpinned: false,
+            wait: 0,
         };
         let ran = ran_in(dir.path(), options, vec![]);
         assert_eq!(ran.code, 1);
@@ -1375,6 +1441,7 @@ mod runs {
             clippy: false,
             published: None,
             unpinned: false,
+            wait: 0,
         };
         let ran = ran_in(
             dir.path(),
@@ -1400,7 +1467,7 @@ mod runs {
                 Answer::Stream(
                     vec![(
                         Stream::Out,
-                        "zeelin's one-run lock is held by a Kluris run (kluris-1-2, process 7): one run at a time, not waiting.\n\n== exit 75\n",
+                        "zeelin's one-run lock is held by a Kluris run (kluris-1-2, process 7): one run at a time.\n\n== exit 75\n",
                     )],
                     Ok(Streamed::Exited(Some(75))),
                 ),
@@ -1488,5 +1555,252 @@ mod runs {
         assert_eq!(ran.code, 255, "{}", ran.err);
         let id = id_of(&ran.fake);
         assert_eq!(stop_sent(&ran.fake), Some(script::stop_line(&id)));
+    }
+
+    // --- the queue every runner on this Mac shares: zeewin2's, the same laptop ----
+
+    fn waiting() -> Options {
+        Options {
+            wait: 60,
+            ..plain(false)
+        }
+    }
+
+    /// A ConsensFlow run queued for zeewin2 a second before the run comes.
+    fn queued_ahead(queues: &tempfile::TempDir) -> crate::ssh_ci::queue::Ticket {
+        Queues::at(queues.path(), Duration::from_secs(3600))
+            .join(
+                "zeewin2",
+                &Who {
+                    tree: "consensflow".into(),
+                    command: "cargo xtask windows --machine zeewin2 -- cargo test".into(),
+                },
+                NOW - 1_000,
+            )
+            .unwrap()
+    }
+
+    fn mine() -> String {
+        format!("-{:010}.ticket", std::process::id())
+    }
+
+    fn passed() -> Answer {
+        Answer::Stream(vec![(Stream::Out, PASSED)], Ok(Streamed::Exited(Some(0))))
+    }
+
+    const POKER_LAB: &str = "zeelin is busy: poker-lab's job holds it (~/.compile-lock/owner), and no run goes while it does";
+
+    fn poker_lab() -> Answer {
+        said(75, &format!("{POKER_LAB}\n\n== exit 75\n"))
+    }
+
+    #[test]
+    fn a_linux_run_queues_in_zeewin2s_folder_behind_a_windows_run() {
+        let queues = tempfile::tempdir().unwrap();
+        let mut ahead = Some(queued_ahead(&queues));
+        let clock = Clock {
+            on_pause: Box::new(move |_| drop(ahead.take())),
+            ..Clock::default()
+        };
+        let ran = ran_queued(
+            Path::new("."),
+            waiting(),
+            vec![free(), said(0, ""), passed()],
+            queues,
+            clock,
+        );
+        assert_eq!(ran.code, 0, "{}", ran.err);
+        assert_eq!(ran.pauses, [10_000]);
+        assert!(
+            ran.err.starts_with(
+                "linux: waiting for zeelin, 0 s of up to 60 min: 2nd in the queue for zeewin2; \
+                 the run ahead is consensflow (cargo xtask windows --machine zeewin2 -- cargo test), here for 1 s\n"
+            ),
+            "{}",
+            ran.err
+        );
+        assert_eq!(ran.held.len(), 1);
+        assert_eq!(ran.held[0].len(), 1, "{:?}", ran.held);
+        assert!(ran.held[0][0].ends_with(&mine()), "{:?}", ran.held);
+        assert_eq!(tickets(ran.queues.path(), "zeewin2"), Vec::<String>::new());
+        assert!(!ran.queues.path().join("zeelin").exists());
+    }
+
+    #[test]
+    fn zeelin_not_running_is_75_at_once_and_never_waited_on() {
+        let ran = ran(
+            waiting(),
+            vec![failed(
+                255,
+                "ssh: connect to host 10.6.0.6 port 22: Operation timed out\n",
+            )],
+        );
+        assert_eq!(ran.code, 75, "{}", ran.err);
+        assert!(ran.pauses.is_empty());
+        assert!(ran.err.contains("linux: zeelin not running"), "{}", ran.err);
+        assert_eq!(ran.fake.calls.len(), 1);
+        assert_eq!(tickets(ran.queues.path(), "zeewin2"), Vec::<String>::new());
+        // Nor once the wait is on.
+        let later = ran_in(Path::new("."), waiting(), vec![poker_lab(), timed_out()]);
+        assert_eq!(later.code, 75, "{}", later.err);
+        assert_eq!(later.pauses, [30_000]);
+        assert!(
+            later.err.contains("linux: zeelin not running"),
+            "{}",
+            later.err
+        );
+    }
+
+    #[test]
+    fn a_busy_zeelin_at_the_head_is_waited_for_and_asked_again() {
+        let ran = ran(waiting(), vec![poker_lab(), free(), said(0, ""), passed()]);
+        assert_eq!(ran.code, 0, "{}", ran.err);
+        assert_eq!(ran.pauses, [30_000]);
+        assert!(
+            ran.err.starts_with(&format!(
+                "linux: waiting for zeelin, 0 s of up to 60 min: {POKER_LAB}\n"
+            )),
+            "{}",
+            ran.err
+        );
+    }
+
+    #[test]
+    fn a_refusal_by_the_bootstrap_at_the_head_keeps_the_place_and_tries_again() {
+        let held = "zeelin's one-run lock is held by a Kluris run (kluris-1-2, process 7): one run at a time\n\n== exit 75\n";
+        let ran = ran(
+            waiting(),
+            vec![
+                free(),
+                said(0, ""),
+                Answer::Stream(vec![(Stream::Out, held)], Ok(Streamed::Exited(Some(75)))),
+                free(),
+                said(0, ""),
+                passed(),
+            ],
+        );
+        assert_eq!(ran.code, 0, "{}", ran.err);
+        assert_eq!(ran.pauses, [30_000]);
+        assert!(
+            ran.err.contains(
+                "linux: waiting for zeelin, 0 s of up to 60 min: zeelin's one-run lock is held by a Kluris run (kluris-1-2, process 7): one run at a time\n"
+            ),
+            "{}",
+            ran.err
+        );
+        assert_eq!(ran.scripts.len(), 1, "packed once");
+        assert_eq!(tickets(ran.queues.path(), "zeewin2"), Vec::<String>::new());
+    }
+
+    #[test]
+    fn wait_0_is_refused_behind_a_live_zeewin2_ticket_and_asks_nothing() {
+        let queues = tempfile::tempdir().unwrap();
+        let ahead = queued_ahead(&queues);
+        let ran = ran_queued(
+            Path::new("."),
+            plain(false),
+            vec![],
+            queues,
+            Clock::default(),
+        );
+        assert_eq!(ran.code, 75);
+        assert_eq!(
+            ran.err,
+            "linux: zeelin is busy: 1 run is queued for it (zeewin2's queue: the same laptop)\n"
+        );
+        assert!(ran.fake.calls.is_empty());
+        drop(ahead);
+    }
+
+    #[test]
+    fn a_wait_that_runs_out_is_75_saying_how_long_and_what_for() {
+        let ran = ran(
+            Options {
+                wait: 1,
+                ..plain(false)
+            },
+            vec![poker_lab(), poker_lab(), poker_lab()],
+        );
+        assert_eq!(ran.code, 75, "{}", ran.err);
+        assert_eq!(
+            ran.err,
+            format!(
+                "linux: waiting for zeelin, 0 s of up to 1 min: {POKER_LAB}\n\
+                 linux: zeelin is still busy after waiting 1 min (as far as --wait 1 goes): {POKER_LAB}\n"
+            )
+        );
+        assert!(ran.scripts.is_empty());
+    }
+
+    #[test]
+    fn the_ticket_goes_however_the_run_ends() {
+        let tree = "== tree 5f54983a\n== step toolchain: x\n";
+        let failed_run = "== tree 5f54983aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n\n== exit 1\n";
+        let cases: Vec<(i32, Vec<Answer>)> = vec![
+            (0, vec![free(), said(0, ""), passed()]),
+            (
+                1,
+                vec![
+                    free(),
+                    said(0, ""),
+                    Answer::Stream(
+                        vec![(Stream::Out, failed_run)],
+                        Ok(Streamed::Exited(Some(1))),
+                    ),
+                ],
+            ),
+            (
+                124,
+                vec![
+                    free(),
+                    said(0, ""),
+                    Answer::Stream(vec![], Ok(Streamed::TimedOut)),
+                    said(0, ""),
+                ],
+            ),
+            (
+                130,
+                vec![
+                    free(),
+                    said(0, ""),
+                    Answer::Stream(vec![], Ok(Streamed::Stopped)),
+                    said(0, ""),
+                ],
+            ),
+            (
+                255,
+                vec![
+                    free(),
+                    said(0, ""),
+                    Answer::Stream(vec![(Stream::Out, tree)], Ok(Streamed::Exited(Some(255)))),
+                    said(0, ""),
+                ],
+            ),
+            (1, vec![free(), said(1, ""), said(0, "removed\n")]),
+        ];
+        for (code, answers) in cases {
+            let ran = ran(waiting(), answers);
+            assert_eq!(ran.code, code, "{}", ran.err);
+            assert_eq!(ran.held.len(), 1);
+            assert!(ran.held[0][0].ends_with(&mine()), "{code}: {:?}", ran.held);
+            assert_eq!(
+                tickets(ran.queues.path(), "zeewin2"),
+                Vec::<String>::new(),
+                "{code}"
+            );
+        }
+        let ran = ran_queued(
+            Path::new("."),
+            waiting(),
+            vec![poker_lab()],
+            tempfile::tempdir().unwrap(),
+            Clock {
+                stop_after: Some(1),
+                ..Clock::default()
+            },
+        );
+        assert_eq!(ran.code, 130, "{}", ran.err);
+        assert!(ran.scripts.is_empty());
+        assert_eq!(tickets(ran.queues.path(), "zeewin2"), Vec::<String>::new());
     }
 }

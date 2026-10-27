@@ -4,7 +4,9 @@
 
 use std::collections::VecDeque;
 use std::io;
+use std::path::Path;
 
+use super::queue::Pace;
 use super::runner::{Call, Captured, Runner, Stream, Streamed};
 
 /// What the fake answers a call with, in the order the calls come.
@@ -85,4 +87,58 @@ pub fn timed_out() -> Answer {
         stderr: String::new(),
         timed_out: true,
     }))
+}
+
+/// A clock for the wait for a turn whose time moves only as the wait pauses,
+/// that hears a stop after `stop_after` pauses if it is given one, and calls
+/// `on_pause` with the pauses so far after each.
+pub struct Clock {
+    pub now: i64,
+    pub pauses: Vec<u64>,
+    pub stop_after: Option<usize>,
+    pub on_pause: Box<dyn FnMut(usize)>,
+}
+
+/// A moment the tests of a whole run count from, in milliseconds.
+pub const NOW: i64 = 1_800_000_000_000;
+
+impl Default for Clock {
+    fn default() -> Self {
+        Self {
+            now: NOW,
+            pauses: Vec::new(),
+            stop_after: None,
+            on_pause: Box::new(|_| {}),
+        }
+    }
+}
+
+impl Pace for Clock {
+    fn now_ms(&mut self) -> i64 {
+        self.now
+    }
+
+    fn pause(&mut self, ms: u64) -> bool {
+        self.pauses.push(ms);
+        self.now += i64::try_from(ms).unwrap_or(i64::MAX);
+        (self.on_pause)(self.pauses.len());
+        self.stop_after.is_none_or(|n| self.pauses.len() < n)
+    }
+
+    fn stopped_after_failure(&mut self) -> bool {
+        false
+    }
+}
+
+/// The tickets in a machine's queue folder, by name.
+pub fn tickets(queues: &Path, machine: &str) -> Vec<String> {
+    let Ok(listing) = std::fs::read_dir(queues.join(machine)) else {
+        return Vec::new();
+    };
+    let mut names: Vec<String> = listing
+        .filter_map(Result::ok)
+        .map(|file| file.file_name().to_string_lossy().into_owned())
+        .collect();
+    names.sort();
+    names
 }

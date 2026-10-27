@@ -25,9 +25,10 @@ Tasks:
   float-repr
       Read one f64 bit pattern (16 hex digits) per stdin line and answer each
       with Python's repr(x), a tab and json.dumps(x).
-  linux [--parity [--parity-files parity/test.py[,...]]] [-- <cargo test args>]
+  linux [--wait MINUTES] [--parity [--parity-files parity/test.py[,...]]] [-- <cargo test args>]
       Run cargo test (and with --parity the parity harness) on zeelin, the
-      household laptop's Ubuntu, over ssh. `cargo xtask linux --help` says more.
+      household laptop's Ubuntu, over ssh, after its turn in the machines'
+      shared queue. `cargo xtask linux --help` says more.
   posix-path
       Read one JSON string per stdin line and answer each with the JSON
       string of its POSIX form, as SKILL.md writes brain paths.
@@ -50,9 +51,10 @@ Tasks:
   sync-specmint-oracle
       Answer parity/tools/sync_specmint_oracle.py's requests (report text,
       path mentions) one JSON line each, for parity/test_sync_specmint.py.
-  windows [--machine zeewin|zeewin2] [--parity] [-- <cargo test args>]
+  windows [--machine zeewin|zeewin2] [--wait MINUTES] [--parity] [-- <cargo test args>]
       Run cargo test (and with --parity the parity harness) on a household
-      Windows machine over ssh. `cargo xtask windows --help` says more.
+      Windows machine over ssh, after its turn in the machines' shared queue.
+      `cargo xtask windows --help` says more.
   yaml-emit --profile md|yml|config
       Read one tagged-JSON mapping per stdin line and answer each with the
       YAML Kluris writes for it, as one JSON string per stdout line.

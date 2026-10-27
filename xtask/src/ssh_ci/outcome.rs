@@ -82,6 +82,8 @@ pub struct Said {
     id: String,
     partial: Vec<u8>,
     pub last_line: Option<String>,
+    /// The line before the last.
+    pub before_last: Option<String>,
     pub tree: Option<String>,
     pub steps: Vec<(String, String, String)>,
 }
@@ -130,7 +132,7 @@ impl Said {
             self.steps
                 .push((name.to_owned(), code.to_owned(), seconds.to_owned()));
         }
-        self.last_line = Some(line);
+        self.before_last = self.last_line.replace(line);
     }
 }
 

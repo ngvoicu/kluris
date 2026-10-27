@@ -16,7 +16,8 @@ use super::options::{self, Name, Options, Parsed};
 use super::remote::{Stream, Streamed};
 use super::run::{self, Ctx};
 use super::script::{self, Spec};
-use crate::ssh_ci::fake::{Answer, Fake, said, timed_out};
+use crate::ssh_ci::fake::{Answer, Clock, Fake, NOW, said, tickets, timed_out};
+use crate::ssh_ci::queue::{Queues, Who};
 
 fn words(line: &str) -> Vec<String> {
     line.split_whitespace().map(str::to_owned).collect()
@@ -107,6 +108,7 @@ mod words_of_the_command {
                 clippy: false,
                 published: None,
                 unpinned: false,
+                wait: 60,
             }
         );
     }
@@ -268,6 +270,36 @@ mod words_of_the_command {
             words("-p kluris-core -- --nocapture --parity")
         );
         assert!(!options.parity, "--parity after -- is cargo's");
+    }
+
+    #[test]
+    fn wait_is_the_minutes_of_a_turn_an_hour_unless_given_at_most_a_day() {
+        assert_eq!(run_of("").wait, 60);
+        assert_eq!(run_of("--wait 0").wait, 0);
+        assert_eq!(run_of("--wait=15 --clippy").wait, 15);
+        assert_eq!(run_of("--wait 1440").wait, 1440);
+        for (line, says) in [
+            (
+                "--wait 1441",
+                "--wait is the minutes to wait for a turn, 0 to 1440: 1441",
+            ),
+            (
+                "--wait=-1",
+                "--wait is the minutes to wait for a turn, 0 to 1440: -1",
+            ),
+            (
+                "--wait soon",
+                "--wait is the minutes to wait for a turn, 0 to 1440: soon",
+            ),
+            (
+                "--wait",
+                "--wait takes the minutes to wait for a turn, 0 to 1440",
+            ),
+            ("--wait 1 --wait 2", "--wait is given once"),
+        ] {
+            let refused = options::parse(&words(line)).expect_err(line);
+            assert_eq!(refused, says, "{line:?}");
+        }
     }
 
     #[test]
@@ -538,7 +570,7 @@ mod machines {
 
     fn chosen(answers: Vec<Answer>) -> (Machine, String, Fake) {
         let mut fake = Fake::new(answers);
-        let (machine, why) = machine::choose(&mut fake);
+        let (machine, why) = machine::choose(&mut fake, None, NOW);
         (machine, why, fake)
     }
 
@@ -1229,6 +1261,12 @@ mod runs {
         fake: Fake,
         packed: Vec<PathBuf>,
         run_script: String,
+        /// The run's queues, a folder of the test's own.
+        queues: tempfile::TempDir,
+        pauses: Vec<u64>,
+        /// The tickets in the machines' queues each time the tree was packed:
+        /// after the wait, while the run holds its place.
+        held: Vec<Vec<String>>,
     }
 
     fn ran(options: Options, answers: Vec<Answer>) -> Ran {
@@ -1237,16 +1275,36 @@ mod runs {
     }
 
     fn ran_rooted(root: &Path, options: Options, answers: Vec<Answer>) -> Ran {
+        ran_queued(
+            root,
+            options,
+            answers,
+            tempfile::tempdir().unwrap(),
+            Clock::default(),
+        )
+    }
+
+    /// A run whose queues are `queues` and whose clock is `clock`.
+    fn ran_queued(
+        root: &Path,
+        options: Options,
+        answers: Vec<Answer>,
+        queues: tempfile::TempDir,
+        mut clock: Clock,
+    ) -> Ran {
         let mut fake = Fake::new(answers);
         let mut out = Vec::new();
         let mut err = Vec::new();
         let mut packed = Vec::new();
         let mut run_script = String::new();
+        let mut held = Vec::new();
+        let folder = queues.path().to_path_buf();
         let code = {
             let mut pack = |tarball: &Path, script: &str| -> Result<String, String> {
                 assert!(script.contains("Invoke-Step 'cargo-test'"));
                 run_script = script.to_owned();
                 packed.push(tarball.to_path_buf());
+                held.push([tickets(&folder, "zeewin"), tickets(&folder, "zeewin2")].concat());
                 fs::write(tarball, b"tarball").map_err(|e| e.to_string())?;
                 Ok("5f54983aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into())
             };
@@ -1259,6 +1317,9 @@ mod runs {
                 channel: "1.99.0".into(),
                 pack: &mut pack,
                 root,
+                queues: Some(Queues::at(&folder, Duration::from_secs(3600))),
+                pace: &mut clock,
+                command: "cargo xtask windows".into(),
             };
             run::windows(&options, &mut ctx)
         };
@@ -1269,6 +1330,9 @@ mod runs {
             fake,
             packed,
             run_script,
+            queues,
+            pauses: clock.pauses,
+            held,
         }
     }
 
@@ -1283,6 +1347,7 @@ mod runs {
             clippy: false,
             published: None,
             unpinned: false,
+            wait: 0,
         }
     }
 
@@ -1383,6 +1448,7 @@ mod runs {
         let mut err = Vec::new();
         let mut run_script = String::new();
         let dir = tempfile::tempdir().unwrap();
+        let queues = tempfile::tempdir().unwrap();
         let options = Options {
             installer_smoke: true,
             wrapper: Some("site/install.ps1".into()),
@@ -1403,6 +1469,9 @@ mod runs {
                 channel: "1.99.0".into(),
                 pack: &mut pack,
                 root: dir.path(),
+                queues: Some(Queues::at(queues.path(), Duration::from_secs(3600))),
+                pace: &mut Clock::default(),
+                command: "cargo xtask windows".into(),
             };
             run::windows(&options, &mut ctx)
         };
@@ -1447,7 +1516,7 @@ mod runs {
                 Answer::Stream(
                     vec![(
                         Stream::Out,
-                        "The machine's one-run lock is held by a ConsensFlow run (0000abcd-12345678, process 4242): one run at a time, not waiting.\r\n\n== exit 75\r\n",
+                        "The machine's one-run lock is held by a ConsensFlow run (0000abcd-12345678, process 4242): one run at a time.\r\n\n== exit 75\r\n",
                     )],
                     Ok(Streamed::Exited(Some(1))),
                 ),
@@ -1492,6 +1561,7 @@ mod runs {
                 clippy: false,
                 published: None,
                 unpinned: false,
+                wait: 0,
             },
             vec![],
         );
@@ -1526,6 +1596,7 @@ mod runs {
                 clippy: false,
                 published: None,
                 unpinned: false,
+                wait: 0,
             },
             vec![
                 said(0, ""),
@@ -1554,6 +1625,7 @@ mod runs {
                 clippy: false,
                 published: None,
                 unpinned: false,
+                wait: 0,
             },
             vec![
                 said(0, "held\n"),
@@ -1721,6 +1793,258 @@ mod runs {
         assert_eq!(ran.code, 255);
         stop_sent(&ran.fake);
         assert!(ran.err.contains("may still be going on"), "{}", ran.err);
+    }
+
+    // --- the queue every runner on this Mac shares --------------------------------
+
+    fn waiting(machine: Option<Name>) -> Options {
+        Options {
+            machine,
+            wait: 60,
+            ..on(Name::Zeewin, false)
+        }
+    }
+
+    /// A ConsensFlow run queued for `machine` a second before the run comes.
+    fn queued_ahead(queues: &tempfile::TempDir, machine: &str) -> crate::ssh_ci::queue::Ticket {
+        Queues::at(queues.path(), Duration::from_secs(3600))
+            .join(
+                machine,
+                &Who {
+                    tree: "consensflow".into(),
+                    command: "cargo xtask windows -- cargo test".into(),
+                },
+                NOW - 1_000,
+            )
+            .unwrap()
+    }
+
+    fn mine() -> String {
+        format!("-{:010}.ticket", std::process::id())
+    }
+
+    const REFUSED_THERE: &str = "The machine's one-run lock is held by a ConsensFlow run (0000abcd-12345678, process 4242): one run at a time.\r\n\n== exit 75\r\n";
+
+    fn passed() -> Answer {
+        Answer::Stream(vec![(Stream::Out, PASSED)], Ok(Streamed::Exited(Some(1))))
+    }
+
+    #[test]
+    fn a_run_waits_behind_a_queued_run_then_goes_holding_its_ticket() {
+        let queues = tempfile::tempdir().unwrap();
+        let mut ahead = Some(queued_ahead(&queues, "zeewin"));
+        let clock = Clock {
+            on_pause: Box::new(move |_| drop(ahead.take())),
+            ..Clock::default()
+        };
+        let root = tempfile::tempdir().unwrap();
+        let ran = ran_queued(
+            root.path(),
+            waiting(Some(Name::Zeewin)),
+            vec![said(0, ""), passed()],
+            queues,
+            clock,
+        );
+        assert_eq!(ran.code, 0, "{}", ran.err);
+        assert_eq!(ran.pauses, [10_000]);
+        assert!(
+            ran.err.starts_with(
+                "windows: waiting for zeewin, 0 s of up to 60 min: 2nd in the queue for zeewin; \
+                 the run ahead is consensflow (cargo xtask windows -- cargo test), here for 1 s\n"
+            ),
+            "{}",
+            ran.err
+        );
+        // It held its own ticket while it went on, and it went with the run.
+        assert_eq!(ran.held.len(), 1);
+        assert_eq!(ran.held[0].len(), 1, "{:?}", ran.held);
+        assert!(ran.held[0][0].ends_with(&mine()), "{:?}", ran.held);
+        assert_eq!(tickets(ran.queues.path(), "zeewin"), Vec::<String>::new());
+    }
+
+    #[test]
+    fn a_refusal_by_the_machines_lock_at_the_head_keeps_the_place_and_tries_again() {
+        let ran = ran(
+            waiting(Some(Name::Zeewin)),
+            vec![
+                said(0, ""),
+                Answer::Stream(
+                    vec![(Stream::Out, REFUSED_THERE)],
+                    Ok(Streamed::Exited(Some(1))),
+                ),
+                said(0, ""),
+                passed(),
+            ],
+        );
+        assert_eq!(ran.code, 0, "{}", ran.err);
+        assert_eq!(ran.pauses, [30_000]);
+        assert!(
+            ran.err.contains(
+                "windows: waiting for zeewin, 0 s of up to 60 min: The machine's one-run lock is held by a ConsensFlow run (0000abcd-12345678, process 4242): one run at a time.\n"
+            ),
+            "{}",
+            ran.err
+        );
+        let scp: Vec<&Vec<String>> = ran
+            .fake
+            .calls
+            .iter()
+            .filter(|call| call.program == "scp")
+            .map(|call| &call.args)
+            .collect();
+        assert_eq!(scp.len(), 2, "the same tarball sent again");
+        assert_eq!(scp[0], scp[1]);
+        assert_eq!(ran.packed.len(), 1, "packed once");
+        assert_eq!(tickets(ran.queues.path(), "zeewin"), Vec::<String>::new());
+    }
+
+    #[test]
+    fn a_wait_that_runs_out_is_75_saying_how_long_and_what_for() {
+        let ran = ran(
+            Options {
+                wait: 1,
+                ..waiting(Some(Name::Zeewin2))
+            },
+            vec![said(0, "held\n"), said(0, "held\n"), said(0, "held\n")],
+        );
+        assert_eq!(ran.code, 75, "{}", ran.err);
+        assert_eq!(ran.pauses, [30_000, 60_000]);
+        let busy = "zeewin2 is busy: poker-lab's job holds it (~/.compile-lock/owner on zeelin), and no run goes while it does";
+        assert_eq!(
+            ran.err,
+            format!(
+                "windows: waiting for zeewin2, 0 s of up to 1 min: {busy}\n\
+                 windows: zeewin2 is still busy after waiting 1 min (as far as --wait 1 goes): {busy}\n"
+            )
+        );
+        assert!(ran.packed.is_empty());
+        assert_eq!(tickets(ran.queues.path(), "zeewin2"), Vec::<String>::new());
+    }
+
+    #[test]
+    fn wait_0_is_refused_behind_a_live_ticket_and_asks_nothing() {
+        let queues = tempfile::tempdir().unwrap();
+        let ahead = queued_ahead(&queues, "zeewin2");
+        let root = tempfile::tempdir().unwrap();
+        let ran = ran_queued(
+            root.path(),
+            on(Name::Zeewin2, false),
+            vec![],
+            queues,
+            Clock::default(),
+        );
+        assert_eq!(ran.code, 75);
+        assert_eq!(
+            ran.err,
+            "windows: zeewin2 is busy: 1 run is queued for it\n"
+        );
+        assert!(ran.fake.calls.is_empty());
+        assert_eq!(
+            tickets(ran.queues.path(), "zeewin2").len(),
+            1,
+            "the live one stays"
+        );
+        drop(ahead);
+    }
+
+    #[test]
+    fn with_no_machine_a_queued_zeewin2_sends_the_run_to_zeewin_unasked() {
+        let queues = tempfile::tempdir().unwrap();
+        let ahead = queued_ahead(&queues, "zeewin2");
+        let root = tempfile::tempdir().unwrap();
+        let ran = ran_queued(
+            root.path(),
+            waiting(None),
+            vec![said(0, ""), passed()],
+            queues,
+            Clock::default(),
+        );
+        assert_eq!(ran.code, 0, "{}", ran.err);
+        assert!(
+            ran.err.starts_with(
+                "windows: on zeewin, as zeewin2 is not free: 1 run is queued for it\n"
+            ),
+            "{}",
+            ran.err
+        );
+        assert!(
+            ran.fake.calls[0]
+                .args
+                .last()
+                .unwrap()
+                .starts_with("zeewin:")
+        );
+        // It queued in zeewin's folder; zeewin2's run is left where it was.
+        assert_eq!(ran.held[0].len(), 2);
+        assert_eq!(tickets(ran.queues.path(), "zeewin"), Vec::<String>::new());
+        assert_eq!(tickets(ran.queues.path(), "zeewin2").len(), 1);
+        drop(ahead);
+    }
+
+    #[test]
+    fn the_ticket_goes_however_the_run_ends() {
+        let tree = "== tree 5f54983aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\r\n";
+        let failed = "== tree 5f54983aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\r\n\r\n== exit 1\r\n";
+        let cases: Vec<(i32, Vec<Answer>)> = vec![
+            (0, vec![said(0, ""), passed()]),
+            (
+                1,
+                vec![
+                    said(0, ""),
+                    Answer::Stream(vec![(Stream::Out, failed)], Ok(Streamed::Exited(Some(1)))),
+                ],
+            ),
+            (
+                124,
+                vec![
+                    said(0, ""),
+                    Answer::Stream(vec![], Ok(Streamed::TimedOut)),
+                    said(0, ""),
+                ],
+            ),
+            (
+                130,
+                vec![
+                    said(0, ""),
+                    Answer::Stream(vec![], Ok(Streamed::Stopped)),
+                    said(0, ""),
+                ],
+            ),
+            (
+                255,
+                vec![
+                    said(0, ""),
+                    Answer::Stream(vec![(Stream::Out, tree)], Ok(Streamed::Exited(Some(255)))),
+                    said(0, ""),
+                ],
+            ),
+            (1, vec![said(1, ""), said(0, "removed\r\n")]),
+        ];
+        for (code, answers) in cases {
+            let ran = ran(waiting(Some(Name::Zeewin)), answers);
+            assert_eq!(ran.code, code, "{}", ran.err);
+            assert_eq!(ran.held.len(), 1);
+            assert!(ran.held[0][0].ends_with(&mine()), "{code}: {:?}", ran.held);
+            assert_eq!(
+                tickets(ran.queues.path(), "zeewin"),
+                Vec::<String>::new(),
+                "{code}"
+            );
+        }
+        // A stop while it waits: 130, nothing sent, the ticket gone.
+        let ran = ran_queued(
+            Path::new("."),
+            waiting(Some(Name::Zeewin2)),
+            vec![said(0, "held\n")],
+            tempfile::tempdir().unwrap(),
+            Clock {
+                stop_after: Some(1),
+                ..Clock::default()
+            },
+        );
+        assert_eq!(ran.code, 130, "{}", ran.err);
+        assert!(ran.packed.is_empty());
+        assert_eq!(tickets(ran.queues.path(), "zeewin2"), Vec::<String>::new());
     }
 }
 

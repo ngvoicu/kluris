@@ -377,7 +377,7 @@ const CHECKS: &str = r#"poker_lab=«poker_lab_q»
 windows_home=«windows_home_q»
 windows_owner=«windows_owner_q»
 if [ -e "${HOME:?}/$poker_lab" ]; then
-  refuse "zeelin is busy: poker-lab's job holds it (~/«poker_lab»), and no run goes while it does: not waiting"
+  refuse "zeelin is busy: poker-lab's job holds it (~/«poker_lab»), and no run goes while it does"
 fi
 if [ ! -d "$windows_home" ]; then
   refuse "zeelin cannot see zeewin2's side ($windows_home is not there), so a build there cannot be ruled out: not going"
@@ -390,13 +390,13 @@ if [ -e "$windows_owner" ]; then
     '') who='a run that left no record' ;;
     *) who="a ConsensFlow run ($of_id, process $of_pid)" ;;
   esac
-  refuse "the laptop is busy: $who holds zeewin2 ($windows_owner), and the laptop runs one build at a time: not waiting"
+  refuse "the laptop is busy: $who holds zeewin2 ($windows_owner), and the laptop runs one build at a time"
 fi"#;
 
 const PROBE: &str = r#"«prelude»
 mkdir -p "$ci/«incoming»"
 if [ -e "$lock" ] && ! flock -n "$lock" true; then
-  refuse "zeelin's one-run lock is held by $(holder): one run at a time, not waiting"
+  refuse "zeelin's one-run lock is held by $(holder): one run at a time"
 fi
 «checks»
 exit_run 0
@@ -425,7 +425,7 @@ trap 'exit 143' TERM
 mkdir -p "$ci/runs"
 exec 9>>"$lock"
 if ! flock -n 9; then
-  refuse "zeelin's one-run lock is held by $(holder): one run at a time, not waiting"
+  refuse "zeelin's one-run lock is held by $(holder): one run at a time"
 fi
 «checks»
 printf '%s\n%s\n' "$id" "$$" > "$owner"

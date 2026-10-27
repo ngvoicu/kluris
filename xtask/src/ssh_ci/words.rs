@@ -1,8 +1,8 @@
 //! The words `cargo xtask windows` and `cargo xtask linux` share: `--parity`,
 //! `--parity-files parity/TEST.PY[,...]` (repeatable, needs `--parity`),
 //! `--installer-smoke` and its `--wrapper FILE` or `--published VERSION`
-//! (with `--unpinned`),
-//! `--help`, after `--` the
+//! (with `--unpinned`), `--clippy`, `--wait MINUTES` (the turn in the shared
+//! queue, [`super::queue`]), `--help`, after `--` the
 //! extra arguments of `cargo test` taken as they are, and for a task with more
 //! than one machine `--machine NAME` (or `--machine=NAME`).
 
@@ -11,6 +11,7 @@ use std::fs;
 use std::path::{Component, Path};
 
 use super::plan::WRAPPER_DIR;
+use super::queue::{DEFAULT_WAIT_MINUTES, MAX_WAIT_MINUTES};
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Words {
@@ -33,12 +34,19 @@ pub struct Words {
     /// With `--published`: install GitHub's latest release (no
     /// `KLURIS_VERSION`) and expect it to be the one `--published` names.
     pub unpinned: bool,
+    /// How long the run waits for its turn at a busy machine, in minutes; 0
+    /// asks once and is refused at once.
+    pub wait: u32,
 }
 
 /// `args` as [`Words`], or none for `--help`. `machines` are the values
 /// `--machine` takes; with none, `--machine` is an unknown option.
 pub fn parse(args: &[String], machines: &[&str]) -> Result<Option<Words>, String> {
-    let mut words = Words::default();
+    let mut words = Words {
+        wait: DEFAULT_WAIT_MINUTES,
+        ..Words::default()
+    };
+    let mut waits = false;
     let mut at = 0;
     while let Some(word) = args.get(at) {
         at += 1;
@@ -91,6 +99,31 @@ pub fn parse(args: &[String], machines: &[&str]) -> Result<Option<Words>, String
                     }
                 };
                 words.published = Some(release_number(value)?);
+            }
+            "--wait" => {
+                if waits {
+                    return Err("--wait is given once".into());
+                }
+                waits = true;
+                let value = match inline {
+                    Some(value) => value,
+                    None => {
+                        let next = args.get(at).filter(|next| !next.starts_with('-'));
+                        at += 1;
+                        next.ok_or_else(|| {
+                            format!("--wait takes the minutes to wait for a turn, 0 to {MAX_WAIT_MINUTES}")
+                        })?
+                    }
+                };
+                words.wait = value
+                    .parse::<u32>()
+                    .ok()
+                    .filter(|minutes| *minutes <= MAX_WAIT_MINUTES)
+                    .ok_or_else(|| {
+                        format!(
+                            "--wait is the minutes to wait for a turn, 0 to {MAX_WAIT_MINUTES}: {value}"
+                        )
+                    })?;
             }
             "--parity-files" => {
                 let value = match inline {

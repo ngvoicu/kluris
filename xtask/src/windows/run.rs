@@ -1,15 +1,19 @@
-//! One run: the machine chosen and asked, the tarball made, then sent and the
-//! bootstrap streamed back ([`crate::ssh_ci::session`]). A run stopped here,
+//! One run: the machine chosen, the run's turn in its queue waited for
+//! ([`crate::ssh_ci::queue`]) and the machine asked at the head, the tarball
+//! made, then sent and the bootstrap streamed back ([`crate::ssh_ci::session`]);
+//! a bootstrap that refuses the run with 75 sends it back to its place in the
+//! queue, to wait on. A run stopped here,
 //! one past its bound and one whose connection was lost are ended there too
 //! (the stop script), since Windows' SSH server does not end what a lost
 //! session started.
 
-use super::machine::{self, Machine, Ready};
+use super::machine::{self, Machine};
 use super::options::{self, Options};
 use super::script::{self, Spec};
 #[cfg(test)]
 pub use crate::ssh_ci::outcome::answer;
-use crate::ssh_ci::outcome::{REFUSED, say};
+use crate::ssh_ci::outcome::{REFUSED, STOPPED, say};
+use crate::ssh_ci::queue::{Place, Turn, Waited, Who};
 pub use crate::ssh_ci::session::Ctx;
 use crate::ssh_ci::session::{self, Remote, Run};
 
@@ -29,27 +33,33 @@ fn go(options: &Options, ctx: &mut Ctx) -> Result<i32, String> {
     let machine = match options.machine {
         Some(name) => Machine::named(name),
         None => {
-            let (machine, why) = machine::choose(ctx.runner);
+            let now = ctx.pace.now_ms();
+            let (machine, why) = machine::choose(ctx.runner, ctx.queues.as_ref(), now);
             say(ctx.err, &why)?;
             machine
         }
     };
-    match machine::ready(&machine, ctx.runner)? {
-        Ready::Refused(why) => {
-            say(ctx.err, &format!("windows: {why}"))?;
-            return Ok(REFUSED);
-        }
-        Ready::Go(notes) => {
-            for note in notes {
-                say(ctx.err, &format!("windows: {note}"))?;
-            }
-        }
+    // The run's place in the machine's queue, kept until the run is over: the
+    // ticket goes with `turn` however the run ends.
+    let who = Who::of(ctx.root, &ctx.command);
+    let (mut turn, refused) = Turn::take(
+        ctx.queues.as_ref(),
+        Place::of(machine.name),
+        &who,
+        options.wait,
+        ctx.pace,
+        &mut |line| say(ctx.err, &format!("windows: {line}")),
+    )?;
+    if let Some(why) = refused {
+        say(ctx.err, &format!("windows: {why}"))?;
+        return Ok(REFUSED);
     }
 
     let id = ctx.id.clone();
+    let channel = ctx.channel.clone();
     let spec = Spec {
         id: &id,
-        channel: &ctx.channel,
+        channel: &channel,
         jobs: machine.jobs,
         parity: options.parity,
         parity_files: &parity_files,
@@ -66,21 +76,52 @@ fn go(options: &Options, ctx: &mut Ctx) -> Result<i32, String> {
     let scratch = tempfile::tempdir().map_err(|e| format!("no folder for the tarball: {e}"))?;
     let name = script::tarball_name(&id);
     let tarball = scratch.path().join(&name);
-    let commit = (ctx.pack)(&tarball, &script::run_script(&spec))?;
-    let remote = Remote {
-        task: "windows",
-        name: machine.name,
-        host: machine.host,
-    };
-    let run = Run {
-        id: &id,
-        tarball_name: &name,
-        target: &name,
-        commit: &commit,
-        bootstrap,
-        bound: script::bound(&spec),
-        stop: &stop,
-        cleanup: &cleanup,
-    };
-    session::go(ctx, remote, &tarball, run)
+    let mut commit = None;
+    loop {
+        let waited = turn.wait(
+            &mut || machine::look_ready(&machine, &mut *ctx.runner),
+            &mut *ctx.pace,
+            &mut |line| say(&mut *ctx.err, &format!("windows: {line}")),
+        )?;
+        match waited {
+            Waited::Stopped => return Ok(STOPPED),
+            Waited::Refused(why) => {
+                say(ctx.err, &format!("windows: {why}"))?;
+                return Ok(REFUSED);
+            }
+            Waited::Go(notes) => {
+                for note in notes {
+                    say(ctx.err, &format!("windows: {note}"))?;
+                }
+            }
+        }
+        // Packed once, when the run first goes: a refused run sends the same
+        // tree again.
+        let commit = match &commit {
+            Some(commit) => commit,
+            None => commit.insert((ctx.pack)(&tarball, &script::run_script(&spec))?),
+        };
+        let remote = Remote {
+            task: "windows",
+            name: machine.name,
+            host: machine.host,
+        };
+        let run = Run {
+            id: &id,
+            tarball_name: &name,
+            target: &name,
+            commit,
+            bootstrap: bootstrap.clone(),
+            bound: script::bound(&spec),
+            stop: &stop,
+            cleanup: &cleanup,
+        };
+        let sent = session::go(ctx, remote, &tarball, run)?;
+        match sent.refused {
+            // The machine's own lock is the last word: the run waits on,
+            // keeping its place, unless it was told not to wait.
+            Some(why) if options.wait > 0 => turn.refused_there(why),
+            _ => return Ok(sent.code),
+        }
+    }
 }
