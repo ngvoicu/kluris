@@ -1879,6 +1879,14 @@ fn installed_services_are_listed_with_whether_they_run() {
     let s = Sandbox::new();
     let env = s.env(Manager::TaskScheduler);
     let runner = FakeRunner::default();
+    // Their names from schtasks (a German status column, never read)...
+    runner.answer(
+        TASK_NAMES,
+        0,
+        "\"\\Microsoft\\Windows\\X\",\"N/A\",\"Bereit\"\r\n\"\\Kluris\\sync-acme\",\"N/A\",\"Wird ausgef\u{fc}hrt\"\r\n\"\\Kluris\\sync-beta\",\"27.10.2026 08:00:00\",\"Bereit\"\r\n",
+        "",
+    );
+    // ...their states from PowerShell.
     runner.answer(
         TASK_STATES,
         0,
@@ -1908,8 +1916,11 @@ fn installed_services_are_listed_with_whether_they_run() {
             },
         ]
     );
-    assert_eq!(runner.take(), [TASK_STATES]);
+    assert_eq!(runner.take(), [TASK_NAMES, TASK_STATES]);
 }
+
+/// Every task's name (column 1); the status column is translated, never read.
+const TASK_NAMES: &str = "schtasks /Query /FO CSV /NH";
 
 /// The query of the Task Scheduler states: PowerShell's ScheduledTask
 /// objects, whose `State` is an enum (`Ready`, `Running`, `Disabled`,
@@ -1923,19 +1934,39 @@ const TASK_STATES: &str = r#"powershell.exe -NoProfile -NonInteractive -Command 
 fn task_states_do_not_depend_on_the_display_language() {
     let s = Sandbox::new();
     let env = s.env(Manager::TaskScheduler);
-    // No \Kluris\ folder: PowerShell prints nothing.
+    // No Kluris task: PowerShell never starts (it writes into the profile).
     let runner = FakeRunner::default();
-    runner.answer(TASK_STATES, 0, "", "");
+    runner.answer(
+        TASK_NAMES,
+        0,
+        "\"\\Microsoft\\Windows\\X\",\"N/A\",\"En cours d'ex\u{e9}cution\"\r\n\"\\Kluris\\other\",\"N/A\",\"Pr\u{ea}t\"\r\n",
+        "",
+    );
     assert_eq!(service::installed(&env, &runner).unwrap(), []);
-    // A failing query is an error, never "nothing installed".
+    assert_eq!(runner.take(), [TASK_NAMES]);
+    // A Kluris task: its state is PowerShell's enum name, whatever
+    // schtasks' (French) status column says.
+    runner.answer(
+        TASK_NAMES,
+        0,
+        "\"\\Kluris\\sync-acme\",\"N/A\",\"Pr\u{ea}t\"\r\n",
+        "",
+    );
+    runner.answer(TASK_STATES, 0, "sync-acme\tRunning\r\n", "");
+    assert_eq!(
+        service::installed(&env, &runner).unwrap(),
+        [Installed {
+            brain: "acme".into(),
+            name: r"\Kluris\sync-acme".into(),
+            definition: None,
+            state: ServiceState::Running,
+        }]
+    );
+    assert_eq!(runner.take(), [TASK_NAMES, TASK_STATES]);
+    // A failing state query is an error, never "nothing installed".
     runner.answer(TASK_STATES, 1, "", "Get-ScheduledTask : Access denied\r\n");
     let err = service::installed(&env, &runner).unwrap_err();
     assert!(err.to_string().contains("Access denied"), "{err}");
-    // schtasks' translated words are never read.
-    assert!(
-        !runner.take().iter().any(|c| c.contains("/FO CSV")),
-        "schtasks /Query /FO CSV is locale-dependent"
-    );
 }
 
 // `kluris remove` and the brain's service.

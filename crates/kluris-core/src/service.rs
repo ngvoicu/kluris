@@ -881,6 +881,27 @@ fn definitions(
     Ok(found)
 }
 
+/// The fields of one `schtasks /FO CSV` row.
+fn csv_fields(row: &str) -> Vec<String> {
+    let mut fields = Vec::new();
+    let mut field = String::new();
+    let mut quoted = false;
+    let mut chars = row.chars().peekable();
+    while let Some(c) = chars.next() {
+        match (c, quoted) {
+            ('"', true) if chars.peek() == Some(&'"') => {
+                field.push('"');
+                chars.next();
+            }
+            ('"', _) => quoted = !quoted,
+            (',', false) => fields.push(std::mem::take(&mut field)),
+            (c, _) => field.push(c),
+        }
+    }
+    fields.push(field);
+    fields
+}
+
 /// Every installed Kluris sync service with whether it runs. Only reads.
 /// A systemd unit with no user instance to stop it is an error.
 pub fn installed(env: &ServiceEnv, runner: &dyn Runner) -> Result<Vec<Installed>, ServiceError> {
@@ -920,6 +941,20 @@ pub fn installed(env: &ServiceEnv, runner: &dyn Runner) -> Result<Vec<Installed>
             Ok(list)
         }
         Manager::TaskScheduler => {
+            // Kluris's tasks by name first: names are never translated
+            // (schtasks' status column is, and is not read). PowerShell,
+            // which writes its own files into the user's profile, starts
+            // only when there is one.
+            let names = must(runner, "schtasks", &["/Query", "/FO", "CSV", "/NH"])?;
+            let prefix = format!("{TASK_FOLDER}sync-");
+            let any = names.stdout.lines().any(|row| {
+                csv_fields(row.trim())
+                    .first()
+                    .is_some_and(|name| brain_of(name, &prefix, "").is_some())
+            });
+            if !any {
+                return Ok(Vec::new());
+            }
             let ran = must(runner, "powershell.exe", &task_states_args())?;
             let mut list = Vec::new();
             for line in ran.stdout.lines() {
@@ -1016,6 +1051,15 @@ impl crate::dist::SyncServices for Services<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn csv_rows_split_on_commas_outside_quotes() {
+        assert_eq!(
+            csv_fields(r#""\Kluris\sync-a","27/10/2026, 08:00","Ready""#),
+            [r"\Kluris\sync-a", "27/10/2026, 08:00", "Ready"]
+        );
+        assert_eq!(csv_fields(r#""a ""b""",c"#), [r#"a "b""#, "c"]);
+    }
 
     #[test]
     fn only_kluris_shaped_names_are_brains() {
