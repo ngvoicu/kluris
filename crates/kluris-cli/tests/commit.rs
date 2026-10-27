@@ -1397,3 +1397,82 @@ fn a_linked_map_is_regenerated_through_its_target() {
     assert!(b.read("maps/base.md").contains("second.md"));
     assert_eq!(b.status(), Vec::<String>::new());
 }
+
+#[test]
+fn a_hook_that_stages_the_stale_work_tree_map_still_commits_kluris_map() {
+    let b = Brain::new();
+    hook(&b.hooks(), "pre-commit", "git add -A");
+    b.write("notes/second.md", &neuron("Second"));
+    let (code, doc) = b.commit("notes/second.md", &[]);
+    assert_eq!(code, 0, "{doc}");
+    assert_eq!(doc["regenerated"], json!(["notes/map.md"]));
+    assert_eq!(doc["left_dirty"], json!([]));
+    assert_eq!(b.committed("HEAD"), ["notes/map.md", "notes/second.md"]);
+    assert!(show(&b, "HEAD", "notes/map.md").contains("second.md"));
+    assert_eq!(b.read("notes/map.md"), show(&b, "HEAD", "notes/map.md"));
+    assert_eq!(b.status(), Vec::<String>::new());
+}
+
+#[test]
+fn a_hook_that_rewrites_a_map_never_reaches_the_commit() {
+    let b = Brain::new();
+    hook(
+        &b.hooks(),
+        "pre-commit",
+        "printf 'HOOK_MAP\\n' > notes/map.md && git add notes/map.md",
+    );
+    b.write("notes/second.md", &neuron("Second"));
+    let (code, doc) = b.commit("notes/second.md", &[]);
+    assert_eq!(code, 0, "{doc}");
+    assert_eq!(doc["regenerated"], json!(["notes/map.md"]));
+    let map = show(&b, "HEAD", "notes/map.md");
+    assert!(
+        map.contains("second.md") && !map.contains("HOOK_MAP"),
+        "{map}"
+    );
+    // The hook's work-tree edit is its own: kept, and left dirty.
+    assert_eq!(b.read("notes/map.md"), "HOOK_MAP\n");
+    assert_eq!(doc["left_dirty"], json!(["notes/map.md"]));
+}
+
+/// A formatter hook that renames `title` to `FORMATTED title` in `rel`.
+fn title_formatter(b: &Brain, rel: &str, title: &str) {
+    hook(
+        &b.hooks(),
+        "pre-commit",
+        &format!(
+            "sed 's/^# {title}$/# FORMATTED {title}/' {rel} > {rel}.tmp && mv {rel}.tmp {rel} && git add {rel}"
+        ),
+    );
+}
+
+#[test]
+fn the_committed_map_shows_a_title_a_hook_rewrote() {
+    let b = Brain::new();
+    title_formatter(&b, "notes/second.md", "Second");
+    b.write("notes/second.md", &neuron("Second"));
+    let (code, doc) = b.commit("notes/second.md", &[]);
+    assert_eq!(code, 0, "{doc}");
+    assert_eq!(doc["regenerated"], json!(["notes/map.md"]));
+    assert!(show(&b, "HEAD", "notes/second.md").contains("# FORMATTED Second"));
+    let map = show(&b, "HEAD", "notes/map.md");
+    assert!(map.contains("FORMATTED Second"), "{map}");
+    assert_eq!(b.read("notes/map.md"), map);
+}
+
+#[test]
+fn a_hook_that_retitles_a_neuron_whose_map_had_not_changed_updates_the_map() {
+    let b = Brain::new();
+    title_formatter(&b, "notes/first.md", "First");
+    b.write(
+        "notes/first.md",
+        &format!("{}\nMore text.\n", neuron("First")),
+    );
+    let (code, doc) = b.commit("notes/first.md", &[]);
+    assert_eq!(code, 0, "{doc}");
+    assert_eq!(doc["regenerated"], json!(["notes/map.md"]));
+    assert_eq!(b.committed("HEAD"), ["notes/first.md", "notes/map.md"]);
+    let map = show(&b, "HEAD", "notes/map.md");
+    assert!(map.contains("FORMATTED First"), "{map}");
+    assert_eq!(b.read("notes/map.md"), map);
+}

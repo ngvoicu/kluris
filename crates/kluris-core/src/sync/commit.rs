@@ -36,9 +36,12 @@
 //! `prepare-commit-msg` or `commit-msg` stops the commit with nothing
 //! changed; `no_verify` skips `pre-commit` and `commit-msg`. A hook may
 //! change what the commit takes for its paths (a formatter does), and that
-//! is committed; a tree that changes any other path, in the brain or
-//! elsewhere in its repo, stops the commit with nothing changed
-//! ([`CommitError::Unapproved`]). That needs git
+//! is committed; the maps in a commit are always Kluris's own, so when the
+//! hook changed the index they are made again from the paths as it left
+//! them, replacing whatever it staged for a map the paths change. A tree
+//! that changes any other path, in the brain or elsewhere in its repo,
+//! stops the commit with nothing changed ([`CommitError::Unapproved`]).
+//! That needs git
 //! >= 2.36 (`git hook run`); `sync` needs 2.38, which `commit` checks first.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -572,6 +575,81 @@ fn drop_removed_lobes(
     removed.into_iter().collect()
 }
 
+/// The given paths as `tree` (the index the hooks left) has them, into
+/// the view: a file, a symlink, or (not there) nothing.
+fn overlay_from_tree<G: Plumbing>(
+    git: &G,
+    repo: &Repo,
+    tree: &str,
+    paths: &[String],
+    nodes: &mut BTreeMap<String, Node>,
+) -> Result<(), GitError> {
+    let entries = entry_map(git, repo, tree)?;
+    let oids: Vec<String> = paths
+        .iter()
+        .filter_map(|rel| entries.get(rel).map(|(_, oid)| oid.clone()))
+        .collect();
+    let blobs = git.read_blobs(repo, &oids)?;
+    for rel in paths {
+        match entries.get(rel) {
+            Some((mode, oid)) => {
+                let bytes = blobs.get(oid).cloned();
+                let node = if mode == "120000" {
+                    Node::Link(String::from_utf8_lossy(&bytes.unwrap_or_default()).into_owned())
+                } else {
+                    Node::File(bytes)
+                };
+                nodes.insert(rel.clone(), node);
+            }
+            None => {
+                nodes.remove(rel);
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The maps to stage: the map step over `view`, limited to `affected` (each
+/// map by the path in the tree that holds its bytes), and the `removed` maps
+/// deleted. A map the step could not regenerate stops the commit when it is
+/// in `affected` or `names` (the paths that lead to them, links included).
+fn regenerate(
+    view: &TreeStore,
+    options: &DreamOptions,
+    affected: &BTreeSet<String>,
+    names: &BTreeSet<String>,
+    removed: &[String],
+    modes: &BTreeMap<String, String>,
+) -> Result<Vec<StagedBlob>, CommitError> {
+    let (changes, skipped) = map_changes(view, options);
+    if let Some((rel, reason)) = skipped
+        .iter()
+        .find(|(rel, _)| affected.contains(*rel) || names.contains(*rel))
+    {
+        return Err(CommitError::Regenerate {
+            rel: rel.clone(),
+            reason: reason.clone(),
+        });
+    }
+    let mode = |rel: &str| modes.get(rel).cloned().unwrap_or_else(|| "100644".into());
+    let mut generated: Vec<StagedBlob> = changes
+        .writes
+        .into_iter()
+        .filter(|write| affected.contains(&write.rel))
+        .map(|write| StagedBlob {
+            mode: mode(&write.rel),
+            rel: write.rel,
+            bytes: Some(write.contents),
+        })
+        .collect();
+    generated.extend(removed.iter().map(|rel| StagedBlob {
+        rel: rel.clone(),
+        mode: mode(rel),
+        bytes: None,
+    }));
+    Ok(generated)
+}
+
 /// Which of `paths` differ between `base` (none: an empty tree) and `tree`.
 fn changed_paths<G: Plumbing>(
     git: &G,
@@ -834,59 +912,47 @@ pub fn commit<G: Plumbing>(
     // The map step over the view, limited to the generated files the paths
     // change.
     let generated_in_base = in_base(&generated_candidates(&paths))?;
-    let mut affected = affected_generated(&paths, view.dirs(), &generated_in_base);
+    let mut names = affected_generated(&paths, view.dirs(), &generated_in_base);
     // A removed lobe's sub-lobe maps go with it, wherever they are.
-    affected.extend(removed_maps.iter().cloned());
+    names.extend(removed_maps.iter().cloned());
     // The map step writes a linked map at its target: each map by the path
     // in the tree that holds its bytes.
-    let affected: BTreeSet<String> = affected
-        .into_iter()
-        .flat_map(|rel| [view.real_rel(&rel), Some(rel)])
-        .flatten()
+    let affected: BTreeSet<String> = names
+        .iter()
+        .map(|rel| view.real_rel(rel).unwrap_or_else(|| rel.clone()))
         .collect();
-    let (changes, skipped) = map_changes(&view, &request.maps);
-    if let Some((rel, reason)) = skipped.iter().find(|(rel, _)| affected.contains(*rel)) {
-        return Err(CommitError::Regenerate {
-            rel: rel.clone(),
-            reason: reason.clone(),
-        });
-    }
-    let mode = |rel: &str| modes.get(rel).cloned().unwrap_or_else(|| "100644".into());
-    let mut generated: Vec<StagedBlob> = changes
-        .writes
-        .into_iter()
-        .filter(|write| affected.contains(&write.rel))
-        .map(|write| StagedBlob {
-            mode: mode(&write.rel),
-            rel: write.rel,
-            bytes: Some(write.contents),
-        })
-        .collect();
-    generated.extend(removed_maps.iter().map(|rel| StagedBlob {
-        rel: rel.clone(),
-        mode: mode(rel),
-        bytes: None,
-    }));
+    let mut generated = regenerate(
+        &view,
+        &request.maps,
+        &affected,
+        &names,
+        &removed_maps,
+        &modes,
+    )?;
     // Each map as it is before its cleanliness is checked, so one changed
     // after the check is never replaced.
-    let seen: BTreeMap<String, Seen> = generated
+    let seen: BTreeMap<String, Seen> = affected
         .iter()
-        .map(|blob| (blob.rel.clone(), Seen::of(&join(root, &blob.rel))))
+        .map(|rel| (rel.clone(), Seen::of(&join(root, rel))))
         .collect();
     let dirty_before: BTreeSet<String> = git.dirty(&repo)?.into_iter().collect();
 
     let index = git.staging_index(&repo, base.as_deref())?;
     git.stage_worktree(&repo, &index, &paths)?;
     git.stage_blobs(&repo, &index, &generated)?;
-    let mut stage = paths.clone();
-    stage.extend(
-        generated
-            .iter()
-            .filter(|blob| !paths.contains(&blob.rel))
-            .map(|blob| blob.rel.clone()),
-    );
-    let tree = git.write_tree(&repo, &index)?;
-    if changed_paths(git, &repo, base.as_deref(), &tree, &stage)?.is_empty() {
+    let stage_of = |generated: &[StagedBlob]| {
+        let mut stage = paths.clone();
+        stage.extend(
+            generated
+                .iter()
+                .filter(|blob| !paths.contains(&blob.rel))
+                .map(|blob| blob.rel.clone()),
+        );
+        stage
+    };
+    let mut stage = stage_of(&generated);
+    let staged = git.write_tree(&repo, &index)?;
+    if changed_paths(git, &repo, base.as_deref(), &staged, &stage)?.is_empty() {
         return Ok(CommitReport {
             commit: None,
             paths,
@@ -902,10 +968,58 @@ pub fn commit<G: Plumbing>(
     }
     // The hook may have changed the index, as with `git commit`, but only
     // for the paths approved and the maps regenerated for them.
-    let tree = git.write_tree(&repo, &index)?;
-    let unapproved = unapproved_changes(git, &repo, base.as_deref(), &tree, &stage)?;
+    let mut tree = git.write_tree(&repo, &index)?;
+    let mut allowed = paths.clone();
+    allowed.extend(affected.iter().filter(|rel| !paths.contains(rel)).cloned());
+    let unapproved = unapproved_changes(git, &repo, base.as_deref(), &tree, &allowed)?;
     if !unapproved.is_empty() {
         return Err(CommitError::Unapproved { paths: unapproved });
+    }
+    if tree != staged {
+        // The maps are Kluris's own: made again from the paths as the hook
+        // left them, whatever it staged for a map.
+        let (mut nodes, _) = match &base {
+            Some(rev) => base_nodes(git, &repo, rev)?,
+            None => (BTreeMap::new(), BTreeMap::new()),
+        };
+        overlay_from_tree(git, &repo, &tree, &paths, &mut nodes)?;
+        for rel in &removed_maps {
+            nodes.remove(rel);
+        }
+        let view = TreeStore::new(root, nodes);
+        generated = regenerate(
+            &view,
+            &request.maps,
+            &affected,
+            &names,
+            &removed_maps,
+            &modes,
+        )?;
+        // A map with no new bytes goes back to the base's.
+        let in_base = match &base {
+            Some(rev) => entry_map(git, &repo, rev)?,
+            None => BTreeMap::new(),
+        };
+        let mut restored = Vec::new();
+        let mut gone = Vec::new();
+        for rel in affected.iter().filter(|rel| !paths.contains(rel)) {
+            if generated.iter().any(|blob| blob.rel == *rel) {
+                continue;
+            }
+            match in_base.get(rel) {
+                Some((mode, oid)) => restored.push((rel.clone(), mode.clone(), oid.clone())),
+                None => gone.push(StagedBlob {
+                    rel: rel.clone(),
+                    mode: "100644".into(),
+                    bytes: None,
+                }),
+            }
+        }
+        git.stage_blobs(&repo, &index, &generated)?;
+        git.stage_entries(&repo, &index, &restored)?;
+        git.stage_blobs(&repo, &index, &gone)?;
+        stage = stage_of(&generated);
+        tree = git.write_tree(&repo, &index)?;
     }
     let changed = changed_paths(git, &repo, base.as_deref(), &tree, &stage)?;
     let regenerated: Vec<String> = affected
