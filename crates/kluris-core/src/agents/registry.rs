@@ -19,9 +19,7 @@ pub const REGISTRY: [&str; 4] = ["antigravity", "claude", "copilot", "hermes"];
 /// Agents served by `~/.agents/skills` alone: accepted in `commands_for`,
 /// they write nothing extra. `windsurf` (Windsurf became Devin Desktop) is
 /// read as `devin` by the config reader and listed for old configs.
-pub const UNIVERSAL_ONLY: [&str; 7] = [
-    "codex", "cursor", "devin", "gemini", "junie", "kilocode", "windsurf",
-];
+pub const UNIVERSAL_ONLY: [&str; 6] = ["codex", "cursor", "devin", "junie", "kilocode", "windsurf"];
 
 /// Skill folders v2 wrote that v3 no longer uses, relative to HOME; their
 /// copies duplicate `~/.agents/skills` (research-07: Codex lists two enabled

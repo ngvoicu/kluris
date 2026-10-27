@@ -169,7 +169,7 @@ pub fn skill_usage(painter: Painter, name: &str) -> String {
         &painter.bold(&format!("Agent skill installed: {skill}")),
     );
     format!(
-        "{title}\n  Claude/Codex/Gemini/etc: /{skill}\n  Hermes: /skill {skill}  (or start with \
+        "{title}\n  Claude/Codex/Antigravity/etc: /{skill}\n  Hermes: /skill {skill}  (or start with \
          `hermes -s {skill}`)\n  Created a new Hermes profile later? Run `kluris doctor` to \
          refresh Kluris skills.\n"
     )

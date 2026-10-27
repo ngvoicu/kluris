@@ -16,6 +16,7 @@ use kluris_core::agents::install::{
     DestinationReport, DestinationRole, InstallReport, InstallRequest, install_skills,
     install_skills_with, read_brain_configs, remove_generated_skills_with,
 };
+use kluris_core::agents::registry;
 use kluris_core::config::{
     BrainConfig, BrainEntry, ConfigError, GlobalConfig, brain_config_to_yaml,
 };
@@ -263,9 +264,7 @@ fn agents_served_by_the_universal_folder_write_nothing_extra() {
     let mut s = Sandbox::new();
     s.brain(
         "acme",
-        Some(&[
-            "cursor", "codex", "gemini", "devin", "kilocode", "junie", "windsurf",
-        ]),
+        Some(&["cursor", "codex", "devin", "kilocode", "junie", "windsurf"]),
     );
     let report = s.install();
     assert_eq!(skill_files(&s), [".agents/skills/kluris-acme/SKILL.md"]);
@@ -282,6 +281,20 @@ fn unknown_agent_names_are_skipped_but_still_a_selection() {
     s.brain("acme", Some(&["bogus-agent"]));
     s.install();
     assert_eq!(skill_files(&s), [".agents/skills/kluris-acme/SKILL.md"]);
+
+    // `gemini` is not an agent Kluris knows: an unknown name like any other.
+    let mut s = Sandbox::new();
+    s.brain("acme", Some(&["gemini"]));
+    let report = s.install();
+    assert_eq!(skill_files(&s), [".agents/skills/kluris-acme/SKILL.md"]);
+    assert!(report.agents.is_empty(), "{:?}", report.agents);
+    assert!(report.ok());
+}
+
+#[test]
+fn gemini_is_not_a_known_agent_name() {
+    assert!(!registry::UNIVERSAL_ONLY.contains(&"gemini"));
+    assert!(!registry::REGISTRY.contains(&"gemini"));
 }
 
 #[test]

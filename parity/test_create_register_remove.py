@@ -210,11 +210,13 @@ def _replace_once(text: str, old: str, new: str) -> str:
 
 def par003(v2_yml: bytes) -> bytes:
     """v2's ``kluris.yml`` as v3 writes the same model: ``windsurf`` read as
-    ``devin`` and v2's default list as v3's, with ``antigravity``."""
+    ``devin`` and v2's default list as v3's, without ``gemini`` and with
+    ``antigravity``."""
     text = v2_yml.decode("utf-8")
     crlf = "\r\n" in text
     text = text.replace("\r\n", "\n")
     text = _replace_once(text, "  - windsurf\n", "  - devin\n")
+    text = _replace_once(text, "  - gemini\n", "")
     text = _replace_once(text, "  - junie\n", "  - junie\n  - antigravity\n")
     return (text.replace("\n", "\r\n") if crlf else text).encode("utf-8")
 
@@ -241,9 +243,15 @@ Then clone this brain and register it:
 git clone <this-repo-url> ~/path/to/brain  # if the brain lives at a git remote
 """
 V2_README_AGENTS = "Windsurf, Gemini CLI, Hermes Agent, Kilo Code, Junie, and other tools that\nsupport skills."
-V3_README_AGENTS = "Devin, Gemini CLI, Hermes Agent, Kilo Code, Junie, OpenCode, and other\ntools that support skills."
+V3_README_AGENTS = "Devin, Antigravity CLI, Hermes Agent, Kilo Code, Junie, OpenCode, and other\ntools that support skills."
 V2_README_COMPANIONS = "Companions are copied from\nthe installed Kluris package into"
 V3_README_COMPANIONS = "Companions ship embedded\nin Kluris; turning one on copies it into"
+
+
+def par083(v2_stdout: str) -> str:
+    """v2's human output with the skill-install line as v3 prints it
+    (PAR-083): Antigravity where v2 names Gemini."""
+    return v2_stdout.replace("  Claude/Codex/Gemini/etc: /kluris-", "  Claude/Codex/Antigravity/etc: /kluris-")
 
 
 def par071(v2_readme: bytes) -> bytes:
@@ -324,7 +332,7 @@ def assert_same_run(r: dict[str, Result], sb: Sandbox, *, yml: set[str] = frozen
     if json_out:
         assert_json_equal(v2.stdout, v3.stdout, sb.root)
     else:
-        same_words(v2.stdout, v3.stdout, sb.root)
+        same_words(par083(v2.stdout), v3.stdout, sb.root)
     assert v3.stderr == v2.stderr
     assert_tree(v3.tree, expected_v3(v2.tree, yml, before=pristine(sb)))
     assert v3.git == expected_git(v2.git, v2.tree, before=pristine(sb))  # type: ignore[attr-defined]
@@ -381,7 +389,7 @@ def test_create_text_output(sandbox: Sandbox):
     r = run_trees(sandbox, args)
     assert_same_run(r, sandbox, yml={"brains/demo/kluris.yml"}, json_out=False)
     for text in ("Brain created: demo (personal)", "Lobes: 3", "Agent skill installed: kluris-demo",
-                 "Claude/Codex/Gemini/etc: /kluris-demo", "Hermes: /skill kluris-demo",
+                 "Claude/Codex/Antigravity/etc: /kluris-demo", "Hermes: /skill kluris-demo",
                  "(or start with `hermes -s kluris-demo`)",
                  "Created a new Hermes profile later? Run `kluris doctor` to refresh Kluris skills."):
         assert text in r["v3"].stdout, text
@@ -621,7 +629,7 @@ def assert_wizard(r: dict[str, Result], sb: Sandbox, yml: set[str]) -> None:
     assert v2.code == 0, (v2.stdout, v2.stderr)
     assert v3.code == 0, (v3.stdout, v3.stderr)
     assert normalize(wizard_transcript(v3.stdout), sb.root) == normalize(wizard_transcript(v2.stdout), sb.root)
-    same_words(v2.stdout, v3.stdout, sb.root)
+    same_words(par083(v2.stdout), v3.stdout, sb.root)
     assert v3.stderr == v2.stderr == ""
     assert_tree(v3.tree, expected_v3(v2.tree, yml, before=pristine(sb)))
     assert v3.git == expected_git(v2.git, v2.tree, before=pristine(sb))  # type: ignore[attr-defined]
@@ -939,7 +947,7 @@ def test_register_the_same_brain_again(sandbox: Sandbox):
         if json_flag:
             assert_json_equal(r["v2"].stdout, r["v3"].stdout, sandbox.root)
         else:
-            same_words(r["v2"].stdout, r["v3"].stdout, sandbox.root)
+            same_words(par083(r["v2"].stdout), r["v3"].stdout, sandbox.root)
         assert r["v2"].tree == r["v3"].tree == pristine(sandbox)
 
 
@@ -1008,7 +1016,7 @@ def test_register_prompts_on_a_terminal(sandbox: Sandbox):
     assert normalize(wizard_transcript(v3.stdout), sandbox.root) == normalize(wizard_transcript(v2.stdout),
                                                                               sandbox.root)
     assert v3.stdout.startswith("\nRegister a brain\n\n  Path to brain directory:   Path to brain directory: \n")
-    same_words(v2.stdout, v3.stdout, sandbox.root)
+    same_words(par083(v2.stdout), v3.stdout, sandbox.root)
     assert_tree(v3.tree, expected_v3(v2.tree, {"brains/team/kluris.yml"}, before=pristine(sandbox)))
 
 

@@ -23,15 +23,15 @@ use crate::companions;
 use crate::yaml::{self, Map, Profile, Value};
 
 /// The default `commands_for`: v2's `DEFAULT_AGENT_COMMANDS` in v2's order
-/// with `devin` in place of `windsurf` (Windsurf became Devin), then
+/// with `devin` in place of `windsurf` (Windsurf became Devin) and without
+/// `gemini` (Antigravity is the Google agent Kluris supports), then
 /// `antigravity`.
-pub const DEFAULT_AGENT_COMMANDS: [&str; 10] = [
+pub const DEFAULT_AGENT_COMMANDS: [&str; 9] = [
     "claude",
     "cursor",
     "devin",
     "copilot",
     "codex",
-    "gemini",
     "hermes",
     "kilocode",
     "junie",
@@ -41,7 +41,7 @@ pub const DEFAULT_AGENT_COMMANDS: [&str; 10] = [
 /// Earlier default lists: a `commands_for` with exactly one of these sets of
 /// names reads as [`DEFAULT_AGENT_COMMANDS`], so upgraded brains get the new
 /// agents (v2 did the same for its pre-Hermes list).
-const LEGACY_DEFAULT_AGENT_COMMANDS: [&[&str]; 3] = [
+const LEGACY_DEFAULT_AGENT_COMMANDS: [&[&str]; 4] = [
     // v2 before Hermes (`_LEGACY_DEFAULT_AGENT_COMMANDS`).
     &[
         "claude", "cursor", "windsurf", "copilot", "codex", "gemini", "kilocode", "junie",
@@ -53,6 +53,19 @@ const LEGACY_DEFAULT_AGENT_COMMANDS: [&[&str]; 3] = [
     // v2.28 with windsurf read as devin.
     &[
         "claude", "cursor", "devin", "copilot", "codex", "gemini", "hermes", "kilocode", "junie",
+    ],
+    // Kluris 3.0.
+    &[
+        "claude",
+        "cursor",
+        "devin",
+        "copilot",
+        "codex",
+        "gemini",
+        "hermes",
+        "kilocode",
+        "junie",
+        "antigravity",
     ],
 ];
 

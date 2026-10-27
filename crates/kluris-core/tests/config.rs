@@ -24,8 +24,22 @@ const V2_DEFAULT_AGENTS: [&str; 9] = [
 ];
 
 /// v3's default list: v2's in v2's order, `devin` in place of `windsurf`,
-/// then `antigravity`. v2's default list (and its pre-Hermes one) reads as it.
-const V3_DEFAULT_AGENTS: [&str; 10] = [
+/// without `gemini`, then `antigravity`. v2's default list (and its
+/// pre-Hermes one) and Kluris 3.0's read as it.
+const V3_DEFAULT_AGENTS: [&str; 9] = [
+    "claude",
+    "cursor",
+    "devin",
+    "copilot",
+    "codex",
+    "hermes",
+    "kilocode",
+    "junie",
+    "antigravity",
+];
+
+/// Kluris 3.0's default list, as 3.0 writes it.
+const V3_0_DEFAULT_AGENTS: [&str; 10] = [
     "claude",
     "cursor",
     "devin",
@@ -300,7 +314,7 @@ fn missing_companions_and_agents_take_v2_defaults() {
 }
 
 #[test]
-fn defaults_are_v2_defaults_with_devin_then_antigravity() {
+fn defaults_are_v2_defaults_with_devin_without_gemini_then_antigravity() {
     assert_eq!(DEFAULT_AGENT_COMMANDS[..], V3_DEFAULT_AGENTS[..]);
     assert_eq!(
         AgentsConfig::default().commands_for,
@@ -414,6 +428,72 @@ fn v2_default_lists_migrate_to_the_v3_default() {
             "claude", "cursor", "devin", "copilot", "codex", "gemini", "kilocode", "junie"
         ])
     );
+}
+
+#[test]
+fn kluris_3_0_default_list_reads_as_the_new_default() {
+    let text = format!(
+        "name: b\ndescription: d\nagents:\n{}companions: []\n",
+        commands_yaml(&V3_0_DEFAULT_AGENTS)
+    );
+    let cfg = parse_brain_config(&text).unwrap();
+    assert_eq!(cfg, brain("b", "d", &V3_DEFAULT_AGENTS, &[]));
+    // Rewritten, the file carries the new default and nothing else changes.
+    assert_eq!(
+        brain_config_to_yaml(&cfg),
+        format!(
+            "name: b\ndescription: d\nagents:\n{}companions: []\n",
+            commands_yaml(&V3_DEFAULT_AGENTS)
+        )
+    );
+    // Compared as a set, as the v2 lists are: any order, repeats. Kluris
+    // 3.0 never wrote `windsurf`, so the list with it is not 3.0's.
+    for names in [
+        "[antigravity, junie, kilocode, hermes, gemini, codex, copilot, devin, cursor, claude]",
+        "[claude, cursor, devin, copilot, codex, gemini, gemini, hermes, kilocode, junie, antigravity]",
+    ] {
+        let text = format!("name: b\nagents:\n  commands_for: {names}\n");
+        assert_eq!(
+            parse_brain_config(&text).unwrap().agents,
+            AgentsConfig::default(),
+            "{names}"
+        );
+    }
+    let text = "name: b\nagents:\n  commands_for: [claude, cursor, windsurf, copilot, codex, gemini, hermes, kilocode, junie, antigravity]\n";
+    assert_eq!(
+        parse_brain_config(text).unwrap().agents.commands_for,
+        strings(&[
+            "claude",
+            "cursor",
+            "devin",
+            "copilot",
+            "codex",
+            "gemini",
+            "hermes",
+            "kilocode",
+            "junie",
+            "antigravity"
+        ])
+    );
+}
+
+#[test]
+fn a_written_gemini_is_an_unknown_name_kept_as_written() {
+    // Not a default set: kept exactly, `gemini` included, and written back.
+    for names in [
+        vec!["claude", "gemini"],
+        vec!["gemini"],
+        vec!["claude", "gemini", "antigravity"],
+    ] {
+        let text = format!(
+            "name: b\ndescription: ''\nagents:\n{}companions: []\n",
+            commands_yaml(&names)
+        );
+        let cfg = parse_brain_config(&text).unwrap();
+        assert_eq!(cfg.agents.commands_for, strings(&names), "{names:?}");
+        assert_eq!(brain_config_to_yaml(&cfg), text, "{names:?}");
+    }
+    assert!(!DEFAULT_AGENT_COMMANDS.contains(&"gemini"));
 }
 
 #[test]

@@ -99,11 +99,13 @@ def _replace_once(text: str, old: str, new: str) -> str:
 
 def par003(v2_yml: bytes) -> bytes:
     """v2's ``kluris.yml`` as v3 writes the same model: ``windsurf`` read as
-    ``devin`` and v2's default list as v3's, with ``antigravity``."""
+    ``devin`` and v2's default list as v3's, without ``gemini`` and with
+    ``antigravity``."""
     text = v2_yml.decode("utf-8")
     crlf = "\r\n" in text
     text = text.replace("\r\n", "\n")
     text = _replace_once(text, "  - windsurf\n", "  - devin\n")
+    text = _replace_once(text, "  - gemini\n", "")
     text = _replace_once(text, "  - junie\n", "  - junie\n  - antigravity\n")
     return (text.replace("\n", "\r\n") if crlf else text).encode("utf-8")
 

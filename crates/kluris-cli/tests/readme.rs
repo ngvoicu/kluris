@@ -270,7 +270,7 @@ fn brain_readme_names_todays_agents() {
         "Codex",
         "Cursor",
         "Devin",
-        "Gemini CLI",
+        "Antigravity CLI",
         "Hermes Agent",
         "Kilo Code",
         "Junie",
@@ -288,5 +288,31 @@ fn brain_readme_flags_exist() {
     assert!(
         unknown.is_empty(),
         "brain README uses flags the commands lack: {unknown:?}"
+    );
+}
+
+#[test]
+fn readmes_name_antigravity_cli_and_never_gemini_cli() {
+    let home = TempDir::new().unwrap();
+    for (which, text) in [
+        ("README", readme()),
+        ("brain README", brain_readme(home.path())),
+    ] {
+        assert!(!text.contains("Gemini CLI"), "{which} names Gemini CLI");
+        assert!(
+            !text.contains("Gemini/"),
+            "{which} names Gemini in the skill line"
+        );
+    }
+    let readme = readme();
+    assert!(
+        readme.contains("| `~/.gemini/config/skills/` | Antigravity CLI (`agy`) |"),
+        "README's Agents table has no Antigravity CLI row"
+    );
+    assert!(readme.contains("  Claude/Codex/Antigravity/etc: /kluris-acme\n"));
+    // The kluris.yml example carries today's default list.
+    assert!(
+        !readme.contains("  - gemini\n"),
+        "README lists gemini as an agent"
     );
 }

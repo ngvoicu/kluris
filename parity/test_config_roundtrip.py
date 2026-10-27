@@ -19,7 +19,7 @@ UNICODE_DESCRIPTION = (
 )
 
 V2_DEFAULT_AGENTS = ["claude", "cursor", "windsurf", "copilot", "codex", "gemini", "hermes", "kilocode", "junie"]
-V3_DEFAULT_AGENTS = ["claude", "cursor", "devin", "copilot", "codex", "gemini", "hermes", "kilocode", "junie", "antigravity"]
+V3_DEFAULT_AGENTS = ["claude", "cursor", "devin", "copilot", "codex", "hermes", "kilocode", "junie", "antigravity"]
 
 LEGACY_AGENTS = ["junie", "claude", "cursor", "windsurf", "copilot", "codex", "gemini", "kilocode"]
 

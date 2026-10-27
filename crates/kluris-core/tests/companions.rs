@@ -643,10 +643,29 @@ fn add_rewrites_a_v2_kluris_yml_keeping_crlf() {
 
     companions::add(&brains, &["specmint-core".to_string()], &home).unwrap();
 
-    let expected = "name: a\ndescription: a knowledge base\nagents:\n  commands_for:\n  - claude\n  - cursor\n  - devin\n  - copilot\n  - codex\n  - gemini\n  - hermes\n  - kilocode\n  - junie\n  - antigravity\ncompanions:\n- specmint-core\n";
     assert_eq!(
         fs::read_to_string(tmp.path().join("a").join("kluris.yml")).unwrap(),
-        expected.replace('\n', "\r\n")
+        DEFAULT_WITH_SPECMINT_CORE.replace('\n', "\r\n")
+    );
+}
+
+/// What `companion add specmint-core` writes for brain `a` with the default
+/// agent list.
+const DEFAULT_WITH_SPECMINT_CORE: &str = "name: a\ndescription: a knowledge base\nagents:\n  commands_for:\n  - claude\n  - cursor\n  - devin\n  - copilot\n  - codex\n  - hermes\n  - kilocode\n  - junie\n  - antigravity\ncompanions:\n- specmint-core\n";
+
+#[test]
+fn add_rewrites_a_kluris_3_0_default_list_as_the_new_default() {
+    let tmp = TempDir::new().unwrap();
+    let home = tmp.path().join("home");
+    let v3_0 = "name: a\ndescription: a knowledge base\nagents:\n  commands_for:\n  - claude\n  - cursor\n  - devin\n  - copilot\n  - codex\n  - gemini\n  - hermes\n  - kilocode\n  - junie\n  - antigravity\ncompanions: []\n";
+    let a = brain(tmp.path(), "a", Some(v3_0));
+    let brains = load_brains(&[a]).unwrap();
+
+    companions::add(&brains, &["specmint-core".to_string()], &home).unwrap();
+
+    assert_eq!(
+        fs::read_to_string(tmp.path().join("a").join("kluris.yml")).unwrap(),
+        DEFAULT_WITH_SPECMINT_CORE
     );
 }
 

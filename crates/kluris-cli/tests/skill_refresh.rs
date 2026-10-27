@@ -183,6 +183,38 @@ fn create_clean_keeps_v2s_output() {
         "{}",
         r.stdout
     );
+    assert!(
+        r.stdout.contains(
+            "Agent skill installed: kluris-demo\n  Claude/Codex/Antigravity/etc: /kluris-demo\n"
+        ),
+        "{}",
+        r.stdout
+    );
+    assert!(!r.stdout.contains("Gemini"), "{}", r.stdout);
+}
+
+/// The `commands_for` a new brain's `kluris.yml` gets.
+const DEFAULT_COMMANDS_FOR: &str = "agents:\n  commands_for:\n  - claude\n  - cursor\n  - devin\n  - copilot\n  - codex\n  - hermes\n  - kilocode\n  - junie\n  - antigravity\ncompanions: []\n";
+
+#[test]
+fn create_and_register_write_the_default_agent_list() {
+    let env = Env::new();
+    env.create("demo");
+    let yml = fs::read_to_string(env.work.join("demo").join("kluris.yml")).unwrap();
+    assert_eq!(
+        yml,
+        format!("name: demo\ndescription: demo knowledge base\n{DEFAULT_COMMANDS_FOR}")
+    );
+
+    // register writes a kluris.yml when the brain has none.
+    let r = env.run(&["remove", "demo", "--json"]);
+    assert_eq!(r.code, 0, "{} {}", r.stdout, r.stderr);
+    fs::remove_file(env.work.join("demo").join("kluris.yml")).unwrap();
+    let r = env.run(&["register", "demo", "--json"]);
+    assert_eq!(r.code, 0, "{} {}", r.stdout, r.stderr);
+    let yml = fs::read_to_string(env.work.join("demo").join("kluris.yml")).unwrap();
+    assert!(yml.starts_with("name: demo\n"), "{yml}");
+    assert!(yml.ends_with(DEFAULT_COMMANDS_FOR), "{yml}");
 }
 
 #[test]

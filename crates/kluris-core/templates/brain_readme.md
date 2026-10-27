@@ -66,7 +66,7 @@ Structure conventions stay stable even as the actual lobes change:
 ## How to use kluris-{name}
 
 `kluris-{name}` is an AI coding-agent skill for Claude Code, Codex, Cursor,
-Devin, Gemini CLI, Hermes Agent, Kilo Code, Junie, OpenCode, and other
+Devin, Antigravity CLI, Hermes Agent, Kilo Code, Junie, OpenCode, and other
 tools that support skills. Most agents invoke it as `/kluris-{name}`; Hermes can load it
 with `/skill kluris-{name}` inside a session or `hermes -s kluris-{name}` at
 startup. Use it inside your coding agent -- not in a regular terminal. The

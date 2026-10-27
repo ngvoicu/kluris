@@ -179,7 +179,7 @@ Brain created: acme (product-group)
   Lobes: 3
 
 Agent skill installed: kluris-acme
-  Claude/Codex/Gemini/etc: /kluris-acme
+  Claude/Codex/Antigravity/etc: /kluris-acme
   Hermes: /skill kluris-acme  (or start with `hermes -s kluris-acme`)
   Created a new Hermes profile later? Run `kluris doctor` to refresh Kluris skills.
 ```
@@ -211,10 +211,10 @@ instructions and the `kluris` commands to run. Kluris writes it to:
 
 | Folder | Read by |
 |--------|---------|
-| `~/.agents/skills/` | Cursor, Codex, Gemini CLI, Devin, OpenCode, Kilo Code, Junie and every other agent that reads this shared folder |
+| `~/.agents/skills/` | Cursor, Codex, Devin, OpenCode, Kilo Code, Junie and every other agent that reads this shared folder |
 | `~/.claude/skills/` | Claude Code |
 | `~/.hermes/skills/` and every `~/.hermes/profiles/*/skills/` | Hermes Agent |
-| `~/.gemini/config/skills/` | Antigravity |
+| `~/.gemini/config/skills/` | Antigravity CLI (`agy`) |
 | `$COPILOT_HOME/skills/` (when `COPILOT_HOME` is set) | GitHub Copilot |
 
 How to call it:
@@ -723,7 +723,6 @@ agents:
   - devin
   - copilot
   - codex
-  - gemini
   - hermes
   - kilocode
   - junie
