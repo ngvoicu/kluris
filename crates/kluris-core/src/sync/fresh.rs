@@ -35,8 +35,14 @@
 //!   incoming files would not fit on the disk ([`fits_on_disk`]). Last, it
 //!   does not start when an ignored file is where the incoming tree writes
 //!   (`--no-overwrite-ignore` makes git refuse one that appears after). It
-//!   runs without autostash. A failing `post-merge` hook runs after the
-//!   fast-forward is whole and changes nothing.
+//!   runs without autostash. On Windows it does not start either when
+//!   another program holds a file it replaces or deletes ([`files_in_use`]);
+//!   one opened between that check and git's write is a race left open. A
+//!   failing `post-merge` hook runs after the fast-forward is whole and
+//!   changes nothing.
+//! - A started fast-forward that still fails (git exits non-zero) is
+//!   [`Fresh::PartlyUpdated`], which the command reports in one stderr line
+//!   ([`Fresh::report`]), so a mixed tree is never silent.
 //! - Never a prompt: [`prompt_env`] for the fetch.
 //! - Off with `KLURIS_NO_AUTO_SYNC=1` or `sync: {auto_fetch: false}` in the
 //!   brain's `kluris.yml`.
@@ -118,10 +124,28 @@ pub enum Fresh {
     Unwritable,
     /// Fetched only: the incoming files might not fit on the disk.
     NoSpace,
+    /// Fetched only (Windows): another program holds a file the
+    /// fast-forward replaces or deletes.
+    InUse,
     /// The branch moved to its upstream.
     FastForwarded,
+    /// The fast-forward started and git exited non-zero: the work tree may
+    /// be partly updated.
+    PartlyUpdated,
     /// Another git step failed.
     Failed,
+}
+
+impl Fresh {
+    /// The one stderr line a command prints after this step: only for a
+    /// brain left partly updated.
+    pub fn report(&self, brain: &str) -> Option<String> {
+        (*self == Fresh::PartlyUpdated).then(|| {
+            format!(
+                "kluris: {brain} was only partly updated from its remote; run `kluris sync --brain {brain}` to finish"
+            )
+        })
+    }
 }
 
 /// The upstream of the current branch.
@@ -367,8 +391,46 @@ fn step(git: &impl FreshGit, req: &FreshRequest, deadline: Instant) -> Result<Fr
     if ignored_in_the_way(&ignored, &incoming) {
         return Ok(Fresh::IgnoredInTheWay);
     }
-    git.fast_forward(dir, theirs).map_err(ended)?;
-    Ok(Fresh::FastForwarded)
+    if files_in_use(dir, &incoming) {
+        return Ok(Fresh::InUse);
+    }
+    match git.fast_forward(dir, theirs) {
+        Ok(()) => Ok(Fresh::FastForwarded),
+        Err(FreshError::Failed(GitError { code: Some(_), .. })) => Ok(Fresh::PartlyUpdated),
+        Err(e) => Err(ended(e)),
+    }
+}
+
+/// Whether another program holds a file the fast-forward replaces or
+/// deletes: Windows only, where git cannot replace a file open without
+/// delete sharing. Each existing regular file among `incoming` is opened
+/// with no sharing and closed at once; a sharing violation, a lock
+/// violation or access denied means it is held. Elsewhere `false`: an open
+/// file does not stop its replacement.
+#[cfg(windows)]
+pub fn files_in_use(dir: &Path, incoming: &[String]) -> bool {
+    use std::os::windows::fs::OpenOptionsExt;
+    const ERROR_ACCESS_DENIED: i32 = 5;
+    const ERROR_SHARING_VIOLATION: i32 = 32;
+    const ERROR_LOCK_VIOLATION: i32 = 33;
+    incoming.iter().any(|rel| {
+        let path = dir.join(rel);
+        if !fs::symlink_metadata(&path).is_ok_and(|meta| meta.is_file()) {
+            return false;
+        }
+        match fs::OpenOptions::new().read(true).share_mode(0).open(&path) {
+            Ok(_) => false,
+            Err(e) => matches!(
+                e.raw_os_error(),
+                Some(ERROR_ACCESS_DENIED | ERROR_SHARING_VIOLATION | ERROR_LOCK_VIOLATION)
+            ),
+        }
+    })
+}
+
+#[cfg(not(windows))]
+pub fn files_in_use(_dir: &Path, _incoming: &[String]) -> bool {
+    false
 }
 
 /// Whether a checkout filter would run: one of the attribute texts assigns

@@ -1314,3 +1314,86 @@ fn a_path_too_long_for_windows_changes_nothing() {
     w.git(&t, &["-c", "core.longpaths=true", "push", "-q"]);
     w.assert_read_changes_nothing();
 }
+
+#[cfg(unix)]
+#[test]
+fn a_failed_fast_forward_is_reported_on_stderr_and_stdout_is_unchanged() {
+    // A `git` first on PATH that passes everything to the real git but
+    // fails the fast-forward (`merge --ff-only`).
+    let w = World::new();
+    let real = std::process::Command::new("sh")
+        .args(["-c", "command -v git"])
+        .output()
+        .unwrap();
+    let real = String::from_utf8(real.stdout).unwrap().trim().to_string();
+    assert!(!real.is_empty());
+    let bin = w.root().join("bin");
+    fs::create_dir_all(&bin).unwrap();
+    let git = bin.join("git");
+    fs::write(
+        &git,
+        format!(
+            "#!/bin/sh\nfor a in \"$@\"; do\n  if [ \"$a\" = --ff-only ]; then echo 'error: simulated' >&2; exit 1; fi\ndone\nexec '{real}' \"$@\"\n"
+        ),
+    )
+    .unwrap();
+    make_executable(&git);
+    let path = std::env::join_paths(std::iter::once(bin.clone()).chain(std::env::split_paths(
+        &std::env::var_os("PATH").unwrap_or_default(),
+    )))
+    .unwrap();
+    w.teammate_pushes("zebra", "zebras");
+    for args in [
+        &["wake-up", "--json"][..],
+        &["wake-up"],
+        &["search", "jwt", "--json"],
+        &["search", "jwt"],
+    ] {
+        let _ = fs::remove_file(w.stamp());
+        let base = w.baseline(args);
+        let out = w.kluris().args(args).env("PATH", &path).output().unwrap();
+        assert_eq!(out.status.code(), Some(0), "{args:?}");
+        assert_eq!(out.stdout, base.stdout, "{args:?}");
+        assert_eq!(
+            String::from_utf8_lossy(&out.stderr),
+            "kluris: team was only partly updated from its remote; run `kluris sync --brain team` to finish\n",
+            "{args:?}"
+        );
+    }
+}
+
+#[cfg(windows)]
+#[test]
+fn a_file_another_program_holds_open_changes_nothing() {
+    // Another program has a file the fast-forward replaces open without
+    // sharing: git could not replace it and would stop partway.
+    use std::os::windows::fs::OpenOptionsExt;
+    let w = World::new();
+    let t = w.teammate();
+    w.write(&t, "data.txt", "one\n");
+    w.commit(&t, "data");
+    w.git(&t, &["push", "-q"]);
+    w.git(&w.mine(), &["pull", "-q", "--ff-only"]);
+    // The index must know data.txt's stat data, so git's status does not
+    // need to read it (a just-written file is "racily clean").
+    thread::sleep(Duration::from_secs(2));
+    w.git(&w.mine(), &["update-index", "-q", "--really-refresh"]);
+    w.write(&t, "data.txt", "two\n");
+    w.write(&t, "a.md", "# a, checked out first\n");
+    w.commit(&t, "change data");
+    w.git(&t, &["push", "-q"]);
+    let before = w.raw_snapshot();
+    let held = fs::OpenOptions::new()
+        .read(true)
+        .share_mode(0)
+        .open(w.mine().join("data.txt"))
+        .unwrap();
+    let base = w.baseline(&["wake-up", "--json"]);
+    let out = w.kluris().args(["wake-up", "--json"]).output().unwrap();
+    drop(held);
+    assert_eq!(out.status.code(), Some(0));
+    assert_eq!(out.stdout, base.stdout);
+    assert_eq!(String::from_utf8_lossy(&out.stderr), "");
+    assert_eq!(w.raw_snapshot(), before, "a byte changed");
+    assert_eq!(w.tracked_remote(), w.remote_head(), "not fetched");
+}

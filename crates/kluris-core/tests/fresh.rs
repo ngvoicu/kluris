@@ -40,6 +40,8 @@ struct FakeGit {
     long_paths: bool,
     /// The paths the filter check was asked about.
     filter_paths: RefCell<Vec<String>>,
+    /// What the fast-forward answers.
+    fast_forward: Result<(), FreshError>,
     calls: RefCell<Vec<String>>,
     deadlines: RefCell<Vec<Instant>>,
 }
@@ -65,6 +67,7 @@ impl FakeGit {
             incoming_size: 0,
             long_paths: false,
             filter_paths: RefCell::new(Vec::new()),
+            fast_forward: Ok(()),
             calls: RefCell::new(Vec::new()),
             deadlines: RefCell::new(Vec::new()),
         }
@@ -171,7 +174,7 @@ impl FreshGit for FakeGit {
     /// No deadline: once started, a fast-forward runs to its end.
     fn fast_forward(&self, _dir: &Path, to: &str) -> Result<(), FreshError> {
         self.calls.borrow_mut().push(format!("fast_forward {to}"));
-        Ok(())
+        self.fast_forward.clone()
     }
 }
 
@@ -702,4 +705,49 @@ fn a_folder_the_fast_forward_cannot_write_leaves_only_the_fetch() {
     let _ = fs::remove_file(git.stamp());
     git.incoming = vec!["k/a.md".into(), "new/b.md".into()];
     assert_eq!(fresh_read(&git, &request(&brain)), Fresh::FastForwarded);
+}
+
+#[test]
+fn a_fast_forward_git_ends_in_failure_is_told_apart() {
+    // git ran and exited non-zero: the tree may be partly updated, and the
+    // command says so. git that could not start changed nothing.
+    let tmp = TempDir::new().unwrap();
+    let brain = brain(&tmp);
+    let failure = |code| {
+        Err(FreshError::Failed(GitError {
+            args: vec!["merge".into()],
+            code,
+            detail: "error: unable to write file".into(),
+        }))
+    };
+    let mut git = FakeGit::behind(&tmp);
+    git.fast_forward = failure(Some(1));
+    assert_eq!(fresh_read(&git, &request(&brain)), Fresh::PartlyUpdated);
+    let mut git = FakeGit::behind(&tmp);
+    let _ = fs::remove_file(git.stamp());
+    git.fast_forward = failure(None);
+    assert_eq!(fresh_read(&git, &request(&brain)), Fresh::Failed);
+}
+
+#[test]
+fn only_a_partly_updated_brain_is_reported() {
+    for fresh in [
+        Fresh::Disabled,
+        Fresh::NotARepo,
+        Fresh::Throttled,
+        Fresh::Dirty,
+        Fresh::FetchFailed,
+        Fresh::TimedOut,
+        Fresh::InUse,
+        Fresh::Failed,
+        Fresh::FastForwarded,
+    ] {
+        assert_eq!(fresh.report("team"), None, "{fresh:?}");
+    }
+    assert_eq!(
+        Fresh::PartlyUpdated.report("team").as_deref(),
+        Some(
+            "kluris: team was only partly updated from its remote; run `kluris sync --brain team` to finish"
+        )
+    );
 }

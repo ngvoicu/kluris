@@ -21,10 +21,13 @@ pub mod watch;
 
 use std::path::Path;
 
-/// Bring the brain at `path` up to date from its remote before a read
-/// (`kluris_core::sync::fresh`): quiet, bounded, never failing the read.
+/// Bring the brain `name` at `path` up to date from its remote before a
+/// read (`kluris_core::sync::fresh`): bounded, never failing the read, and
+/// quiet but for one stderr line when a started fast-forward failed.
 /// Off when `KLURIS_NO_AUTO_SYNC` is exactly `1`.
-pub(crate) fn fresh_read(path: &Path) {
+pub(crate) fn fresh_read(name: &str, path: &Path) {
     let off = std::env::var_os("KLURIS_NO_AUTO_SYNC").is_some_and(|v| v == "1");
-    let _ = kluris_core::sync::fresh::refresh(path, off);
+    if let Some(line) = kluris_core::sync::fresh::refresh(path, off).report(name) {
+        let _ = std::io::Write::write_all(&mut std::io::stderr(), format!("{line}\n").as_bytes());
+    }
 }
