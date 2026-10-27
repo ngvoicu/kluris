@@ -20,15 +20,23 @@
 //! The opt-in `real_service_round_trip` installs a real service for a
 //! throwaway brain, checks it runs and syncs, uninstalls it and checks that
 //! nothing is left; it runs only with `--ignored`.
+//!
+//! Every process a test starts and every service it installs has a guard
+//! ([`Owned`], [`TestService`]) that stops it (by its own process group or
+//! job, by the PIDs the test recorded, by the service name the test made)
+//! and waits, on every unwind path, so a failing test leaves nothing
+//! running. A guard cannot run when the test process is itself killed; each
+//! guard says what then remains.
 
 use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::fs;
-use std::io;
+use std::io::{self, BufRead, BufReader};
 use std::path::{Path, PathBuf};
-use std::process::Command as StdCommand;
+use std::process::{Child, Command as StdCommand, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Mutex, MutexGuard};
+use std::sync::{Mutex, MutexGuard, mpsc};
+use std::thread;
 use std::time::{Duration, Instant};
 
 use assert_cmd::Command;
@@ -1139,91 +1147,357 @@ fn help_lists_the_watch_and_service_flags() {
     assert!(!out.contains("--config"), "{out}");
 }
 
+// ---------------------------------------------------------------------------
+// The processes a test starts, each owned by a guard (F163-4).
+// ---------------------------------------------------------------------------
+
+/// How long a watch asked to stop (TERM to its group) has before its group
+/// is killed: a sync in progress finishes first.
+#[cfg(unix)]
+const GRACE: Duration = Duration::from_secs(20);
+
+/// A process this test started, with everything it starts: on Unix it
+/// leads a process group of its own, on Windows it is in a job object of
+/// this test's. Dropped, so on every unwind path too, it is stopped and
+/// waited for: on Unix its group gets TERM (the watch's clean stop), then
+/// KILL after [`GRACE`]; on Windows the job is terminated. A child already
+/// waited for is never signalled: its id may be another process's by then.
+///
+/// No guard runs when the test process itself is killed (SIGKILL, or the
+/// default action of a Ctrl-C or SIGTERM sent to it, which ends it without
+/// unwinding). On Unix the watch, in a group of its own, then keeps running
+/// under PID 1, and so does its HOME (the `TempDir`, not removed either),
+/// until it is stopped by its PID. On Windows the job's handle closes with
+/// the test process and the job's kill-on-close ends the tree.
+struct Owned {
+    child: Child,
+    #[cfg(windows)]
+    job: Option<job::Job>,
+}
+
+impl Owned {
+    fn spawn(mut cmd: StdCommand) -> Owned {
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+            cmd.process_group(0);
+        }
+        let child = cmd.spawn().unwrap();
+        #[cfg(windows)]
+        let job = job::Job::adopt(&child);
+        Owned {
+            child,
+            #[cfg(windows)]
+            job,
+        }
+    }
+
+    fn pid(&self) -> u32 {
+        self.child.id()
+    }
+
+    fn running(&mut self) -> bool {
+        matches!(self.child.try_wait(), Ok(None))
+    }
+
+    /// Stop the process (its whole group or job) and wait for it.
+    #[cfg(unix)]
+    fn end(&mut self) {
+        if !self.running() {
+            return;
+        }
+        // Not waited for yet, so the group's id is still this child's.
+        let group = format!("-{}", self.pid());
+        let signal = |name: &str| {
+            let _ = StdCommand::new("kill")
+                .args([name, "--", &group])
+                .stderr(Stdio::null())
+                .status();
+        };
+        signal("-TERM");
+        let until = Instant::now() + GRACE;
+        while self.running() && Instant::now() < until {
+            thread::sleep(Duration::from_millis(20));
+        }
+        if self.running() {
+            signal("-KILL");
+        }
+        let _ = self.child.wait();
+    }
+
+    /// Stop the process (its whole job) and wait for it.
+    #[cfg(windows)]
+    fn end(&mut self) {
+        match &self.job {
+            Some(job) => job.terminate(),
+            None => {
+                if self.running() {
+                    let _ = self.child.kill();
+                }
+            }
+        }
+        let _ = self.child.wait();
+    }
+}
+
+impl Drop for Owned {
+    fn drop(&mut self) {
+        self.end();
+    }
+}
+
+/// A job object holding a test's process and everything it starts, killed
+/// when its last handle closes.
+#[cfg(windows)]
+mod job {
+    use std::os::windows::io::AsRawHandle;
+    use std::process::Child;
+
+    use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
+    use windows_sys::Win32::System::JobObjects::{
+        AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+        JOBOBJECT_BASIC_ACCOUNTING_INFORMATION, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+        JobObjectBasicAccountingInformation, JobObjectExtendedLimitInformation,
+        QueryInformationJobObject, SetInformationJobObject, TerminateJobObject,
+    };
+
+    pub struct Job(HANDLE);
+
+    impl Job {
+        /// The child's new job, or `None` when it cannot have one.
+        pub fn adopt(child: &Child) -> Option<Job> {
+            // SAFETY: plain Win32 calls on a handle created here and the
+            // child's process handle, which `child` keeps open; every
+            // pointer is to a live local of the stated size.
+            unsafe {
+                let job = CreateJobObjectW(std::ptr::null(), std::ptr::null());
+                if job.is_null() {
+                    return None;
+                }
+                let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
+                info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+                let set = SetInformationJobObject(
+                    job,
+                    JobObjectExtendedLimitInformation,
+                    (&raw const info).cast(),
+                    u32::try_from(std::mem::size_of_val(&info)).unwrap_or(0),
+                );
+                let process = child.as_raw_handle() as HANDLE;
+                if set == 0 || AssignProcessToJobObject(job, process) == 0 {
+                    CloseHandle(job);
+                    return None;
+                }
+                Some(Job(job))
+            }
+        }
+
+        /// How many processes are in the job (`None` when it cannot say).
+        pub fn active(&self) -> Option<u32> {
+            // SAFETY: `self.0` is this job's open handle; the pointer is to
+            // a live local of the stated size.
+            unsafe {
+                let mut info: JOBOBJECT_BASIC_ACCOUNTING_INFORMATION = std::mem::zeroed();
+                let ok = QueryInformationJobObject(
+                    self.0,
+                    JobObjectBasicAccountingInformation,
+                    (&raw mut info).cast(),
+                    u32::try_from(std::mem::size_of_val(&info)).unwrap_or(0),
+                    std::ptr::null_mut(),
+                );
+                (ok != 0).then_some(info.ActiveProcesses)
+            }
+        }
+
+        /// Kill every process in the job.
+        pub fn terminate(&self) {
+            // SAFETY: `self.0` is this job's open handle.
+            unsafe {
+                TerminateJobObject(self.0, 1);
+            }
+        }
+    }
+
+    impl Drop for Job {
+        fn drop(&mut self) {
+            self.terminate();
+            // SAFETY: closed once, here.
+            unsafe {
+                CloseHandle(self.0);
+            }
+        }
+    }
+}
+
+/// Whether the process `pid` is running.
+#[cfg(unix)]
+fn alive(pid: u32) -> bool {
+    StdCommand::new("kill")
+        .args(["-0", &pid.to_string()])
+        .stderr(Stdio::null())
+        .status()
+        .unwrap()
+        .success()
+}
+
+/// Whether the process `pid` is running.
+#[cfg(windows)]
+fn alive(pid: u32) -> bool {
+    use windows_sys::Win32::Foundation::{CloseHandle, STILL_ACTIVE};
+    use windows_sys::Win32::System::Threading::{
+        GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+    // SAFETY: plain Win32 calls; the handle opened here is closed here.
+    unsafe {
+        let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+        if process.is_null() {
+            return false;
+        }
+        let mut code = 0u32;
+        let ok = GetExitCodeProcess(process, &mut code);
+        CloseHandle(process);
+        ok != 0 && code == STILL_ACTIVE as u32
+    }
+}
+
+/// A `kluris sync --watch` this test started, owned by its guard; its
+/// stdout arrives line by line.
+struct Watching {
+    owned: Owned,
+    lines: mpsc::Receiver<String>,
+}
+
+impl Watching {
+    fn start(w: &World, extra: &[&str]) -> Watching {
+        let mut args = vec!["sync", "--watch", "--brain", "acme", "--interval", "5"];
+        args.extend(extra);
+        let mut cmd = w.command(&args);
+        cmd.stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .stdin(Stdio::null());
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            use windows_sys::Win32::System::Threading::CREATE_NEW_PROCESS_GROUP;
+            cmd.creation_flags(CREATE_NEW_PROCESS_GROUP);
+        }
+        let mut owned = Owned::spawn(cmd);
+        let stdout = owned.child.stdout.take().unwrap();
+        let (tx, rx) = mpsc::channel();
+        thread::spawn(move || {
+            for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+                let _ = tx.send(line);
+            }
+        });
+        Watching { owned, lines: rx }
+    }
+
+    fn pid(&self) -> u32 {
+        self.owned.pid()
+    }
+
+    fn line(&self) -> String {
+        self.line_within(Duration::from_secs(20))
+    }
+
+    fn line_within(&self, limit: Duration) -> String {
+        self.lines
+            .recv_timeout(limit)
+            .unwrap_or_else(|e| panic!("a line within {limit:?}: {e:?}"))
+    }
+
+    /// `signal` to the watch's process group, as a terminal sends Ctrl-C.
+    #[cfg(unix)]
+    fn signal_group(&self, signal: &str) {
+        let group = format!("-{}", self.pid());
+        let status = StdCommand::new("kill")
+            .args([&format!("-{signal}"), "--", &group])
+            .status()
+            .unwrap();
+        assert!(status.success());
+    }
+
+    /// CTRL_BREAK to the watch's process group; false when there is no
+    /// console to send it through.
+    #[cfg(windows)]
+    fn ctrl_break(&self) -> bool {
+        use windows_sys::Win32::System::Console::{CTRL_BREAK_EVENT, GenerateConsoleCtrlEvent};
+        // SAFETY: a plain Win32 call with the child's process group id.
+        unsafe { GenerateConsoleCtrlEvent(CTRL_BREAK_EVENT, self.pid()) != 0 }
+    }
+
+    /// Exit code and stderr within `limit`; past it the test fails and the
+    /// guard stops the watch.
+    fn exit(mut self, limit: Duration) -> (Option<i32>, String) {
+        let until = Instant::now() + limit;
+        loop {
+            if let Some(status) = self.owned.child.try_wait().unwrap() {
+                let mut err = String::new();
+                if let Some(mut e) = self.owned.child.stderr.take() {
+                    let _ = io::Read::read_to_string(&mut e, &mut err);
+                }
+                return (status.code(), err);
+            }
+            assert!(
+                Instant::now() < until,
+                "the watch did not exit within {limit:?}"
+            );
+            thread::sleep(Duration::from_millis(20));
+        }
+    }
+}
+
+/// F163-4: a watch test that fails leaves no watch running. The remote is
+/// gone, so the watch's fetch fails and it stays quiet (the review's probe);
+/// waiting for its first line panics, and the panic unwinds through the
+/// guard, which stops the watch and waits for it.
+#[test]
+fn a_failing_watch_test_leaves_no_watch_running() {
+    let pid = Mutex::new(None);
+    let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let w = World::new();
+        fs::rename(w.bare(), w.home().join("gone.git")).unwrap();
+        let watching = Watching::start(&w, &[]);
+        *pid.lock().unwrap() = Some(watching.pid());
+        let first = watching.line_within(Duration::from_secs(8));
+        assert!(first.ends_with("acme: up to date"), "{first}");
+    }));
+    assert!(
+        failed.is_err(),
+        "the injected failure did not fail the test"
+    );
+    let pid = pid.into_inner().unwrap().expect("the watch was started");
+    let survived = alive(pid);
+    if survived {
+        // This test's own watch, by its recorded id.
+        stop_pid(pid);
+    }
+    assert!(!survived, "watch {pid} outlived its failed test");
+}
+
+/// Stop the process `pid`, one this test recorded as its own.
+#[cfg(unix)]
+fn stop_pid(pid: u32) {
+    let pid = pid.to_string();
+    let _ = StdCommand::new("kill").args(["-KILL", &pid]).status();
+}
+
+/// Stop the process `pid`, one this test recorded as its own.
+#[cfg(windows)]
+fn stop_pid(pid: u32) {
+    let pid = pid.to_string();
+    let _ = StdCommand::new("taskkill")
+        .args(["/PID", &pid, "/F"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+}
+
 /// The watch started in a process group of its own, as a terminal starts a
 /// foreground job: a signal to the group reaches every process in it, the
 /// way Ctrl-C does.
 #[cfg(unix)]
 mod unix_signals {
     use super::*;
-    use std::io::{BufRead, BufReader};
-    use std::os::unix::process::CommandExt;
-    use std::process::{Child, Stdio};
-    use std::sync::mpsc;
-    use std::thread;
-
-    struct Watching {
-        child: Child,
-        lines: mpsc::Receiver<String>,
-    }
-
-    impl Watching {
-        fn start(w: &World, extra: &[&str]) -> Watching {
-            let mut args = vec!["sync", "--watch", "--brain", "acme", "--interval", "5"];
-            args.extend(extra);
-            let mut cmd = w.command(&args);
-            cmd.stdout(Stdio::piped())
-                .stderr(Stdio::piped())
-                .stdin(Stdio::null())
-                .process_group(0);
-            let mut child = cmd.spawn().unwrap();
-            let stdout = child.stdout.take().unwrap();
-            let (tx, rx) = mpsc::channel();
-            thread::spawn(move || {
-                for line in BufReader::new(stdout).lines().map_while(Result::ok) {
-                    let _ = tx.send(line);
-                }
-            });
-            Watching { child, lines: rx }
-        }
-
-        fn line(&self) -> String {
-            self.line_within(Duration::from_secs(20))
-        }
-
-        fn line_within(&self, limit: Duration) -> String {
-            self.lines
-                .recv_timeout(limit)
-                .unwrap_or_else(|e| panic!("a line within {limit:?}: {e:?}"))
-        }
-
-        fn signal_group(&self, signal: &str) {
-            let group = format!("-{}", self.child.id());
-            let status = StdCommand::new("kill")
-                .args([&format!("-{signal}"), "--", &group])
-                .status()
-                .unwrap();
-            assert!(status.success());
-        }
-
-        /// Exit code within `limit`, killing the watch if it is not done.
-        fn exit(mut self, limit: Duration) -> (Option<i32>, String) {
-            let until = Instant::now() + limit;
-            loop {
-                if let Some(status) = self.child.try_wait().unwrap() {
-                    let mut err = String::new();
-                    if let Some(mut e) = self.child.stderr.take() {
-                        let _ = io::Read::read_to_string(&mut e, &mut err);
-                    }
-                    return (status.code(), err);
-                }
-                if Instant::now() >= until {
-                    let _ = self.child.kill();
-                    let _ = self.child.wait();
-                    panic!("the watch did not exit within {limit:?}");
-                }
-                thread::sleep(Duration::from_millis(20));
-            }
-        }
-    }
-
-    fn alive(pid: &str) -> bool {
-        StdCommand::new("kill")
-            .args(["-0", pid])
-            .stderr(Stdio::null())
-            .status()
-            .unwrap()
-            .success()
-    }
 
     #[test]
     fn sigint_while_waiting_exits_0_at_once() {
@@ -1287,7 +1561,10 @@ mod unix_signals {
         );
         assert_eq!(w.remote_head(), w.head(), "the sync did not finish");
         let pid = fs::read_to_string(&pid_file).unwrap();
-        assert!(!alive(pid.trim()), "the hook outlived the watch");
+        assert!(
+            !alive(pid.trim().parse().unwrap()),
+            "the hook outlived the watch"
+        );
         let status = w.git(&w.root(), &["status", "--porcelain"]);
         assert_eq!(status, "", "the work tree is not clean");
         assert!(!w.root().join(".git").join("index.lock").exists());
@@ -1474,55 +1751,34 @@ mod unix_signals {
 #[cfg(windows)]
 #[test]
 fn ctrl_break_exits_0() {
-    use std::io::{BufRead, BufReader};
-    use std::os::windows::process::CommandExt;
-    use std::process::Stdio;
-    use windows_sys::Win32::System::Console::{CTRL_BREAK_EVENT, GenerateConsoleCtrlEvent};
-    use windows_sys::Win32::System::Threading::CREATE_NEW_PROCESS_GROUP;
-
     let w = World::new();
-    let mut cmd = w.command(&["sync", "--watch", "--brain", "acme", "--interval", "5"]);
-    cmd.stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .stdin(Stdio::null())
-        .creation_flags(CREATE_NEW_PROCESS_GROUP);
-    let mut child = cmd.spawn().unwrap();
-    let mut out = BufReader::new(child.stdout.take().unwrap());
-    let mut first = String::new();
-    out.read_line(&mut first).unwrap();
-    assert!(first.trim_end().ends_with("acme: up to date"), "{first}");
-    // SAFETY: a plain Win32 call with the child's process group id.
-    let sent = unsafe { GenerateConsoleCtrlEvent(CTRL_BREAK_EVENT, child.id()) };
-    if sent == 0 {
-        let _ = child.kill();
-        let _ = child.wait();
+    let watching = Watching::start(&w, &[]);
+    let first = watching.line();
+    assert!(first.ends_with("acme: up to date"), "{first}");
+    if !watching.ctrl_break() {
+        // The guard ends the watch.
         eprintln!(
             "skipped: no console to send CTRL_BREAK through ({})",
             io::Error::last_os_error()
         );
         return;
     }
-    let until = Instant::now() + Duration::from_secs(10);
-    loop {
-        if let Some(status) = child.try_wait().unwrap() {
-            assert_eq!(status.code(), Some(0));
-            break;
-        }
-        if Instant::now() >= until {
-            let _ = child.kill();
-            panic!("the watch did not exit on CTRL_BREAK");
-        }
-        std::thread::sleep(Duration::from_millis(20));
-    }
+    let (code, err) = watching.exit(Duration::from_secs(10));
+    assert_eq!(
+        code,
+        Some(0),
+        "the watch did not exit 0 on CTRL_BREAK: {err}"
+    );
 }
 
 /// The Windows service's watch (`--log-file`) runs under `conhost.exe
 /// --headless`, which `schtasks /End` ends without ending its child: the
-/// watch ends itself once the process that started it is gone.
+/// watch ends itself once the process that started it is gone. The parent
+/// and the watch it starts are in this test's job, so the watch is seen to
+/// end (the job empties) and is ended by the guard if it does not.
 #[cfg(windows)]
 #[test]
 fn a_service_watch_ends_when_its_parent_does() {
-    use std::process::Stdio;
     let w = World::new();
     let log = w.home().join("logs").join("watch.log");
     let mut cmd = StdCommand::new("cmd");
@@ -1542,34 +1798,28 @@ fn a_service_watch_ends_when_its_parent_does() {
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
-    let mut parent = cmd.spawn().unwrap();
+    let mut parent = Owned::spawn(cmd);
+    assert!(parent.job.is_some(), "the parent could not be put in a job");
     let until = Instant::now() + Duration::from_secs(30);
     while !fs::read_to_string(&log).is_ok_and(|t| t.contains("acme: up to date")) {
         assert!(
             Instant::now() < until,
             "the watch never logged its first sync"
         );
-        std::thread::sleep(Duration::from_millis(100));
+        thread::sleep(Duration::from_millis(100));
     }
-    parent.kill().unwrap();
-    let _ = parent.wait();
-    let needle = log.display().to_string();
+    // The parent alone; the watch stays in the job.
+    parent.child.kill().unwrap();
+    let _ = parent.child.wait();
+    let in_job = |parent: &Owned| parent.job.as_ref().and_then(job::Job::active);
     let until = Instant::now() + Duration::from_secs(10);
-    while watch_running_with(&needle) {
-        if Instant::now() >= until {
-            end_round_trip_processes();
-            let _ = StdCommand::new("powershell")
-                .args([
-                    "-NoProfile",
-                    "-Command",
-                    &format!(
-                        "Get-CimInstance Win32_Process | Where-Object {{ $_.ProcessId -ne $PID -and $_.CommandLine -like '*{needle}*' }} | ForEach-Object {{ Stop-Process -Id $_.ProcessId -Force }}"
-                    ),
-                ])
-                .status();
-            panic!("the watch outlived its parent by 10 s");
-        }
-        std::thread::sleep(Duration::from_millis(200));
+    while in_job(&parent) != Some(0) {
+        assert!(
+            Instant::now() < until,
+            "the watch outlived its parent by 10 s ({:?} processes left)",
+            in_job(&parent)
+        );
+        thread::sleep(Duration::from_millis(200));
     }
 }
 
@@ -2822,23 +3072,183 @@ fn install_and_uninstall_through_the_binary() {
     );
 }
 
+/// F163-4: a service test that fails after its install leaves no service:
+/// as the panic unwinds, the guard uninstalls the test's brain's service
+/// (through the fake `launchctl`/`systemctl`).
+#[cfg(unix)]
+#[test]
+fn a_failing_service_test_leaves_no_service_installed() {
+    let w = World::new();
+    let bin = fake_tools(w.home(), false);
+    let path = format!("{}:{}", bin.display(), std::env::var("PATH").unwrap());
+    let run = |args: &[&str]| {
+        let mut cmd = w.command(args);
+        cmd.env("PATH", &path);
+        ran(cmd)
+    };
+    let definition = Mutex::new(None);
+    let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let (_service, (code, out, err)) = TestService::install("acme", &run);
+        assert_eq!(code, 0, "{out}{err}");
+        let doc: Value = serde_json::from_str(&out).unwrap();
+        let installed = PathBuf::from(doc["definition"].as_str().unwrap());
+        assert!(installed.exists());
+        *definition.lock().unwrap() = Some(installed);
+        panic!("injected: the test fails after its install");
+    }));
+    assert!(
+        failed.is_err(),
+        "the injected failure did not fail the test"
+    );
+    let definition = definition.into_inner().unwrap().expect("installed");
+    assert!(
+        !definition.exists(),
+        "the service outlived its failed test: {}",
+        definition.display()
+    );
+    let calls = fs::read_to_string(w.home().join("tool-calls")).unwrap();
+    assert!(
+        calls.contains("bootout") || calls.contains("disable"),
+        "{calls}"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // The opt-in real round trip.
 // ---------------------------------------------------------------------------
 
-/// Installs a real service for a throwaway brain (`kluris-rt-<pid>`, its
-/// config and remote in a temp folder), waits until it runs and has pushed
-/// a local commit, uninstalls it, then checks nothing is left: the
-/// definition, the service manager's entry, a watch process, the log.
+/// A command's exit code (-1 when it has none or could not start), stdout
+/// and stderr. It never panics, so a guard can run it while unwinding.
+fn ran(mut cmd: StdCommand) -> (i32, String, String) {
+    match cmd.output() {
+        Ok(out) => (
+            out.status.code().unwrap_or(-1),
+            String::from_utf8_lossy(&out.stdout).into_owned(),
+            String::from_utf8_lossy(&out.stderr).into_owned(),
+        ),
+        Err(e) => (-1, String::new(), e.to_string()),
+    }
+}
+
+/// `kluris` run with a test's environment: exit code, stdout, stderr.
+type Kluris<'a> = &'a dyn Fn(&[&str]) -> (i32, String, String);
+
+/// A sync service a test installs, for that test's brain alone, through
+/// `kluris` (the test's own environment). Dropped, so on every unwind path
+/// too, it uninstalls that brain's service (never another), stops the watch
+/// processes it recorded for it that are still running, each by its PID,
+/// and removes the service's log.
+///
+/// No guard runs when the test process itself is killed: the service then
+/// stays installed and running, with its log; `kluris sync
+/// --uninstall-service --brain <name>` with the test's `KLURIS_CONFIG`
+/// removes it (`no_round_trip_leftovers` finds a round trip's).
+struct TestService<'a> {
+    brain: String,
+    kluris: Kluris<'a>,
+    log: Option<PathBuf>,
+    recorded: Vec<u32>,
+    uninstalled: bool,
+}
+
+impl<'a> TestService<'a> {
+    /// The guard, then the install (`--json`), so a failed or half-done
+    /// install is undone too.
+    fn install(brain: &str, kluris: Kluris<'a>) -> (TestService<'a>, (i32, String, String)) {
+        let mut service = TestService {
+            brain: brain.to_string(),
+            kluris,
+            log: None,
+            recorded: Vec::new(),
+            uninstalled: false,
+        };
+        let installed = kluris(&["sync", "--install-service", "--brain", brain, "--json"]);
+        service.log = serde_json::from_str::<Value>(&installed.1)
+            .ok()
+            .and_then(|doc| doc["log"].as_str().map(PathBuf::from));
+        (service, installed)
+    }
+
+    /// Record the watch processes running for this brain: those whose
+    /// `--brain` is exactly its name. Only for a name no other run uses
+    /// (the round trip's `kluris-rt-<pid>-<nonce>`).
+    fn record(&mut self) {
+        for pid in watch_pids(&self.brain) {
+            if !self.recorded.contains(&pid) {
+                self.recorded.push(pid);
+            }
+        }
+    }
+
+    fn uninstall(&mut self) -> (i32, String, String) {
+        self.uninstalled = true;
+        (self.kluris)(&["sync", "--uninstall-service", "--brain", &self.brain])
+    }
+}
+
+impl Drop for TestService<'_> {
+    fn drop(&mut self) {
+        if !self.uninstalled {
+            let (code, out, err) = self.uninstall();
+            eprintln!("the guard uninstalled {}: {code} {out}{err}", self.brain);
+        }
+        // What the service manager left of the watches recorded, each
+        // still a watch for this brain (not a reused id).
+        for &pid in &self.recorded {
+            if watch_pids(&self.brain).contains(&pid) {
+                eprintln!("the guard stops watch {pid} of {}", self.brain);
+                end_pid(pid, &self.brain);
+            }
+        }
+        // The log, then its folders once empty: `kluris` (macOS),
+        // `kluris\logs` (Windows).
+        if let Some(log) = &self.log {
+            let _ = fs::remove_file(log);
+            let mut dir = log.parent();
+            while let Some(d) = dir.filter(|d| d.ends_with("kluris") || d.ends_with("logs")) {
+                if fs::remove_dir(d).is_err() {
+                    break;
+                }
+                dir = d.parent();
+            }
+        }
+    }
+}
+
+/// Stop the watch `pid` of `brain`, recorded as this run's: TERM first on
+/// Unix (its clean stop), then [`stop_pid`] if it is still that watch.
+fn end_pid(pid: u32, brain: &str) {
+    #[cfg(unix)]
+    {
+        let _ = StdCommand::new("kill")
+            .args(["-TERM", &pid.to_string()])
+            .stderr(Stdio::null())
+            .status();
+        let until = Instant::now() + Duration::from_secs(10);
+        while watch_pids(brain).contains(&pid) && Instant::now() < until {
+            thread::sleep(Duration::from_millis(100));
+        }
+    }
+    if watch_pids(brain).contains(&pid) {
+        stop_pid(pid);
+    }
+}
+
+/// Installs a real service for a throwaway brain (`kluris-rt-<pid>-<nonce>`,
+/// its config and remote in a temp folder), waits until it runs and has
+/// pushed a local commit, uninstalls it, then checks nothing is left: the
+/// definition, the service manager's entry, a watch process. Its guard
+/// uninstalls the service and stops the watches it recorded however the
+/// test ends.
 /// `cargo test -p kluris --test watch -- --ignored real_service_round_trip`.
 #[test]
 #[ignore = "installs a real per-user service on this machine"]
 fn real_service_round_trip() {
-    for line in end_round_trip_processes() {
-        eprintln!("ended a leftover of an earlier round trip: {line}");
-    }
     let w = World::new();
-    let name = format!("kluris-rt-{}", std::process::id());
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.subsec_nanos());
+    let name = format!("kluris-rt-{}-{nonce}", std::process::id());
     // The brain under the throwaway name.
     let config = w.home().join(".kluris").join("config.yml");
     let text = fs::read_to_string(&config).unwrap();
@@ -2854,20 +3264,13 @@ fn real_service_round_trip() {
             .env("GIT_CONFIG_GLOBAL", w.home().join("gitconfig"))
             .env("GIT_CONFIG_NOSYSTEM", "1")
             .env("KLURIS_NO_PROMPT", "1");
-        let out = cmd.output().unwrap();
-        (
-            out.status.code().unwrap_or(-1),
-            String::from_utf8_lossy(&out.stdout).into_owned(),
-            String::from_utf8_lossy(&out.stderr).into_owned(),
-        )
+        ran(cmd)
     };
-    let (code, out, err) = real(&["sync", "--install-service", "--brain", &name, "--json"]);
-    if code != 0 {
-        panic!("install failed: {out}{err}");
-    }
+    let (mut service, (code, out, err)) = TestService::install(&name, &real);
+    assert_eq!(code, 0, "install failed: {out}{err}");
     let doc: Value = serde_json::from_str(&out).unwrap();
     eprintln!("installed: {doc}");
-    let log = doc["log"].as_str().map(PathBuf::from);
+    let log = service.log.clone();
     let definition = doc["definition"].as_str().map(PathBuf::from);
 
     // It runs: doctor says so, it pushes the local commit, and its log
@@ -2882,6 +3285,7 @@ fn real_service_round_trip() {
     let mut running = false;
     let mut pushed = false;
     while Instant::now() < until && !(running && pushed && logged()) {
+        service.record();
         let (_, out, _) = real(&["doctor", "--no-refresh", "--json"]);
         let doc: Value = serde_json::from_str(&out).unwrap_or(Value::Null);
         running = doc["checks"].as_array().is_some_and(|checks| {
@@ -2893,25 +3297,13 @@ fn real_service_round_trip() {
             })
         });
         pushed = w.remote_head() == w.head();
-        std::thread::sleep(Duration::from_millis(500));
+        thread::sleep(Duration::from_millis(500));
     }
+    service.record();
     let log_text = read_log();
     let was_logged = logged();
-    let (code, out, err) = real(&["sync", "--uninstall-service", "--brain", &name]);
+    let (code, out, err) = service.uninstall();
     eprintln!("uninstall: {code} {out}{err}");
-    // The log goes before anything is asserted.
-    if let Some(log) = &log {
-        let _ = fs::remove_file(log);
-        // The log folders, once empty: `kluris` (macOS), `kluris\logs`
-        // (Windows).
-        let mut dir = log.parent();
-        while let Some(d) = dir.filter(|d| d.ends_with("kluris") || d.ends_with("logs")) {
-            if fs::remove_dir(d).is_err() {
-                break;
-            }
-            dir = d.parent();
-        }
-    }
     assert!(running, "the service never ran; log: {log_text}");
     assert!(pushed, "the service never pushed; log: {log_text}");
     assert!(was_logged, "the push was never logged: {log_text}");
@@ -2923,56 +3315,19 @@ fn real_service_round_trip() {
     }
     let (_, out, _) = real(&["doctor", "--no-refresh", "--json"]);
     assert!(!out.contains(&format!("sync-service:{name}")), "{out}");
-    std::thread::sleep(Duration::from_secs(2));
-    if watch_process_running(&name) {
-        let left = end_round_trip_processes();
-        panic!("a watch for {name} was still running, now ended: {left:#?}");
-    }
-}
-
-/// The processes earlier round trips left (`--brain kluris-rt-<pid>` on
-/// their command line), ended, each printed as `pid ppid name command`.
-fn end_round_trip_processes() -> Vec<String> {
-    let out = if cfg!(windows) {
-        StdCommand::new("powershell")
-            .args([
-                "-NoProfile",
-                "-Command",
-                "Get-CimInstance Win32_Process | Where-Object { $_.ProcessId -ne $PID -and $_.CommandLine -like '*--watch --brain kluris-rt-*' } | ForEach-Object { \"$($_.ProcessId) $($_.ParentProcessId) $($_.Name) $($_.CommandLine)\"; Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }",
-            ])
-            .output()
-    } else {
-        StdCommand::new("sh")
-            .args([
-                "-c",
-                "ps -A -o pid=,ppid=,args= | grep -e '--watch --brain kluris-rt-' | grep -v grep | while read pid ppid args; do echo \"$pid $ppid $args\"; kill \"$pid\"; done",
-            ])
-            .output()
-    };
-    out.map(|o| {
-        String::from_utf8_lossy(&o.stdout)
-            .lines()
-            .filter(|l| !l.trim().is_empty())
-            .map(str::to_string)
-            .collect()
-    })
-    .unwrap_or_default()
-}
-
-/// Ends what earlier round trips left running; run it alone through the
-/// runner when a round trip failed: `-- --test watch -- --ignored
-/// end_round_trip_leftovers --nocapture`.
-#[test]
-#[ignore = "ends processes of earlier real round trips on this machine"]
-fn end_round_trip_leftovers() {
-    for line in end_round_trip_processes() {
-        eprintln!("ended: {line}");
-    }
+    thread::sleep(Duration::from_secs(2));
+    service.record();
+    let left = watch_pids(&name);
+    assert!(
+        left.is_empty(),
+        "a watch for {name} was still running after the uninstall (the guard stops it): {left:?}"
+    );
 }
 
 /// Nothing of any real round trip is on this machine: no service
 /// definition, task or unit for a `kluris-rt-*` brain, no watch for one, no
-/// log of one. `-- --test watch -- --ignored no_round_trip_leftovers`.
+/// log of one. It only looks; what it finds is removed by hand.
+/// `-- --test watch -- --ignored no_round_trip_leftovers`.
 #[test]
 #[ignore = "looks at this machine's real services"]
 fn no_round_trip_leftovers() {
@@ -3014,46 +3369,69 @@ fn no_round_trip_leftovers() {
                 .map(str::to_string),
         );
     }
-    if watch_running_with("--brain kluris-rt-") {
-        found.push("a watch process for a kluris-rt- brain".into());
-    }
+    found.extend(
+        processes()
+            .into_iter()
+            .filter(|(_, line)| is_watch(line) && line.contains("--brain kluris-rt-"))
+            .map(|(pid, line)| format!("watch {pid}: {line}")),
+    );
     assert!(found.is_empty(), "left behind: {found:#?}");
     eprintln!("no round trip leftovers");
 }
 
-/// Whether a `kluris sync --watch --brain <name>` process is running.
-fn watch_process_running(name: &str) -> bool {
-    watch_running_with(&format!("--brain {name}"))
-}
-
-/// Whether a `kluris sync --watch` process with `needle` in its command
-/// line is running.
-fn watch_running_with(needle: &str) -> bool {
+/// Every process on this machine: its id and command line.
+fn processes() -> Vec<(u32, String)> {
     let out = if cfg!(windows) {
         StdCommand::new("powershell")
             .args([
                 "-NoProfile",
                 "-Command",
-                "Get-CimInstance Win32_Process | ForEach-Object { $_.CommandLine }",
+                "Get-CimInstance Win32_Process | ForEach-Object { \"$($_.ProcessId) $($_.CommandLine)\" }",
             ])
             .output()
     } else {
-        StdCommand::new("ps").args(["-A", "-o", "args="]).output()
+        StdCommand::new("ps")
+            .args(["-A", "-o", "pid=,args="])
+            .output()
     };
     let text = out
         .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
         .unwrap_or_default();
-    // Only kluris itself (or the conhost a Windows task runs it under), not
-    // a shell or a search whose command line quotes the words.
-    let program = |line: &str| {
-        let line = line.trim_start();
-        let first = match line.strip_prefix('"') {
-            Some(rest) => rest.split('"').next().unwrap_or_default(),
-            None => line.split_whitespace().next().unwrap_or_default(),
-        };
-        let name = first.rsplit(['/', '\\']).next().unwrap_or_default();
-        ["kluris", "kluris.exe", "conhost.exe"].contains(&name.to_ascii_lowercase().as_str())
-    };
     text.lines()
-        .any(|line| program(line) && line.contains("--watch") && line.contains(needle))
+        .filter_map(|line| {
+            let (pid, command) = line.trim_start().split_once(char::is_whitespace)?;
+            Some((pid.parse().ok()?, command.trim().to_string()))
+        })
+        .collect()
+}
+
+/// Whether a command line is a `kluris sync --watch`: kluris itself (or the
+/// conhost a Windows task runs it under), not a shell or a search whose
+/// command line quotes the words.
+fn is_watch(line: &str) -> bool {
+    let line = line.trim_start();
+    let first = match line.strip_prefix('"') {
+        Some(rest) => rest.split('"').next().unwrap_or_default(),
+        None => line.split_whitespace().next().unwrap_or_default(),
+    };
+    let name = first.rsplit(['/', '\\']).next().unwrap_or_default();
+    ["kluris", "kluris.exe", "conhost.exe"].contains(&name.to_ascii_lowercase().as_str())
+        && line.contains("--watch")
+}
+
+/// The watch processes whose `--brain` is exactly `brain`.
+fn watch_pids(brain: &str) -> Vec<u32> {
+    processes()
+        .into_iter()
+        .filter(|(_, line)| {
+            is_watch(line) && {
+                let words: Vec<&str> = line
+                    .split_whitespace()
+                    .map(|w| w.trim_matches('"'))
+                    .collect();
+                words.windows(2).any(|pair| pair == ["--brain", brain])
+            }
+        })
+        .map(|(pid, _)| pid)
+        .collect()
 }
