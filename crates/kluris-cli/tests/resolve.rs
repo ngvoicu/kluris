@@ -108,13 +108,14 @@ fn resolving_path_by_path_then_committing_and_pushing() {
 
 #[test]
 fn a_read_during_an_open_conflict_fetches_and_resolve_still_finishes() {
-    // The conflict records its two commits: a fresh read's fetch moving the
-    // remote-tracking ref changes nothing it settles.
+    // The conflict records its two commits: a fresh read's fetch, which
+    // brings objects and writes no ref, changes nothing it settles.
     let mut h = Home::new();
     let root = h.two_conflicts_and_more();
     let pending = root.join(".git").join("kluris-sync").join("pending.json");
     let recorded = fs::read(&pending).unwrap();
     let head = h.git(&root, &["rev-parse", "HEAD"]).trim().to_string();
+    let refs = h.git(&root, &["for-each-ref"]);
     let mut wake_up = std::process::Command::new(assert_cmd::cargo::cargo_bin!("kluris"));
     h.hermetic(&mut wake_up);
     let out = wake_up
@@ -125,8 +126,9 @@ fn a_read_during_an_open_conflict_fetches_and_resolve_still_finishes() {
     assert_eq!(out.status.code(), Some(0));
     let mate = h.teammate("alpha");
     let remote = h.git(&mate, &["rev-parse", "HEAD"]).trim().to_string();
-    let tracked = h.git(&root, &["rev-parse", "refs/remotes/origin/main"]);
-    assert_eq!(tracked.trim(), remote, "fetched");
+    let commit = format!("{remote}^{{commit}}");
+    h.git(&root, &["cat-file", "-e", &commit]);
+    assert_eq!(h.git(&root, &["for-each-ref"]), refs, "a ref changed");
     assert_eq!(h.git(&root, &["rev-parse", "HEAD"]).trim(), head);
     assert_eq!(fs::read(&pending).unwrap(), recorded);
 

@@ -1,9 +1,10 @@
 //! Fresh reads (SPEC Phase 7, TEST-K3-49): before `wake-up` and `search`
-//! read a brain, a `git fetch` of its current branch's upstream, so the
-//! remote-tracking refs hold what teammates pushed. The read then reads the
-//! brain as it is on disk: a fresh read never changes the work tree, the
-//! index or HEAD. Teammates' changes come into the work tree with `kluris
-//! sync` ([`super::sync`]) and `kluris sync --watch`.
+//! read a brain, a `git fetch` of the objects of its current branch's
+//! upstream, so what teammates pushed is already here when `kluris sync`
+//! fetches it. The read then reads the brain as it is on disk: a fresh read
+//! changes no ref, the work tree, the index or HEAD. Teammates' changes come
+//! into the work tree with `kluris sync` ([`super::sync`]) and `kluris sync
+//! --watch`.
 //!
 //! - At most once per [`THROTTLE`] per brain: the time of the last attempt,
 //!   in Unix seconds, is in `<git dir>/kluris-sync/last-fetch` ([`STAMP`]),
@@ -12,12 +13,15 @@
 //! - Within [`TIME_LIMIT`] overall: a git still running then is stopped with
 //!   every process it started ([`crate::process`]), and the read goes on.
 //! - Only a brain at the root of its own work tree: a brain nested in a
-//!   larger repo (a project's) is never fetched and gets no stamp.
+//!   larger repo (a project's) is never fetched and gets no stamp; nor is a
+//!   shallow brain (deepening it would write `.git/shallow`).
 //! - Nothing fails the read: no work tree, no upstream (or a detached
 //!   HEAD), or a fetch that fails (offline, refused credentials) ends the
 //!   step quietly, and nothing is printed.
-//! - What it writes is what `git fetch` writes (objects, the remote-tracking
-//!   refs, `FETCH_HEAD`) and the stamp: every git it runs has
+//! - What it writes is objects and the stamp ([`SystemGit`]'s
+//!   [`FreshGit::fetch_objects`]): no ref, `FETCH_HEAD`, `packed-refs`,
+//!   `.git/shallow`, commit-graph or config, so it never holds a lock a
+//!   stopped fetch could leave behind; every git it runs has
 //!   `GIT_OPTIONAL_LOCKS=0` ([`READ_ENV`]), so none refreshes the index.
 //! - Never a prompt: [`prompt_env`] for the fetch.
 //! - Off with `KLURIS_NO_AUTO_SYNC=1` or `sync: {auto_fetch: false}` in the
@@ -58,6 +62,8 @@ pub enum Fresh {
     NotARepo,
     /// The brain is below the root of a larger work tree.
     Nested,
+    /// The brain is a shallow clone.
+    Shallow,
     /// Fetched less than [`THROTTLE`] ago.
     Throttled,
     /// A detached HEAD, or a branch without an upstream on a remote.
@@ -66,7 +72,7 @@ pub enum Fresh {
     FetchFailed,
     /// The time limit passed; whatever git was running was stopped.
     TimedOut,
-    /// The upstream was fetched.
+    /// The upstream's objects were fetched.
     Fetched,
     /// Another git step failed.
     Failed,
@@ -79,6 +85,8 @@ pub struct Upstream {
     pub remote: String,
     /// The upstream's full ref (`refs/remotes/origin/main`).
     pub refname: String,
+    /// The branch on the remote (`branch.<name>.merge`, `refs/heads/main`).
+    pub remote_ref: String,
 }
 
 /// Where the brain sits in its work tree.
@@ -87,6 +95,8 @@ pub struct WorkTree {
     /// The brain's folder relative to the work tree root, `/`-separated
     /// with a trailing `/` (`git rev-parse --show-prefix`); empty at the root.
     pub prefix: String,
+    /// `git rev-parse --is-shallow-repository`.
+    pub shallow: bool,
     /// The paths asked for, inside the git directory.
     pub paths: Vec<PathBuf>,
 }
@@ -103,8 +113,9 @@ pub enum FreshError {
 /// The git steps of a fresh read (and of `kluris sync`'s fetch), each
 /// bounded by `deadline`.
 pub trait FreshGit {
-    /// Where `dir` sits in its work tree, and each of `names` inside its git
-    /// directory (`git rev-parse --show-prefix --git-path`); `None` outside a
+    /// Where `dir` sits in its work tree, whether the repository is
+    /// shallow, and each of `names` inside its git directory (`git rev-parse
+    /// --is-shallow-repository --show-prefix --git-path`); `None` outside a
     /// work tree.
     fn git_paths(
         &self,
@@ -117,8 +128,18 @@ pub trait FreshGit {
     /// upstream, or with a local branch as upstream.
     fn upstream(&self, dir: &Path, deadline: Instant) -> Result<Option<Upstream>, FreshError>;
 
-    /// `git fetch <remote>`, never prompting.
+    /// `git fetch <remote>`, never prompting (`kluris sync`'s fetch).
     fn fetch(&self, dir: &Path, remote: &str, deadline: Instant) -> Result<(), FreshError>;
+
+    /// Fetch the objects of the upstream's branch and write nothing else:
+    /// no ref, `FETCH_HEAD`, tag, `packed-refs`, `.git/shallow`, commit-graph
+    /// or config. Never prompting.
+    fn fetch_objects(
+        &self,
+        dir: &Path,
+        upstream: &Upstream,
+        deadline: Instant,
+    ) -> Result<(), FreshError>;
 
     /// Whether `ancestor` is an ancestor of (or is) `descendant`.
     fn is_ancestor(
@@ -195,6 +216,9 @@ fn step(git: &impl FreshGit, req: &FreshRequest, deadline: Instant) -> Result<Fr
     if !tree.prefix.is_empty() {
         return Ok(Fresh::Nested);
     }
+    if tree.shallow {
+        return Ok(Fresh::Shallow);
+    }
     let [stamp] = tree.paths.as_slice() else {
         return Ok(Fresh::Failed);
     };
@@ -207,7 +231,7 @@ fn step(git: &impl FreshGit, req: &FreshRequest, deadline: Instant) -> Result<Fr
         return Ok(Fresh::NoUpstream);
     };
     write_stamp(stamp, now);
-    git.fetch(dir, &upstream.remote, deadline)
+    git.fetch_objects(dir, &upstream, deadline)
         .map_err(|e| match e {
             FreshError::TimedOut => Fresh::TimedOut,
             FreshError::Failed(_) => Fresh::FetchFailed,
@@ -328,6 +352,27 @@ impl SystemGit {
     }
 }
 
+impl SystemGit {
+    /// [`prompt_env`] and [`READ_ENV`] for a fetch from `dir`.
+    fn no_prompt_env(
+        &self,
+        dir: &Path,
+        deadline: Instant,
+    ) -> Result<Vec<(&'static str, &'static str)>, FreshError> {
+        let ssh_command = self.bounded(
+            dir,
+            &["config", "--get", "core.sshCommand"],
+            &READ_ENV,
+            deadline,
+        )?;
+        let configured =
+            ssh_command.status.success() && !ssh_command.stdout.trim_ascii().is_empty();
+        let mut env = prompt_env(|key| self.env_var(key), configured);
+        env.extend(READ_ENV);
+        Ok(env)
+    }
+}
+
 /// git exited 0 with output this step cannot use.
 fn unreadable(args: &[&str], why: &str) -> FreshError {
     FreshError::Failed(GitError {
@@ -346,7 +391,12 @@ impl FreshGit for SystemGit {
         names: &[&str],
         deadline: Instant,
     ) -> Result<Option<WorkTree>, FreshError> {
-        let mut args = vec!["rev-parse", "--is-inside-work-tree", "--show-prefix"];
+        let mut args = vec![
+            "rev-parse",
+            "--is-inside-work-tree",
+            "--is-shallow-repository",
+            "--show-prefix",
+        ];
         for name in names {
             args.extend(["--git-path", name]);
         }
@@ -359,12 +409,21 @@ impl FreshGit for SystemGit {
         if lines.next() != Some("true") {
             return Ok(None);
         }
+        let shallow = match lines.next() {
+            Some("true") => true,
+            Some("false") => false,
+            _ => return Err(unreadable(&args, "no shallow answer")),
+        };
         let prefix = lines.next().unwrap_or_default().to_string();
         let paths: Vec<PathBuf> = lines.map(|line| dir.join(line)).collect();
         if paths.len() != names.len() {
             return Err(unreadable(&args, "not one path per name"));
         }
-        Ok(Some(WorkTree { prefix, paths }))
+        Ok(Some(WorkTree {
+            prefix,
+            shallow,
+            paths,
+        }))
     }
 
     fn upstream(&self, dir: &Path, deadline: Instant) -> Result<Option<Upstream>, FreshError> {
@@ -376,37 +435,62 @@ impl FreshGit for SystemGit {
         let branch = String::from_utf8(head.stdout).map_err(|_| unreadable(&symbolic, NOT_UTF8))?;
         let args = [
             "for-each-ref",
-            "--format=%(upstream:remotename)%00%(upstream)",
+            "--format=%(upstream:remotename)%00%(upstream)%00%(upstream:remoteref)",
             branch.trim(),
         ];
         let out = self.checked(dir, &args, &READ_ENV, deadline)?;
         let text = String::from_utf8(out).map_err(|_| unreadable(&args, NOT_UTF8))?;
         let line = text.lines().next().unwrap_or_default();
-        let Some((remote, refname)) = line.split_once('\0') else {
+        let mut fields = line.split('\0');
+        let (Some(remote), Some(refname), Some(remote_ref)) =
+            (fields.next(), fields.next(), fields.next())
+        else {
             return Ok(None);
         };
-        if remote.is_empty() || remote == "." || refname.is_empty() {
+        if remote.is_empty() || remote == "." || refname.is_empty() || remote_ref.is_empty() {
             return Ok(None);
         }
         Ok(Some(Upstream {
             remote: remote.to_string(),
             refname: refname.to_string(),
+            remote_ref: remote_ref.to_string(),
         }))
     }
 
     fn fetch(&self, dir: &Path, remote: &str, deadline: Instant) -> Result<(), FreshError> {
-        let ssh_command = self.bounded(
-            dir,
-            &["config", "--get", "core.sshCommand"],
-            &READ_ENV,
-            deadline,
-        )?;
-        let configured =
-            ssh_command.status.success() && !ssh_command.stdout.trim_ascii().is_empty();
-        let mut env = prompt_env(|key| self.env_var(key), configured);
-        env.extend(READ_ENV);
+        let env = self.no_prompt_env(dir, deadline)?;
         let args =
             SystemGit::with_no_background(&["fetch", "--quiet", "--no-recurse-submodules", remote]);
+        self.checked(dir, &args, &env, deadline).map(drop)
+    }
+
+    fn fetch_objects(
+        &self,
+        dir: &Path,
+        upstream: &Upstream,
+        deadline: Instant,
+    ) -> Result<(), FreshError> {
+        let env = self.no_prompt_env(dir, deadline)?;
+        // The source alone (no `:dst`) with an empty `--refmap=` updates no
+        // remote-tracking ref (`remote.<name>.fetch` is ignored, and so is
+        // `remote.<name>.followRemoteHEAD`); no tags, no pruning, no
+        // `FETCH_HEAD`; no commit-graph, and no bundle URI (which writes
+        // `refs/bundles/*` and `fetch.bundleCreationToken`).
+        let args = SystemGit::with_no_background(&[
+            "-c",
+            "fetch.writeCommitGraph=false",
+            "-c",
+            "fetch.bundleURI=",
+            "fetch",
+            "--quiet",
+            "--no-tags",
+            "--no-prune",
+            "--no-recurse-submodules",
+            "--no-write-fetch-head",
+            "--refmap=",
+            &upstream.remote,
+            &upstream.remote_ref,
+        ]);
         self.checked(dir, &args, &env, deadline).map(drop)
     }
 

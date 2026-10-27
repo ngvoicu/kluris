@@ -20,6 +20,7 @@ struct FakeGit {
     git_dir: Option<PathBuf>,
     /// The brain's folder relative to the work tree root (`sub/`).
     prefix: String,
+    shallow: bool,
     upstream: Option<Upstream>,
     fetch: Result<(), FreshError>,
     calls: RefCell<Vec<String>>,
@@ -33,9 +34,11 @@ impl FakeGit {
         FakeGit {
             git_dir: Some(git_dir),
             prefix: String::new(),
+            shallow: false,
             upstream: Some(Upstream {
                 remote: "origin".into(),
                 refname: "refs/remotes/origin/main".into(),
+                remote_ref: "refs/heads/main".into(),
             }),
             fetch: Ok(()),
             calls: RefCell::new(Vec::new()),
@@ -67,6 +70,7 @@ impl FreshGit for FakeGit {
         self.log("git_paths", deadline);
         Ok(self.git_dir.as_ref().map(|dir| WorkTree {
             prefix: self.prefix.clone(),
+            shallow: self.shallow,
             paths: names.iter().map(|n| dir.join(n)).collect(),
         }))
     }
@@ -78,6 +82,19 @@ impl FreshGit for FakeGit {
 
     fn fetch(&self, _dir: &Path, remote: &str, deadline: Instant) -> Result<(), FreshError> {
         self.log(&format!("fetch {remote}"), deadline);
+        self.fetch.clone()
+    }
+
+    fn fetch_objects(
+        &self,
+        _dir: &Path,
+        upstream: &Upstream,
+        deadline: Instant,
+    ) -> Result<(), FreshError> {
+        self.log(
+            &format!("fetch_objects {} {}", upstream.remote, upstream.remote_ref),
+            deadline,
+        );
         self.fetch.clone()
     }
 
@@ -115,7 +132,14 @@ fn the_brain_is_fetched_and_nothing_else_runs() {
     let started = Instant::now();
     assert_eq!(fresh_read(&git, &request(&brain)), Fresh::Fetched);
     let finished = Instant::now();
-    assert_eq!(git.calls(), ["git_paths", "upstream", "fetch origin"]);
+    assert_eq!(
+        git.calls(),
+        [
+            "git_paths",
+            "upstream",
+            "fetch_objects origin refs/heads/main"
+        ]
+    );
     assert!(git.stamp().is_file(), "stamped");
     // One deadline for the whole step, 3 s from its start.
     let deadlines = git.deadlines.borrow();
@@ -180,6 +204,17 @@ fn a_brain_below_its_work_tree_root_is_never_touched() {
     let mut git = FakeGit::behind(&tmp);
     git.prefix = "docs/brain/".into();
     assert_eq!(fresh_read(&git, &request(&brain(&tmp))), Fresh::Nested);
+    assert_eq!(git.calls(), ["git_paths"]);
+    assert!(!git.stamp().exists());
+}
+
+#[test]
+fn a_shallow_brain_is_never_fetched() {
+    // Deepening it would write `.git/shallow` under `shallow.lock`.
+    let tmp = TempDir::new().unwrap();
+    let mut git = FakeGit::behind(&tmp);
+    git.shallow = true;
+    assert_eq!(fresh_read(&git, &request(&brain(&tmp))), Fresh::Shallow);
     assert_eq!(git.calls(), ["git_paths"]);
     assert!(!git.stamp().exists());
 }
@@ -251,7 +286,11 @@ fn an_operation_in_progress_or_an_open_conflict_does_not_stop_the_fetch() {
         );
         assert_eq!(
             git.calls(),
-            ["git_paths", "upstream", "fetch origin"],
+            [
+                "git_paths",
+                "upstream",
+                "fetch_objects origin refs/heads/main"
+            ],
             "{marker}"
         );
         if marker.starts_with("rebase") {
@@ -293,7 +332,14 @@ fn a_failed_or_timed_out_fetch_ends_the_step_and_is_throttled() {
         let _ = fs::remove_file(git.stamp());
         git.fetch = fetch;
         assert_eq!(fresh_read(&git, &request(&brain)), expected);
-        assert_eq!(git.calls(), ["git_paths", "upstream", "fetch origin"]);
+        assert_eq!(
+            git.calls(),
+            [
+                "git_paths",
+                "upstream",
+                "fetch_objects origin refs/heads/main"
+            ]
+        );
         // Stamped before the fetch: an offline brain costs this once a minute.
         assert!(git.stamp().exists());
         assert_eq!(fresh_read(&git, &request(&brain)), Fresh::Throttled);

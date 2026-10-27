@@ -273,7 +273,7 @@ def team_brain(sb: Sandbox, *, teammate_pushed: bool) -> Path:
     """A bare remote under ``work/``, a teammate's clone, and the clone that
     is registered as the brain ``team`` (its branch tracks the remote's
     ``main``). With ``teammate_pushed`` the teammate pushes ``k/zebra.md``
-    after the brain was cloned, so it waits upstream. Not frozen."""
+    and a tag ``v1`` after the brain was cloned, so they wait upstream. Not frozen."""
     remote, teammate, brain = sb.work / "remote.git", sb.work / "teammate", sb.work / "brains" / "team"
     git(sb, sb.work, "init", "-q", "--bare", "-b", "main", str(remote))
     git(sb, sb.work, "clone", "-q", str(remote), str(teammate))
@@ -290,15 +290,29 @@ def team_brain(sb: Sandbox, *, teammate_pushed: bool) -> Path:
         _write(teammate, "k/zebra.md", "---\nparent: map.md\nupdated: 2026-03-01\n---\n# Zebra\n\nAll about zebras.\n")
         git(sb, teammate, "add", "-A")
         git(sb, teammate, "commit", "-q", "-m", "zebra")
-        git(sb, teammate, "push", "-q")
+        git(sb, teammate, "tag", "v1")
+        git(sb, teammate, "push", "-q", "origin", "main", "v1")
     write_config(sb, [("team", str(brain), "")])
     return brain
 
 
 def fetched_teammates_push(sb: Sandbox, side: str) -> bool:
     """Whether the brain in the finished tree of ``side`` (``"v2"`` or
-    ``"v3"``, kept by ``harness.run_both``) has the teammate's push in its
-    remote-tracking ref ``refs/remotes/origin/main``."""
+    ``"v3"``, kept by ``harness.run_both``) has the teammate's commit (the
+    remote's ``main``) among its objects."""
     tree = sb.root / side
-    tracked = git(sb, tree / "brains" / "team", "rev-parse", "refs/remotes/origin/main")
-    return tracked == git(sb, tree / "remote.git", "rev-parse", "main")
+    pushed = git(sb, tree / "remote.git", "rev-parse", "main")
+    found = subprocess.run(
+        ["git", "cat-file", "-e", pushed + "^{commit}"],
+        cwd=tree / "brains" / "team", env=sb.env, capture_output=True,
+    )
+    return found.returncode == 0
+
+
+def brain_refs(sb: Sandbox, side: str) -> tuple[str, bytes | None, bytes | None]:
+    """The brain's refs in the finished tree of ``side``: ``git
+    for-each-ref`` (tags and remote-tracking refs included), the bytes of
+    ``packed-refs`` and of ``FETCH_HEAD`` (``None`` when absent)."""
+    brain = sb.root / side / "brains" / "team"
+    read = lambda name: (brain / ".git" / name).read_bytes() if (brain / ".git" / name).exists() else None  # noqa: E731
+    return git(sb, brain, "for-each-ref"), read("packed-refs"), read("FETCH_HEAD")

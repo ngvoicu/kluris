@@ -39,7 +39,7 @@ from pathlib import Path
 import pytest
 
 from harness import IS_WINDOWS, PARITY_DIR, Sandbox, normalize, oracle_kluris, run_both, run_v2, run_v3
-from runs import clear_runs, fetched_teammates_push, parse_exact, team_brain, write_config
+from runs import brain_refs, clear_runs, fetched_teammates_push, parse_exact, team_brain, write_config
 
 WORKSPACE = PARITY_DIR.parent
 FIXTURES = WORKSPACE / "crates" / "kluris-core" / "tests" / "fixtures" / "brains"
@@ -577,7 +577,7 @@ def test_fresh_read_with_nothing_new_finds_what_v2_finds(sandbox):
 
 
 def test_fresh_read_fetches_a_teammates_push_and_searches_the_brain_as_it_is(sandbox):
-    # v3 fetches the teammate's push (its remote-tracking ref moves) and
+    # v3 fetches the objects of the teammate's push (no ref changes) and
     # searches the brain as it is on disk: it finds what v2 finds, with v2's
     # keys (and v3's PAR-020 ones) only.
     team_brain(sandbox, teammate_pushed=True)
@@ -593,5 +593,6 @@ def test_fresh_read_fetches_a_teammates_push_and_searches_the_brain_as_it_is(san
         assert r["v3"].tree == r["v2"].tree
         assert fetched_teammates_push(sandbox, "v3")
         assert not fetched_teammates_push(sandbox, "v2")
+        assert brain_refs(sandbox, "v3") == brain_refs(sandbox, "v2")
         clear_runs(sandbox)
     assert ("k/jwt.md", "JWT tokens") in _items(j3)

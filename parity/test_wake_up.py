@@ -24,6 +24,7 @@ from harness import IS_WINDOWS, PARITY_DIR, Sandbox, normalize, oracle_kluris, r
 from runs import (
     assert_wake_up_equal,
     clear_runs,
+    brain_refs,
     fetched_teammates_push,
     parse_exact,
     same_words,
@@ -380,9 +381,9 @@ def test_fresh_read_with_nothing_new_is_v2s_output(sandbox):
 
 
 def test_fresh_read_fetches_a_teammates_push_and_reads_the_brain_as_it_is(sandbox):
-    # A teammate pushed after the brain was cloned: v3 fetches the push (its
-    # remote-tracking ref moves) and reads the brain as it is on disk, so its
-    # output and its brain are v2's.
+    # A teammate pushed after the brain was cloned: v3 fetches the push's
+    # objects (no ref changes) and reads the brain as it is on disk, so its
+    # output, its brain and its refs are v2's.
     team_brain(sandbox, teammate_pushed=True)
     sandbox.freeze()
     for args in (["wake-up", "--json"], ["wake-up"]):
@@ -398,4 +399,5 @@ def test_fresh_read_fetches_a_teammates_push_and_reads_the_brain_as_it_is(sandbo
         assert "brains/team/k/zebra.md" not in r["v3"].tree
         assert fetched_teammates_push(sandbox, "v3")
         assert not fetched_teammates_push(sandbox, "v2")
+        assert brain_refs(sandbox, "v3") == brain_refs(sandbox, "v2")
         clear_runs(sandbox)
