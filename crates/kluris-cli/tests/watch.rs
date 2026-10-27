@@ -1179,26 +1179,50 @@ fn help_lists_the_watch_and_service_flags() {
 // The processes a test starts, each owned by a guard (F163-4).
 // ---------------------------------------------------------------------------
 
-/// How long a watch asked to stop (TERM to its group) has before its group
-/// is killed: a sync in progress finishes first.
+/// How long a watch asked to stop (TERM to its group) has before it is
+/// killed. TERM ends no step and no sync: the watch lets the sync in
+/// progress finish and exits between two brains. The step a failing test
+/// interrupts is a probe or one sync step; the longest, a fetch or a push,
+/// is ended by the watch itself within
+/// [`kluris_core::sync::NETWORK_TIME_LIMIT`] (its git gets TERM, then KILL
+/// half a second later), and the margin is for that half second and for the
+/// watch to print its line and exit. What a sync does after that step (a
+/// push after its fetch, another attempt after a rejected push, local steps
+/// without a deadline) is not waited for: past the grace the guard stops
+/// it (see [`Owned`]).
 #[cfg(unix)]
-const GRACE: Duration = Duration::from_secs(20);
+const GRACE: Duration =
+    kluris_core::sync::NETWORK_TIME_LIMIT.saturating_add(Duration::from_secs(5));
 
-/// A process this test started, with everything it starts: on Unix it
-/// leads a process group of its own, on Windows it is in a job object of
-/// this test's. Dropped, so on every unwind path too, it is stopped and
-/// waited for: on Unix its group gets TERM (the watch's clean stop), then
-/// KILL after [`GRACE`]; on Windows the job is terminated. A child already
+/// A process this test started: on Unix it leads a process group of its
+/// own, on Windows it is in a job object of this test's. Dropped, so on
+/// every unwind path too, it is stopped and waited for. A child already
 /// waited for is never signalled: its id may be another process's by then.
+///
+/// - Unix: its group gets TERM (the watch's clean stop, which ends the
+///   git it runs). If it is still running after [`GRACE`], its group gets
+///   STOP, so it starts and reaps nothing more; the guard then lists, at
+///   that moment, every process descended from it by parentage, kills the
+///   process groups its own children lead (the product starts each git in
+///   one, with what that git starts) and any other descendant by its PID,
+///   kills its group, waits for it, and checks every process it listed is
+///   gone. A process that left the tree before then (one whose parent
+///   exited, reparented to PID 1) is not found.
+/// - Windows: the job, which holds every process started from it, is
+///   terminated.
 ///
 /// No guard runs when the test process itself is killed (SIGKILL, or the
 /// default action of a Ctrl-C or SIGTERM sent to it, which ends it without
 /// unwinding). On Unix the watch, in a group of its own, then keeps running
-/// under PID 1, and so does its HOME (the `TempDir`, not removed either),
-/// until it is stopped by its PID. On Windows the job's handle closes with
-/// the test process and the job's kill-on-close ends the tree.
+/// under PID 1 with any git it runs, and so does its HOME (the `TempDir`,
+/// not removed either), until they are stopped by their PIDs. On Windows
+/// the job's handle closes with the test process and the job's
+/// kill-on-close ends the tree.
 struct Owned {
     child: Child,
+    /// How long TERM has before KILL; [`GRACE`] unless a test sets it.
+    #[cfg(unix)]
+    grace: Duration,
     #[cfg(windows)]
     job: Option<job::Job>,
 }
@@ -1215,6 +1239,8 @@ impl Owned {
         let job = job::Job::adopt(&child);
         Owned {
             child,
+            #[cfg(unix)]
+            grace: GRACE,
             #[cfg(windows)]
             job,
         }
@@ -1228,29 +1254,53 @@ impl Owned {
         matches!(self.child.try_wait(), Ok(None))
     }
 
-    /// Stop the process (its whole group or job) and wait for it.
+    /// Stop the process and what it started (see [`Owned`]) and wait for
+    /// it.
     #[cfg(unix)]
     fn end(&mut self) {
         if !self.running() {
             return;
         }
         // Not waited for yet, so the group's id is still this child's.
-        let group = format!("-{}", self.pid());
-        let signal = |name: &str| {
-            let _ = StdCommand::new("kill")
-                .args([name, "--", &group])
-                .stderr(Stdio::null())
-                .status();
-        };
-        signal("-TERM");
-        let until = Instant::now() + GRACE;
+        let pid = self.pid();
+        let group = format!("-{pid}");
+        signal("-TERM", &group);
+        let until = Instant::now() + self.grace;
         while self.running() && Instant::now() < until {
             thread::sleep(Duration::from_millis(20));
         }
-        if self.running() {
-            signal("-KILL");
+        if !self.running() {
+            let _ = self.child.wait();
+            return;
         }
+        // Stopped, it reaps none of its children: each keeps its id,
+        // exited or not, and so does the group it leads.
+        signal("-STOP", &group);
+        thread::sleep(Duration::from_millis(50));
+        let listed = descendants(pid);
+        for p in &listed {
+            if p.pgid == p.pid && p.ppid == pid {
+                signal("-KILL", &format!("-{}", p.pid));
+            } else if p.pgid != pid {
+                signal("-KILL", &p.pid.to_string());
+            }
+        }
+        signal("-KILL", &group);
         let _ = self.child.wait();
+        let until = Instant::now() + Duration::from_secs(10);
+        let mut left: Vec<u32> = listed.iter().map(|p| p.pid).collect();
+        while !left.is_empty() && Instant::now() < until {
+            thread::sleep(Duration::from_millis(50));
+            left.retain(|&p| alive(p));
+        }
+        if !left.is_empty() {
+            let message = format!("the guard of {pid} could not stop {left:?}");
+            if thread::panicking() {
+                eprintln!("{message}");
+            } else {
+                panic!("{message}");
+            }
+        }
     }
 
     /// Stop the process (its whole job) and wait for it.
@@ -1365,6 +1415,55 @@ fn alive(pid: u32) -> bool {
         .status()
         .unwrap()
         .success()
+}
+
+/// `kill <signal> -- <target>`: a PID, or a process group as `-<id>`.
+#[cfg(unix)]
+fn signal(signal: &str, target: &str) {
+    let _ = StdCommand::new("kill")
+        .args([signal, "--", target])
+        .stderr(Stdio::null())
+        .status();
+}
+
+/// A process on this machine.
+#[cfg(unix)]
+struct Process {
+    pid: u32,
+    ppid: u32,
+    pgid: u32,
+}
+
+/// The processes descended from `pid` by parentage, at this moment.
+#[cfg(unix)]
+fn descendants(pid: u32) -> Vec<Process> {
+    let out = StdCommand::new("ps")
+        .args(["-A", "-o", "pid=,ppid=,pgid="])
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+        .unwrap_or_default();
+    let all: Vec<Process> = out
+        .lines()
+        .filter_map(|line| {
+            let mut ids = line.split_whitespace().map(|n| n.parse().ok());
+            Some(Process {
+                pid: ids.next()??,
+                ppid: ids.next()??,
+                pgid: ids.next()??,
+            })
+        })
+        .collect();
+    let mut found: Vec<Process> = Vec::new();
+    let mut parents = vec![pid];
+    while let Some(parent) = parents.pop() {
+        for p in all.iter().filter(|p| p.ppid == parent) {
+            if p.pid != pid && !found.iter().any(|f| f.pid == p.pid) {
+                parents.push(p.pid);
+                found.push(Process { ..*p });
+            }
+        }
+    }
+    found
 }
 
 /// Whether the process `pid` is running.
@@ -1526,6 +1625,113 @@ fn stop_pid(pid: u32) {
 #[cfg(unix)]
 mod unix_signals {
     use super::*;
+
+    /// F171-2: a watch test that fails while the watch's fetch is in flight
+    /// leaves no git running. The remote's upload-pack (the brain's
+    /// `remote.origin.uploadpack`) holds a fetch for 90 s, longer than the
+    /// fetch may take; the probe's `ls-remote` is answered at once. The
+    /// test panics once the fetch has started, with `grace` (the guard's
+    /// when `None`); the watch, the fetch's git and the upload-pack (and
+    /// its sleep), each recorded while the watch ran, are all gone after
+    /// it. Returns those still running, after stopping them by their PIDs.
+    fn fail_during_a_fetch(grace: Option<Duration>) -> Vec<String> {
+        let recorded = Mutex::new(Vec::new());
+        let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let w = World::new();
+            let marks = w.home().join("marks");
+            fs::create_dir_all(&marks).unwrap();
+            let script = w.home().join("slow-upload-pack");
+            fs::write(
+                &script,
+                format!(
+                    "#!/bin/sh\n\
+                     # Slow for a fetch alone: its git is an ancestor.\n\
+                     p=$PPID\n\
+                     for _ in 1 2 3; do\n\
+                     \x20 case \" $(ps -o args= -p \"$p\") \" in\n\
+                     \x20 *' fetch '*)\n\
+                     \x20   echo \"$p\" > '{m}/fetch.pid'\n\
+                     \x20   sleep 90 &\n\
+                     \x20   echo \"$!\" > '{m}/sleep.pid'\n\
+                     \x20   echo \"$$\" > '{m}/upload.pid'\n\
+                     \x20   wait \"$!\"\n\
+                     \x20   break;;\n\
+                     \x20 esac\n\
+                     \x20 p=$(ps -o ppid= -p \"$p\" | tr -d ' ')\n\
+                     done\n\
+                     exec git upload-pack \"$@\"\n",
+                    m = marks.display()
+                ),
+            )
+            .unwrap();
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
+            let quoted = format!("'{}'", script.display());
+            w.git(&w.root(), &["config", "remote.origin.uploadpack", &quoted]);
+            let mut watching = Watching::start(&w, &[]);
+            if let Some(grace) = grace {
+                watching.owned.grace = grace;
+            }
+            recorded
+                .lock()
+                .unwrap()
+                .push(("watch".to_string(), watching.pid()));
+            let upload = marks.join("upload.pid");
+            let until = Instant::now() + Duration::from_secs(30);
+            while !upload.exists() {
+                assert!(Instant::now() < until, "the watch's fetch never started");
+                thread::sleep(Duration::from_millis(20));
+            }
+            thread::sleep(Duration::from_millis(100));
+            for name in ["fetch", "upload", "sleep"] {
+                let text = fs::read_to_string(marks.join(format!("{name}.pid"))).unwrap();
+                let pid = text.trim().parse().unwrap();
+                recorded.lock().unwrap().push((name.to_string(), pid));
+            }
+            panic!("injected: the test fails while the watch's fetch is in flight");
+        }));
+        assert!(
+            failed.is_err(),
+            "the injected failure did not fail the test"
+        );
+        let recorded = recorded.into_inner().unwrap();
+        assert_eq!(
+            recorded.len(),
+            4,
+            "not every process was recorded: {recorded:?}"
+        );
+        let mut survivors = Vec::new();
+        for (name, pid) in recorded {
+            if alive(pid) {
+                // This test's own process, by its recorded id.
+                stop_pid(pid);
+                survivors.push(format!("{name} {pid}"));
+            }
+        }
+        survivors
+    }
+
+    /// The guard's grace lets the fetch reach its time limit: the watch
+    /// stops its git and exits by itself.
+    #[test]
+    fn a_watch_test_failing_during_a_fetch_leaves_no_git_running() {
+        let survivors = fail_during_a_fetch(None);
+        assert!(
+            survivors.is_empty(),
+            "outlived the failed test: {survivors:?}"
+        );
+    }
+
+    /// A watch still syncing when the grace ends: the guard stops the
+    /// process groups the watch started before it kills the watch.
+    #[test]
+    fn a_watch_past_its_grace_leaves_no_git_running() {
+        let survivors = fail_during_a_fetch(Some(Duration::from_secs(1)));
+        assert!(
+            survivors.is_empty(),
+            "outlived the failed test: {survivors:?}"
+        );
+    }
 
     #[test]
     fn sigint_while_waiting_exits_0_at_once() {
