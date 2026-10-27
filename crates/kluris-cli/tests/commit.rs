@@ -1270,3 +1270,130 @@ fn post_commit_runs_after_the_commit_lands() {
     assert_eq!(doc["commit"], b.head().as_str());
     assert_eq!(fs::read_to_string(&out_file).unwrap().trim(), b.head());
 }
+
+/// A refused commit left everything as it was: HEAD, the user's index, the
+/// work tree.
+fn assert_untouched(b: &Brain, before: &str, status: &[String]) {
+    assert_eq!(b.head(), before);
+    assert_eq!(b.staged(), Vec::<String>::new());
+    assert_eq!(b.status(), status);
+}
+
+#[test]
+fn a_hook_that_stages_an_unapproved_file_stops_the_commit() {
+    let b = Brain::new();
+    hook(&b.hooks(), "pre-commit", "git add -A");
+    b.write("notes/second.md", &neuron("Second"));
+    b.write("notes/private.md", &neuron("UNAPPROVED_SECRET"));
+    let before = b.head();
+    let status = b.status();
+    let (code, doc) = b.commit("notes/second.md", &[]);
+    assert_eq!(code, 1, "{doc}");
+    assert_eq!(keys(&doc), ["ok", "error"]);
+    let error = doc["error"].as_str().unwrap();
+    assert!(
+        error.contains("a hook staged files you didn't approve: notes/private.md")
+            && error.contains("nothing was committed"),
+        "{error}"
+    );
+    assert_untouched(&b, &before, &status);
+    assert!(!b.git_ok(&["cat-file", "-e", "HEAD:notes/private.md"]));
+    assert!(status.contains(&"?? notes/private.md".to_string()));
+}
+
+#[test]
+fn a_hook_that_unstages_a_tracked_file_stops_the_commit() {
+    let b = Brain::new();
+    hook(&b.hooks(), "pre-commit", "git rm -q --cached notes/keep.md");
+    b.write("notes/second.md", &neuron("Second"));
+    let before = b.head();
+    let status = b.status();
+    let (code, doc) = b.commit("notes/second.md", &[]);
+    assert_eq!(code, 1, "{doc}");
+    let error = doc["error"].as_str().unwrap();
+    assert!(
+        error.contains("a hook staged files you didn't approve: notes/keep.md"),
+        "{error}"
+    );
+    assert_untouched(&b, &before, &status);
+}
+
+#[test]
+fn a_hook_that_stages_a_file_outside_a_nested_brain_stops_the_commit() {
+    let b = Brain::nested();
+    hook(&b.hooks(), "pre-commit", "git add -A");
+    fs::write(b.repo.join("README.md"), "OUTSIDE_CHANGE\n").unwrap();
+    b.write("notes/second.md", &neuron("Second"));
+    let before = b.head();
+    let status = b.status();
+    let (code, doc) = b.commit("notes/second.md", &[]);
+    assert_eq!(code, 1, "{doc}");
+    let error = doc["error"].as_str().unwrap();
+    assert!(
+        error.contains("a hook staged files you didn't approve: ../../README.md"),
+        "{error}"
+    );
+    assert_untouched(&b, &before, &status);
+}
+
+#[test]
+fn a_hook_may_reformat_an_approved_file() {
+    let b = Brain::new();
+    hook(
+        &b.hooks(),
+        "pre-commit",
+        "printf '\\nFORMATTED\\n' >> notes/second.md && git add notes/second.md",
+    );
+    b.write("notes/second.md", &neuron("Second"));
+    let (code, doc) = b.commit("notes/second.md", &[]);
+    assert_eq!(code, 0, "{doc}");
+    assert_eq!(doc["committed"], true);
+    assert!(show(&b, "HEAD", "notes/second.md").ends_with("FORMATTED\n"));
+    assert_eq!(b.committed("HEAD"), ["notes/map.md", "notes/second.md"]);
+}
+
+#[test]
+fn a_map_edited_while_the_hooks_run_is_kept_and_reported() {
+    let b = Brain::new();
+    hook(
+        &b.hooks(),
+        "pre-commit",
+        "printf 'USER_MAP_EDIT_DURING_HOOK\\n' > notes/map.md",
+    );
+    b.write("notes/second.md", &neuron("Second"));
+    let (code, doc) = b.commit("notes/second.md", &[]);
+    assert_eq!(code, 0, "{doc}");
+    assert_eq!(doc["regenerated"], json!(["notes/map.md"]));
+    assert_eq!(doc["left_dirty"], json!(["notes/map.md"]));
+    assert_eq!(b.read("notes/map.md"), "USER_MAP_EDIT_DURING_HOOK\n");
+    assert!(show(&b, "HEAD", "notes/map.md").contains("second.md"));
+}
+
+#[cfg(unix)]
+#[test]
+fn a_linked_map_is_regenerated_through_its_target() {
+    let b = Brain::new();
+    let original = b.read("notes/map.md");
+    b.write("maps/base.md", &original);
+    fs::remove_file(b.path("notes/map.md")).unwrap();
+    std::os::unix::fs::symlink("../maps/base.md", b.path("notes/map.md")).unwrap();
+    b.git(&["add", "-A"]);
+    b.git(&["commit", "-q", "-m", "linked map"]);
+    b.write("notes/second.md", &neuron("Second"));
+    let (code, doc) = b.commit("notes/second.md", &[]);
+    assert_eq!(code, 0, "{doc}");
+    assert_eq!(doc["regenerated"], json!(["maps/base.md"]));
+    assert_eq!(doc["left_dirty"], json!([]));
+    assert_eq!(b.committed("HEAD"), ["maps/base.md", "notes/second.md"]);
+    assert!(
+        b.git(&["ls-tree", "HEAD", "notes/map.md"])
+            .starts_with("120000 ")
+    );
+    assert!(show(&b, "HEAD", "maps/base.md").contains("second.md"));
+    assert_eq!(
+        fs::read_link(b.path("notes/map.md")).unwrap(),
+        Path::new("../maps/base.md")
+    );
+    assert!(b.read("maps/base.md").contains("second.md"));
+    assert_eq!(b.status(), Vec::<String>::new());
+}

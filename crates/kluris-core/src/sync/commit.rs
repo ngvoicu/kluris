@@ -18,9 +18,15 @@
 //! paths create or remove (its `map.md` is new, or is in the base but the
 //! directory is gone from the work tree), its parent's map (`brain.md` at the
 //! top) and its siblings' maps (their `sideways` links). Only those are
-//! committed. Afterwards a regenerated map's work-tree copy gets the committed
-//! bytes (its line endings kept) when it had no change of its own, as a
-//! checkout would; one with changes of its own is left as it is.
+//! committed. A map is known by the path in the tree that holds its bytes: a
+//! `map.md` that is a symlink in the brain (`notes/map.md -> ../maps/x.md`)
+//! is regenerated, staged and reported as its target (`maps/x.md`), and the
+//! link stays as it is. Afterwards a regenerated map's work-tree copy gets
+//! the committed bytes (its line endings kept) when it had no change of its
+//! own, as a checkout would: its bytes and file identity are taken before
+//! its cleanliness is checked and compared again right before it is
+//! replaced, so a map edited in between (by a hook, an editor) is left as it
+//! is, as is one with changes of its own; both are then in `left_dirty`.
 //!
 //! Hooks run as `git commit` runs them (`git hook run`, so `core.hooksPath`
 //! counts), against the temporary index: `pre-commit` before the tree is
@@ -28,13 +34,18 @@
 //! message is what they leave there, cleaned up as `git commit -m` does),
 //! `post-commit` once `HEAD` has moved. A failing `pre-commit`,
 //! `prepare-commit-msg` or `commit-msg` stops the commit with nothing
-//! changed; `no_verify` skips `pre-commit` and `commit-msg`. That needs git
+//! changed; `no_verify` skips `pre-commit` and `commit-msg`. A hook may
+//! change what the commit takes for its paths (a formatter does), and that
+//! is committed; a tree that changes any other path, in the brain or
+//! elsewhere in its repo, stops the commit with nothing changed
+//! ([`CommitError::Unapproved`]). That needs git
 //! >= 2.36 (`git hook run`); `sync` needs 2.38, which `commit` checks first.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
 use crate::atomic;
 use crate::brain::sandbox;
@@ -382,6 +393,12 @@ pub enum CommitError {
         name: &'static str,
         code: i32,
     },
+    /// The tree the hooks left changes paths that are neither given nor
+    /// regenerated for them (brain-relative; `../` for one outside a nested
+    /// brain); nothing was committed.
+    Unapproved {
+        paths: Vec<String>,
+    },
     /// The hooks left the message empty.
     EmptyMessage,
     /// The message file in the git directory could not be written or read.
@@ -423,6 +440,11 @@ impl fmt::Display for CommitError {
             CommitError::Hook { name, code } => write!(
                 f,
                 "the {name} hook failed (exit {code}); nothing was committed"
+            ),
+            CommitError::Unapproved { paths } => write!(
+                f,
+                "a hook staged files you didn't approve: {}; nothing was committed",
+                paths.join(", ")
             ),
             CommitError::EmptyMessage => {
                 f.write_str("the commit message is empty; nothing was committed")
@@ -580,30 +602,154 @@ fn with_line_ending(text: &[u8], ending: LineEnding) -> Vec<u8> {
     }
 }
 
+/// A work-tree file's identity: what it is, its size and modification time
+/// (on Unix its device and inode too), so a file replaced or rewritten since
+/// is told apart.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Stamp {
+    link: bool,
+    len: u64,
+    modified: Option<SystemTime>,
+    #[cfg(unix)]
+    id: (u64, u64),
+}
+
+/// A work-tree file as it was when its cleanliness was checked (`None`:
+/// not there).
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Seen(Option<(Stamp, Option<Vec<u8>>)>);
+
+impl Seen {
+    fn of(path: &Path) -> Seen {
+        Seen(fs::symlink_metadata(path).ok().map(|meta| {
+            #[cfg(unix)]
+            use std::os::unix::fs::MetadataExt as _;
+            let stamp = Stamp {
+                link: meta.file_type().is_symlink(),
+                len: meta.len(),
+                modified: meta.modified().ok(),
+                #[cfg(unix)]
+                id: (meta.dev(), meta.ino()),
+            };
+            (stamp, fs::read(path).ok())
+        }))
+    }
+}
+
 /// Bring a regenerated map's work-tree copy to the committed bytes when it
-/// had no change of its own (`clean`), keeping its line endings, as a
-/// checkout would; a map with changes of its own is left as it is. A new
-/// map is created only where its directory is.
-fn update_worktree_map(root: &Path, rel: &str, committed: &[u8], clean: bool) {
-    if !clean {
+/// had no change of its own (`clean`) and is still as it was then (`seen`),
+/// keeping its line endings, as a checkout would; a map with changes of its
+/// own, or changed since, is left as it is. A new map is created only where
+/// its directory is.
+fn update_worktree_map(root: &Path, rel: &str, committed: &[u8], clean: bool, seen: &Seen) {
+    let path = join(root, rel);
+    if !clean || Seen::of(&path) != *seen {
         return;
     }
-    let path = join(root, rel);
-    let bytes = match fs::read(&path) {
-        Ok(old) => {
-            let ending = line_ending(&String::from_utf8_lossy(&old));
+    let bytes = match &seen.0 {
+        Some((_, Some(old))) => {
+            let ending = line_ending(&String::from_utf8_lossy(old));
             let new = with_line_ending(committed, ending);
-            if new == old {
+            if new == *old {
                 return;
             }
             new
         }
-        Err(_) if path.parent().is_some_and(Path::is_dir) => committed.to_vec(),
-        Err(_) => return,
+        Some((_, None)) => return,
+        None if path.parent().is_some_and(Path::is_dir) => committed.to_vec(),
+        None => return,
     };
     // A failed write leaves the map as it was; it is then listed in
     // `left_dirty`.
     let _ = atomic::write_atomic(&path, &bytes);
+}
+
+/// The repo of a brain seen from its work tree's root, for listings of the
+/// whole tree: the brain directory with one `..` per part of its prefix
+/// (the prefix is git's, so the parents are the real ones).
+fn whole_repo(repo: &Repo) -> Repo {
+    let dir = repo
+        .prefix
+        .split('/')
+        .filter(|part| !part.is_empty())
+        .fold(repo.dir.clone(), |dir, _| dir.join(".."));
+    Repo {
+        dir,
+        prefix: String::new(),
+    }
+}
+
+/// A tree's files by path: their mode and blob id.
+fn entry_map<G: Plumbing>(
+    git: &G,
+    repo: &Repo,
+    rev: &str,
+) -> Result<BTreeMap<String, (String, String)>, GitError> {
+    Ok(git
+        .tree_entries(repo, rev)?
+        .into_iter()
+        .map(|e| (e.rel, (e.mode, e.oid)))
+        .collect())
+}
+
+/// The paths `tree` changes beyond `stage` (each taken as `tree` has it),
+/// compared with `base` (none: an empty tree): empty when the commit
+/// changes nothing else. Brain-relative; one outside a nested brain with
+/// `../` parts.
+fn unapproved_changes<G: Plumbing>(
+    git: &G,
+    repo: &Repo,
+    base: Option<&str>,
+    tree: &str,
+    stage: &[String],
+) -> Result<Vec<String>, GitError> {
+    // What the commit may be: the base with the stage paths as `tree` has
+    // them. Any other difference is not approved.
+    let entries = entry_map(git, repo, tree)?;
+    let expected = git.staging_index(repo, base)?;
+    let mut taken = Vec::new();
+    let mut gone = Vec::new();
+    for rel in stage {
+        match entries.get(rel) {
+            Some((mode, oid)) => taken.push((rel.clone(), mode.clone(), oid.clone())),
+            None => gone.push(StagedBlob {
+                rel: rel.clone(),
+                mode: "100644".into(),
+                bytes: None,
+            }),
+        }
+    }
+    git.stage_entries(repo, &expected, &taken)?;
+    git.stage_blobs(repo, &expected, &gone)?;
+    if git.write_tree(repo, &expected)? == tree {
+        return Ok(Vec::new());
+    }
+
+    // Name them, over the whole repo.
+    let whole = whole_repo(repo);
+    let before = match base {
+        Some(rev) => entry_map(git, &whole, rev)?,
+        None => BTreeMap::new(),
+    };
+    let after = entry_map(git, &whole, tree)?;
+    let up = "../".repeat(repo.prefix.split('/').filter(|p| !p.is_empty()).count());
+    let mut out: Vec<String> = before
+        .keys()
+        .chain(after.keys())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .filter(|rel| before.get(*rel) != after.get(*rel))
+        .map(|rel| match rel.strip_prefix(&repo.prefix) {
+            Some(inside) => inside.to_string(),
+            None => format!("{up}{rel}"),
+        })
+        .filter(|rel| !stage.contains(rel))
+        .collect();
+    if out.is_empty() {
+        // Only an entry the listing leaves out (a submodule) differs.
+        out.push("a submodule entry".into());
+    }
+    Ok(out)
 }
 
 /// Removes a file when dropped.
@@ -672,7 +818,6 @@ pub fn commit<G: Plumbing>(
             problem,
         })?;
     }
-    let dirty_before: BTreeSet<String> = git.dirty(&repo)?.into_iter().collect();
 
     // The view: the base revision's files, the given paths from the work
     // tree, nothing else.
@@ -692,6 +837,13 @@ pub fn commit<G: Plumbing>(
     let mut affected = affected_generated(&paths, view.dirs(), &generated_in_base);
     // A removed lobe's sub-lobe maps go with it, wherever they are.
     affected.extend(removed_maps.iter().cloned());
+    // The map step writes a linked map at its target: each map by the path
+    // in the tree that holds its bytes.
+    let affected: BTreeSet<String> = affected
+        .into_iter()
+        .flat_map(|rel| [view.real_rel(&rel), Some(rel)])
+        .flatten()
+        .collect();
     let (changes, skipped) = map_changes(&view, &request.maps);
     if let Some((rel, reason)) = skipped.iter().find(|(rel, _)| affected.contains(*rel)) {
         return Err(CommitError::Regenerate {
@@ -715,6 +867,13 @@ pub fn commit<G: Plumbing>(
         mode: mode(rel),
         bytes: None,
     }));
+    // Each map as it is before its cleanliness is checked, so one changed
+    // after the check is never replaced.
+    let seen: BTreeMap<String, Seen> = generated
+        .iter()
+        .map(|blob| (blob.rel.clone(), Seen::of(&join(root, &blob.rel))))
+        .collect();
+    let dirty_before: BTreeSet<String> = git.dirty(&repo)?.into_iter().collect();
 
     let index = git.staging_index(&repo, base.as_deref())?;
     git.stage_worktree(&repo, &index, &paths)?;
@@ -741,8 +900,13 @@ pub fn commit<G: Plumbing>(
     if !request.no_verify {
         gate(git, &repo, &index, "pre-commit", &[])?;
     }
-    // The hook may have changed the index, as with `git commit`.
+    // The hook may have changed the index, as with `git commit`, but only
+    // for the paths approved and the maps regenerated for them.
     let tree = git.write_tree(&repo, &index)?;
+    let unapproved = unapproved_changes(git, &repo, base.as_deref(), &tree, &stage)?;
+    if !unapproved.is_empty() {
+        return Err(CommitError::Unapproved { paths: unapproved });
+    }
     let changed = changed_paths(git, &repo, base.as_deref(), &tree, &stage)?;
     let regenerated: Vec<String> = affected
         .iter()
@@ -814,8 +978,10 @@ pub fn commit<G: Plumbing>(
     for blob in &generated {
         if let Some(bytes) = &blob.bytes
             && regenerated.contains(&blob.rel)
+            && let Some(seen) = seen.get(&blob.rel)
         {
-            update_worktree_map(root, &blob.rel, bytes, !dirty_before.contains(&blob.rel));
+            let clean = !dirty_before.contains(&blob.rel);
+            update_worktree_map(root, &blob.rel, bytes, clean, seen);
         }
     }
     // As with `git commit`, post-commit cannot undo or fail the commit.
