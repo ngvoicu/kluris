@@ -30,7 +30,7 @@ pub mod watch;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::{Duration, Instant};
 
 use crate::atomic;
@@ -65,6 +65,13 @@ pub enum ConflictKind {
     Parent,
     /// Another frontmatter key changed differently on both sides.
     Frontmatter,
+    /// A file on one side where the other has a directory, or a rename git
+    /// could not settle: a `null` side has no file at the path (a directory
+    /// or a rename there).
+    Structure,
+    /// Changed on both sides of a history with several merge bases, where no
+    /// single base can say who changed what.
+    AmbiguousBase,
 }
 
 impl ConflictKind {
@@ -74,6 +81,8 @@ impl ConflictKind {
             ConflictKind::DeleteEdit => "delete_edit",
             ConflictKind::Parent => "parent",
             ConflictKind::Frontmatter => "frontmatter",
+            ConflictKind::Structure => "structure",
+            ConflictKind::AmbiguousBase => "ambiguous-base",
         }
     }
 }
@@ -119,6 +128,8 @@ pub struct SyncReport {
     /// The uncommitted files the incoming changes would overwrite; when
     /// any, nothing changed.
     pub blocked: Vec<String>,
+    /// Why the brain was left alone (an open conflict), else `None`.
+    pub refused: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -133,8 +144,6 @@ pub enum SyncError {
         prefix: String,
     },
     InProgress(InProgress),
-    /// An open sync conflict, recorded at this path.
-    OpenConflict(PathBuf),
     /// A hook stopped the merge.
     Hook {
         name: &'static str,
@@ -144,8 +153,11 @@ pub enum SyncError {
     Push(String),
     /// Every push was rejected because the remote kept moving.
     RemoteKeptMoving,
-    /// The open conflict could not be recorded.
+    /// The open conflict could not be recorded, or the merge message file
+    /// could not be written or read.
     Pending(String),
+    /// The message hooks left the merge message empty.
+    EmptyMessage,
     Git(GitError),
 }
 
@@ -168,11 +180,6 @@ impl fmt::Display for SyncError {
             SyncError::InProgress(op) => {
                 write!(f, "a {op} is in progress; finish or abort it first")
             }
-            SyncError::OpenConflict(path) => write!(
-                f,
-                "it has an open sync conflict; settle it with `kluris resolve` (recorded in {})",
-                path.display()
-            ),
             SyncError::Hook { name, code } => write!(
                 f,
                 "the {name} hook failed (exit {code}); nothing was merged"
@@ -185,6 +192,9 @@ impl fmt::Display for SyncError {
                 "the remote kept moving: {PUSH_ATTEMPTS} pushes were rejected; run kluris sync again"
             ),
             SyncError::Pending(e) => write!(f, "cannot record the open conflict: {e}"),
+            SyncError::EmptyMessage => {
+                f.write_str("the message hooks left the merge message empty; nothing was merged")
+            }
             SyncError::Git(e) => e.fmt(f),
         }
     }
@@ -204,10 +214,7 @@ impl SyncError {
     pub fn is_refusal(&self) -> bool {
         matches!(
             self,
-            SyncError::NotARepo
-                | SyncError::Nested { .. }
-                | SyncError::InProgress(_)
-                | SyncError::OpenConflict(_)
+            SyncError::NotARepo | SyncError::Nested { .. } | SyncError::InProgress(_)
         )
     }
 }
@@ -348,6 +355,8 @@ impl Pending {
             "delete_edit" => Some(ConflictKind::DeleteEdit),
             "parent" => Some(ConflictKind::Parent),
             "frontmatter" => Some(ConflictKind::Frontmatter),
+            "structure" => Some(ConflictKind::Structure),
+            "ambiguous-base" => Some(ConflictKind::AmbiguousBase),
             _ => None,
         };
         let mut conflicts = Vec::new();
@@ -415,8 +424,31 @@ pub(crate) fn blocked_paths<G: SyncGit>(
         .collect())
 }
 
-/// The merge commit of the tree in `index` on `ours` and `theirs`, after
-/// the `pre-merge-commit` hook (unless `no_verify`), as git merge makes it.
+/// Why sync leaves a brain with an open conflict alone (its entry also
+/// lists the conflicts).
+pub const OPEN_CONFLICT: &str =
+    "a conflict is open: settle it with kluris resolve (or kluris resolve --abort)";
+
+/// Run a hook that can stop the merge, against `index`.
+fn gate<G: SyncGit>(
+    git: &G,
+    repo: &crate::git::Repo,
+    index: &crate::git::StagingIndex,
+    name: &'static str,
+    args: &[&str],
+) -> Result<(), SyncError> {
+    match git.run_hook(repo, Some(index), name, args)? {
+        0 => Ok(()),
+        code => Err(SyncError::Hook { name, code }),
+    }
+}
+
+/// The merge commit of the tree in `index` on `ours` and `theirs`, with
+/// the hooks git merge runs: `pre-merge-commit` (unless `no_verify`), then
+/// `prepare-commit-msg` (with `merge`) and `commit-msg` (unless
+/// `no_verify`) on a message file, against the merged index; the message is
+/// what they leave there, cleaned up as `git commit` does. A failing hook
+/// stops it with nothing committed.
 pub(crate) fn commit_merge<G: SyncGit>(
     git: &G,
     repo: &crate::git::Repo,
@@ -426,23 +458,59 @@ pub(crate) fn commit_merge<G: SyncGit>(
     no_verify: bool,
 ) -> Result<String, SyncError> {
     if !no_verify {
-        match git.run_hook(repo, Some(index), "pre-merge-commit", &[])? {
-            0 => {}
-            code => {
-                return Err(SyncError::Hook {
-                    name: "pre-merge-commit",
-                    code,
-                });
-            }
-        }
+        gate(git, repo, index, "pre-merge-commit", &[])?;
     }
-    // The hook may have changed the index, as with git merge.
-    let tree = git.write_tree(repo, index)?;
     let file = git.git_dir_path(repo, &format!("KLURIS_MERGE_MSG-{}", std::process::id()))?;
     fs::write(&file, message).map_err(|e| SyncError::Pending(e.to_string()))?;
-    let commit = git.commit_tree(repo, &tree, &parents, &file);
+    let made = (|| {
+        // Hooks are shell scripts (Git for Windows' sh too): `/` separators.
+        let arg = file.to_string_lossy().replace('\\', "/");
+        gate(git, repo, index, "prepare-commit-msg", &[&arg, "merge"])?;
+        if !no_verify {
+            gate(git, repo, index, "commit-msg", &[&arg])?;
+        }
+        let text = fs::read(&file).map_err(|e| SyncError::Pending(e.to_string()))?;
+        let message = commit::cleanup_message(&String::from_utf8_lossy(&text));
+        if message.is_empty() {
+            return Err(SyncError::EmptyMessage);
+        }
+        fs::write(&file, &message).map_err(|e| SyncError::Pending(e.to_string()))?;
+        // The hooks may have changed the index, as with git merge.
+        let tree = git.write_tree(repo, index)?;
+        Ok(git.commit_tree(repo, &tree, &parents, &file)?)
+    })();
     let _ = fs::remove_file(&file);
-    Ok(commit?)
+    made
+}
+
+/// Move the branch to `to`, a descendant of `ours`, unless an uncommitted,
+/// untracked or ignored file sits where it writes: checked right before the
+/// fast-forward (a hook or an editor may have written one since the first
+/// check) and again when git refuses (one written in between); the
+/// fast-forward itself never overwrites an ignored file nor stashes. The
+/// files in the way; none when the branch moved.
+pub(crate) fn land<G: SyncGit>(
+    git: &G,
+    repo: &crate::git::Repo,
+    root: &Path,
+    ours: &str,
+    to: &str,
+) -> Result<Vec<String>, SyncError> {
+    let in_the_way = || -> Result<Vec<String>, SyncError> {
+        let dirty = git.dirty(repo)?;
+        Ok(blocked_paths(git, repo, root, &dirty, ours, to)?)
+    };
+    let blocked = in_the_way()?;
+    if !blocked.is_empty() {
+        return Ok(blocked);
+    }
+    match git.fast_forward_to(repo, to) {
+        Ok(()) => Ok(Vec::new()),
+        Err(e) => match in_the_way()? {
+            blocked if blocked.is_empty() => Err(e.into()),
+            blocked => Ok(blocked),
+        },
+    }
 }
 
 /// Sync the brain at `root` (see the module docs).
@@ -460,7 +528,18 @@ pub fn sync<G: SyncGit>(
     }
     let pending = git.git_dir_path(&repo, PENDING)?;
     if fs::symlink_metadata(&pending).is_ok() {
-        return Err(SyncError::OpenConflict(pending));
+        // Reported in the brain's entry, so an agent sees the conflicts and
+        // settles them (decision of T-146).
+        let conflicts = fs::read_to_string(&pending)
+            .ok()
+            .and_then(|text| Pending::parse(&text))
+            .map(|p| p.conflicts)
+            .unwrap_or_default();
+        return Ok(SyncReport {
+            conflicts,
+            refused: Some(OPEN_CONFLICT.to_string()),
+            ..SyncReport::default()
+        });
     }
     if let Some(op) = git.in_progress(&repo)? {
         return Err(SyncError::InProgress(op));
@@ -532,7 +611,12 @@ pub fn sync<G: SyncGit>(
                     commit?
                 }
             };
-            git.fast_forward_to(&repo, &to)?;
+            let blocked = land(git, &repo, root, &ours, &to)?;
+            if !blocked.is_empty() {
+                report.skipped_dirty = git.dirty(&repo)?;
+                report.blocked = blocked;
+                return Ok(report);
+            }
             report.merged = true;
             if !ahead {
                 return Ok(report);

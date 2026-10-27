@@ -27,8 +27,8 @@ use super::commit::{PathProblem, normalize_path};
 use super::merge::{MergeOutcome, merge_commits};
 use super::plumbing::SyncGit;
 use super::{
-    Conflict, PENDING, Pending, ResolvedChoice, SyncError, SyncRequest, blocked_paths, check_git,
-    commit_merge, sync,
+    Conflict, ConflictKind, PENDING, Pending, ResolvedChoice, SyncError, SyncRequest,
+    blocked_paths, check_git, commit_merge, sync,
 };
 use crate::frontmatter;
 use crate::git::{GitError, Plumbing, Repo};
@@ -82,6 +82,11 @@ pub enum ResolveError {
         path: String,
         reason: String,
     },
+    /// `--file` for a file/directory conflict: which side's structure to
+    /// keep is a person's choice of `--ours` or `--theirs`.
+    Structure {
+        path: String,
+    },
     /// `HEAD` is not the commit the conflict was found on.
     Stale {
         head: Option<String>,
@@ -109,6 +114,10 @@ impl fmt::Display for ResolveError {
             ResolveError::InvalidFile { path, reason } => write!(
                 f,
                 "the file for {path} cannot be used: {reason}; nothing was recorded"
+            ),
+            ResolveError::Structure { path } => write!(
+                f,
+                "{path} is a file on one side and a directory on the other; keep one side's whole structure with --ours or --theirs (a --file says nothing about the directory); nothing was recorded"
             ),
             ResolveError::Stale { head, ours } => write!(
                 f,
@@ -225,8 +234,22 @@ pub fn resolve<G: SyncGit>(
         path: request.path.to_string(),
         problem,
     })?;
-    if !pending.conflicts.iter().any(|c| c.path == rel) {
+    let Some(conflict) = pending.conflicts.iter().find(|c| c.path == rel) else {
         return Err(ResolveError::NotConflicted(rel));
+    };
+    // A file for a file/directory conflict would say nothing about the
+    // directory: only a whole side settles it.
+    if conflict.kind == ConflictKind::Structure && matches!(request.choice, Choice::File(_)) {
+        let below = format!("{rel}/");
+        for side in [&pending.ours, &pending.theirs] {
+            if git
+                .tree_entries(&repo, side)?
+                .iter()
+                .any(|e| e.rel.starts_with(&below))
+            {
+                return Err(ResolveError::Structure { path: rel });
+            }
+        }
     }
     let head = git.head(&repo)?;
     if head.as_deref() != Some(pending.ours.as_str()) {
@@ -340,6 +363,9 @@ fn finish<G: SyncGit>(
         &message,
         request.sync.no_verify,
     )?;
-    git.fast_forward_to(repo, &commit)?;
+    let blocked = super::land(git, repo, root, &pending.ours, &commit)?;
+    if !blocked.is_empty() {
+        return Err(ResolveError::Blocked(blocked));
+    }
     Ok(commit)
 }

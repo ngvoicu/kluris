@@ -558,3 +558,191 @@ fn a_windows_style_path_names_the_conflict() {
     assert_eq!(r.path, "notes/first.md");
     assert_completed(&w, &r);
 }
+
+// --- structural and ambiguous-base conflicts (T-146) ----------------------------------
+
+/// Ours adds `notes/topic.md` and edits `notes/first.md`; theirs adds
+/// `notes/topic.md/child.md` and edits the same line of `notes/first.md`.
+fn file_and_directory(w: &World) -> String {
+    let base = w.read(&w.ours, "notes/first.md");
+    w.theirs_push(
+        &[
+            ("notes/topic.md/child.md", &neuron("", "# Child\n")),
+            ("notes/first.md", &base.replace("Three.", "Three, theirs.")),
+        ],
+        &[],
+    );
+    w.ours_commit(
+        &[
+            ("notes/topic.md", &neuron("", "# Topic\n")),
+            ("notes/first.md", &base.replace("Three.", "Three, ours.")),
+        ],
+        &[],
+    );
+    open(w, &["notes/first.md", "notes/topic.md"]);
+    w.run(&w.ours, &["rev-parse", "HEAD:notes/topic.md"])
+        .trim()
+        .to_string()
+}
+
+#[test]
+fn settling_another_path_never_drops_a_file_in_a_structural_conflict() {
+    let w = World::new();
+    let oid = file_and_directory(&w);
+    let before = w.snapshot();
+    let r = resolve_with(&w, "notes/first.md", Choice::Ours).unwrap();
+    assert!(!r.committed, "{r:?}");
+    assert_eq!(r.remaining, ["notes/topic.md"]);
+    assert_eq!(w.snapshot(), before);
+    // A file for a file/directory conflict says nothing about the directory.
+    match resolve_with(
+        &w,
+        "notes/topic.md",
+        Choice::File(neuron("", "# T\n").into_bytes()),
+    ) {
+        Err(e @ ResolveError::Structure { .. }) => assert!(e.to_string().contains("--ours"), "{e}"),
+        other => panic!("{other:?}"),
+    }
+    let r = resolve_with(&w, "notes/topic.md", Choice::Ours).unwrap();
+    assert_completed(&w, &r);
+    let tree = w.run(&w.ours, &["ls-tree", "-r", "HEAD"]);
+    assert!(tree.contains(&oid), "{tree}");
+    assert!(!tree.contains("notes/topic.md/child.md"), "{tree}");
+    assert!(!tree.contains('~'), "{tree}");
+}
+
+#[test]
+fn theirs_keeps_the_teammates_whole_directory() {
+    let w = World::new();
+    file_and_directory(&w);
+    resolve_with(&w, "notes/first.md", Choice::Theirs).unwrap();
+    let r = resolve_with(&w, "notes/topic.md", Choice::Theirs).unwrap();
+    assert_completed(&w, &r);
+    let tree = w.run(&w.ours, &["ls-tree", "-r", "--name-only", "HEAD"]);
+    assert!(
+        tree.lines().any(|l| l == "notes/topic.md/child.md"),
+        "{tree}"
+    );
+    assert!(!tree.lines().any(|l| l == "notes/topic.md"), "{tree}");
+    assert!(
+        w.read(&w.ours, "notes/topic.md/child.md")
+            .contains("# Child")
+    );
+}
+
+#[test]
+fn a_rename_conflict_takes_a_file() {
+    let w = World::new();
+    w.run(&w.ours, &["mv", "notes/keep.md", "notes/renamed.md"]);
+    w.commit(&w.ours, &["notes/keep.md", "notes/renamed.md"]);
+    w.theirs_push(&[], &["notes/keep.md"]);
+    open(&w, &["notes/renamed.md"]);
+    let kept = neuron("", "# Kept after all\n");
+    let r = resolve_with(
+        &w,
+        "notes/renamed.md",
+        Choice::File(kept.clone().into_bytes()),
+    )
+    .unwrap();
+    assert_completed(&w, &r);
+    assert_eq!(w.read(&w.ours, "notes/renamed.md"), kept);
+}
+
+#[test]
+fn an_ambiguous_base_conflict_keeps_the_chosen_side() {
+    let w = World::new();
+    w.ours_commit(
+        &[(
+            "notes/first.md",
+            &w.read(&w.ours, "notes/first.md").replace("One.", "P."),
+        )],
+        &[],
+    );
+    let q_text = w.read(&w.theirs, "notes/first.md").replace("Five.", "Q.");
+    w.theirs_push(&[("notes/first.md", &q_text)], &[]);
+    let q = w.remote_head();
+    w.run(&w.ours, &["fetch", "-q"]);
+    let ours_path = w.ours.to_string_lossy().into_owned();
+    w.run(&w.theirs, &["fetch", "-q", &ours_path, "main:refs/ours"]);
+    w.run(&w.ours, &["merge", "-q", "--no-edit", &q]);
+    w.run(&w.theirs, &["merge", "-q", "--no-edit", "refs/ours"]);
+    w.run(&w.theirs, &["push", "-q"]);
+    let base = w.read(&w.ours, "notes/first.md");
+    let ours = base.replace("Two.", "Two, ours.");
+    w.ours_commit(&[("notes/first.md", &ours)], &[]);
+    w.theirs_push(
+        &[("notes/first.md", &base.replace("Four.", "Four, theirs."))],
+        &[],
+    );
+    let s = w.sync().unwrap();
+    assert_eq!(s.conflicts[0].kind, ConflictKind::AmbiguousBase, "{s:?}");
+    let r = resolve_with(&w, "notes/first.md", Choice::Ours).unwrap();
+    assert_completed(&w, &r);
+    assert_eq!(w.read(&w.ours, "notes/first.md"), ours);
+}
+
+// --- the landing: ignored files, message hooks ----------------------------------------
+
+#[test]
+fn an_ignored_file_written_before_the_resolved_merge_lands_blocks_it() {
+    let w = World::new();
+    fs::write(
+        w.ours.join(".git").join("info").join("exclude"),
+        "private/\n",
+    )
+    .unwrap();
+    let base = w.read(&w.ours, "notes/first.md");
+    w.theirs_push(
+        &[
+            ("notes/first.md", &base.replace("Three.", "Three, theirs.")),
+            ("private/draft.md", "REMOTE VERSION\n"),
+        ],
+        &[],
+    );
+    w.ours_commit(
+        &[("notes/first.md", &base.replace("Three.", "Three, ours."))],
+        &[],
+    );
+    open(&w, &["notes/first.md"]);
+    w.hook(
+        &w.ours,
+        "pre-merge-commit",
+        "mkdir -p private; printf 'PRIVATE EDIT\\n' > private/draft.md",
+    );
+    let (head, remote) = (w.head(&w.ours), w.remote_head());
+    match resolve_with(&w, "notes/first.md", Choice::Ours) {
+        Err(ResolveError::Blocked(paths)) => assert_eq!(paths, ["private/draft.md"]),
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(w.read(&w.ours, "private/draft.md"), "PRIVATE EDIT\n");
+    assert_eq!((w.head(&w.ours), w.remote_head()), (head, remote));
+    assert!(pending(&w).exists());
+}
+
+#[test]
+fn the_message_hooks_run_for_the_resolved_merge() {
+    let w = World::new();
+    content_conflict(&w);
+    w.hook(&w.ours, "commit-msg", "exit 9");
+    let head = w.head(&w.ours);
+    match resolve_with(&w, "notes/first.md", Choice::Ours) {
+        Err(ResolveError::Sync(SyncError::Hook { name, code })) => {
+            assert_eq!((name, code), ("commit-msg", 9))
+        }
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(w.head(&w.ours), head);
+    assert!(pending(&w).exists());
+    w.hook(&w.ours, "commit-msg", "exit 0");
+    w.hook(
+        &w.ours,
+        "prepare-commit-msg",
+        "echo 'Prepared: yes' >> \"$1\"",
+    );
+    let r = resolve_with(&w, "notes/first.md", Choice::Ours).unwrap();
+    assert!(r.committed && r.pushed, "{r:?}");
+    assert_eq!(
+        w.run(&w.ours, &["log", "-1", "--format=%B"]),
+        "kluris: sync (resolved)\n\nKluris-Sync: resolved\nKluris-Resolved-By: Ana Tester\nPrepared: yes\n\n"
+    );
+}

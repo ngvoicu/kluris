@@ -9,7 +9,13 @@
 //! - the same change on both sides is that change; a change on one side
 //!   only is taken;
 //! - a deletion on one side and an edit on the other goes to a person
-//!   ([`ConflictKind::DeleteEdit`]);
+//!   ([`ConflictKind::DeleteEdit`]), unless git merged it as a rename;
+//! - a file on one side where the other has a directory, and a rename git
+//!   could not settle, go to a person ([`ConflictKind::Structure`]): nothing
+//!   of either side is dropped, and a choice keeps one side's whole
+//!   structure;
+//! - with several merge bases (a criss-cross history) every path changed on
+//!   both sides goes to a person ([`ConflictKind::AmbiguousBase`]);
 //! - a markdown file changed on both sides is merged by [`merge_markdown`]:
 //!   frontmatter field by field ([`super::frontmatter_merge`]), bodies by
 //!   `git merge-file` ([`TextMerger`]); an overlapping edit goes to a person;
@@ -192,21 +198,129 @@ pub fn merge_commits<G: SyncGit>(
     resolutions: &BTreeMap<String, ResolvedChoice>,
 ) -> Result<MergeOutcome, GitError> {
     // A criss-cross history has several merge bases. merge-tree merges with
-    // a virtual base of them all; the conflict rules here take the first one
-    // `git merge-base --all` lists as each file's base.
-    let base = git.merge_bases(repo, ours, theirs)?.into_iter().next();
+    // a virtual base of them all, but no single base says who changed what:
+    // with several, every path changed on both sides goes to a person
+    // (`ambiguous-base`) and only one-sided changes merge, as merge-tree
+    // has them (decision of T-146, replacing the first-base rule).
+    let bases = git.merge_bases(repo, ours, theirs)?;
+    let ambiguous = bases.len() > 1;
+    let base = bases.first().cloned();
     let merged = git.merge_tree(repo, ours, theirs)?;
-    let eb = match &base {
-        Some(base) => entries(git, repo, base)?,
-        None => Entries::new(),
-    };
+    let mut ebs = Vec::new();
+    for b in &bases {
+        ebs.push(entries(git, repo, b)?);
+    }
+    let no_base = Entries::new();
+    let eb = ebs.first().unwrap_or(&no_base);
     let (eo, et) = (entries(git, repo, ours)?, entries(git, repo, theirs)?);
     let em = entries(git, repo, &merged.tree)?;
 
-    let mut paths: BTreeSet<&String> = merged.conflicted.iter().collect();
+    // Structural conflicts (`structure`). A file/directory conflict leaves a
+    // synthetic `<path>~<commit>` in merge-tree's result, a path neither side
+    // has. A path git could not merge without a file on both sides, nor a
+    // base and one side (a delete/edit), is a rename conflict.
+    let known = |p: &str| eb.contains_key(p) || eo.contains_key(p) || et.contains_key(p);
+    let mut structural: BTreeSet<String> = BTreeSet::new();
+    let mut synthetic: Vec<(String, String)> = Vec::new();
+    for path in em.keys().chain(merged.conflicted.iter()) {
+        if known(path) {
+            continue;
+        }
+        let original = path.rsplit_once('~').map_or(path.as_str(), |(p, _)| p);
+        structural.insert(original.to_string());
+        synthetic.push((path.clone(), original.to_string()));
+    }
+    for path in &merged.conflicted {
+        let (b, o, t) = (eb.get(path), eo.get(path), et.get(path));
+        let triple = o.is_some() && t.is_some();
+        let delete_edit = b.is_some() && (o.is_some() != t.is_some());
+        if known(path) && !triple && !delete_edit && !is_generated(path) {
+            structural.insert(path.clone());
+        }
+    }
+    // Everything a structural conflict covers: the path, its synthetic copy
+    // and whatever either side has below it.
+    let covered = |p: &str| -> Vec<String> {
+        let below = format!("{p}/");
+        let mut all: BTreeSet<String> = BTreeSet::from([p.to_string()]);
+        all.extend(
+            synthetic
+                .iter()
+                .filter(|(_, original)| original == p)
+                .map(|(s, _)| s.clone()),
+        );
+        for key in eo.keys().chain(et.keys()).chain(em.keys()) {
+            if key.starts_with(&below) {
+                all.insert(key.clone());
+            }
+        }
+        all.into_iter().collect()
+    };
+    let mut owned: BTreeSet<String> = BTreeSet::new();
+    let mut decided: BTreeMap<String, Decided> = BTreeMap::new();
+    let mut conflicts = Vec::new();
+    let take =
+        |side: Option<&TreeEntry>| side.map_or(Decided::Removed, |e| Decided::Entry(e.clone()));
+    for p in &structural {
+        let all = covered(p);
+        owned.extend(all.iter().cloned());
+        let is_synthetic = |x: &String| synthetic.iter().any(|(s, _)| s == x);
+        match resolutions.get(p.as_str()) {
+            // A person's choice keeps that side's whole structure.
+            Some(ResolvedChoice::Ours) | Some(ResolvedChoice::Theirs) => {
+                let side = match resolutions.get(p.as_str()) {
+                    Some(ResolvedChoice::Ours) => &eo,
+                    _ => &et,
+                };
+                for x in &all {
+                    let chosen = if is_synthetic(x) {
+                        Decided::Removed
+                    } else {
+                        take(side.get(x))
+                    };
+                    decided.insert(x.clone(), chosen);
+                }
+            }
+            Some(ResolvedChoice::Blob(oid)) => {
+                for x in all.iter().filter(|x| is_synthetic(x)) {
+                    decided.insert(x.clone(), Decided::Removed);
+                }
+                let mode = eo
+                    .get(p)
+                    .or(et.get(p))
+                    .map_or_else(|| "100644".to_string(), |e| e.mode.clone());
+                decided.insert(
+                    p.clone(),
+                    Decided::Entry(TreeEntry {
+                        rel: p.clone(),
+                        mode,
+                        oid: oid.clone(),
+                    }),
+                );
+            }
+            None => conflicts.push(Conflict {
+                path: p.clone(),
+                kind: ConflictKind::Structure,
+                base: eb.get(p).map(|e| e.oid.clone()),
+                ours: eo.get(p).map(|e| e.oid.clone()),
+                theirs: et.get(p).map(|e| e.oid.clone()),
+            }),
+        }
+    }
+
+    let mut paths: BTreeSet<&String> = merged
+        .conflicted
+        .iter()
+        .filter(|p| !owned.contains(*p))
+        .collect();
     for path in eo.keys().chain(et.keys()).chain(eb.keys()) {
         let (b, o, t) = (eb.get(path), eo.get(path), et.get(path));
-        if !same(o, b) && !same(t, b) {
+        let candidate = if ambiguous {
+            !same(o, t)
+        } else {
+            !same(o, b) && !same(t, b)
+        };
+        if candidate && !owned.contains(path) {
             paths.insert(path);
         }
     }
@@ -222,13 +336,9 @@ pub fn merge_commits<G: SyncGit>(
     let blobs = git.read_blobs(repo, &wanted)?;
     let bytes_of = |entry: Option<&TreeEntry>| entry.and_then(|e| blobs.get(&e.oid));
 
-    let mut decided: BTreeMap<String, Decided> = BTreeMap::new();
-    let mut conflicts = Vec::new();
     let mut auto_merged = Vec::new();
     for path in paths {
         let (b, o, t) = (eb.get(path), eo.get(path), et.get(path));
-        let take =
-            |side: Option<&TreeEntry>| side.map_or(Decided::Removed, |e| Decided::Entry(e.clone()));
         if is_generated(path) {
             // Rebuilt below; ours (or theirs) until then, never git's merge.
             decided.insert(path.clone(), take(o.or(t)));
@@ -251,6 +361,26 @@ pub fn merge_commits<G: SyncGit>(
             decided.insert(path.clone(), chosen);
             continue;
         }
+        let conflict = |kind| Conflict {
+            path: path.clone(),
+            kind,
+            base: b.map(|e| e.oid.clone()),
+            ours: o.map(|e| e.oid.clone()),
+            theirs: t.map(|e| e.oid.clone()),
+        };
+        if ambiguous {
+            if same(o, t) {
+                decided.insert(path.clone(), take(o));
+            } else if merged.conflicted.contains(path)
+                || ebs
+                    .iter()
+                    .all(|eb| !same(o, eb.get(path)) && !same(t, eb.get(path)))
+            {
+                conflicts.push(conflict(ConflictKind::AmbiguousBase));
+            }
+            // Otherwise one side changed it: merge-tree's result stands.
+            continue;
+        }
         if same(o, t) || same(t, b) {
             decided.insert(path.clone(), take(o));
             continue;
@@ -259,13 +389,6 @@ pub fn merge_commits<G: SyncGit>(
             decided.insert(path.clone(), take(t));
             continue;
         }
-        let conflict = |kind| Conflict {
-            path: path.clone(),
-            kind,
-            base: b.map(|e| e.oid.clone()),
-            ours: o.map(|e| e.oid.clone()),
-            theirs: t.map(|e| e.oid.clone()),
-        };
         match (o, t) {
             (Some(oe), Some(_)) if is_markdown(path) => {
                 let (Some(ob), Some(tb)) = (bytes_of(o), bytes_of(t)) else {
@@ -284,10 +407,16 @@ pub fn merge_commits<G: SyncGit>(
                 // git merged it cleanly (not markdown): its result stands.
             }
             (Some(_), Some(_)) => conflicts.push(conflict(ConflictKind::Content)),
-            _ => conflicts.push(conflict(ConflictKind::DeleteEdit)),
+            _ if merged.conflicted.contains(path) => {
+                conflicts.push(conflict(ConflictKind::DeleteEdit))
+            }
+            // Deleted on one side, edited on the other, and git merged it:
+            // a rename it followed. Its result stands.
+            _ => {}
         }
     }
     if !conflicts.is_empty() {
+        conflicts.sort_by(|a, b| a.path.cmp(&b.path));
         return Ok(MergeOutcome::Conflicts { base, conflicts });
     }
 
@@ -363,8 +492,13 @@ pub fn merge_commits<G: SyncGit>(
             }),
         }
     }
+    // Removals first: a file can replace a directory of the merged tree (a
+    // structural choice), and the other way round.
+    let (removals, writes): (Vec<StagedBlob>, Vec<StagedBlob>) =
+        by_bytes.into_iter().partition(|b| b.bytes.is_none());
+    git.stage_blobs(repo, &index, &removals)?;
     git.stage_entries(repo, &index, &by_oid)?;
-    git.stage_blobs(repo, &index, &by_bytes)?;
+    git.stage_blobs(repo, &index, &writes)?;
     let tree = git.write_tree(repo, &index)?;
     Ok(MergeOutcome::Clean {
         tree,

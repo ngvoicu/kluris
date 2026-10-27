@@ -171,23 +171,27 @@ const V3_WRITING_RULES: &str = "\
 Before you write, change, or delete any brain file, run
 `kluris sync{flag} --json` and read the brain's entry in `brains[]`:
 - `conflicts[]` is not empty: this brain and a teammate's push changed the
-  same thing. STOP and show the human each conflict: its `path`, its `kind`
-  (`content`, `delete_edit`, `parent`, or `frontmatter`), and what each side
-  changed. The conflict's `base`, `ours`, and `theirs` are blob ids: read
+  same thing (or a conflict is already open: then `refused` says so too).
+  STOP and show the human each conflict: its `path`, its `kind` (`content`,
+  `delete_edit`, `parent`, `frontmatter`, `structure`, or `ambiguous-base`),
+  and what each side changed. The conflict's `base`, `ours`, and `theirs` are blob ids: read
   them with `git -C {path} show <id>`, or compare with
   `git -C {path} diff <base> <ours>` and `git -C {path} diff <base> <theirs>`
   (a `null` side deleted the file). Ask which version to keep, or propose a
   merged text and apply the approval protocol to it. Then settle each path
   with `kluris resolve{flag} <path> --ours`, `--theirs`, or
-  `--file <merged file>`; the last one commits the merge and pushes it.
+  `--file <merged file>`; the last one commits the merge and pushes it. A
+  `structure` conflict (a file on one side where the other has a directory,
+  or a rename) is settled with `--ours` or `--theirs`, which keep that side's
+  whole structure.
   Brain files never contain conflict markers, so never edit a file to
   resolve a conflict. If `kluris resolve` says the conflict is stale, run
   `kluris resolve{flag} --abort` and sync again.
 - `blocked[]` is not empty: those files have uncommitted changes that the
   incoming changes would overwrite. Ask the human to commit or stash them,
   then sync again.
-- `refused` is set or `offline` is true: tell the human, then go on with the
-  local brain.
+- `refused` is set with no `conflicts[]`, or `offline` is true: tell the
+  human, then go on with the local brain.
 
 ### Approval protocol
 ";

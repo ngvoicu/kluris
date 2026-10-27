@@ -333,22 +333,29 @@ ahead, and merges when both sides have new commits:
   `related` and `tags`, both lists joined; edits to different parts of the
   same neuron.
 - Left for a person: overlapping edits, a file deleted on one side and edited
-  on the other, different `parent` values, and any other frontmatter field
-  changed differently on both sides. Nothing changes then (no file, no
-  commit, no push) until the conflict is settled with `kluris resolve`.
+  on the other, different `parent` values, any other frontmatter field
+  changed differently on both sides, a file on one side where the other has
+  a directory (or a rename git cannot settle), and, when the history has
+  several merge bases (both sides merged each other), any file changed on
+  both sides. Nothing changes then (no file, no commit, no push) until the
+  conflict is settled with `kluris resolve`, and a later sync reports the
+  same open conflict.
 
-A file with uncommitted changes is never overwritten: when incoming changes
-touch one, that brain is not synced until you commit or stash it. The
-repository's `pre-merge-commit`, `post-merge` and `pre-push` hooks run
-(`--no-verify` skips `pre-merge-commit`). The brain must be the root of its
+A file with uncommitted changes is never overwritten, nor is an untracked or
+ignored file where an incoming file lands: that brain is not synced until you
+commit, stash or move it. The repository's `pre-merge-commit`,
+`prepare-commit-msg`, `commit-msg`, `post-merge` and `pre-push` hooks run
+(`--no-verify` skips `pre-merge-commit` and `commit-msg`). The brain must be the root of its
 own git repository, and git must be 2.38 or newer.
 
 With `--json`, each brain's entry has `name`, `fetched`, `merged`, `pushed`,
 `auto_merged` (neurons merged on their own), `conflicts` (each with `path`,
-`kind` (`content`, `delete_edit`, `parent` or `frontmatter`) and the `base`,
-`ours` and `theirs` blob ids), `skipped_dirty` (uncommitted files left as
-they are), `offline`, `blocked` (uncommitted files in the way) and `refused`
-(why the brain was left alone under `--brain all`, else `null`). The exit
+`kind` (`content`, `delete_edit`, `parent`, `frontmatter`, `structure` or
+`ambiguous-base`) and the `base`, `ours` and `theirs` blob ids, `null` where
+a side has no file there), `skipped_dirty` (uncommitted files left as they
+are), `offline`, `blocked` (uncommitted files in the way) and `refused` (why
+the brain was left alone: an open conflict, listed in `conflicts`, or under
+`--brain all` any other reason; else `null`). The exit
 code is 1 when a brain has a conflict, is blocked or was refused.
 
 ### Settle a conflict
@@ -361,7 +368,10 @@ kluris resolve --brain acme knowledge/oauth.md --theirs         # keep the remot
 kluris resolve --brain acme knowledge/jwt.md --file merged.md   # keep what you merged by hand
 ```
 
-`--ours` and `--theirs` keep that side's version, a deletion included.
+`--ours` and `--theirs` keep that side's version, a deletion included; for a
+`structure` conflict, that side's whole structure (its file, or its directory
+and everything in it), and `--file` is refused there when a side has a
+directory.
 `--file` content is checked first: its frontmatter must read, and a YAML
 neuron needs its `#---` block. Each call records one choice; with the last
 one the merge is committed under your git identity, the brain moves to it

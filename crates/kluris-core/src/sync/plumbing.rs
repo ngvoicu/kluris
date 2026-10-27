@@ -62,9 +62,10 @@ pub trait SyncGit: Plumbing + FreshGit + TextMerger {
     fn diff_names(&self, repo: &Repo, from: &str, to: &str) -> Result<Vec<String>, GitError>;
 
     /// Move the current branch, the index and the work tree to `to`, a
-    /// descendant of `HEAD` (`git merge --ff-only`): git refuses if `HEAD`
-    /// moved meanwhile or a local change would be overwritten, and runs the
-    /// `post-merge` hook.
+    /// descendant of `HEAD` (`git merge --ff-only --no-overwrite-ignore`,
+    /// autostash off): git refuses if `HEAD` moved meanwhile or a local
+    /// change, an untracked or an ignored file would be overwritten, and
+    /// runs the `post-merge` hook.
     fn fast_forward_to(&self, repo: &Repo, to: &str) -> Result<(), GitError>;
 
     /// Push `HEAD` to the upstream branch, never prompting, by `deadline`.
@@ -200,7 +201,20 @@ impl SyncGit for SystemGit {
     }
 
     fn fast_forward_to(&self, repo: &Repo, to: &str) -> Result<(), GitError> {
-        let args = SystemGit::with_no_background(&["merge", "--ff-only", "--quiet", to]);
+        // Whatever the user's config says: an ignored file in the way stops
+        // it (git overwrites one by default), and a local change stops it
+        // instead of being stashed and applied back with conflict markers.
+        let args = SystemGit::with_no_background(&[
+            "-c",
+            "merge.autostash=false",
+            "-c",
+            "rebase.autoStash=false",
+            "merge",
+            "--ff-only",
+            "--no-overwrite-ignore",
+            "--quiet",
+            to,
+        ]);
         // The post-merge hook's output reaches the user, all of it on
         // stderr so `--json` stays one document; so does git's own message
         // when it refuses.

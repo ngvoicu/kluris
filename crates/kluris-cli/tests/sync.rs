@@ -161,3 +161,29 @@ fn sync_is_in_help() {
         assert!(out.contains(text), "{text}: {out}");
     }
 }
+
+/// An already-open conflict is reported in the brain's entry, `--brain NAME`
+/// included: the conflicts from pending.json and `refused` saying how to
+/// settle it, exit 1 (decision of T-146).
+#[test]
+fn an_open_conflict_is_reported_in_the_entry() {
+    let mut h = Home::new();
+    let root = h.brain("alpha");
+    h.conflict("alpha", &root);
+    let (code, first) = h.json(&["sync", "--brain", "alpha", "--json"]);
+    assert_eq!(code, 1, "{first}");
+    let (code, doc) = h.json(&["sync", "--brain", "alpha", "--json"]);
+    assert_eq!(code, 1, "{doc}");
+    assert_eq!(keys(&doc), ["ok", "brains"]);
+    let entry = &doc["brains"][0];
+    assert_eq!(keys(entry), BRAIN_KEYS);
+    assert_eq!(entry["conflicts"], first["brains"][0]["conflicts"]);
+    assert_eq!(
+        entry["refused"],
+        "a conflict is open: settle it with kluris resolve (or kluris resolve --abort)"
+    );
+    assert_eq!(entry["fetched"], false);
+    let (code, out, _) = h.run(&["sync", "--brain", "alpha"]);
+    assert_eq!(code, 1);
+    assert!(out.contains("kluris resolve"), "{out}");
+}

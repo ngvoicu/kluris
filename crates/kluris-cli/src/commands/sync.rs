@@ -34,7 +34,7 @@ fn opt(value: &Option<String>) -> Json {
 pub(crate) fn entry(name: &str, outcome: &Result<SyncReport, String>) -> Json {
     let empty = SyncReport::default();
     let (report, refused) = match outcome {
-        Ok(report) => (report, Json::Null),
+        Ok(report) => (report, opt(&report.refused)),
         Err(why) => (&empty, Json::Str(why.clone())),
     };
     let conflicts = report
@@ -71,10 +71,13 @@ pub(crate) fn text(name: &str, outcome: &Result<SyncReport, String>) -> String {
         Err(why) => return format!("{name}: refused: {why}\n"),
     };
     let mut out = if !report.conflicts.is_empty() {
-        let mut out = format!(
-            "{name}: {} conflict(s), nothing changed; settle them with `kluris resolve`:\n",
-            report.conflicts.len()
-        );
+        let mut out = match &report.refused {
+            Some(why) => format!("{name}: refused: {why}\n"),
+            None => format!(
+                "{name}: {} conflict(s), nothing changed; settle them with `kluris resolve`:\n",
+                report.conflicts.len()
+            ),
+        };
         for c in &report.conflicts {
             out.push_str(&format!("  {}: {}\n", c.kind.as_str(), c.path));
         }
@@ -152,7 +155,9 @@ pub fn run(brain: Option<&str>, no_verify: bool, as_json: bool) -> Result<(), Cl
         outcomes.push((brain.name.clone(), outcome));
     }
     let failed = outcomes.iter().any(|(_, outcome)| match outcome {
-        Ok(report) => !report.conflicts.is_empty() || !report.blocked.is_empty(),
+        Ok(report) => {
+            !report.conflicts.is_empty() || !report.blocked.is_empty() || report.refused.is_some()
+        }
         Err(_) => true,
     });
     if as_json {

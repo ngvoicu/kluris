@@ -298,13 +298,20 @@ fn assert_conflict(w: &World, path: &str, kind: ConflictKind) {
         .collect();
     assert_eq!(entry_keys, ["path", "kind", "base", "ours", "theirs"]);
 
-    // An open conflict refuses the next sync, pointing at `kluris resolve`.
-    match w.sync() {
-        Err(e @ SyncError::OpenConflict(_)) => {
-            assert!(e.to_string().contains("kluris resolve"), "{e}")
-        }
-        other => panic!("{other:?}"),
-    }
+    // The next sync reports the open conflict in its entry (decision of
+    // T-146): the conflicts from pending.json, `refused` pointing at
+    // `kluris resolve`, nothing fetched or changed.
+    let again = w.sync().unwrap();
+    assert_eq!(again.conflicts, r.conflicts);
+    assert!(
+        !again.fetched && !again.merged && !again.pushed,
+        "{again:?}"
+    );
+    let why = again.refused.as_deref().unwrap_or_default();
+    assert_eq!(
+        why,
+        "a conflict is open: settle it with kluris resolve (or kluris resolve --abort)"
+    );
     assert_eq!(w.snapshot(), before);
 }
 
@@ -592,43 +599,317 @@ fn an_older_git_is_a_clean_error() {
 
 // --- criss-cross ---------------------------------------------------------------------------
 
-/// With several merge bases (a criss-cross history), the conflict rules take
-/// the first one `git merge-base --all` lists as each file's base.
-#[test]
-fn a_criss_cross_history_merges_with_the_first_merge_base() {
-    let w = World::new();
-    // P on ours, Q on theirs; each merges the other: two merge bases.
-    w.ours_commit(&[("notes/p.md", &neuron("", "# P\n"))], &[]);
+/// Two clones that each merged the other: `git merge-base --all` lists two
+/// bases. `base` is the first neuron text both sides then change.
+fn criss_cross(w: &World) -> (String, String, String) {
+    w.ours_commit(
+        &[(
+            "notes/first.md",
+            &w.read(&w.ours, "notes/first.md")
+                .replace("One.", "P_APPROVED"),
+        )],
+        &[],
+    );
     let p = w.head(&w.ours);
-    w.theirs_push(&[("ideas/q.md", &neuron("", "# Q\n"))], &[]);
+    let q_text = w
+        .read(&w.theirs, "notes/first.md")
+        .replace("Five.", "Q_APPROVED");
+    w.theirs_push(&[("notes/first.md", &q_text)], &[]);
     let q = w.remote_head();
     w.run(&w.ours, &["fetch", "-q"]);
-    w.run(&w.theirs, &["fetch", "-q", "origin"]);
     let ours_path = w.ours.to_string_lossy().into_owned();
     w.run(&w.theirs, &["fetch", "-q", &ours_path, "main:refs/ours"]);
     w.run(&w.ours, &["merge", "-q", "--no-edit", &q]);
     w.run(&w.theirs, &["merge", "-q", "--no-edit", "refs/ours"]);
+    w.run(&w.theirs, &["push", "-q"]);
+    w.run(&w.ours, &["fetch", "-q"]);
+    let bases = w.run(&w.ours, &["merge-base", "--all", "HEAD", "origin/main"]);
+    assert_eq!(bases.lines().count(), 2, "{bases}");
+    let first = bases.lines().next().unwrap_or_default().to_string();
+    (p, q, first)
+}
+
+/// With several merge bases nothing is decided field by field: a neuron
+/// changed on both sides goes to a person (`ambiguous-base`), even when the
+/// edits do not overlap (decision of T-146, replacing the first-base rule).
+#[test]
+fn a_criss_cross_history_sends_a_neuron_changed_on_both_sides_to_a_person() {
+    let w = World::new();
+    criss_cross(&w);
     let base = w.read(&w.ours, "notes/first.md");
     w.theirs_push(
-        &[("notes/first.md", &base.replace("One.", "One, theirs."))],
+        &[("notes/first.md", &base.replace("Two.", "Two, theirs."))],
         &[],
     );
     w.ours_commit(
-        &[("notes/first.md", &base.replace("Five.", "Five, ours."))],
+        &[("notes/first.md", &base.replace("Four.", "Four, ours."))],
         &[],
     );
-    let bases = w.run(&w.ours, &["merge-base", "--all", "HEAD", "origin/main"]);
-    w.run(&w.ours, &["fetch", "-q"]);
-    let bases_now = w.run(&w.ours, &["merge-base", "--all", "HEAD", "origin/main"]);
-    assert_eq!(bases_now.lines().count(), 2, "{bases} / {bases_now}");
-    assert!(bases_now.contains(&p) || bases_now.contains(&q));
+    assert_conflict(&w, "notes/first.md", ConflictKind::AmbiguousBase);
+}
+
+/// The review's case: ours reverts one side's approved change, theirs edits
+/// that same text. The first base equals ours' revert; trusting it dropped
+/// the revert.
+#[test]
+fn a_criss_cross_revert_is_never_dropped() {
+    let w = World::new();
+    let (_, _, first) = criss_cross(&w);
+    let old = w.show(&w.ours, &first, "notes/first.md");
+    let token = if old.contains("Q_APPROVED") {
+        "P_APPROVED"
+    } else {
+        "Q_APPROVED"
+    };
+    w.ours_commit(&[("notes/first.md", &old)], &[]);
+    let theirs = w
+        .read(&w.theirs, "notes/first.md")
+        .replace(token, &format!("THEIRS_REPLACED_{token}"));
+    w.theirs_push(&[("notes/first.md", &theirs)], &[]);
+    assert_conflict(&w, "notes/first.md", ConflictKind::AmbiguousBase);
+}
+
+/// A file changed on one side only still merges as git's merge-tree says.
+#[test]
+fn a_criss_cross_history_merges_one_sided_changes() {
+    let w = World::new();
+    criss_cross(&w);
+    w.theirs_push(&[("ideas/new.md", &neuron("", "# New\n"))], &[]);
+    w.ours_commit(&[("notes/second.md", &neuron("", "# Second\n"))], &[]);
     let r = w.sync().unwrap();
     assert!(r.merged && r.pushed && r.conflicts.is_empty(), "{r:?}");
-    let text = w.read(&w.ours, "notes/first.md");
-    assert!(
-        text.contains("One, theirs.") && text.contains("Five, ours."),
-        "{text}"
+    assert!(w.read(&w.ours, "ideas/new.md").contains("# New"));
+    assert!(w.read(&w.ours, "notes/second.md").contains("# Second"));
+}
+
+// --- structural conflicts --------------------------------------------------------------
+
+#[test]
+fn a_file_where_the_teammate_made_a_directory_goes_to_a_person() {
+    let w = World::new();
+    w.theirs_push(
+        &[("notes/topic.md/child.md", &neuron("", "# Child\n"))],
+        &[],
     );
+    w.ours_commit(&[("notes/topic.md", &neuron("", "# Topic\n"))], &[]);
+    let oid = w
+        .run(&w.ours, &["rev-parse", "HEAD:notes/topic.md"])
+        .trim()
+        .to_string();
+    assert_conflict(&w, "notes/topic.md", ConflictKind::Structure);
+    let r = w.sync().unwrap();
+    assert_eq!(r.conflicts[0].ours.as_deref(), Some(oid.as_str()));
+    assert_eq!(r.conflicts[0].theirs, None);
+}
+
+#[test]
+fn a_directory_where_the_teammate_made_a_file_goes_to_a_person() {
+    let w = World::new();
+    w.theirs_push(&[("notes/topic.md", &neuron("", "# Topic, theirs\n"))], &[]);
+    let oid = w
+        .run(&w.theirs, &["rev-parse", "HEAD:notes/topic.md"])
+        .trim()
+        .to_string();
+    w.ours_commit(
+        &[("notes/topic.md/child.md", &neuron("", "# Child\n"))],
+        &[],
+    );
+    assert_conflict(&w, "notes/topic.md", ConflictKind::Structure);
+    let r = w.sync().unwrap();
+    assert_eq!(r.conflicts[0].theirs.as_deref(), Some(oid.as_str()));
+}
+
+#[test]
+fn a_rename_on_one_side_and_an_edit_on_the_other_merge_as_git_does() {
+    let w = World::new();
+    w.run(&w.ours, &["mv", "notes/keep.md", "notes/renamed.md"]);
+    w.commit(&w.ours, &["notes/keep.md", "notes/renamed.md"]);
+    let edited = w
+        .read(&w.theirs, "notes/keep.md")
+        .replace("# Keep", "# Keep\n\nTheir approved line.");
+    w.theirs_push(&[("notes/keep.md", &edited)], &[]);
+    let r = w.sync().unwrap();
+    assert!(r.merged && r.pushed && r.conflicts.is_empty(), "{r:?}");
+    assert!(
+        w.read(&w.ours, "notes/renamed.md")
+            .contains("Their approved line.")
+    );
+    assert!(!w.ours.join("notes").join("keep.md").exists());
+    assert_eq!(w.status(&w.ours), "");
+}
+
+#[test]
+fn a_rename_on_one_side_and_a_delete_on_the_other_goes_to_a_person() {
+    let w = World::new();
+    w.run(&w.ours, &["mv", "notes/keep.md", "notes/renamed.md"]);
+    w.commit(&w.ours, &["notes/keep.md", "notes/renamed.md"]);
+    w.theirs_push(&[], &["notes/keep.md"]);
+    assert_conflict(&w, "notes/renamed.md", ConflictKind::Structure);
+}
+
+// --- ignored files, autostash, a late edit ---------------------------------------------
+
+/// Ours ignores `private/` locally; the teammate starts tracking a file there.
+fn ignored_in_the_way(w: &World) {
+    fs::write(
+        w.ours.join(".git").join("info").join("exclude"),
+        "private/\n",
+    )
+    .unwrap();
+    w.theirs_push(&[("private/draft.md", "TEAM VERSION\n")], &[]);
+}
+
+#[test]
+fn an_ignored_file_written_by_a_hook_before_the_fast_forward_blocks() {
+    let w = World::new();
+    ignored_in_the_way(&w);
+    w.ours_commit(&[("notes/second.md", &neuron("", "# Second\n"))], &[]);
+    w.hook(
+        &w.ours,
+        "pre-merge-commit",
+        "mkdir -p private; printf 'MINE\\n' > private/draft.md",
+    );
+    let (head, remote) = (w.head(&w.ours), w.remote_head());
+    let r = w.sync().unwrap();
+    assert_eq!(r.blocked, ["private/draft.md"], "{r:?}");
+    assert!(!r.merged && !r.pushed);
+    assert_eq!(w.read(&w.ours, "private/draft.md"), "MINE\n");
+    assert_eq!((w.head(&w.ours), w.remote_head()), (head, remote));
+}
+
+#[test]
+fn a_tracked_edit_made_before_the_fast_forward_blocks_even_with_autostash() {
+    let w = World::new();
+    w.theirs_push(&[("ideas/idea.md", &neuron("", "# Idea, theirs\n"))], &[]);
+    w.ours_commit(&[("notes/second.md", &neuron("", "# Second\n"))], &[]);
+    w.run(&w.ours, &["config", "merge.autostash", "true"]);
+    w.hook(
+        &w.ours,
+        "pre-merge-commit",
+        "printf '# MINE, UNCOMMITTED\\n' > ideas/idea.md",
+    );
+    let (head, remote) = (w.head(&w.ours), w.remote_head());
+    let r = w.sync().unwrap();
+    assert_eq!(r.blocked, ["ideas/idea.md"], "{r:?}");
+    assert_eq!(w.read(&w.ours, "ideas/idea.md"), "# MINE, UNCOMMITTED\n");
+    assert_eq!(w.run(&w.ours, &["stash", "list"]), "");
+    assert_eq!((w.head(&w.ours), w.remote_head()), (head, remote));
+    no_markers_anywhere(&w, &w.ours);
+}
+
+/// The fast-forward itself: an ignored file in the way and a local edit
+/// both stop it, whatever merge.autostash says; nothing is stashed.
+#[test]
+fn the_fast_forward_never_overwrites_an_ignored_file_or_stashes() {
+    use kluris_core::git::Git;
+    use kluris_core::sync::plumbing::SyncGit;
+    let w = World::new();
+    ignored_in_the_way(&w);
+    w.run(&w.ours, &["fetch", "-q"]);
+    w.write(&w.ours, "private/draft.md", "MINE\n");
+    let git = w.git();
+    let repo = git.repo(&w.ours).unwrap();
+    let head = w.head(&w.ours);
+    assert!(git.fast_forward_to(&repo, "origin/main").is_err());
+    assert_eq!(w.read(&w.ours, "private/draft.md"), "MINE\n");
+    assert_eq!(w.head(&w.ours), head);
+
+    fs::remove_dir_all(w.ours.join("private")).unwrap();
+    w.theirs_push(&[("ideas/idea.md", &neuron("", "# Idea, theirs\n"))], &[]);
+    w.run(&w.ours, &["fetch", "-q"]);
+    w.run(&w.ours, &["config", "merge.autostash", "true"]);
+    w.write(&w.ours, "ideas/idea.md", "# mine\n");
+    assert!(git.fast_forward_to(&repo, "origin/main").is_err());
+    assert_eq!(w.read(&w.ours, "ideas/idea.md"), "# mine\n");
+    assert_eq!(w.run(&w.ours, &["stash", "list"]), "");
+    assert_eq!(w.head(&w.ours), head);
+}
+
+// --- merge message hooks -----------------------------------------------------------------
+
+fn diverged(w: &World) {
+    w.theirs_push(&[("ideas/new.md", &neuron("", "# New\n"))], &[]);
+    w.ours_commit(&[("notes/second.md", &neuron("", "# Second\n"))], &[]);
+}
+
+#[test]
+fn a_failing_commit_msg_hook_stops_the_merge() {
+    let w = World::new();
+    diverged(&w);
+    w.hook(&w.ours, "commit-msg", "exit 23");
+    let before = w.snapshot();
+    match w.sync() {
+        Err(SyncError::Hook { name, code }) => assert_eq!((name, code), ("commit-msg", 23)),
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(w.snapshot(), before);
+}
+
+#[test]
+fn the_message_hooks_shape_the_merge_message() {
+    let w = World::new();
+    diverged(&w);
+    let seen = w.dir.path().join("prepare-args");
+    w.hook(
+        &w.ours,
+        "prepare-commit-msg",
+        &format!(
+            "echo \"$2\" > '{}'\necho 'Prepared: yes' >> \"$1\"",
+            seen.display().to_string().replace('\\', "/")
+        ),
+    );
+    w.hook(
+        &w.ours,
+        "commit-msg",
+        "sed 's/^kluris: sync$/kluris: sync (checked)/' \"$1\" > \"$1.tmp\" && mv \"$1.tmp\" \"$1\"",
+    );
+    let r = w.sync().unwrap();
+    assert!(r.merged && r.pushed, "{r:?}");
+    assert_eq!(
+        w.run(&w.ours, &["log", "-1", "--format=%B"]),
+        "kluris: sync (checked)\n\nKluris-Sync: auto\nPrepared: yes\n\n"
+    );
+    assert_eq!(fs::read_to_string(&seen).unwrap().trim(), "merge");
+}
+
+#[test]
+fn no_verify_skips_commit_msg_but_not_prepare_commit_msg() {
+    let w = World::new();
+    diverged(&w);
+    w.hook(&w.ours, "commit-msg", "exit 23");
+    w.hook(&w.ours, "pre-merge-commit", "exit 1");
+    w.hook(
+        &w.ours,
+        "prepare-commit-msg",
+        "echo 'Prepared: yes' >> \"$1\"",
+    );
+    let r = sync(
+        &w.ours,
+        &w.git(),
+        &SyncRequest {
+            no_verify: true,
+            ..w.request()
+        },
+    )
+    .unwrap();
+    assert!(r.merged && r.pushed, "{r:?}");
+    assert!(
+        w.run(&w.ours, &["log", "-1", "--format=%B"])
+            .contains("\nPrepared: yes\n")
+    );
+}
+
+#[test]
+fn a_failing_prepare_commit_msg_hook_stops_the_merge() {
+    let w = World::new();
+    diverged(&w);
+    w.hook(&w.ours, "prepare-commit-msg", "exit 4");
+    let before = w.snapshot();
+    match w.sync() {
+        Err(SyncError::Hook { name, code }) => assert_eq!((name, code), ("prepare-commit-msg", 4)),
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(w.snapshot(), before);
 }
 
 // --- the merge never writes markers, never loses a change ----------------------------------
