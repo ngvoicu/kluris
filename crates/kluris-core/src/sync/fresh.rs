@@ -6,6 +6,15 @@
 //! into the work tree with `kluris sync` ([`super::sync`]) and `kluris sync
 //! --watch`.
 //!
+//! - One read at a time decides and fetches: a read holds an exclusive OS
+//!   lock (`flock`, `LockFileEx`) on [`CLAIM`] from before its checks until
+//!   it is done, and one that finds it held reads the brain as it is
+//!   ([`Fresh::Throttled`]); one that cannot take it for another reason
+//!   (a read-only folder) does not fetch ([`Fresh::NoClaim`]). The lock
+//!   goes with the process, so a read that crashes or is killed blocks no
+//!   other; the file is made when missing and never removed. It is
+//!   Kluris's own, not a git lock. `kluris sync` neither takes nor waits
+//!   for it.
 //! - At most once per [`THROTTLE`] per brain: the time of the last attempt,
 //!   in Unix seconds, is in `<git dir>/kluris-sync/last-fetch` ([`STAMP`]),
 //!   written atomically before the fetch, so an offline brain costs the
@@ -67,6 +76,10 @@ pub const NO_HOOKS: &str = "kluris-sync/no-hooks";
 /// directory: `<until> <window>\n`, both in Unix seconds and seconds.
 pub const BACKOFF: &str = "kluris-sync/fetch-backoff";
 
+/// The file whose OS lock a read holds while it decides and fetches,
+/// relative to the git directory.
+pub const CLAIM: &str = "kluris-sync/fetch-claim";
+
 /// The first back-off after a fetch stopped at the deadline.
 pub const BACKOFF_FIRST: Duration = Duration::from_secs(60 * 60);
 
@@ -90,6 +103,8 @@ pub enum Fresh {
     Shallow,
     /// Something exists at [`NO_HOOKS`], so hooks could run.
     HooksPathTaken,
+    /// The claim ([`CLAIM`]) could not be taken (not another read's).
+    NoClaim,
     /// Fetched less than [`THROTTLE`] ago.
     Throttled,
     /// A fetch was stopped at the deadline less than its back-off ago.
@@ -247,7 +262,7 @@ fn ended(error: FreshError) -> Fresh {
 fn step(git: &impl FreshGit, req: &FreshRequest, deadline: Instant) -> Result<Fresh, Fresh> {
     let dir = req.brain;
     let Some(tree) = git
-        .git_paths(dir, &[STAMP, BACKOFF, NO_HOOKS], deadline)
+        .git_paths(dir, &[STAMP, BACKOFF, NO_HOOKS, CLAIM], deadline)
         .map_err(ended)?
     else {
         return Ok(Fresh::NotARepo);
@@ -258,7 +273,7 @@ fn step(git: &impl FreshGit, req: &FreshRequest, deadline: Instant) -> Result<Fr
     if tree.shallow {
         return Ok(Fresh::Shallow);
     }
-    let [stamp, backoff, no_hooks] = tree.paths.as_slice() else {
+    let [stamp, backoff, no_hooks, claim] = tree.paths.as_slice() else {
         return Ok(Fresh::Failed);
     };
     // git resolves a relative hooks path from the work tree root.
@@ -266,6 +281,13 @@ fn step(git: &impl FreshGit, req: &FreshRequest, deadline: Instant) -> Result<Fr
     if fs::symlink_metadata(&no_hooks).is_ok() {
         return Ok(Fresh::HooksPathTaken);
     }
+    // Held until the read is done, so the checks, the stamp, the fetch and
+    // the back-off are one read's at a time.
+    let _claim = match take_claim(claim) {
+        Ok(file) => file,
+        Err(fs::TryLockError::WouldBlock) => return Ok(Fresh::Throttled),
+        Err(fs::TryLockError::Error(_)) => return Ok(Fresh::NoClaim),
+    };
     let now = unix_seconds(req.now);
     if fetched_recently(stamp, now, req.throttle) {
         return Ok(Fresh::Throttled);
@@ -289,6 +311,24 @@ fn step(git: &impl FreshGit, req: &FreshRequest, deadline: Instant) -> Result<Fr
         }
         Err(FreshError::Failed(_)) => Err(Fresh::FetchFailed),
     }
+}
+
+/// The claim: [`CLAIM`] (made when missing, never removed) opened and
+/// locked exclusively without waiting (`flock`, `LockFileEx`). The lock
+/// goes with the file handle, and so with a read that crashes or is killed.
+fn take_claim(path: &Path) -> Result<fs::File, fs::TryLockError> {
+    if let Some(folder) = path.parent() {
+        fs::create_dir_all(folder).map_err(fs::TryLockError::Error)?;
+    }
+    let file = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(path)
+        .map_err(fs::TryLockError::Error)?;
+    file.try_lock()?;
+    Ok(file)
 }
 
 /// The back-off's end and its window, as [`BACKOFF`] records them.

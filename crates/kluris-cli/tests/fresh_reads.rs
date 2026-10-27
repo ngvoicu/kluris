@@ -940,6 +940,181 @@ fn partial_packs(w: &World) -> Vec<PathBuf> {
         .collect()
 }
 
+impl World {
+    /// `kluris <args>` as a process of its own, with [`World::kluris`]'s
+    /// environment.
+    fn spawn_kluris(&self, args: &[&str]) -> std::process::Child {
+        let mut cmd = std::process::Command::new(assert_cmd::cargo::cargo_bin!("kluris"));
+        self.hermetic(&mut cmd);
+        cmd.args(args)
+            .env(
+                "KLURIS_CONFIG",
+                self.home().join(".kluris").join("config.yml"),
+            )
+            .env("KLURIS_NO_PROMPT", "1")
+            .env("NO_COLOR", "1")
+            .env_remove("KLURIS_NO_AUTO_SYNC")
+            .current_dir(self.root())
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+        cmd.spawn().unwrap()
+    }
+
+    /// The teammate pushes `k/big.bin`, 8 MiB that do not compress.
+    fn teammate_pushes_8_mib(&self) {
+        let mut state = 0x9e37_79b9_7f4a_7c15u64;
+        let bytes: Vec<u8> = (0..8 * 1024 * 1024)
+            .map(|_| {
+                state ^= state << 13;
+                state ^= state >> 7;
+                state ^= state << 17;
+                (state >> 24) as u8
+            })
+            .collect();
+        let t = self.teammate();
+        fs::write(t.join("k").join("big.bin"), bytes).unwrap();
+        self.git(&t, &["add", "k/big.bin"]);
+        self.git(&t, &["commit", "-q", "-m", "big"]);
+        self.git(&t, &["push", "-q"]);
+    }
+
+    /// The fetch's upload-pack sends at about 400 KiB/s (64 KiB, then a
+    /// pause of 0.15 s; perl, which git ships on Windows too), and logs
+    /// each call to `<root>/upload-pack-calls`.
+    fn slow_link(&self) -> PathBuf {
+        let calls = self.root().join("upload-pack-calls");
+        let relay = self.root().join("slow-relay.sh");
+        fs::write(
+            &relay,
+            format!(
+                "#!/bin/sh\necho call >> '{}'\ngit upload-pack \"$@\" | perl -e '$|=1; while (sysread(STDIN, my $b, 65536)) {{ syswrite(STDOUT, $b); select(undef, undef, undef, 0.15) }}'\n",
+                sh_path(&calls)
+            ),
+        )
+        .unwrap();
+        self.git(
+            &self.mine(),
+            &[
+                "config",
+                "remote.origin.uploadpack",
+                &format!("sh '{}'", sh_path(&relay)),
+            ],
+        );
+        calls
+    }
+}
+
+#[test]
+fn two_reads_at_once_fetch_once_per_back_off_window() {
+    // Agents starting together over a slow link (review T-171, F171-1).
+    let w = World::new();
+    w.teammate_pushes_8_mib();
+    let calls = w.slow_link();
+    // A pack git keeps (`index-pack`, `tmp_pack_*`), as for any push of 100
+    // objects or more; under that, git unpacks the objects as they come.
+    w.git(&w.mine(), &["config", "fetch.unpackLimit", "1"]);
+    let backoff = w
+        .mine()
+        .join(".git")
+        .join("kluris-sync")
+        .join("fetch-backoff");
+    let now = || {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+    };
+    for (round, window) in [3600u64, 7200, 14400].into_iter().enumerate() {
+        if round > 0 {
+            // The last window has run out (as an hour later).
+            let last = window / 2;
+            fs::write(&backoff, format!("{} {last}\n", now() - 1)).unwrap();
+        }
+        w.set_stamp_age(61);
+        let started = Instant::now();
+        let mut reads = [
+            w.spawn_kluris(&["wake-up", "--json"]),
+            w.spawn_kluris(&["search", "jwt", "--json"]),
+        ];
+        for read in &mut reads {
+            assert!(read.wait().unwrap().success());
+        }
+        assert!(started.elapsed() < Duration::from_secs(8));
+        let attempts = fs::read_to_string(&calls).unwrap().lines().count();
+        assert_eq!(attempts, round + 1, "one fetch per window");
+        let packs = partial_packs(&w);
+        assert!(packs.len() <= round + 1, "{packs:?}");
+        let state = fs::read_to_string(&backoff).unwrap();
+        let mut fields = state.split_whitespace();
+        let until: u64 = fields.next().unwrap().parse().unwrap();
+        assert_eq!(fields.next(), Some(window.to_string().as_str()), "{state}");
+        assert!(
+            until >= now() + window - 30 && until <= now() + window,
+            "{state}"
+        );
+    }
+    assert!(!w.has_remote_head());
+}
+
+#[test]
+fn a_read_killed_while_it_fetches_never_blocks_the_next() {
+    // The claim is an OS lock: it goes with the process.
+    let w = World::new();
+    w.teammate_pushes("zebra", "zebras");
+    let m = w.mine();
+    let pids = w.root().join("pids");
+    let hang = w.root().join("hang.sh");
+    fs::write(
+        &hang,
+        format!(
+            "#!/bin/sh\necho $$ >> '{0}'\nsleep 30 &\necho $! >> '{0}'\nwait\n",
+            sh_path(&pids)
+        ),
+    )
+    .unwrap();
+    w.git(
+        &m,
+        &[
+            "config",
+            "remote.origin.uploadpack",
+            &format!("sh '{}'", sh_path(&hang)),
+        ],
+    );
+    let mut read = w.spawn_kluris(&["wake-up", "--json"]);
+    let until = Instant::now() + Duration::from_secs(10);
+    while fs::read_to_string(&pids).map_or(0, |t| t.lines().count()) < 2 && Instant::now() < until {
+        thread::sleep(Duration::from_millis(20));
+    }
+    assert!(
+        pids.exists(),
+        "the read never fetched: the test proves nothing"
+    );
+    // SIGKILL on Unix, TerminateProcess on Windows: no cleanup runs.
+    read.kill().unwrap();
+    read.wait().unwrap();
+    // Unix: the fetch's own process group outlives kluris; end it.
+    #[cfg(unix)]
+    for pid in fs::read_to_string(&pids).unwrap().lines() {
+        let _ = std::process::Command::new("kill")
+            .args(["-9", pid])
+            .status();
+    }
+    assert!(
+        m.join(".git")
+            .join("kluris-sync")
+            .join("fetch-claim")
+            .is_file()
+    );
+    w.git(&m, &["config", "--unset", "remote.origin.uploadpack"]);
+    w.set_stamp_age(61);
+    w.run(&["wake-up", "--json"]);
+    assert!(
+        w.has_remote_head(),
+        "the read after the killed one did not fetch"
+    );
+}
+
 #[test]
 fn a_read_stopped_at_the_deadline_backs_off_until_a_fetch_succeeds() {
     // A slow link (review T-163, F163-2): each upload-pack starts late.

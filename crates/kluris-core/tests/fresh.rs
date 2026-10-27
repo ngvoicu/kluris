@@ -6,12 +6,13 @@ use std::cell::RefCell;
 use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Barrier};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use kluris_core::git::GitError;
 use kluris_core::sync::fresh::{
-    BACKOFF, BACKOFF_FIRST, BACKOFF_MAX, Fresh, FreshError, FreshGit, FreshRequest, NO_HOOKS,
-    STAMP, Upstream, WorkTree, fresh_read, prompt_env,
+    BACKOFF, BACKOFF_FIRST, BACKOFF_MAX, CLAIM, Fresh, FreshError, FreshGit, FreshRequest,
+    NO_HOOKS, STAMP, Upstream, WorkTree, fresh_read, prompt_env,
 };
 use tempfile::TempDir;
 
@@ -26,6 +27,10 @@ struct FakeGit {
     fetch: Result<(), FreshError>,
     /// The hooks path each git after `rev-parse` was given.
     hooks_paths: RefCell<Vec<PathBuf>>,
+    /// `upstream` (after the throttle and back-off checks, before the stamp)
+    /// waits on the first barrier (the read is there), then on the second
+    /// (it may go on).
+    gate: Option<Arc<(Barrier, Barrier)>>,
     calls: RefCell<Vec<String>>,
     deadlines: RefCell<Vec<Instant>>,
 }
@@ -45,6 +50,7 @@ impl FakeGit {
             }),
             fetch: Ok(()),
             hooks_paths: RefCell::new(Vec::new()),
+            gate: None,
             calls: RefCell::new(Vec::new()),
             deadlines: RefCell::new(Vec::new()),
         }
@@ -95,6 +101,10 @@ impl FreshGit for FakeGit {
     ) -> Result<Option<Upstream>, FreshError> {
         self.log("upstream", deadline);
         self.hooks_paths.borrow_mut().push(no_hooks.to_path_buf());
+        if let Some(gate) = &self.gate {
+            gate.0.wait();
+            gate.1.wait();
+        }
         Ok(self.upstream.clone())
     }
 
@@ -530,4 +540,62 @@ fn a_back_off_that_does_not_read_or_lies_far_ahead_never_blocks_longer() {
             assert_eq!(fresh, Fresh::Fetched, "{text:?}");
         }
     }
+}
+
+#[test]
+fn two_reads_at_once_fetch_once_and_the_back_off_doubles() {
+    // Agents starting together (review T-171, F171-1): while one read
+    // fetches, holding the claim, another reads the brain as it is.
+    let tmp = TempDir::new().unwrap();
+    let brain = brain(&tmp);
+    let gate = Arc::new((Barrier::new(2), Barrier::new(2)));
+    let second = FakeGit::behind(&tmp);
+    let git_dir = second.git_dir.clone().unwrap();
+    let mut at = 1_000_000_000u64;
+    for window in [3600u64, 7200] {
+        // The fake is not `Sync`: the fetching read owns its own.
+        let mut first = FakeGit::behind(&tmp);
+        first.fetch = Err(FreshError::TimedOut);
+        first.gate = Some(gate.clone());
+        let _ = fs::remove_file(first.stamp());
+        let brain = &brain;
+        std::thread::scope(|scope| {
+            let fetching = scope.spawn(move || read_at(&first, brain, at));
+            // The first read has passed its checks and not stamped yet.
+            gate.0.wait();
+            second.calls.borrow_mut().clear();
+            let other = read_at(&second, brain, at);
+            // Let the first read end before anything can fail.
+            gate.1.wait();
+            assert_eq!(fetching.join().unwrap(), Fresh::TimedOut);
+            assert_eq!(other, Fresh::Throttled);
+            assert_eq!(second.calls(), ["git_paths"], "the second read fetched");
+        });
+        assert_eq!(
+            fs::read_to_string(second.backoff()).unwrap(),
+            format!("{} {window}\n", at + window)
+        );
+        // The claim file stays; the lock went with the read.
+        assert!(git_dir.join(CLAIM).is_file());
+        at += window;
+    }
+    // Free again: a read past the window fetches.
+    assert_eq!(read_at(&second, &brain, at), Fresh::Fetched);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_claim_that_cannot_be_taken_skips_the_fetch() {
+    use std::os::unix::fs::PermissionsExt;
+    // `kluris-sync/` exists but cannot be written: no claim file can be made.
+    let tmp = TempDir::new().unwrap();
+    let brain = brain(&tmp);
+    let git = FakeGit::behind(&tmp);
+    let folder = git.git_dir.as_ref().unwrap().join("kluris-sync");
+    fs::create_dir_all(&folder).unwrap();
+    fs::set_permissions(&folder, fs::Permissions::from_mode(0o500)).unwrap();
+    let fresh = fresh_read(&git, &request(&brain));
+    fs::set_permissions(&folder, fs::Permissions::from_mode(0o700)).unwrap();
+    assert_eq!(fresh, Fresh::NoClaim);
+    assert_eq!(git.calls(), ["git_paths"]);
 }

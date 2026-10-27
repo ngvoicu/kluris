@@ -452,11 +452,11 @@ kluris wake-up --brain acme
 ```
 
 Before they read, `kluris wake-up` and `kluris search` fetch your team's
-pushes, at most once a minute and within 3 seconds, without changing any file
-or running your git hooks: they read the brain as it is on disk. A fetch cut
-off at 3 seconds (a slow link) pauses these fetches for that brain for an
-hour, doubling up to a day, until a fetch succeeds. `kluris sync` brings the
-changes in; the agent runs it before every write and when you ask for the
+pushes, at most once a minute and one read at a time, within 3 seconds,
+without changing any file or running your git hooks: they read the brain as
+it is on disk. A fetch cut off at 3 seconds (a slow link) pauses these fetches
+for that brain for an hour, doubling up to a day, until a fetch succeeds.
+`kluris sync` brings the changes in; the agent runs it before every write and when you ask for the
 team's latest. A brain inside another project's repository is never fetched.
 Turn the fetch off with `KLURIS_NO_AUTO_SYNC=1` or, for one brain,
 `sync: {auto_fetch: false}` in its `kluris.yml`.
