@@ -1146,3 +1146,171 @@ fn the_machines_own_system_git_config_does_not_block_the_fast_forward() {
     assert_eq!(doc["total_neurons"], 2);
     assert_eq!(w.head(), w.remote_head());
 }
+
+/// HEAD, the index's bytes and every file of my clone outside `.git` (with
+/// untracked and ignored files), read without running anything that could
+/// refresh the index.
+type RawSnapshot = (String, Vec<u8>, Vec<(PathBuf, Vec<u8>)>);
+
+impl World {
+    fn raw_snapshot(&self) -> RawSnapshot {
+        let mut files = Vec::new();
+        let mut stack = vec![self.mine()];
+        while let Some(dir) = stack.pop() {
+            for entry in fs::read_dir(&dir).unwrap() {
+                let path = entry.unwrap().path();
+                if path.file_name().is_some_and(|n| n == ".git") {
+                    continue;
+                }
+                if path.is_dir() {
+                    files.push((path.clone(), b"<dir>".to_vec()));
+                    stack.push(path);
+                } else {
+                    let bytes = fs::read(&path).unwrap();
+                    files.push((path, bytes));
+                }
+            }
+        }
+        files.sort();
+        let index = fs::read(self.mine().join(".git").join("index")).unwrap();
+        (self.head(), index, files)
+    }
+
+    /// A failing, required smudge filter in my clone's config only.
+    fn configure_failing_required_filter(&self) {
+        let m = self.mine();
+        self.git(&m, &["config", "filter.required.smudge", "exit 1"]);
+        self.git(&m, &["config", "filter.required.clean", "cat"]);
+        self.git(&m, &["config", "filter.required.required", "true"]);
+    }
+
+    /// The teammate changes `k/jwt.md` (checked out before `k/z.md`) and adds
+    /// `k/z.md`, and pushes.
+    fn teammate_pushes_a_change_and_z(&self) {
+        let t = self.teammate();
+        self.write(
+            &t,
+            "k/jwt.md",
+            "---\nparent: map.md\nupdated: 2026-03-02\n---\n# INCOMING JWT\n",
+        );
+        self.write(&t, "k/z.md", "# FILTERED Z\n");
+        self.commit(&t, "change and z");
+        self.git(&t, &["push", "-q"]);
+    }
+
+    /// A read changes nothing at all: the raw snapshot is the same after it
+    /// (taken before anything else runs git), and the fetch happened.
+    fn assert_read_changes_nothing(&self) {
+        let before = self.raw_snapshot();
+        let base = self.baseline(&["wake-up", "--json"]);
+        let out = self.run(&["wake-up", "--json"]);
+        let after = self.raw_snapshot();
+        assert_eq!(after.0, before.0, "HEAD moved");
+        assert_eq!(after.1, before.1, "the index changed");
+        assert_eq!(after.2, before.2, "the work tree changed");
+        assert_eq!(out.stdout, base.stdout);
+        assert_eq!(self.tracked_remote(), self.remote_head(), "not fetched");
+    }
+}
+
+#[test]
+fn an_untracked_gitattributes_naming_a_failing_required_filter_changes_nothing() {
+    // T-150 F150-4 (probes/r_filter_required_failure): the attribute is in
+    // the work tree only, where git's checkout reads it.
+    let w = World::new();
+    w.configure_failing_required_filter();
+    w.write(&w.mine(), ".gitattributes", "k/z.md filter=required\n");
+    w.teammate_pushes_a_change_and_z();
+    w.assert_read_changes_nothing();
+}
+
+#[test]
+fn an_ignored_gitattributes_naming_a_failing_required_filter_changes_nothing() {
+    let w = World::new();
+    w.configure_failing_required_filter();
+    fs::write(
+        w.mine().join(".git").join("info").join("exclude"),
+        ".gitattributes\n",
+    )
+    .unwrap();
+    w.write(&w.mine(), ".gitattributes", "k/z.md filter=required\n");
+    w.teammate_pushes_a_change_and_z();
+    w.assert_read_changes_nothing();
+}
+
+#[test]
+fn a_gitattributes_in_a_subfolder_naming_a_failing_required_filter_changes_nothing() {
+    let w = World::new();
+    w.configure_failing_required_filter();
+    w.write(&w.mine(), "k/.gitattributes", "z.md filter=required\n");
+    w.teammate_pushes_a_change_and_z();
+    w.assert_read_changes_nothing();
+}
+
+#[test]
+fn a_failing_post_merge_hook_leaves_a_complete_fast_forward() {
+    // git runs post-merge after HEAD, the index and the tree are updated,
+    // and ignores its status: the fast-forward is whole.
+    let w = World::new();
+    let hook = w.mine().join(".git").join("hooks").join("post-merge");
+    fs::write(&hook, "#!/bin/sh\nexit 1\n").unwrap();
+    #[cfg(unix)]
+    make_executable(&hook);
+    w.teammate_pushes("zebra", "zebras");
+    assert_eq!(w.wake_up()["total_neurons"], 2);
+    assert_eq!(w.head(), w.remote_head());
+    assert_eq!(
+        w.git(
+            &w.mine(),
+            &["status", "--porcelain", "--untracked-files=all"]
+        ),
+        ""
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_folder_git_cannot_write_into_changes_nothing() {
+    // git cannot replace k/jwt.md in a read-only k/, so a fast-forward
+    // would stop halfway (the analogue of a locked file).
+    use std::os::unix::fs::PermissionsExt;
+    let w = World::new();
+    let t = w.teammate();
+    w.write(&t, "a.md", "# a, checked out first\n");
+    w.write(
+        &t,
+        "k/jwt.md",
+        "---\nparent: map.md\nupdated: 2026-03-02\n---\n# INCOMING JWT\n",
+    );
+    w.commit(&t, "a and jwt");
+    w.git(&t, &["push", "-q"]);
+    let k = w.mine().join("k");
+    fs::set_permissions(&k, fs::Permissions::from_mode(0o555)).unwrap();
+    let before = w.raw_snapshot();
+    let out = w.kluris().args(["wake-up", "--json"]).output().unwrap();
+    let after = w.raw_snapshot();
+    fs::set_permissions(&k, fs::Permissions::from_mode(0o755)).unwrap();
+    assert_eq!(out.status.code(), Some(0));
+    assert_eq!(after, before);
+    assert_eq!(w.tracked_remote(), w.remote_head(), "not fetched");
+}
+
+#[cfg(windows)]
+#[test]
+fn a_path_too_long_for_windows_changes_nothing() {
+    // Without core.longpaths, git for Windows cannot check out a path of
+    // 260 characters or more and stops halfway.
+    let w = World::new();
+    let t = w.teammate();
+    let mine_len = w.mine().display().to_string().encode_utf16().count();
+    let rel = format!("k/{}.md", "l".repeat(260usize.saturating_sub(mine_len)));
+    w.write(&t, "a.md", "# a, checked out first\n");
+    w.write(&t, &rel, "# long\n");
+    w.git(&t, &["-c", "core.longpaths=true", "add", "-A"]);
+    w.git(
+        &t,
+        &["-c", "core.longpaths=true", "commit", "-q", "-m", "long"],
+    );
+    w.git(&t, &["-c", "core.longpaths=true", "push", "-q"]);
+    w.assert_read_changes_nothing();
+}

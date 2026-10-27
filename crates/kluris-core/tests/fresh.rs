@@ -11,7 +11,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use kluris_core::git::GitError;
 use kluris_core::sync::fresh::{
     Fresh, FreshError, FreshGit, FreshRequest, MAX_FAST_FORWARD_FILES, STAMP, Upstream, WorkTree,
-    filter_would_run, fresh_read, ignored_in_the_way, prompt_env,
+    filter_would_run, fits_on_disk, fresh_read, ignored_in_the_way, prompt_env,
+    windows_path_too_long,
 };
 use tempfile::TempDir;
 
@@ -33,6 +34,12 @@ struct FakeGit {
     filters: bool,
     /// Ignored files and folders (`dir/`) of the work tree.
     ignored: Vec<String>,
+    /// The bytes the incoming files take.
+    incoming_size: u64,
+    /// `core.longpaths`.
+    long_paths: bool,
+    /// The paths the filter check was asked about.
+    filter_paths: RefCell<Vec<String>>,
     calls: RefCell<Vec<String>>,
     deadlines: RefCell<Vec<Instant>>,
 }
@@ -55,6 +62,9 @@ impl FakeGit {
             incoming: vec!["k/new.md".into()],
             filters: false,
             ignored: Vec::new(),
+            incoming_size: 0,
+            long_paths: false,
+            filter_paths: RefCell::new(Vec::new()),
             calls: RefCell::new(Vec::new()),
             deadlines: RefCell::new(Vec::new()),
         }
@@ -125,9 +135,32 @@ impl FreshGit for FakeGit {
         Ok(self.incoming.clone())
     }
 
-    fn uses_filters(&self, _dir: &Path, to: &str, deadline: Instant) -> Result<bool, FreshError> {
+    fn uses_filters(
+        &self,
+        _dir: &Path,
+        to: &str,
+        incoming: &[String],
+        deadline: Instant,
+    ) -> Result<bool, FreshError> {
         self.log(&format!("uses_filters {to}"), deadline);
+        *self.filter_paths.borrow_mut() = incoming.to_vec();
         Ok(self.filters)
+    }
+
+    fn incoming_size(
+        &self,
+        _dir: &Path,
+        to: &str,
+        _incoming: &[String],
+        deadline: Instant,
+    ) -> Result<u64, FreshError> {
+        self.log(&format!("incoming_size {to}"), deadline);
+        Ok(self.incoming_size)
+    }
+
+    fn long_paths(&self, _dir: &Path, deadline: Instant) -> Result<bool, FreshError> {
+        self.log("long_paths", deadline);
+        Ok(self.long_paths)
     }
 
     fn ignored(&self, _dir: &Path, deadline: Instant) -> Result<Vec<String>, FreshError> {
@@ -594,4 +627,79 @@ fn a_filter_counts_only_when_an_attribute_names_a_configured_driver() {
         &attrs("a filter=x\n"),
         &keys(&["filter.x.Smudge"])
     ));
+}
+
+#[test]
+fn the_filter_check_is_asked_about_every_incoming_path() {
+    let tmp = TempDir::new().unwrap();
+    let mut git = FakeGit::behind(&tmp);
+    git.incoming = vec!["k/a.md".into(), "k/z.md".into(), "gone.md".into()];
+    assert_eq!(
+        fresh_read(&git, &request(&brain(&tmp))),
+        Fresh::FastForwarded
+    );
+    assert_eq!(*git.filter_paths.borrow(), git.incoming);
+}
+
+#[test]
+fn too_little_free_space_leaves_only_the_fetch() {
+    let tmp = TempDir::new().unwrap();
+    let mut git = FakeGit::behind(&tmp);
+    git.incoming_size = u64::MAX / 4;
+    assert_eq!(fresh_read(&git, &request(&brain(&tmp))), Fresh::NoSpace);
+    assert!(git.calls().iter().any(|c| c == "fetch origin"));
+    assert!(!git.calls().iter().any(|c| c.starts_with("fast_forward")));
+}
+
+#[test]
+fn the_incoming_files_must_fit_with_room_to_spare() {
+    const MIB: u64 = 1024 * 1024;
+    // Each file takes at least one 4 KiB block; 64 MiB stay free.
+    assert!(fits_on_disk(0, 0, 64 * MIB));
+    assert!(fits_on_disk(1, 1, 64 * MIB + 4096));
+    assert!(!fits_on_disk(1, 1, 64 * MIB + 4095));
+    assert!(!fits_on_disk(10 * MIB, 3, 70 * MIB));
+    assert!(fits_on_disk(10 * MIB, 3, 75 * MIB));
+    // No overflow on huge sizes.
+    assert!(!fits_on_disk(u64::MAX, u64::MAX, u64::MAX));
+}
+
+#[test]
+fn a_windows_path_of_248_characters_or_more_is_too_long_without_core_longpaths() {
+    let root = format!("C:\\{}", "r".repeat(100));
+    let short = "k/a.md".to_string();
+    let rel = |len: usize| format!("k/{}", "x".repeat(len - 2));
+    // root + "\\" + rel: 103 + 1 + rel.
+    assert!(!windows_path_too_long(Path::new(&root), &short));
+    assert!(!windows_path_too_long(Path::new(&root), &rel(143)));
+    assert!(windows_path_too_long(Path::new(&root), &rel(144)));
+    // Counted in UTF-16 units, as Windows counts.
+    assert!(windows_path_too_long(
+        Path::new(&root),
+        &format!("k/{}", "\u{1F600}".repeat(72))
+    ));
+}
+
+#[cfg(unix)]
+#[test]
+fn a_folder_the_fast_forward_cannot_write_leaves_only_the_fetch() {
+    use std::os::unix::fs::PermissionsExt;
+    let tmp = TempDir::new().unwrap();
+    let brain = brain(&tmp);
+    let k = brain.join("k");
+    fs::create_dir_all(&k).unwrap();
+    let mut git = FakeGit::behind(&tmp);
+    // An existing file in a folder that cannot be written, and a new file
+    // whose nearest existing folder cannot be written.
+    for (folder, incoming) in [(&k, "k/a.md"), (&brain, "new/b.md")] {
+        let _ = fs::remove_file(git.stamp());
+        git.incoming = vec![incoming.into()];
+        fs::set_permissions(folder, fs::Permissions::from_mode(0o555)).unwrap();
+        let fresh = fresh_read(&git, &request(&brain));
+        fs::set_permissions(folder, fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(fresh, Fresh::Unwritable, "{incoming}");
+    }
+    let _ = fs::remove_file(git.stamp());
+    git.incoming = vec!["k/a.md".into(), "new/b.md".into()];
+    assert_eq!(fresh_read(&git, &request(&brain)), Fresh::FastForwarded);
 }

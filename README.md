@@ -447,15 +447,16 @@ branch's upstream and, when your branch is only behind it, fast-forward it.
 The fetch and the checks take at most 3 seconds; a fast-forward, once started,
 always finishes, so it starts only when it is quick and safe. The read keeps
 just the fetch, and your next `kluris sync` brings the changes in, when a
-checkout filter would run (an attribute such as `filter=lfs` in a
+checkout filter would run (an attribute such as `filter=lfs` in any
 `.gitattributes`, `.git/info/attributes` or your `core.attributesFile`, and a
 driver for it in git config, as Git LFS sets up), when more than 200 files
-changed, or when a file you ignore is where an incoming file goes. A brain
-with local edits, a merge or rebase in progress, an open sync conflict, a
-branch that diverged or no upstream is read as it is, and a brain inside
-another project's repository is never fetched. Turn it off with
-`KLURIS_NO_AUTO_SYNC=1` or, for one brain, `sync: {auto_fetch: false}` in its
-`kluris.yml`.
+changed, when a file you ignore is where an incoming file goes, when a folder
+it writes in is read-only, when the disk is nearly full, or on Windows when a
+path is too long for it. A brain with local edits, a merge or rebase in
+progress, an open sync conflict, a branch that diverged or no upstream is read
+as it is, and a brain inside another project's repository is never fetched.
+Turn it off with `KLURIS_NO_AUTO_SYNC=1` or, for one brain,
+`sync: {auto_fetch: false}` in its `kluris.yml`.
 
 ## Several brains
 

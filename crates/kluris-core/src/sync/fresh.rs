@@ -23,13 +23,20 @@
 //!   and `index.lock` behind); it runs to its end. So it starts only when it
 //!   is cheap and safe, and otherwise the read keeps just the fetch and the
 //!   next `kluris sync` moves the branch: not with less than
-//!   [`FAST_FORWARD_RESERVE`] left, not when a checkout filter would run
-//!   ([`filter_would_run`]: an attribute assigns `filter=<name>` and git
-//!   has a driver for that name), not for
-//!   more than [`MAX_FAST_FORWARD_FILES`] incoming files, and not when an
-//!   ignored file is where the incoming tree writes (checked right before
-//!   it; `--no-overwrite-ignore` makes git refuse one that appears after).
-//!   It runs without autostash.
+//!   [`FAST_FORWARD_RESERVE`] left, not for more than
+//!   [`MAX_FAST_FORWARD_FILES`] incoming files, and not when it could stop
+//!   partway (git then leaves HEAD and the index as they were but the
+//!   files it already wrote changed): a checkout filter would run on an
+//!   incoming path ([`filter_would_run`]: git's effective attributes, from
+//!   `git check-attr`, or the upstream's `.gitattributes`, assign
+//!   `filter=<name>` and git has a driver for that name), a path would be
+//!   too long for Windows ([`windows_path_too_long`], without
+//!   `core.longpaths`), a folder it writes in is not writable, or the
+//!   incoming files would not fit on the disk ([`fits_on_disk`]). Last, it
+//!   does not start when an ignored file is where the incoming tree writes
+//!   (`--no-overwrite-ignore` makes git refuse one that appears after). It
+//!   runs without autostash. A failing `post-merge` hook runs after the
+//!   fast-forward is whole and changes nothing.
 //! - Never a prompt: [`prompt_env`] for the fetch.
 //! - Off with `KLURIS_NO_AUTO_SYNC=1` or `sync: {auto_fetch: false}` in the
 //!   brain's `kluris.yml`.
@@ -105,6 +112,12 @@ pub enum Fresh {
     TooBig,
     /// Fetched only: an ignored file is where the incoming tree writes.
     IgnoredInTheWay,
+    /// Fetched only: a path would be too long for Windows.
+    PathTooLong,
+    /// Fetched only: a folder the fast-forward writes in is not writable.
+    Unwritable,
+    /// Fetched only: the incoming files might not fit on the disk.
+    NoSpace,
     /// The branch moved to its upstream.
     FastForwarded,
     /// Another git step failed.
@@ -175,11 +188,32 @@ pub trait FreshGit {
     /// to `to` writes or removes.
     fn incoming(&self, dir: &Path, to: &str, deadline: Instant) -> Result<Vec<String>, FreshError>;
 
-    /// Whether a checkout filter would run ([`filter_would_run`]): an
-    /// attribute assigns `filter=<name>` (a `.gitattributes` of `HEAD` or
-    /// `to`, `<git dir>/info/attributes`, the `core.attributesFile`) and git
-    /// config, in any scope, has a smudge, clean or process driver for it.
-    fn uses_filters(&self, dir: &Path, to: &str, deadline: Instant) -> Result<bool, FreshError>;
+    /// Whether a checkout filter would run on one of the `incoming` paths
+    /// ([`filter_would_run`]): git's effective attributes for them (`git
+    /// check-attr filter`: the work tree's `.gitattributes` at every level,
+    /// tracked, untracked or ignored, `<git dir>/info/attributes` and the
+    /// `core.attributesFile`), or a `.gitattributes` of `to`, assign
+    /// `filter=<name>`, and git config, in any scope, has a smudge, clean or
+    /// process driver for it.
+    fn uses_filters(
+        &self,
+        dir: &Path,
+        to: &str,
+        incoming: &[String],
+        deadline: Instant,
+    ) -> Result<bool, FreshError>;
+
+    /// The bytes `to`'s versions of the `incoming` paths take.
+    fn incoming_size(
+        &self,
+        dir: &Path,
+        to: &str,
+        incoming: &[String],
+        deadline: Instant,
+    ) -> Result<u64, FreshError>;
+
+    /// `core.longpaths` (Git for Windows' long path support).
+    fn long_paths(&self, dir: &Path, deadline: Instant) -> Result<bool, FreshError>;
 
     /// The work tree's ignored files, a wholly ignored folder as `dir/`.
     fn ignored(&self, dir: &Path, deadline: Instant) -> Result<Vec<String>, FreshError>;
@@ -297,9 +331,6 @@ fn step(git: &impl FreshGit, req: &FreshRequest, deadline: Instant) -> Result<Fr
     if incoming.len() > MAX_FAST_FORWARD_FILES {
         return Ok(Fresh::TooBig);
     }
-    if git.uses_filters(dir, theirs, deadline).map_err(ended)? {
-        return Ok(Fresh::Filtered);
-    }
     if deadline.saturating_duration_since(Instant::now()) < FAST_FORWARD_RESERVE {
         return Ok(Fresh::TimedOut);
     }
@@ -309,6 +340,28 @@ fn step(git: &impl FreshGit, req: &FreshRequest, deadline: Instant) -> Result<Fr
     }
     if git.has_tracked_changes(dir, deadline).map_err(ended)? {
         return Ok(Fresh::Dirty);
+    }
+    if git
+        .uses_filters(dir, theirs, &incoming, deadline)
+        .map_err(ended)?
+    {
+        return Ok(Fresh::Filtered);
+    }
+    if cfg!(windows)
+        && incoming.iter().any(|p| windows_path_too_long(dir, p))
+        && !git.long_paths(dir, deadline).map_err(ended)?
+    {
+        return Ok(Fresh::PathTooLong);
+    }
+    if !folders_writable(dir, &incoming) {
+        return Ok(Fresh::Unwritable);
+    }
+    let size = git
+        .incoming_size(dir, theirs, &incoming, deadline)
+        .map_err(ended)?;
+    let files = u64::try_from(incoming.len()).unwrap_or(u64::MAX);
+    if free_space(dir).is_some_and(|free| !fits_on_disk(size, files, free)) {
+        return Ok(Fresh::NoSpace);
     }
     let ignored = git.ignored(dir, deadline).map_err(ended)?;
     if ignored_in_the_way(&ignored, &incoming) {
@@ -338,6 +391,97 @@ pub fn filter_would_run(attributes: &[String], config_keys: &[String]) -> bool {
             .filter_map(|token| token.strip_prefix("filter="))
             .any(|name| drivers.contains(&name))
     })
+}
+
+/// The space kept free on the disk beside the incoming files.
+const SPARE_SPACE: u64 = 64 * 1024 * 1024;
+
+/// The block a file's size is rounded up to.
+const BLOCK: u64 = 4096;
+
+/// Whether `bytes` in `files` files fit in `free` bytes with
+/// [`SPARE_SPACE`] to spare, each file rounded up to a [`BLOCK`] (the
+/// space the old versions free is not counted).
+pub fn fits_on_disk(bytes: u64, files: u64, free: u64) -> bool {
+    // A need too large to count never fits.
+    let needed = bytes
+        .div_ceil(BLOCK)
+        .checked_mul(BLOCK)
+        .and_then(|n| n.checked_add(files.saturating_sub(1).checked_mul(BLOCK)?))
+        .and_then(|n| n.checked_add(SPARE_SPACE));
+    needed.is_some_and(|needed| needed <= free)
+}
+
+/// The longest path Windows takes without long path support: a folder
+/// must leave room for an 8.3 name (`MAX_PATH` 260 less 12).
+const WINDOWS_MAX_PATH: usize = 247;
+
+/// Whether `root` joined with the `/`-separated `rel` is longer than
+/// Windows takes without `core.longpaths` (counted in UTF-16 units).
+pub fn windows_path_too_long(root: &Path, rel: &str) -> bool {
+    let root = root.as_os_str().to_string_lossy();
+    let root = root.trim_end_matches(['/', '\\']);
+    root.encode_utf16().count() + 1 + rel.encode_utf16().count() > WINDOWS_MAX_PATH
+}
+
+/// Whether the fast-forward can write where the `incoming` paths go: for
+/// each, the nearest existing folder at or above its parent (below `dir`)
+/// is writable and searchable by this user. Windows: not checked (a folder's
+/// read-only attribute does not block writes; ACLs and locks are not seen).
+#[cfg(unix)]
+fn folders_writable(dir: &Path, incoming: &[String]) -> bool {
+    use rustix::fs::{Access, AtFlags, CWD, accessat};
+    incoming.iter().all(|rel| {
+        let target = dir.join(rel);
+        let mut folder = target.parent().unwrap_or(dir);
+        while folder != dir && fs::symlink_metadata(folder).is_err() {
+            folder = folder.parent().unwrap_or(dir);
+        }
+        accessat(
+            CWD,
+            folder,
+            Access::WRITE_OK | Access::EXEC_OK,
+            AtFlags::EACCESS,
+        )
+        .is_ok()
+    })
+}
+
+#[cfg(not(unix))]
+fn folders_writable(_dir: &Path, _incoming: &[String]) -> bool {
+    true
+}
+
+/// The bytes free for this user on the disk holding `dir`; `None` when it
+/// cannot be told (and then not checked).
+#[cfg(unix)]
+fn free_space(dir: &Path) -> Option<u64> {
+    let stat = rustix::fs::statvfs(dir).ok()?;
+    Some(stat.f_bavail.saturating_mul(stat.f_frsize))
+}
+
+#[cfg(windows)]
+fn free_space(dir: &Path) -> Option<u64> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
+    let wide: Vec<u16> = dir.as_os_str().encode_wide().chain([0]).collect();
+    let mut free = 0u64;
+    // SAFETY: `wide` is NUL-terminated and lives across the call; `free`
+    // is a live u64; the other two outputs may be null.
+    let ok = unsafe {
+        GetDiskFreeSpaceExW(
+            wide.as_ptr(),
+            &mut free,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        )
+    };
+    (ok != 0).then_some(free)
+}
+
+#[cfg(not(any(unix, windows)))]
+fn free_space(_dir: &Path) -> Option<u64> {
+    None
 }
 
 /// The filter names the git config keys define a smudge, clean or process
@@ -617,7 +761,13 @@ impl FreshGit for SystemGit {
         nul_separated(&out, &args)
     }
 
-    fn uses_filters(&self, dir: &Path, to: &str, deadline: Instant) -> Result<bool, FreshError> {
+    fn uses_filters(
+        &self,
+        dir: &Path,
+        to: &str,
+        incoming: &[String],
+        deadline: Instant,
+    ) -> Result<bool, FreshError> {
         let config = ["config", "-z", "--name-only", "--get-regexp", r"^filter\."];
         let done = self.bounded(dir, &config, &[], deadline)?;
         let keys = match done.status.code() {
@@ -629,13 +779,13 @@ impl FreshGit for SystemGit {
             return Ok(false);
         }
         let mut attributes = Vec::new();
+        // The checkout reads the incoming tree's `.gitattributes` too.
         let grep = [
             "grep",
             "-h",
             "-I",
             "-e",
             "filter=",
-            "HEAD",
             to,
             "--",
             ":(glob)**/.gitattributes",
@@ -646,12 +796,70 @@ impl FreshGit for SystemGit {
             Some(1) => {}
             code => return Err(failed(&grep, code, &done.stderr)),
         }
-        for file in self.attribute_files(dir, deadline)? {
-            if let Ok(bytes) = fs::read(&file) {
-                attributes.push(String::from_utf8_lossy(&bytes).into_owned());
+        // git's own view of every incoming path's attributes now.
+        if !incoming.is_empty() {
+            let mut check = vec![
+                "-c",
+                "core.quotePath=false",
+                "check-attr",
+                "-z",
+                "filter",
+                "--",
+            ];
+            check.extend(incoming.iter().map(String::as_str));
+            let out = self.checked(dir, &check, &[], deadline)?;
+            let fields = nul_separated(&out, &check)?;
+            for record in fields.chunks(3) {
+                if let [path, _, value] = record
+                    && !matches!(value.as_str(), "unspecified" | "unset" | "set")
+                {
+                    attributes.push(format!("{path} filter={value}"));
+                }
             }
         }
         Ok(filter_would_run(&attributes, &keys))
+    }
+
+    fn incoming_size(
+        &self,
+        dir: &Path,
+        to: &str,
+        incoming: &[String],
+        deadline: Instant,
+    ) -> Result<u64, FreshError> {
+        if incoming.is_empty() {
+            return Ok(0);
+        }
+        let mut args = vec![
+            "--literal-pathspecs",
+            "-c",
+            "core.quotePath=false",
+            "ls-tree",
+            "-r",
+            "-l",
+            "-z",
+            to,
+            "--",
+        ];
+        args.extend(incoming.iter().map(String::as_str));
+        let out = self.checked(dir, &args, &[], deadline)?;
+        // `<mode> <type> <object> <size>\t<path>`; `-` for a non-blob.
+        let total = nul_separated(&out, &args)?
+            .iter()
+            .filter_map(|entry| entry.split('\t').next()?.split_whitespace().nth(3))
+            .filter_map(|size| size.parse::<u64>().ok())
+            .fold(0u64, u64::saturating_add);
+        Ok(total)
+    }
+
+    fn long_paths(&self, dir: &Path, deadline: Instant) -> Result<bool, FreshError> {
+        let args = ["config", "--bool", "--get", "core.longpaths"];
+        let done = self.bounded(dir, &args, &[], deadline)?;
+        match done.status.code() {
+            Some(0) => Ok(done.stdout.trim_ascii() == b"true"),
+            Some(1) => Ok(false),
+            code => Err(failed(&args, code, &done.stderr)),
+        }
     }
 
     fn ignored(&self, dir: &Path, deadline: Instant) -> Result<Vec<String>, FreshError> {
@@ -695,39 +903,6 @@ impl FreshGit for SystemGit {
         } else {
             Err(failed(&args, done.status.code(), &done.stderr))
         }
-    }
-}
-
-impl SystemGit {
-    /// The attribute files outside the trees: `<git dir>/info/attributes`
-    /// and the `core.attributesFile` (when unset, git's default,
-    /// `$XDG_CONFIG_HOME/git/attributes` or `~/.config/git/attributes`).
-    fn attribute_files(&self, dir: &Path, deadline: Instant) -> Result<Vec<PathBuf>, FreshError> {
-        let info = ["rev-parse", "--git-path", "info/attributes"];
-        let out = self.checked(dir, &info, &[], deadline)?;
-        let info = String::from_utf8(out).map_err(|_| unreadable(&info, NOT_UTF8))?;
-        let mut files = vec![dir.join(info.trim_end_matches(['\r', '\n']))];
-        let global = ["config", "--path", "--get", "core.attributesFile"];
-        let done = self.bounded(dir, &global, &[], deadline)?;
-        match done.status.code() {
-            Some(0) => {
-                let path =
-                    String::from_utf8(done.stdout).map_err(|_| unreadable(&global, NOT_UTF8))?;
-                files.push(dir.join(path.trim_end_matches(['\r', '\n'])));
-            }
-            Some(1) => {
-                let xdg = self.env_var("XDG_CONFIG_HOME").filter(|v| !v.is_empty());
-                let home = self.env_var("HOME").filter(|v| !v.is_empty());
-                let base = xdg
-                    .map(PathBuf::from)
-                    .or_else(|| home.map(|h| PathBuf::from(h).join(".config")));
-                if let Some(base) = base {
-                    files.push(base.join("git").join("attributes"));
-                }
-            }
-            code => return Err(failed(&global, code, &done.stderr)),
-        }
-        Ok(files)
     }
 }
 
