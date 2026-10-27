@@ -50,7 +50,7 @@ pub const FAST_FORWARD_RESERVE: Duration = Duration::from_secs(1);
 
 /// The markers of an operation in progress, relative to the git directory:
 /// git's, and an open `kluris sync` conflict waiting for `kluris resolve`.
-const IN_PROGRESS: [&str; 6] = [
+pub(super) const IN_PROGRESS: [&str; 6] = [
     "MERGE_HEAD",
     "rebase-merge",
     "rebase-apply",

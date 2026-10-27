@@ -53,13 +53,17 @@ fn heads(local: &str, remote: &str) -> Heads {
     }
 }
 
-/// Answers each probe from a script (the last answer repeats), and
-/// `settled` with what the last sync left.
+/// Answers each probe from a script (the last answer repeats), `settled`
+/// with what the last sync left, and `local_state` (what `git status` and
+/// the operation markers say) as a function of the tick (the probes made
+/// so far), counting its calls.
 struct FakeGit {
     probes: RefCell<VecDeque<Probe>>,
     last: RefCell<Probe>,
     settled: RefCell<Option<Heads>>,
     probed: RefCell<usize>,
+    local: Box<dyn Fn(usize) -> Option<String>>,
+    local_calls: RefCell<usize>,
 }
 
 impl FakeGit {
@@ -69,7 +73,15 @@ impl FakeGit {
             last: RefCell::new(Probe::Offline),
             settled: RefCell::new(None),
             probed: RefCell::new(0),
+            local: Box::new(|_| Some(String::new())),
+            local_calls: RefCell::new(0),
         }
+    }
+
+    /// The local state at each tick.
+    fn with_local(mut self, local: impl Fn(usize) -> Option<String> + 'static) -> FakeGit {
+        self.local = Box::new(local);
+        self
     }
 }
 
@@ -84,6 +96,11 @@ impl WatchGit for FakeGit {
 
     fn settled(&self, _root: &Path) -> Option<Heads> {
         self.settled.borrow().clone()
+    }
+
+    fn local_state(&self, _root: &Path, _deadline: Instant) -> Option<String> {
+        *self.local_calls.borrow_mut() += 1;
+        (self.local)(*self.probed.borrow())
     }
 }
 
@@ -123,6 +140,8 @@ impl Clock for FakeClock<'_> {
 #[derive(Default)]
 struct Log {
     syncs: Vec<String>,
+    /// The tick (1-based) each sync ran in.
+    sync_ticks: Vec<usize>,
     reports: Vec<String>,
 }
 
@@ -175,6 +194,7 @@ fn run_loop(
     let mut last = Ok(SyncReport::default());
     let mut n = 0;
     let mut syncs = Vec::new();
+    let mut sync_ticks = Vec::new();
     let mut reports = Vec::new();
     watch::watch(
         &brains,
@@ -188,6 +208,7 @@ fn run_loop(
         &mut |brain| {
             n += 1;
             syncs.push(brain.name.to_string());
+            sync_ticks.push(*git.probed.borrow());
             if let Some(next) = outcomes.pop_front() {
                 last = next;
             }
@@ -197,6 +218,7 @@ fn run_loop(
         &mut |brain, report| reports.push(format!("{}: {}", brain.name, report_line(&report))),
     );
     log.syncs = syncs;
+    log.sync_ticks = sync_ticks;
     log.reports = reports;
     // Each tick waits one interval, in slices, before the next.
     assert_eq!(clock.waited(), interval * ticks as u32);
@@ -366,6 +388,144 @@ fn a_block_is_printed_once_and_not_retried_until_a_head_moves() {
     let log = run_loop(&git, 4, vec![Ok(blocked())], |_| Some(heads("L1", "R1")));
     assert_eq!(log.syncs, ["acme", "acme"]);
     assert_eq!(log.reports, ["acme: blocked", "acme: blocked"]);
+}
+
+// A brain a person must see to is looked at again each tick (one status
+// call) and synced once the reason is gone, though no head moved (T-145).
+
+/// What `git status --porcelain` says with notes/first.md changed.
+const DIRTY: &str = " M notes/first.md";
+
+#[test]
+fn a_block_that_clears_without_a_head_moving_syncs_again() {
+    // A teammate's change waits behind an uncommitted edit; at tick 4 the
+    // edit is undone (no head moved).
+    // After the pull at tick 4, HEAD is the remote's.
+    let mut probes = vec![Probe::Heads(heads("L1", "R2")); 4];
+    probes.push(Probe::Heads(heads("R2", "R2")));
+    let git = FakeGit::new(probes).with_local(|tick| {
+        Some(if tick < 4 {
+            DIRTY.into()
+        } else {
+            String::new()
+        })
+    });
+    let log = run_loop(&git, 5, vec![Ok(blocked()), Ok(pulled())], |n| match n {
+        1 => Some(heads("L1", "R1")),
+        _ => Some(heads("R2", "R2")),
+    });
+    assert_eq!(log.sync_ticks, [1, 4]);
+    assert_eq!(log.reports, ["acme: blocked", "acme: pulled"]);
+    // Once after the block, then once a tick (2, 3, 4) until it cleared;
+    // none once the brain is in sync.
+    assert_eq!(*git.local_calls.borrow(), 4);
+}
+
+#[test]
+fn a_block_that_changes_but_stays_is_synced_again_and_printed_once() {
+    // Another file is edited at tick 3: the brain is synced again, still
+    // blocked by the same file, and nothing new is printed.
+    let git = FakeGit::new(vec![Probe::Heads(heads("L1", "R2"))]).with_local(|tick| {
+        Some(if tick < 3 {
+            DIRTY.into()
+        } else {
+            format!("{DIRTY}\0?? notes/new.md")
+        })
+    });
+    let log = run_loop(&git, 5, vec![Ok(blocked())], |_| Some(heads("L1", "R1")));
+    assert_eq!(log.sync_ticks, [1, 3]);
+    assert_eq!(log.reports, ["acme: blocked"]);
+}
+
+#[test]
+fn a_brain_in_sync_runs_no_status_call() {
+    let git = FakeGit::new(vec![Probe::Heads(heads("L1", "R1"))]);
+    let log = run_loop(&git, 4, vec![Ok(up_to_date())], |_| Some(heads("L1", "R1")));
+    assert_eq!(log.sync_ticks, [1]);
+    assert_eq!(*git.local_calls.borrow(), 0);
+}
+
+#[test]
+fn an_open_conflict_cleared_without_a_head_moving_syncs_again() {
+    // The watch starts on a brain with an open conflict; at tick 3 it is
+    // dropped (`kluris resolve --abort` removes its record; no head moves).
+    let open = "it has an open sync conflict; settle it with `kluris resolve` (recorded in .git/kluris-sync/pending.json)";
+    let git = FakeGit::new(vec![Probe::Heads(heads("L1", "R1"))]).with_local(|tick| {
+        Some(if tick < 3 {
+            "kluris-sync/pending.json".into()
+        } else {
+            String::new()
+        })
+    });
+    let log = run_loop(&git, 4, vec![Err(open.into()), Ok(up_to_date())], |_| {
+        Some(heads("L1", "R1"))
+    });
+    assert_eq!(log.sync_ticks, [1, 3]);
+    assert_eq!(
+        log.reports,
+        [format!("acme: refused: {open}"), "acme: up to date".into()]
+    );
+}
+
+#[test]
+fn a_refusal_that_stays_is_printed_once() {
+    // The rebase goes on (its files change), the refusal stays.
+    let why = "a rebase is in progress; finish or abort it first";
+    let git = FakeGit::new(vec![Probe::Heads(heads("L1", "R1"))])
+        .with_local(|tick| Some(format!("rebase-merge {tick}")));
+    let log = run_loop(&git, 4, vec![Err(why.into())], |_| None);
+    assert_eq!(log.sync_ticks, [1, 2, 3, 4]);
+    assert_eq!(log.reports, [format!("acme: refused: {why}")]);
+}
+
+#[test]
+fn a_block_that_clears_while_offline_syncs_once_the_remote_answers() {
+    // Blocked; then the remote goes away (ticks 2-3: no status call, as a
+    // sync could not run); the edit is undone meanwhile; back at tick 4.
+    let git = FakeGit::new(vec![
+        Probe::Heads(heads("L1", "R2")),
+        Probe::Offline,
+        Probe::Offline,
+        Probe::Heads(heads("L1", "R2")),
+        // After the pull.
+        Probe::Heads(heads("R2", "R2")),
+    ])
+    .with_local(|tick| {
+        Some(if tick < 3 {
+            DIRTY.into()
+        } else {
+            String::new()
+        })
+    });
+    let log = run_loop(&git, 5, vec![Ok(blocked()), Ok(pulled())], |n| match n {
+        1 => Some(heads("L1", "R1")),
+        _ => Some(heads("R2", "R2")),
+    });
+    assert_eq!(log.sync_ticks, [1, 4]);
+    assert_eq!(log.reports, ["acme: blocked", "acme: pulled"]);
+    // After the block, then at tick 4.
+    assert_eq!(*git.local_calls.borrow(), 2);
+}
+
+#[test]
+fn a_sync_that_found_the_remote_away_is_tried_again_once_it_answers() {
+    // The probe answered but the sync's fetch did not (quiet); the heads
+    // stay as they are; the next ticks sync again until it gets through.
+    // After the push at tick 3, the remote has the local commit.
+    let mut probes = vec![Probe::Heads(heads("L2", "R1")); 3];
+    probes.push(Probe::Heads(heads("L2", "L2")));
+    let git = FakeGit::new(probes);
+    let log = run_loop(
+        &git,
+        4,
+        vec![Ok(offline()), Ok(offline()), Ok(pushed())],
+        |n| match n {
+            3 => Some(heads("L2", "L2")),
+            _ => None,
+        },
+    );
+    assert_eq!(log.sync_ticks, [1, 2, 3]);
+    assert_eq!(log.reports, ["acme: pushed"]);
 }
 
 #[test]
@@ -996,6 +1156,33 @@ mod unix_signals {
         let next = watching.line();
         assert!(next.ends_with("acme: pulled"), "{next}");
         assert!(w.root().join("notes").join("third.md").exists());
+        watching.signal_group("INT");
+        let (code, err) = watching.exit(Duration::from_secs(5));
+        assert_eq!(code, Some(0), "{err}");
+    }
+
+    /// The review's case (T-145): an uncommitted edit blocks a teammate's
+    /// change; once the edit is undone (no head moves) the next tick pulls.
+    #[test]
+    fn a_block_that_clears_is_pulled_on_the_next_tick() {
+        let w = World::new();
+        w.teammate_pushes("notes/first.md");
+        w.write("notes/first.md", &NEURON.replace("One.", "One, mine."));
+        let watching = Watching::start(&w, &[]);
+        let first = watching.line();
+        assert!(
+            first.contains("acme: not synced, uncommitted changes are in the way: notes/first.md"),
+            "{first}"
+        );
+        w.git(&w.root(), &["checkout", "--", "notes/first.md"]);
+        let next = watching.line();
+        assert!(next.ends_with("acme: pulled"), "{next}");
+        assert!(
+            fs::read_to_string(w.root().join("notes").join("first.md"))
+                .unwrap()
+                .contains("# Teammate"),
+            "the teammate's change did not land"
+        );
         watching.signal_group("INT");
         let (code, err) = watching.exit(Duration::from_secs(5));
         assert_eq!(code, Some(0), "{err}");

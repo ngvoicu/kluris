@@ -390,8 +390,10 @@ whether the remote's branch moved (`git ls-remote`, which never asks for
 credentials) or you made a commit, and when either did it runs one
 `kluris sync` for that brain, with the same rules, and prints one line
 (`--json`: the document `kluris sync --json` prints, one per line). A
-conflict or a block is printed once; that brain then waits until its branch
-or the remote moves (`kluris resolve`, your commit, a teammate's push).
+conflict, a block or a refusal is printed once; each tick that brain is
+looked at again (one `git status`), and it is synced as soon as its branch
+or the remote moves (`kluris resolve`, your commit, a teammate's push) or
+the cause clears without a commit (an edit undone, a rebase aborted).
 Offline it stays quiet and picks up when the remote answers again. Ctrl-C
 lets a sync in progress finish, then exits with 0.
 

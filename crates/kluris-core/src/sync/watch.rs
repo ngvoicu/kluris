@@ -10,9 +10,13 @@
 //! - after a clean sync, what it settled to ([`WatchGit::settled`]: `HEAD`
 //!   and the upstream's remote-tracking ref), so its own push is not a
 //!   change the next tick;
-//! - after a conflict, a block or a refusal, the heads probed before it: it
-//!   is reported once and not synced again until one of them moves (a
-//!   `kluris resolve`, a commit, a teammate's push);
+//! - after a conflict, a block or a refusal, the heads probed before it,
+//!   and its local state ([`WatchGit::local_state`]: one `git status` and
+//!   the operation markers). It is reported once. Each tick it is synced
+//!   again when a head moved (a `kluris resolve`, a commit, a teammate's
+//!   push) or its local state changed (an edit undone, a rebase aborted, an
+//!   open conflict dropped), a sync that finds the same reason after a
+//!   local change printing nothing;
 //! - after a sync that found the remote unreachable, where it was: the
 //!   next tick tries again.
 //!
@@ -23,12 +27,13 @@
 //! stop is seen at once. A stop ends the loop between two brains, never
 //! during a sync.
 
-use std::path::Path;
+use std::fs;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use super::SyncReport;
-use super::fresh::{FreshError, prompt_env};
+use super::fresh::{FreshError, IN_PROGRESS, prompt_env};
 use super::plumbing::SyncGit;
 use crate::git::{Git, Plumbing, SystemGit};
 
@@ -73,6 +78,13 @@ pub trait WatchGit {
     /// After a sync: `HEAD` and the upstream's remote-tracking ref; `None`
     /// when either cannot be read.
     fn settled(&self, root: &Path) -> Option<Heads>;
+
+    /// What a person changes to clear a block or a refusal, without
+    /// moving a head: the files `git status` lists (untracked included)
+    /// and which operation markers exist (a merge, rebase, cherry-pick or
+    /// revert in progress, an open sync conflict). Compared from tick to
+    /// tick; `None` when it cannot be read. One cheap call, never a sync.
+    fn local_state(&self, root: &Path, deadline: Instant) -> Option<String>;
 }
 
 /// The time the loop waits by.
@@ -139,11 +151,40 @@ struct State {
     left_at: Option<Heads>,
     /// "No upstream" was reported and nothing changed since.
     told_no_upstream: bool,
+    /// The brain waits for a person: why, and its local state then.
+    parked: Option<Parked>,
+}
+
+/// A conflict, a block or a refusal, and the local state it was found in.
+struct Parked {
+    reason: Reason,
+    local: Option<String>,
+}
+
+/// What a person must see to, as it was reported.
+#[derive(PartialEq)]
+enum Reason {
+    Conflicts(Vec<super::Conflict>),
+    Blocked(Vec<String>),
+    Refused(String),
+}
+
+impl Reason {
+    /// The reason of a parked outcome ([`parked`]).
+    fn of(outcome: &Result<SyncReport, String>) -> Reason {
+        match outcome {
+            Ok(report) if !report.conflicts.is_empty() => {
+                Reason::Conflicts(report.conflicts.clone())
+            }
+            Ok(report) => Reason::Blocked(report.blocked.clone()),
+            Err(why) => Reason::Refused(why.clone()),
+        }
+    }
 }
 
 /// Whether a sync's outcome is a problem a person must see to (a conflict,
-/// a block, a refusal or a failure): the brain is not synced again until a
-/// head moves.
+/// a block, a refusal or a failure): the brain is synced again once a head
+/// moves or its local state changes.
 fn parked(outcome: &Result<SyncReport, String>) -> bool {
     match outcome {
         Ok(report) => !report.conflicts.is_empty() || !report.blocked.is_empty(),
@@ -222,17 +263,39 @@ fn tick(
         },
     };
     state.told_no_upstream = false;
-    if state.left_at.as_ref() == Some(&probed) {
-        return;
+    let deadline = || clock.now() + request.probe_time_limit;
+    // Neither head moved: a brain in sync rests; one that waits for a
+    // person is synced again only if its local state changed.
+    let recheck = state.left_at.as_ref() == Some(&probed);
+    if recheck {
+        let Some(parked) = &state.parked else {
+            return;
+        };
+        if git.local_state(brain.root, deadline()) == parked.local {
+            return;
+        }
     }
     let outcome = sync(brain);
     if quiet(&outcome) {
         return;
     }
+    if parked(&outcome) {
+        let reason = Reason::of(&outcome);
+        // A recheck that finds the same reason says nothing new.
+        let same = recheck && state.parked.as_ref().is_some_and(|p| p.reason == reason);
+        if !same {
+            report(brain, Report::Synced(&outcome));
+        }
+        state.parked = Some(Parked {
+            reason,
+            local: git.local_state(brain.root, deadline()),
+        });
+        state.left_at = Some(probed);
+        return;
+    }
+    state.parked = None;
     report(brain, Report::Synced(&outcome));
-    state.left_at = if parked(&outcome) {
-        Some(probed)
-    } else if matches!(&outcome, Ok(r) if r.offline) {
+    state.left_at = if matches!(&outcome, Ok(r) if r.offline) {
         // Pulled, but the push found the remote unreachable: try again.
         state.left_at.take()
     } else {
@@ -294,4 +357,46 @@ impl WatchGit for SystemGit {
         let remote = self.rev_parse(&repo, &tracking.refname).ok()?;
         Some(Heads { local, remote })
     }
+
+    fn local_state(&self, root: &Path, deadline: Instant) -> Option<String> {
+        let args = [
+            "--no-optional-locks",
+            "-c",
+            "core.fsmonitor=false",
+            "status",
+            "--porcelain=v1",
+            "-z",
+            "--untracked-files=all",
+        ];
+        let out = self.checked(root, &args, &[], deadline).ok()?;
+        let mut state = String::from_utf8_lossy(&out).into_owned();
+        if let Some(dir) = git_dir(root) {
+            for marker in IN_PROGRESS {
+                let path = marker.split('/').fold(dir.clone(), |p, part| p.join(part));
+                if fs::symlink_metadata(path).is_ok() {
+                    state.push('\0');
+                    state.push_str(marker);
+                }
+            }
+        }
+        Some(state)
+    }
+}
+
+/// The git directory of a brain at the root of its work tree, read from
+/// its `.git` (a folder, or a linked worktree's `gitdir:` file) without
+/// running git: every operation marker and an open sync conflict are in it
+/// (`git rev-parse --git-path` gives the same folder for each).
+fn git_dir(root: &Path) -> Option<PathBuf> {
+    let dot = root.join(".git");
+    if fs::metadata(&dot).ok()?.is_dir() {
+        return Some(dot);
+    }
+    let text = fs::read_to_string(&dot).ok()?;
+    let path = PathBuf::from(text.lines().next()?.strip_prefix("gitdir:")?.trim());
+    Some(if path.is_absolute() {
+        path
+    } else {
+        root.join(path)
+    })
 }

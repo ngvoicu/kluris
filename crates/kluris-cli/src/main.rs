@@ -492,9 +492,10 @@ repository's pre-merge-commit, post-merge and pre-push hooks run \
 least 5) it asks the remote what its branch points at (git ls-remote, \
 never prompting) and looks for new local commits, and when either changed \
 runs one sync of that brain, printed as one line (with --json, the \
-document kluris sync --json prints). A conflict or a block is printed once, \
-and that brain waits until its branch or the remote moves; offline is \
-quiet. Ctrl-C (or SIGTERM) lets a sync in progress finish, then exits 0.
+document kluris sync --json prints). A conflict, a block or a refusal is \
+printed once; that brain is looked at again each tick (git status) and \
+synced once its branch or the remote moves or the cause clears (an edit \
+undone, a rebase aborted); offline is quiet. Ctrl-C (or SIGTERM) lets a sync in progress finish, then exits 0.
 
 --install-service writes a per-user service that runs `kluris sync --watch \
 --brain NAME` from login on and starts it (a launchd agent on macOS, a \
