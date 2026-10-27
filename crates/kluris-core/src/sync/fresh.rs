@@ -40,15 +40,26 @@
 //!   one opened between that check and git's write is a race left open. A
 //!   failing `post-merge` hook runs after the fast-forward is whole and
 //!   changes nothing.
-//! - A started fast-forward that still fails (git exits non-zero) is
-//!   [`Fresh::PartlyUpdated`], which the command reports in one stderr line
-//!   ([`Fresh::report`]), so a mixed tree is never silent.
+//!   Nor when a file it replaces or deletes, or the folder it writes in, is
+//!   immutable or append-only ([`locked_by_flags`]: macOS `uchg`, `uappnd`,
+//!   `schg`, `sappnd`; Linux `chattr +i`, `+a`).
+//! - The safety net: a started fast-forward that still fails (git exits
+//!   non-zero) is rolled back. It only ever starts on a clean tree with
+//!   nothing in the way, so every incoming path it changed is put back to
+//!   HEAD (`git reset -q HEAD -- <paths>`, then `git checkout-index -f -u
+//!   -- <paths HEAD has>`; plumbing, so no hook runs), each new file and
+//!   folder it made is removed, and an `index.lock` it left is removed; then
+//!   HEAD, the index entries and the bytes of those paths are checked
+//!   against the snapshot taken right before it. Done: [`Fresh::RolledBack`];
+//!   not: [`Fresh::PartlyUpdated`] with the paths still changed. Either is
+//!   one stderr line ([`Fresh::report`]), so a failure is never silent.
 //! - Never a prompt: [`prompt_env`] for the fetch.
 //! - Off with `KLURIS_NO_AUTO_SYNC=1` or `sync: {auto_fetch: false}` in the
 //!   brain's `kluris.yml`.
 //!
 //! Git runs behind [`FreshGit`] so the decisions can be tested with a fake.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -87,8 +98,9 @@ pub(super) const IN_PROGRESS: [&str; 6] = [
     super::PENDING,
 ];
 
-/// What the step did. Never shown: the read goes on the same way.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// What the step did. Never shown but for a failed fast-forward
+/// ([`Fresh::report`]): the read goes on the same way.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Fresh {
     /// `KLURIS_NO_AUTO_SYNC=1` or `sync.auto_fetch: false`.
     Disabled,
@@ -127,24 +139,53 @@ pub enum Fresh {
     /// Fetched only (Windows): another program holds a file the
     /// fast-forward replaces or deletes.
     InUse,
+    /// Fetched only: a file the fast-forward replaces or deletes, or a
+    /// folder it writes in, is immutable or append-only.
+    Locked,
     /// The branch moved to its upstream.
     FastForwarded,
-    /// The fast-forward started and git exited non-zero: the work tree may
-    /// be partly updated.
-    PartlyUpdated,
+    /// The fast-forward started, git exited non-zero, and everything it
+    /// changed was put back: the brain is as it was.
+    RolledBack,
+    /// The fast-forward started, git exited non-zero, and these paths could
+    /// not be put back.
+    PartlyUpdated(Vec<String>),
     /// Another git step failed.
     Failed,
 }
 
+/// The most paths a report names.
+const REPORTED_PATHS: usize = 10;
+
 impl Fresh {
     /// The one stderr line a command prints after this step: only for a
-    /// brain left partly updated.
+    /// fast-forward that failed.
     pub fn report(&self, brain: &str) -> Option<String> {
-        (*self == Fresh::PartlyUpdated).then(|| {
-            format!(
-                "kluris: {brain} was only partly updated from its remote; run `kluris sync --brain {brain}` to finish"
-            )
-        })
+        match self {
+            Fresh::RolledBack => Some(format!(
+                "kluris: {brain} could not be updated from its remote; nothing changed. Run `kluris sync --brain {brain}` to see why"
+            )),
+            Fresh::PartlyUpdated(paths) => {
+                let mut named = paths
+                    .iter()
+                    .take(REPORTED_PATHS)
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                if paths.len() > REPORTED_PATHS {
+                    named.push_str(&format!(" and {} more", paths.len() - REPORTED_PATHS));
+                }
+                let named = if named.is_empty() {
+                    String::new()
+                } else {
+                    format!(" ({named})")
+                };
+                Some(format!(
+                    "kluris: {brain} was only partly updated from its remote{named}; run `kluris sync --brain {brain}` to finish"
+                ))
+            }
+            _ => None,
+        }
     }
 }
 
@@ -246,6 +287,29 @@ pub trait FreshGit {
     /// never over an ignored file and without autostash. No deadline: once
     /// started it runs to its end.
     fn fast_forward(&self, dir: &Path, to: &str) -> Result<(), FreshError>;
+
+    /// HEAD's commit.
+    fn head_commit(&self, dir: &Path, deadline: Instant) -> Result<String, FreshError>;
+
+    /// The index entries of `paths` (`git ls-files -s -z`: mode, blob,
+    /// stage and path, without stat data); nothing for no paths.
+    fn index_entries(
+        &self,
+        dir: &Path,
+        paths: &[String],
+        deadline: Instant,
+    ) -> Result<Vec<u8>, FreshError>;
+
+    /// Put `all` back to HEAD in the index (a path HEAD lacks leaves it)
+    /// and `in_head` in the work tree too, with plumbing (no hook runs).
+    /// No deadline.
+    fn restore(&self, dir: &Path, in_head: &[String], all: &[String]) -> Result<(), FreshError>;
+
+    /// Whether a file the fast-forward replaces or deletes, or the folder
+    /// it writes in, is immutable or append-only ([`locked_by_flags`]).
+    fn locked(&self, dir: &Path, incoming: &[String]) -> bool {
+        locked_by_flags(dir, incoming)
+    }
 }
 
 /// One fresh read of the brain at `brain`.
@@ -307,7 +371,7 @@ fn ended(error: FreshError) -> Fresh {
 
 fn step(git: &impl FreshGit, req: &FreshRequest, deadline: Instant) -> Result<Fresh, Fresh> {
     let dir = req.brain;
-    let mut names = vec![STAMP];
+    let mut names = vec![STAMP, "index.lock"];
     names.extend(IN_PROGRESS);
     let Some(tree) = git.git_paths(dir, &names, deadline).map_err(ended)? else {
         return Ok(Fresh::NotARepo);
@@ -315,7 +379,7 @@ fn step(git: &impl FreshGit, req: &FreshRequest, deadline: Instant) -> Result<Fr
     if !tree.prefix.is_empty() {
         return Ok(Fresh::Nested);
     }
-    let Some((stamp, markers)) = tree.paths.split_first() else {
+    let [stamp, index_lock, markers @ ..] = tree.paths.as_slice() else {
         return Ok(Fresh::Failed);
     };
     let now = unix_seconds(req.now);
@@ -380,6 +444,9 @@ fn step(git: &impl FreshGit, req: &FreshRequest, deadline: Instant) -> Result<Fr
     if !folders_writable(dir, &incoming) {
         return Ok(Fresh::Unwritable);
     }
+    if git.locked(dir, &incoming) {
+        return Ok(Fresh::Locked);
+    }
     let size = git
         .incoming_size(dir, theirs, &incoming, deadline)
         .map_err(ended)?;
@@ -387,6 +454,14 @@ fn step(git: &impl FreshGit, req: &FreshRequest, deadline: Instant) -> Result<Fr
     if free_space(dir).is_some_and(|free| !fits_on_disk(size, files, free)) {
         return Ok(Fresh::NoSpace);
     }
+    // What a rollback puts back, taken before the last checks.
+    let before = Before {
+        head: git.head_commit(dir, deadline).map_err(ended)?,
+        index: index_by_path(&git.index_entries(dir, &incoming, deadline).map_err(ended)?),
+        shapes: incoming.iter().map(|p| shape(&dir.join(p))).collect(),
+        new_folders: missing_folders(dir, &incoming),
+        lock_existed: fs::symlink_metadata(index_lock).is_ok(),
+    };
     let ignored = git.ignored(dir, deadline).map_err(ended)?;
     if ignored_in_the_way(&ignored, &incoming) {
         return Ok(Fresh::IgnoredInTheWay);
@@ -396,9 +471,254 @@ fn step(git: &impl FreshGit, req: &FreshRequest, deadline: Instant) -> Result<Fr
     }
     match git.fast_forward(dir, theirs) {
         Ok(()) => Ok(Fresh::FastForwarded),
-        Err(FreshError::Failed(GitError { code: Some(_), .. })) => Ok(Fresh::PartlyUpdated),
+        Err(FreshError::Failed(GitError { code: Some(_), .. })) => {
+            Ok(roll_back(git, dir, &incoming, index_lock, &before))
+        }
         Err(e) => Err(ended(e)),
     }
+}
+
+/// The brain right before a fast-forward, for its rollback: HEAD, and for
+/// each incoming path its index entries and its shape in the work tree.
+struct Before {
+    head: String,
+    index: BTreeMap<String, Vec<u8>>,
+    /// In the order of the incoming paths.
+    shapes: Vec<Shape>,
+    /// Folders above new paths that did not exist, deepest first.
+    new_folders: Vec<PathBuf>,
+    lock_existed: bool,
+}
+
+/// What a path is in the work tree: enough to tell its bytes, mode and
+/// kind changed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Shape {
+    Absent,
+    File {
+        len: u64,
+        hash: u64,
+        exec: bool,
+    },
+    Link(PathBuf),
+    Folder,
+    /// A file that cannot be read: its length only.
+    Unreadable(u64),
+}
+
+fn shape(path: &Path) -> Shape {
+    use std::hash::Hasher;
+    use std::io::Read;
+    let Ok(meta) = fs::symlink_metadata(path) else {
+        return Shape::Absent;
+    };
+    if meta.file_type().is_symlink() {
+        return fs::read_link(path).map_or(Shape::Unreadable(0), Shape::Link);
+    }
+    if meta.is_dir() {
+        return Shape::Folder;
+    }
+    let Ok(mut file) = fs::File::open(path) else {
+        return Shape::Unreadable(meta.len());
+    };
+    let mut hasher = std::hash::DefaultHasher::new();
+    let mut buf = vec![0u8; 64 * 1024];
+    let mut len = 0u64;
+    loop {
+        match file.read(&mut buf) {
+            Ok(0) => break,
+            Ok(n) => {
+                hasher.write(&buf[..n]);
+                len = len.saturating_add(u64::try_from(n).unwrap_or(u64::MAX));
+            }
+            Err(_) => return Shape::Unreadable(meta.len()),
+        }
+    }
+    Shape::File {
+        len,
+        hash: hasher.finish(),
+        exec: executable(&meta),
+    }
+}
+
+#[cfg(unix)]
+fn executable(meta: &fs::Metadata) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    meta.permissions().mode() & 0o111 != 0
+}
+
+#[cfg(not(unix))]
+fn executable(_meta: &fs::Metadata) -> bool {
+    false
+}
+
+/// The folders above the `incoming` paths that do not exist (and so a
+/// checkout would make), deepest first.
+fn missing_folders(dir: &Path, incoming: &[String]) -> Vec<PathBuf> {
+    let mut missing = BTreeSet::new();
+    for rel in incoming {
+        let mut folder = dir.join(rel);
+        while folder.pop() && folder != dir && folder.starts_with(dir) {
+            if fs::symlink_metadata(&folder).is_ok() {
+                break;
+            }
+            missing.insert(folder.clone());
+        }
+    }
+    let mut missing: Vec<PathBuf> = missing.into_iter().collect();
+    missing.sort_by_key(|f| std::cmp::Reverse(f.components().count()));
+    missing
+}
+
+/// `git ls-files -s -z` entries by path (`<mode> <blob> <stage>\t<path>`;
+/// a path in conflict has one entry per stage).
+fn index_by_path(out: &[u8]) -> BTreeMap<String, Vec<u8>> {
+    let mut entries: BTreeMap<String, Vec<u8>> = BTreeMap::new();
+    for record in out.split(|b| *b == 0).filter(|r| !r.is_empty()) {
+        let Some(tab) = record.iter().position(|b| *b == b'\t') else {
+            continue;
+        };
+        let path = String::from_utf8_lossy(&record[tab + 1..]).into_owned();
+        let entry = entries.entry(path).or_default();
+        entry.extend_from_slice(&record[..tab]);
+        entry.push(0);
+    }
+    entries
+}
+
+/// Undo a fast-forward that git ended non-zero (see the module
+/// documentation): no deadline, as nothing here may stop halfway.
+fn roll_back(
+    git: &impl FreshGit,
+    dir: &Path,
+    incoming: &[String],
+    index_lock: &Path,
+    before: &Before,
+) -> Fresh {
+    let unbounded = Instant::now() + Duration::from_secs(24 * 60 * 60);
+    let head_kept = git
+        .head_commit(dir, unbounded)
+        .is_ok_and(|h| h == before.head);
+    let changed = |index: &BTreeMap<String, Vec<u8>>| -> Vec<String> {
+        incoming
+            .iter()
+            .zip(&before.shapes)
+            .filter(|(path, was)| {
+                shape(&dir.join(path)) != **was || index.get(*path) != before.index.get(*path)
+            })
+            .map(|(path, _)| path.clone())
+            .collect()
+    };
+    let index_now = |_: ()| {
+        git.index_entries(dir, incoming, unbounded)
+            .map(|out| index_by_path(&out))
+    };
+    if !head_kept {
+        // The fast-forward moved HEAD: there is no "before" to go back to.
+        let index = index_now(()).unwrap_or_default();
+        return Fresh::PartlyUpdated(changed(&index));
+    }
+    if !before.lock_existed && fs::symlink_metadata(index_lock).is_ok() {
+        // git has exited, so the lock is the one it left.
+        let _ = fs::remove_file(index_lock);
+    }
+    let differing = match index_now(()) {
+        Ok(index) => changed(&index),
+        Err(_) => incoming.to_vec(),
+    };
+    if !differing.is_empty() {
+        let in_head: Vec<String> = differing
+            .iter()
+            .filter(|p| before.index.contains_key(*p))
+            .cloned()
+            .collect();
+        let _ = git.restore(dir, &in_head, &differing);
+    }
+    for (path, was) in incoming.iter().zip(&before.shapes) {
+        if *was != Shape::Absent {
+            continue;
+        }
+        let path = dir.join(path);
+        match fs::symlink_metadata(&path) {
+            Ok(meta) if meta.is_dir() => {
+                let _ = fs::remove_dir(&path);
+            }
+            Ok(_) => {
+                let _ = fs::remove_file(&path);
+            }
+            Err(_) => {}
+        }
+    }
+    for folder in &before.new_folders {
+        let _ = fs::remove_dir(folder);
+    }
+    let mut left = match index_now(()) {
+        Ok(index) => changed(&index),
+        Err(_) => incoming.to_vec(),
+    };
+    for folder in &before.new_folders {
+        if fs::symlink_metadata(folder).is_ok()
+            && let Ok(rel) = folder.strip_prefix(dir)
+        {
+            left.push(rel.to_string_lossy().replace('\\', "/"));
+        }
+    }
+    let lock_kept = fs::symlink_metadata(index_lock).is_ok() == before.lock_existed;
+    let head_kept = git
+        .head_commit(dir, unbounded)
+        .is_ok_and(|h| h == before.head);
+    if left.is_empty() && lock_kept && head_kept {
+        Fresh::RolledBack
+    } else {
+        Fresh::PartlyUpdated(left)
+    }
+}
+
+/// Whether a file the fast-forward replaces or deletes (each existing one
+/// of `incoming`), or the nearest existing folder above each incoming path
+/// (where it writes, adds or deletes), is immutable or append-only: macOS
+/// `uchg`, `uappnd`, `schg`, `sappnd` ([`crate::fileops::locking_flags`],
+/// as `self-uninstall` reads them); Linux the `FS_IMMUTABLE_FL` and
+/// `FS_APPEND_FL` inode flags (`chattr +i`, `+a`). Elsewhere `false`.
+pub fn locked_by_flags(dir: &Path, incoming: &[String]) -> bool {
+    incoming.iter().any(|rel| {
+        let target = dir.join(rel);
+        let mut folder = target.parent().unwrap_or(dir).to_path_buf();
+        while folder != dir && fs::symlink_metadata(&folder).is_err() {
+            if !folder.pop() {
+                break;
+            }
+        }
+        flagged(&target) || flagged(&folder)
+    })
+}
+
+#[cfg(target_os = "macos")]
+fn flagged(path: &Path) -> bool {
+    fs::symlink_metadata(path).is_ok_and(|meta| !crate::fileops::locking_flags(&meta).is_empty())
+}
+
+#[cfg(target_os = "linux")]
+fn flagged(path: &Path) -> bool {
+    use rustix::fs::{IFlags, Mode, OFlags, ioctl_getflags, open};
+    // Only a regular file or a folder is opened (never a FIFO or a device),
+    // without following a link; one that cannot be opened is not seen.
+    let Ok(meta) = fs::symlink_metadata(path) else {
+        return false;
+    };
+    if !(meta.is_file() || meta.is_dir()) {
+        return false;
+    }
+    let flags = OFlags::RDONLY | OFlags::NONBLOCK | OFlags::NOFOLLOW | OFlags::CLOEXEC;
+    let Ok(fd) = open(path, flags, Mode::empty()) else {
+        return false;
+    };
+    ioctl_getflags(&fd).is_ok_and(|f| f.intersects(IFlags::IMMUTABLE | IFlags::APPEND))
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+fn flagged(_path: &Path) -> bool {
+    false
 }
 
 /// Whether another program holds a file the fast-forward replaces or
@@ -544,6 +864,24 @@ fn free_space(dir: &Path) -> Option<u64> {
 #[cfg(not(any(unix, windows)))]
 fn free_space(_dir: &Path) -> Option<u64> {
     None
+}
+
+/// Whether `git check-attr -z filter -- <paths>` output (NUL-separated
+/// `path, attribute, value` triples) assigns a filter that would run: a
+/// value that is the name of a driver the config keys define. git prints
+/// its states (`unspecified`, `unset`, `set`) as values too, so such a
+/// value counts only when a driver of that name is configured. Paths are
+/// never read as attribute text (a `#` in one is just a byte).
+pub fn filter_values_run(out: &[u8], config_keys: &[String]) -> bool {
+    let drivers = filter_drivers(config_keys);
+    let mut fields: Vec<&[u8]> = out.split(|b| *b == 0).collect();
+    if fields.last().is_some_and(|f| f.is_empty()) {
+        fields.pop();
+    }
+    fields.as_chunks::<3>().0.iter().any(|triple| {
+        let value = String::from_utf8_lossy(triple[2]);
+        drivers.contains(&value.as_ref())
+    })
 }
 
 /// The filter names the git config keys define a smudge, clean or process
@@ -858,28 +1196,24 @@ impl FreshGit for SystemGit {
             Some(1) => {}
             code => return Err(failed(&grep, code, &done.stderr)),
         }
-        // git's own view of every incoming path's attributes now.
-        if !incoming.is_empty() {
-            let mut check = vec![
-                "-c",
-                "core.quotePath=false",
-                "check-attr",
-                "-z",
-                "filter",
-                "--",
-            ];
-            check.extend(incoming.iter().map(String::as_str));
-            let out = self.checked(dir, &check, &[], deadline)?;
-            let fields = nul_separated(&out, &check)?;
-            for record in fields.chunks(3) {
-                if let [path, _, value] = record
-                    && !matches!(value.as_str(), "unspecified" | "unset" | "set")
-                {
-                    attributes.push(format!("{path} filter={value}"));
-                }
-            }
+        if filter_would_run(&attributes, &keys) {
+            return Ok(true);
         }
-        Ok(filter_would_run(&attributes, &keys))
+        // git's own view of every incoming path's attributes now.
+        if incoming.is_empty() {
+            return Ok(false);
+        }
+        let mut check = vec![
+            "-c",
+            "core.quotePath=false",
+            "check-attr",
+            "-z",
+            "filter",
+            "--",
+        ];
+        check.extend(incoming.iter().map(String::as_str));
+        let out = self.checked(dir, &check, &[], deadline)?;
+        Ok(filter_values_run(&out, &keys))
     }
 
     fn incoming_size(
@@ -964,6 +1298,65 @@ impl FreshGit for SystemGit {
             Ok(())
         } else {
             Err(failed(&args, done.status.code(), &done.stderr))
+        }
+    }
+
+    fn head_commit(&self, dir: &Path, deadline: Instant) -> Result<String, FreshError> {
+        let args = ["rev-parse", "--verify", "-q", "HEAD"];
+        let out = self.checked(dir, &args, &[], deadline)?;
+        String::from_utf8(out)
+            .map(|h| h.trim().to_string())
+            .map_err(|_| unreadable(&args, NOT_UTF8))
+    }
+
+    fn index_entries(
+        &self,
+        dir: &Path,
+        paths: &[String],
+        deadline: Instant,
+    ) -> Result<Vec<u8>, FreshError> {
+        if paths.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut args = vec![
+            "--literal-pathspecs",
+            "-c",
+            "core.quotePath=false",
+            "ls-files",
+            "-s",
+            "-z",
+            "--",
+        ];
+        args.extend(paths.iter().map(String::as_str));
+        self.checked(dir, &args, &[], deadline)
+    }
+
+    fn restore(&self, dir: &Path, in_head: &[String], all: &[String]) -> Result<(), FreshError> {
+        let mut reset =
+            SystemGit::with_no_background(&["--literal-pathspecs", "reset", "-q", "HEAD", "--"]);
+        reset.extend(all.iter().map(String::as_str));
+        self.to_end(dir, &reset)?;
+        if !in_head.is_empty() {
+            let mut checkout = SystemGit::with_no_background(&["checkout-index", "-f", "-u", "--"]);
+            checkout.extend(in_head.iter().map(String::as_str));
+            self.to_end(dir, &checkout)?;
+        }
+        Ok(())
+    }
+}
+
+impl SystemGit {
+    /// Run git to its end (no deadline), failing unless it exits 0.
+    fn to_end(&self, dir: &Path, args: &[&str]) -> Result<Vec<u8>, FreshError> {
+        match run_to_end(self.command(Some(dir), args)) {
+            Ok(done) if done.status.success() => Ok(done.stdout),
+            Ok(done) => Err(failed(args, done.status.code(), &done.stderr)),
+            Err(RunError::Spawn(e)) => Err(FreshError::Failed(GitError {
+                args: args.iter().map(|a| a.to_string()).collect(),
+                code: None,
+                detail: e.to_string(),
+            })),
+            Err(RunError::TimedOut) => Err(FreshError::TimedOut),
         }
     }
 }

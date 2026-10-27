@@ -1315,33 +1315,72 @@ fn a_path_too_long_for_windows_changes_nothing() {
     w.assert_read_changes_nothing();
 }
 
+/// The real git, for a fake one to pass calls on to.
 #[cfg(unix)]
-#[test]
-fn a_failed_fast_forward_is_reported_on_stderr_and_stdout_is_unchanged() {
-    // A `git` first on PATH that passes everything to the real git but
-    // fails the fast-forward (`merge --ff-only`).
-    let w = World::new();
-    let real = std::process::Command::new("sh")
+fn real_git() -> String {
+    let out = std::process::Command::new("sh")
         .args(["-c", "command -v git"])
         .output()
         .unwrap();
-    let real = String::from_utf8(real.stdout).unwrap().trim().to_string();
+    let real = String::from_utf8(out.stdout).unwrap().trim().to_string();
     assert!(!real.is_empty());
+    real
+}
+
+/// A PATH whose first `git` runs `on_merge` (a shell snippet, with `$REAL`
+/// the real git and `$REF` the merged ref) for `merge --ff-only <ref>`, runs
+/// `on_checkout_index` for `checkout-index`, and passes every other call
+/// to the real git.
+#[cfg(unix)]
+fn fake_git_path(w: &World, on_merge: &str, on_checkout_index: &str) -> std::ffi::OsString {
+    // An empty `then` is a shell syntax error.
+    let on_merge = if on_merge.is_empty() { ":" } else { on_merge };
+    let on_checkout_index = if on_checkout_index.is_empty() {
+        ":"
+    } else {
+        on_checkout_index
+    };
     let bin = w.root().join("bin");
     fs::create_dir_all(&bin).unwrap();
     let git = bin.join("git");
     fs::write(
         &git,
         format!(
-            "#!/bin/sh\nfor a in \"$@\"; do\n  if [ \"$a\" = --ff-only ]; then echo 'error: simulated' >&2; exit 1; fi\ndone\nexec '{real}' \"$@\"\n"
+            "#!/bin/sh\nREAL='{real}'\nff=\nci=\nfor a in \"$@\"; do\n  REF=$a\n  [ \"$a\" = --ff-only ] && ff=1\n  [ \"$a\" = checkout-index ] && ci=1\ndone\nif [ -n \"$ff\" ]; then\n{on_merge}\nfi\nif [ -n \"$ci\" ]; then\n{on_checkout_index}\nfi\nexec \"$REAL\" \"$@\"\n",
+            real = real_git()
         ),
     )
     .unwrap();
     make_executable(&git);
-    let path = std::env::join_paths(std::iter::once(bin.clone()).chain(std::env::split_paths(
+    std::env::join_paths(std::iter::once(bin).chain(std::env::split_paths(
         &std::env::var_os("PATH").unwrap_or_default(),
     )))
-    .unwrap();
+    .unwrap()
+}
+
+/// HEAD, the index's entries (`git ls-files -s`: mode, blob, stage, path)
+/// and every file and folder of my clone outside `.git`, with the bytes or
+/// link target of each file: what a rollback must restore (the index file's
+/// own bytes carry stat data a checkout refreshes).
+type LogicalSnapshot = (String, String, Vec<(PathBuf, Vec<u8>)>);
+
+impl World {
+    fn logical_snapshot(&self) -> LogicalSnapshot {
+        let (head, _, files) = self.raw_snapshot();
+        let index = self.git(&self.mine(), &["ls-files", "-s"]);
+        (head, index, files)
+    }
+}
+
+/// The line a rolled-back fast-forward prints.
+const ROLLED_BACK: &str = "kluris: team could not be updated from its remote; nothing changed. Run `kluris sync --brain team` to see why\n";
+
+#[cfg(unix)]
+#[test]
+fn a_fast_forward_git_refuses_is_reported_as_nothing_changed() {
+    // git fails the fast-forward before writing anything: nothing to undo.
+    let w = World::new();
+    let path = fake_git_path(&w, "echo 'error: simulated' >&2; exit 1", "");
     w.teammate_pushes("zebra", "zebras");
     for args in [
         &["wake-up", "--json"][..],
@@ -1350,15 +1389,240 @@ fn a_failed_fast_forward_is_reported_on_stderr_and_stdout_is_unchanged() {
         &["search", "jwt"],
     ] {
         let _ = fs::remove_file(w.stamp());
+        let before = w.logical_snapshot();
         let base = w.baseline(args);
         let out = w.kluris().args(args).env("PATH", &path).output().unwrap();
         assert_eq!(out.status.code(), Some(0), "{args:?}");
         assert_eq!(out.stdout, base.stdout, "{args:?}");
         assert_eq!(
             String::from_utf8_lossy(&out.stderr),
-            "kluris: team was only partly updated from its remote; run `kluris sync --brain team` to finish\n",
+            ROLLED_BACK,
             "{args:?}"
         );
+        assert_eq!(w.logical_snapshot(), before, "{args:?}");
+    }
+}
+
+/// The teammate changes `k/jwt.md`, adds `k/newdir/new.md` and deletes
+/// `glossary.md`, and pushes.
+#[cfg(unix)]
+fn teammate_changes_adds_and_deletes(w: &World) {
+    let t = w.teammate();
+    w.write(
+        &t,
+        "k/jwt.md",
+        "---\nparent: map.md\nupdated: 2026-03-02\n---\n# INCOMING JWT\n",
+    );
+    w.write(&t, "k/newdir/new.md", "# new\n");
+    fs::remove_file(t.join("glossary.md")).unwrap();
+    w.commit(&t, "change, add, delete");
+    w.git(&t, &["push", "-q"]);
+}
+
+/// What a fast-forward stopped partway leaves: one file changed in the
+/// tree and the index, a new file in a new folder, a file deleted, a stale
+/// `index.lock`; then git exits 1.
+#[cfg(unix)]
+const PARTIAL_MERGE: &str = "\"$REAL\" show \"$REF:k/jwt.md\" > k/jwt.md && \"$REAL\" update-index k/jwt.md && mkdir -p k/newdir && \"$REAL\" show \"$REF:k/newdir/new.md\" > k/newdir/new.md && \"$REAL\" update-index --add k/newdir/new.md && rm glossary.md && : > .git/index.lock; echo 'error: simulated' >&2; exit 1";
+
+#[cfg(unix)]
+#[test]
+fn a_fast_forward_that_stops_partway_is_rolled_back() {
+    let w = World::new();
+    let path = fake_git_path(&w, PARTIAL_MERGE, "");
+    teammate_changes_adds_and_deletes(&w);
+    let before = w.logical_snapshot();
+    let base = w.baseline(&["wake-up", "--json"]);
+    let out = w
+        .kluris()
+        .args(["wake-up", "--json"])
+        .env("PATH", &path)
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(0));
+    assert_eq!(out.stdout, base.stdout);
+    assert_eq!(String::from_utf8_lossy(&out.stderr), ROLLED_BACK);
+    assert_eq!(w.logical_snapshot(), before, "not rolled back");
+    assert!(!w.mine().join(".git").join("index.lock").exists());
+    assert_eq!(w.tracked_remote(), w.remote_head(), "not fetched");
+    // The next sync finishes the update.
+    let _ = fs::remove_file(w.stamp());
+    let out = w
+        .kluris()
+        .args(["sync", "--brain", "team", "--json"])
+        .output()
+        .unwrap();
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+    assert_eq!(w.head(), w.remote_head());
+}
+
+#[cfg(unix)]
+#[test]
+fn a_rollback_that_fails_names_the_paths_left_changed() {
+    let w = World::new();
+    let path = fake_git_path(&w, PARTIAL_MERGE, "echo 'error: simulated' >&2; exit 1");
+    teammate_changes_adds_and_deletes(&w);
+    let out = w
+        .kluris()
+        .args(["wake-up", "--json"])
+        .env("PATH", &path)
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(0));
+    assert_eq!(
+        String::from_utf8_lossy(&out.stderr),
+        "kluris: team was only partly updated from its remote (glossary.md, k/jwt.md); run `kluris sync --brain team` to finish\n"
+    );
+}
+
+/// A driver named `name` whose smudge marks that it ran and fails, assigned
+/// to `pattern` in `info/attributes`; the teammate changes `k/jwt.md` and
+/// adds `path`. Returns the marker.
+fn assign_a_marking_driver(w: &World, name: &str, pattern: &str, path: &str) -> PathBuf {
+    let marker = w.root().join(format!("ran-{}", name.replace('#', "h")));
+    let m = w.mine();
+    let shown = marker.display().to_string().replace('\\', "/");
+    w.git(
+        &m,
+        &[
+            "config",
+            &format!("filter.{name}.smudge"),
+            &format!("touch '{shown}'; exit 1"),
+        ],
+    );
+    w.git(&m, &["config", &format!("filter.{name}.clean"), "cat"]);
+    w.git(&m, &["config", &format!("filter.{name}.required"), "true"]);
+    fs::write(
+        m.join(".git").join("info").join("attributes"),
+        format!("{pattern} filter={name}\n"),
+    )
+    .unwrap();
+    let t = w.teammate();
+    w.write(
+        &t,
+        "k/jwt.md",
+        "---\nparent: map.md\nupdated: 2026-03-02\n---\n# INCOMING JWT\n",
+    );
+    w.write(&t, path, "# filtered\n");
+    w.commit(&t, "change and add");
+    w.git(&t, &["push", "-q"]);
+    marker
+}
+
+#[test]
+fn drivers_named_like_attribute_states_are_still_drivers() {
+    // `set`, `unset` and `unspecified` are also git's names for attribute
+    // states; with a driver of that name configured, the value is the driver.
+    for name in ["set", "unset", "unspecified"] {
+        let w = World::new();
+        let marker = assign_a_marking_driver(&w, name, "k/z.md", "k/z.md");
+        w.assert_read_changes_nothing();
+        assert!(!marker.exists(), "the {name} filter ran");
+    }
+}
+
+#[test]
+fn a_filter_on_a_path_starting_with_a_hash_is_seen() {
+    let w = World::new();
+    let marker = assign_a_marking_driver(&w, "slow", "\"#Inbox/z.md\"", "#Inbox/z.md");
+    w.assert_read_changes_nothing();
+    assert!(!marker.exists(), "the filter ran");
+}
+
+/// Sets macOS file flags (`chflags`) and clears them however the test ends.
+#[cfg(target_os = "macos")]
+struct Flagged(Vec<(PathBuf, &'static str)>);
+
+#[cfg(target_os = "macos")]
+impl Flagged {
+    fn set(path: &Path, flag: &'static str) -> Flagged {
+        let mut f = Flagged(Vec::new());
+        f.add(path, flag);
+        f
+    }
+
+    fn add(&mut self, path: &Path, flag: &'static str) {
+        let ok = std::process::Command::new("chflags")
+            .arg(flag)
+            .arg(path)
+            .status()
+            .unwrap()
+            .success();
+        assert!(ok, "chflags {flag}");
+        self.0.push((path.to_path_buf(), flag));
+    }
+
+    fn clear(&mut self) {
+        for (path, flag) in self.0.drain(..).rev() {
+            let _ = std::process::Command::new("chflags")
+                .arg(format!("no{flag}"))
+                .arg(&path)
+                .status();
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+impl Drop for Flagged {
+    fn drop(&mut self) {
+        self.clear();
+    }
+}
+
+/// The teammate changes `k/a.md` (checked out first) and `k/jwt.md`, adds
+/// `k/new.md`, and pushes.
+#[cfg(target_os = "macos")]
+fn teammate_changes_two_and_adds(w: &World) {
+    let t = w.teammate();
+    w.write(&t, "k/a.md", "# a\n");
+    w.commit(&t, "a");
+    w.git(&t, &["push", "-q"]);
+    w.git(&w.mine(), &["pull", "-q", "--ff-only"]);
+    w.write(&t, "k/a.md", "# INCOMING A\n");
+    w.write(
+        &t,
+        "k/jwt.md",
+        "---\nparent: map.md\nupdated: 2026-03-02\n---\n# INCOMING JWT\n",
+    );
+    w.write(&t, "k/new.md", "# new\n");
+    w.commit(&t, "change two, add one");
+    w.git(&t, &["push", "-q"]);
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn an_immutable_or_append_only_file_or_folder_changes_nothing() {
+    // T-155 F155-1: git cannot replace a flagged file, or write in a
+    // flagged folder, and would stop partway.
+    for (target, flag) in [
+        ("k/jwt.md", "uchg"),
+        ("k/jwt.md", "uappnd"),
+        ("k", "uchg"),
+        ("k", "uappnd"),
+    ] {
+        let w = World::new();
+        teammate_changes_two_and_adds(&w);
+        let mut flagged = Flagged::set(&w.mine().join(target), flag);
+        w.assert_read_changes_nothing();
+        flagged.clear();
+        // With the flag gone, sync updates the brain.
+        let out = w
+            .kluris()
+            .args(["sync", "--brain", "team", "--json"])
+            .output()
+            .unwrap();
+        assert_eq!(
+            out.status.code(),
+            Some(0),
+            "{target} {flag}: {}",
+            String::from_utf8_lossy(&out.stdout)
+        );
+        assert_eq!(w.head(), w.remote_head(), "{target} {flag}");
     }
 }
 

@@ -99,6 +99,30 @@ pub fn folder_id(path: &Path) -> Option<FolderId> {
     }
 }
 
+/// macOS: the immutable and append-only flags set in `meta` (`uchg`,
+/// `uappnd`, `schg`, `sappnd`), each with the command that clears it.
+/// Any of them stops a file's removal, a rename over it, and a removal
+/// from or creation in its folder.
+#[cfg(target_os = "macos")]
+pub fn locking_flags(meta: &fs::Metadata) -> Vec<(&'static str, &'static str)> {
+    use std::os::macos::fs::MetadataExt;
+    const UF_IMMUTABLE: u32 = 0x0000_0002;
+    const UF_APPEND: u32 = 0x0000_0004;
+    const SF_IMMUTABLE: u32 = 0x0002_0000;
+    const SF_APPEND: u32 = 0x0004_0000;
+    let flags = meta.st_flags();
+    [
+        (UF_IMMUTABLE, "uchg", "chflags nouchg"),
+        (UF_APPEND, "uappnd", "chflags nouappnd"),
+        (SF_IMMUTABLE, "schg", "sudo chflags noschg"),
+        (SF_APPEND, "sappnd", "sudo chflags nosappnd"),
+    ]
+    .into_iter()
+    .filter(|(bit, _, _)| flags & bit != 0)
+    .map(|(_, name, off)| (name, off))
+    .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

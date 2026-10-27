@@ -249,24 +249,11 @@ fn need(_path: &Path, _what: Need, _why: &str, _found: &mut Found) {}
 /// removal, a rename over the file and a removal from the folder.
 #[cfg(target_os = "macos")]
 fn attributes(path: &Path, meta: &fs::Metadata, found: &mut Found) {
-    use std::os::macos::fs::MetadataExt;
-    const UF_IMMUTABLE: u32 = 0x0000_0002;
-    const UF_APPEND: u32 = 0x0000_0004;
-    const SF_IMMUTABLE: u32 = 0x0002_0000;
-    const SF_APPEND: u32 = 0x0004_0000;
-    let flags = meta.st_flags();
     let mut clear = Vec::new();
     let mut names = Vec::new();
-    for (bit, name, off) in [
-        (UF_IMMUTABLE, "uchg", "chflags nouchg"),
-        (UF_APPEND, "uappnd", "chflags nouappnd"),
-        (SF_IMMUTABLE, "schg", "sudo chflags noschg"),
-        (SF_APPEND, "sappnd", "sudo chflags nosappnd"),
-    ] {
-        if flags & bit != 0 {
-            names.push(name);
-            clear.push(format!("{off} {}", sh_quote(path)));
-        }
+    for (name, off) in crate::fileops::locking_flags(meta) {
+        names.push(name);
+        clear.push(format!("{off} {}", sh_quote(path)));
     }
     if !names.is_empty() {
         found.push(Blocker {
