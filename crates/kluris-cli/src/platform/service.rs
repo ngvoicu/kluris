@@ -22,9 +22,27 @@ const COMMAND_TIME_LIMIT: Duration = Duration::from_secs(60);
 /// [`COMMAND_TIME_LIMIT`] (with whatever it starts).
 pub struct SystemRunner;
 
+/// The program to start for `program`: Windows PowerShell by its full path
+/// under `%SystemRoot%`, as its folder (`System32\WindowsPowerShell\v1.0`)
+/// may not be on PATH, where Windows finds System32's own programs
+/// (`schtasks`, `whoami`) whatever PATH holds.
+fn resolve(program: &str) -> PathBuf {
+    if cfg!(windows)
+        && program.eq_ignore_ascii_case("powershell.exe")
+        && let Some(root) = var("SystemRoot")
+    {
+        return PathBuf::from(root)
+            .join("System32")
+            .join("WindowsPowerShell")
+            .join("v1.0")
+            .join("powershell.exe");
+    }
+    PathBuf::from(program)
+}
+
 impl Runner for SystemRunner {
     fn run(&self, program: &str, args: &[&str]) -> io::Result<Ran> {
-        let mut cmd = Command::new(program);
+        let mut cmd = Command::new(resolve(program));
         cmd.args(args);
         match run_until(cmd, Instant::now() + COMMAND_TIME_LIMIT) {
             Ok(done) => Ok(Ran {
