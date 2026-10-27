@@ -953,8 +953,11 @@ pub fn installed(env: &ServiceEnv, runner: &dyn Runner) -> Result<Vec<Installed>
 /// PowerShell's ScheduledTask `State` is an enum (`Ready`, `Running`,
 /// `Disabled`, `Queued`, `Unknown`) whose name is the same in every display
 /// language, where `schtasks /Query`'s status column is translated. No
-/// `\Kluris\` folder prints nothing.
-const TASK_STATES_SCRIPT: &str = "Get-ScheduledTask -TaskPath '\\Kluris\\' -ErrorAction SilentlyContinue | ForEach-Object { $_.TaskName + [char]9 + [string]$_.State }";
+/// `\Kluris\` folder is Get-ScheduledTask's ObjectNotFound error: nothing
+/// printed, exit 0; any other error is on stderr, exit 1. (`-Command` on its
+/// own exits 1 whenever the last pipeline reported an error, even one
+/// silenced with `-ErrorAction SilentlyContinue`.)
+const TASK_STATES_SCRIPT: &str = r#"try { Get-ScheduledTask -TaskPath '\Kluris\' -ErrorAction Stop | ForEach-Object { $_.TaskName + [char]9 + [string]$_.State } } catch { if ($_.CategoryInfo.Category -ne 'ObjectNotFound') { [Console]::Error.WriteLine($_); exit 1 } }; exit 0"#;
 
 fn task_states_args() -> [&'static str; 4] {
     [

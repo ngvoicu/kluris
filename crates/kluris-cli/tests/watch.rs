@@ -1914,8 +1914,10 @@ fn installed_services_are_listed_with_whether_they_run() {
 /// The query of the Task Scheduler states: PowerShell's ScheduledTask
 /// objects, whose `State` is an enum (`Ready`, `Running`, `Disabled`,
 /// `Queued`, `Unknown`), the same in every display language, where
-/// `schtasks /Query`'s status column is translated.
-const TASK_STATES: &str = "powershell.exe -NoProfile -NonInteractive -Command Get-ScheduledTask -TaskPath '\\Kluris\\' -ErrorAction SilentlyContinue | ForEach-Object { $_.TaskName + [char]9 + [string]$_.State }";
+/// `schtasks /Query`'s status column is translated. No `\Kluris\` folder
+/// is the ObjectNotFound error, which is "none" (exit 0); any other error
+/// exits 1 (`-Command` alone exits 1 for both, as zeewin showed).
+const TASK_STATES: &str = r#"powershell.exe -NoProfile -NonInteractive -Command try { Get-ScheduledTask -TaskPath '\Kluris\' -ErrorAction Stop | ForEach-Object { $_.TaskName + [char]9 + [string]$_.State } } catch { if ($_.CategoryInfo.Category -ne 'ObjectNotFound') { [Console]::Error.WriteLine($_); exit 1 } }; exit 0"#;
 
 #[test]
 fn task_states_do_not_depend_on_the_display_language() {
