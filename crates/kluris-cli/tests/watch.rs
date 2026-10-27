@@ -159,6 +159,8 @@ fn report_line(r: &Report) -> String {
         Report::Synced(Ok(report)) => {
             if !report.conflicts.is_empty() {
                 "conflict".into()
+            } else if let Some(why) = &report.refused {
+                format!("refused: {why}")
             } else if !report.blocked.is_empty() {
                 "blocked".into()
             } else if report.offline {
@@ -390,6 +392,32 @@ fn a_conflict_is_printed_once_and_synced_when_a_head_moves() {
     );
     assert_eq!(log.sync_ticks, [1, 3, 4]);
     assert_eq!(log.reports, ["acme: conflict", "acme: pushed"]);
+}
+
+#[test]
+fn a_locked_ref_is_printed_once() {
+    // Removing the lock moves no head and changes no `git status`: the
+    // brain is synced again on the retry backoff (60 s, then 120 s).
+    let why = "a ref is locked: /brains/acme/.git/refs/remotes/origin/main.lock exists";
+    let locked = SyncReport {
+        refused: Some(why.into()),
+        ..SyncReport::default()
+    };
+    let git = FakeGit::new(vec![Probe::Heads(heads("L1", "R2"))]);
+    let log = run_loop(
+        &git,
+        7,
+        vec![Ok(locked.clone()), Ok(locked), Ok(pulled())],
+        |n| match n {
+            3 => Some(heads("R2", "R2")),
+            _ => Some(heads("L1", "R2")),
+        },
+    );
+    assert_eq!(log.sync_ticks, [1, 3, 7]);
+    assert_eq!(
+        log.reports,
+        [format!("acme: refused: {why}"), "acme: pulled".into()]
+    );
 }
 
 #[test]

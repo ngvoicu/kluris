@@ -8,6 +8,8 @@
 //!    with an open sync conflict ([`PENDING`], for `kluris resolve`);
 //! 2. fetches the current branch's upstream, never prompting, within the
 //!    network time limit; offline (or without an upstream) nothing changes;
+//!    a fetch git stopped on a ref lock refuses the brain, naming the lock
+//!    file ([`ref_locked`]), which Kluris never removes;
 //! 3. behind only: fast-forwards; ahead only: pushes; diverged: merges in
 //!    memory ([`merge`]) and, without conflicts, commits the merge
 //!    (`commit-tree`, two parents, `kluris: sync` with `Kluris-Sync: auto`,
@@ -128,7 +130,8 @@ pub struct SyncReport {
     /// The uncommitted files the incoming changes would overwrite; when
     /// any, nothing changed.
     pub blocked: Vec<String>,
-    /// Why the brain was left alone (an open conflict), else `None`.
+    /// Why the brain was left alone (an open conflict, a locked ref), else
+    /// `None`.
     pub refused: Option<String>,
 }
 
@@ -623,9 +626,15 @@ pub fn sync<G: SyncGit>(
 
     for _ in 0..PUSH_ATTEMPTS {
         let deadline = Instant::now() + request.network_time_limit;
-        if git.fetch(&repo.dir, &tracking.remote, deadline).is_err() {
-            report.offline = true;
+        if let Err(e) = git.fetch(&repo.dir, &tracking.remote, deadline) {
+            match locked_ref(git, &repo, &e) {
+                Some(lock) => report.refused = Some(ref_locked(&lock)),
+                None => report.offline = true,
+            }
             return Ok(report);
+        }
+        if let Ok(path) = git.git_dir_path(&repo, fresh::BACKOFF) {
+            fresh::end_backoff(&path);
         }
         report.fetched = true;
         let ours = git
@@ -709,6 +718,35 @@ pub fn sync<G: SyncGit>(
         }
     }
     Err(SyncError::RemoteKeptMoving)
+}
+
+/// Why sync leaves a brain whose fetch found a ref locked alone: `lock`,
+/// and how to clear it.
+pub fn ref_locked(lock: &str) -> String {
+    format!(
+        "a ref is locked: {lock} exists, so git cannot update the brain's refs; if no git is running in this brain, remove that file and run kluris sync again"
+    )
+}
+
+/// The lock file a failed fetch was stopped by, if that is why it failed:
+/// the one git named, or the named ref's `<ref>.lock` when it exists.
+fn locked_ref<G: SyncGit>(
+    git: &G,
+    repo: &crate::git::Repo,
+    error: &fresh::FreshError,
+) -> Option<String> {
+    let fresh::FreshError::Failed(e) = error else {
+        return None;
+    };
+    match plumbing::ref_lock(&e.detail)? {
+        plumbing::RefLock::File(path) => Some(path),
+        plumbing::RefLock::Ref(name) => {
+            let path = git.git_dir_path(repo, &format!("{name}.lock")).ok()?;
+            fs::symlink_metadata(&path)
+                .is_ok()
+                .then(|| path.display().to_string())
+        }
+    }
 }
 
 /// Local steps have no deadline; [`fresh::FreshGit::is_ancestor`] takes one.

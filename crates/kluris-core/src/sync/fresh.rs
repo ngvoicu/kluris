@@ -23,6 +23,16 @@
 //!   `.git/shallow`, commit-graph or config, so it never holds a lock a
 //!   stopped fetch could leave behind; every git it runs has
 //!   `GIT_OPTIONAL_LOCKS=0` ([`READ_ENV`]), so none refreshes the index.
+//! - No hook runs: every git after `rev-parse` (which finds the git
+//!   directory and runs none) has `core.hooksPath` at [`NO_HOOKS`] under
+//!   the git directory, a path that is never made; when something exists
+//!   there, the read does not fetch.
+//! - A fetch stopped at the deadline backs off ([`BACKOFF`]): no read
+//!   fetches that brain for [`BACKOFF_FIRST`], each further stop doubles
+//!   that up to [`BACKOFF_MAX`], and any fetch that succeeds (a read's or
+//!   `kluris sync`'s) ends it. A slow link so leaves at most one partial
+//!   pack (`tmp_pack_*`) per window, which git's gc expires; Kluris never
+//!   removes git's temporary, `.keep` or lock files.
 //! - Never a prompt: [`prompt_env`] for the fetch.
 //! - Off with `KLURIS_NO_AUTO_SYNC=1` or `sync: {auto_fetch: false}` in the
 //!   brain's `kluris.yml`.
@@ -49,6 +59,20 @@ pub const THROTTLE: Duration = Duration::from_secs(60);
 /// The time the whole step may take.
 pub const TIME_LIMIT: Duration = Duration::from_secs(3);
 
+/// The hooks path of every git a fresh read runs after `rev-parse`,
+/// relative to the git directory: it is never made, so no hook runs.
+pub const NO_HOOKS: &str = "kluris-sync/no-hooks";
+
+/// The back-off after a fetch stopped at the deadline, relative to the git
+/// directory: `<until> <window>\n`, both in Unix seconds and seconds.
+pub const BACKOFF: &str = "kluris-sync/fetch-backoff";
+
+/// The first back-off after a fetch stopped at the deadline.
+pub const BACKOFF_FIRST: Duration = Duration::from_secs(60 * 60);
+
+/// The longest back-off: each stop doubles it up to this.
+pub const BACKOFF_MAX: Duration = Duration::from_secs(24 * 60 * 60);
+
 /// The environment of every git a fresh read runs: no optional locks, so
 /// nothing it runs writes the index.
 pub const READ_ENV: [(&str, &str); 1] = [("GIT_OPTIONAL_LOCKS", "0")];
@@ -64,8 +88,12 @@ pub enum Fresh {
     Nested,
     /// The brain is a shallow clone.
     Shallow,
+    /// Something exists at [`NO_HOOKS`], so hooks could run.
+    HooksPathTaken,
     /// Fetched less than [`THROTTLE`] ago.
     Throttled,
+    /// A fetch was stopped at the deadline less than its back-off ago.
+    BackedOff,
     /// A detached HEAD, or a branch without an upstream on a remote.
     NoUpstream,
     /// The fetch failed (offline, no such remote, refused credentials).
@@ -125,19 +153,27 @@ pub trait FreshGit {
     ) -> Result<Option<WorkTree>, FreshError>;
 
     /// The current branch's upstream; `None` on a detached HEAD, without an
-    /// upstream, or with a local branch as upstream.
-    fn upstream(&self, dir: &Path, deadline: Instant) -> Result<Option<Upstream>, FreshError>;
+    /// upstream, or with a local branch as upstream. Hooks off:
+    /// `core.hooksPath` is `no_hooks`.
+    fn upstream(
+        &self,
+        dir: &Path,
+        no_hooks: &Path,
+        deadline: Instant,
+    ) -> Result<Option<Upstream>, FreshError>;
 
     /// `git fetch <remote>`, never prompting (`kluris sync`'s fetch).
     fn fetch(&self, dir: &Path, remote: &str, deadline: Instant) -> Result<(), FreshError>;
 
     /// Fetch the objects of the upstream's branch and write nothing else:
     /// no ref, `FETCH_HEAD`, tag, `packed-refs`, `.git/shallow`, commit-graph
-    /// or config. Never prompting.
+    /// or config. Never prompting; hooks off (`core.hooksPath` is
+    /// `no_hooks`).
     fn fetch_objects(
         &self,
         dir: &Path,
         upstream: &Upstream,
+        no_hooks: &Path,
         deadline: Instant,
     ) -> Result<(), FreshError>;
 
@@ -210,7 +246,10 @@ fn ended(error: FreshError) -> Fresh {
 
 fn step(git: &impl FreshGit, req: &FreshRequest, deadline: Instant) -> Result<Fresh, Fresh> {
     let dir = req.brain;
-    let Some(tree) = git.git_paths(dir, &[STAMP], deadline).map_err(ended)? else {
+    let Some(tree) = git
+        .git_paths(dir, &[STAMP, BACKOFF, NO_HOOKS], deadline)
+        .map_err(ended)?
+    else {
         return Ok(Fresh::NotARepo);
     };
     if !tree.prefix.is_empty() {
@@ -219,24 +258,72 @@ fn step(git: &impl FreshGit, req: &FreshRequest, deadline: Instant) -> Result<Fr
     if tree.shallow {
         return Ok(Fresh::Shallow);
     }
-    let [stamp] = tree.paths.as_slice() else {
+    let [stamp, backoff, no_hooks] = tree.paths.as_slice() else {
         return Ok(Fresh::Failed);
     };
+    // git resolves a relative hooks path from the work tree root.
+    let no_hooks = std::path::absolute(no_hooks).unwrap_or_else(|_| no_hooks.clone());
+    if fs::symlink_metadata(&no_hooks).is_ok() {
+        return Ok(Fresh::HooksPathTaken);
+    }
     let now = unix_seconds(req.now);
     if fetched_recently(stamp, now, req.throttle) {
         return Ok(Fresh::Throttled);
     }
-    let Some(upstream) = git.upstream(dir, deadline).map_err(ended)? else {
+    if backed_off(backoff, now) {
+        return Ok(Fresh::BackedOff);
+    }
+    let Some(upstream) = git.upstream(dir, &no_hooks, deadline).map_err(ended)? else {
         write_stamp(stamp, now);
         return Ok(Fresh::NoUpstream);
     };
     write_stamp(stamp, now);
-    git.fetch_objects(dir, &upstream, deadline)
-        .map_err(|e| match e {
-            FreshError::TimedOut => Fresh::TimedOut,
-            FreshError::Failed(_) => Fresh::FetchFailed,
-        })?;
-    Ok(Fresh::Fetched)
+    match git.fetch_objects(dir, &upstream, &no_hooks, deadline) {
+        Ok(()) => {
+            end_backoff(backoff);
+            Ok(Fresh::Fetched)
+        }
+        Err(FreshError::TimedOut) => {
+            back_off(backoff, now);
+            Err(Fresh::TimedOut)
+        }
+        Err(FreshError::Failed(_)) => Err(Fresh::FetchFailed),
+    }
+}
+
+/// The back-off's end and its window, as [`BACKOFF`] records them.
+fn read_backoff(path: &Path) -> Option<(u64, u64)> {
+    let text = fs::read_to_string(path).ok()?;
+    let mut fields = text.split_whitespace();
+    let until = fields.next()?.parse::<u64>().ok()?;
+    let window = fields.next()?.parse::<u64>().ok()?;
+    Some((until, window))
+}
+
+/// Whether a read at `now` is inside the back-off: before its end, and no
+/// further from it than its window (at most [`BACKOFF_MAX`]); one that does
+/// not read, or lies further ahead (the clock went back), never blocks.
+fn backed_off(path: &Path, now: u64) -> bool {
+    read_backoff(path).is_some_and(|(until, window)| {
+        let window = window.min(BACKOFF_MAX.as_secs());
+        now < until && until - now <= window
+    })
+}
+
+/// Record a fetch stopped at the deadline at `now`: the next window is
+/// twice the last (the first [`BACKOFF_FIRST`]), at most [`BACKOFF_MAX`].
+fn back_off(path: &Path, now: u64) {
+    let window = read_backoff(path).map_or(BACKOFF_FIRST.as_secs(), |(_, last)| {
+        last.saturating_mul(2)
+            .clamp(BACKOFF_FIRST.as_secs(), BACKOFF_MAX.as_secs())
+    });
+    let until = now.saturating_add(window);
+    let _ = atomic::write_atomic(path, format!("{until} {window}\n").as_bytes());
+}
+
+/// End the back-off: a fetch from the brain's remote succeeded.
+pub(crate) fn end_backoff(path: &Path) {
+    let _ = fs::remove_file(path);
 }
 
 fn unix_seconds(time: SystemTime) -> u64 {
@@ -353,24 +440,28 @@ impl SystemGit {
 }
 
 impl SystemGit {
-    /// [`prompt_env`] and [`READ_ENV`] for a fetch from `dir`.
+    /// [`prompt_env`] and [`READ_ENV`] for a fetch from `dir`; `config`
+    /// options (`-c ...`) go before `git config`'s own arguments.
     fn no_prompt_env(
         &self,
         dir: &Path,
+        options: &[&str],
         deadline: Instant,
     ) -> Result<Vec<(&'static str, &'static str)>, FreshError> {
-        let ssh_command = self.bounded(
-            dir,
-            &["config", "--get", "core.sshCommand"],
-            &READ_ENV,
-            deadline,
-        )?;
+        let mut args = options.to_vec();
+        args.extend(["config", "--get", "core.sshCommand"]);
+        let ssh_command = self.bounded(dir, &args, &READ_ENV, deadline)?;
         let configured =
             ssh_command.status.success() && !ssh_command.stdout.trim_ascii().is_empty();
         let mut env = prompt_env(|key| self.env_var(key), configured);
         env.extend(READ_ENV);
         Ok(env)
     }
+}
+
+/// `core.hooksPath=<no_hooks>`, for `-c`.
+fn hooks_off(no_hooks: &Path) -> String {
+    format!("core.hooksPath={}", no_hooks.display())
 }
 
 /// git exited 0 with output this step cannot use.
@@ -426,14 +517,22 @@ impl FreshGit for SystemGit {
         }))
     }
 
-    fn upstream(&self, dir: &Path, deadline: Instant) -> Result<Option<Upstream>, FreshError> {
-        let symbolic = ["symbolic-ref", "--quiet", "HEAD"];
+    fn upstream(
+        &self,
+        dir: &Path,
+        no_hooks: &Path,
+        deadline: Instant,
+    ) -> Result<Option<Upstream>, FreshError> {
+        let hooks = hooks_off(no_hooks);
+        let symbolic = ["-c", &hooks, "symbolic-ref", "--quiet", "HEAD"];
         let head = self.bounded(dir, &symbolic, &READ_ENV, deadline)?;
         if !head.status.success() {
             return Ok(None);
         }
         let branch = String::from_utf8(head.stdout).map_err(|_| unreadable(&symbolic, NOT_UTF8))?;
         let args = [
+            "-c",
+            &hooks,
             "for-each-ref",
             "--format=%(upstream:remotename)%00%(upstream)%00%(upstream:remoteref)",
             branch.trim(),
@@ -458,7 +557,7 @@ impl FreshGit for SystemGit {
     }
 
     fn fetch(&self, dir: &Path, remote: &str, deadline: Instant) -> Result<(), FreshError> {
-        let env = self.no_prompt_env(dir, deadline)?;
+        let env = self.no_prompt_env(dir, &[], deadline)?;
         let args =
             SystemGit::with_no_background(&["fetch", "--quiet", "--no-recurse-submodules", remote]);
         self.checked(dir, &args, &env, deadline).map(drop)
@@ -468,15 +567,19 @@ impl FreshGit for SystemGit {
         &self,
         dir: &Path,
         upstream: &Upstream,
+        no_hooks: &Path,
         deadline: Instant,
     ) -> Result<(), FreshError> {
-        let env = self.no_prompt_env(dir, deadline)?;
+        let hooks = hooks_off(no_hooks);
+        let env = self.no_prompt_env(dir, &["-c", &hooks], deadline)?;
         // The source alone (no `:dst`) with an empty `--refmap=` updates no
         // remote-tracking ref (`remote.<name>.fetch` is ignored, and so is
         // `remote.<name>.followRemoteHEAD`); no tags, no pruning, no
         // `FETCH_HEAD`; no commit-graph, and no bundle URI (which writes
         // `refs/bundles/*` and `fetch.bundleCreationToken`).
         let args = SystemGit::with_no_background(&[
+            "-c",
+            &hooks,
             "-c",
             "fetch.writeCommitGraph=false",
             "-c",

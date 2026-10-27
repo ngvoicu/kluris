@@ -82,6 +82,8 @@ pub(crate) fn text(name: &str, outcome: &Result<SyncReport, String>) -> String {
             out.push_str(&format!("  {}: {}\n", c.kind.as_str(), c.path));
         }
         out
+    } else if let Some(why) = &report.refused {
+        format!("{name}: refused: {why}\n")
     } else if !report.blocked.is_empty() {
         format!(
             "{name}: not synced, uncommitted changes are in the way: {}; commit or stash them, then run kluris sync again\n",

@@ -825,9 +825,173 @@ fn every_git_a_fresh_read_runs_has_optional_locks_off() {
         .collect();
     assert!(fresh.iter().any(|l| l.contains("fetch")), "{text}");
     assert!(fresh.len() >= 10, "{text}");
-    for line in fresh {
+    for line in &fresh {
         assert!(line.starts_with("0|"), "{line}\n{text}");
     }
+    // Every one but `rev-parse` (which finds the git dir) runs with hooks
+    // off: `core.hooksPath` at a path under the git dir that never exists.
+    let no_hooks = w.mine().join(".git").join("kluris-sync").join("no-hooks");
+    let hooks_off = format!("core.hooksPath={}", no_hooks.display());
+    let own: Vec<&&str> = fresh
+        .iter()
+        .filter(|line| {
+            [
+                "symbolic-ref",
+                "for-each-ref",
+                "core.sshCommand",
+                "--refmap=",
+            ]
+            .iter()
+            .any(|word| line.contains(word))
+        })
+        .collect();
+    assert_eq!(own.len(), 8, "{text}");
+    for line in own {
+        assert!(line.contains(&hooks_off), "{line}\n{text}");
+    }
+    assert!(!no_hooks.exists());
+}
+
+impl World {
+    /// A hook of my clone, written for git's sh on every OS.
+    fn hook(&self, name: &str, body: &str) {
+        let hook = self.mine().join(".git").join("hooks").join(name);
+        fs::write(&hook, format!("#!/bin/sh\n{body}")).unwrap();
+        #[cfg(unix)]
+        make_executable(&hook);
+    }
+}
+
+/// A path for a shell script, in forward slashes (Git for Windows' sh).
+fn sh_path(path: &Path) -> String {
+    path.display().to_string().replace('\\', "/")
+}
+
+#[test]
+fn a_reference_transaction_hook_never_runs_in_a_read() {
+    // The hook rewrites a file with an uncommitted edit and stages it
+    // (review T-163, F163-1).
+    let w = World::new();
+    let m = w.mine();
+    let marker = w.root().join("hook-ran");
+    w.hook(
+        "reference-transaction",
+        &format!(
+            "touch '{}'\nprintf 'hook output\\n' > k/jwt.md\ngit add k/jwt.md\n",
+            sh_path(&marker)
+        ),
+    );
+    // Control: the hook runs for git's own fetch here.
+    w.teammate_pushes("zebra", "zebras");
+    w.git(&m, &["fetch", "-q"]);
+    assert!(
+        marker.exists(),
+        "the hook never runs: the test proves nothing"
+    );
+    // Set the edit up again with the hook moved aside.
+    let hook = m.join(".git").join("hooks").join("reference-transaction");
+    let aside = m.join(".git").join("hooks").join("aside");
+    fs::rename(&hook, &aside).unwrap();
+    w.git(&m, &["reset", "-q"]);
+    w.write(
+        &m,
+        "k/jwt.md",
+        "---\nparent: map.md\n---\n# JWT mine\n\nmy edit\n",
+    );
+    fs::rename(&aside, &hook).unwrap();
+    fs::remove_file(&marker).unwrap();
+    w.teammate_pushes("okapi", "okapis");
+    w.assert_fetched_and_left_as_it_was();
+    assert!(!marker.exists(), "the hook ran during a read");
+}
+
+#[test]
+fn a_post_index_change_hook_never_runs_in_a_read() {
+    let w = World::new();
+    let m = w.mine();
+    let marker = w.root().join("hook-ran");
+    w.hook(
+        "post-index-change",
+        &format!("touch '{}'\n", sh_path(&marker)),
+    );
+    // Control: the hook runs when git writes the index here.
+    w.write(&m, "k/draft.md", "# draft\n");
+    w.git(&m, &["add", "k/draft.md"]);
+    assert!(
+        marker.exists(),
+        "the hook never runs: the test proves nothing"
+    );
+    fs::remove_file(&marker).unwrap();
+    w.teammate_pushes("zebra", "zebras");
+    w.assert_fetched_and_left_as_it_was();
+    assert!(!marker.exists(), "the hook ran during a read");
+}
+
+/// The `tmp_pack_*` files in my clone's object store.
+fn partial_packs(w: &World) -> Vec<PathBuf> {
+    let pack = w.mine().join(".git").join("objects").join("pack");
+    fs::read_dir(pack)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .filter(|p| {
+            p.file_name()
+                .is_some_and(|n| n.to_string_lossy().starts_with("tmp_pack_"))
+        })
+        .collect()
+}
+
+#[test]
+fn a_read_stopped_at_the_deadline_backs_off_until_a_fetch_succeeds() {
+    // A slow link (review T-163, F163-2): each upload-pack starts late.
+    let w = World::new();
+    w.teammate_pushes("zebra", "zebras");
+    let m = w.mine();
+    let calls = w.root().join("upload-pack-calls");
+    let slow = w.root().join("slow-upload-pack.sh");
+    fs::write(
+        &slow,
+        format!(
+            "#!/bin/sh\necho call >> '{}'\nsleep 10\nexec git upload-pack \"$@\"\n",
+            sh_path(&calls)
+        ),
+    )
+    .unwrap();
+    w.git(
+        &m,
+        &[
+            "config",
+            "remote.origin.uploadpack",
+            &format!("sh '{}'", sh_path(&slow)),
+        ],
+    );
+    let backoff = m.join(".git").join("kluris-sync").join("fetch-backoff");
+    for args in [
+        &["wake-up", "--json"][..],
+        &["search", "jwt", "--json"],
+        &["wake-up", "--json"],
+    ] {
+        w.set_stamp_age(61);
+        w.run(args);
+    }
+    let attempts = fs::read_to_string(&calls).unwrap();
+    assert_eq!(attempts.lines().count(), 1, "one fetch in the back-off");
+    assert!(partial_packs(&w).len() <= 1, "{:?}", partial_packs(&w));
+    assert!(backoff.is_file());
+    assert!(!w.has_remote_head());
+
+    // A sync that fetches ends the back-off; the next read fetches.
+    w.git(&m, &["config", "--unset", "remote.origin.uploadpack"]);
+    let out = w
+        .kluris()
+        .args(["sync", "--brain", "team", "--json"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(0));
+    assert!(!backoff.exists(), "sync did not end the back-off");
+    w.teammate_pushes("okapi", "okapis");
+    w.set_stamp_age(61);
+    w.run(&["search", "okapis", "--json"]);
+    assert!(w.has_remote_head(), "the read after sync did not fetch");
 }
 
 #[cfg(unix)]

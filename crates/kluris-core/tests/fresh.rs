@@ -10,7 +10,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use kluris_core::git::GitError;
 use kluris_core::sync::fresh::{
-    Fresh, FreshError, FreshGit, FreshRequest, STAMP, Upstream, WorkTree, fresh_read, prompt_env,
+    BACKOFF, BACKOFF_FIRST, BACKOFF_MAX, Fresh, FreshError, FreshGit, FreshRequest, NO_HOOKS,
+    STAMP, Upstream, WorkTree, fresh_read, prompt_env,
 };
 use tempfile::TempDir;
 
@@ -23,6 +24,8 @@ struct FakeGit {
     shallow: bool,
     upstream: Option<Upstream>,
     fetch: Result<(), FreshError>,
+    /// The hooks path each git after `rev-parse` was given.
+    hooks_paths: RefCell<Vec<PathBuf>>,
     calls: RefCell<Vec<String>>,
     deadlines: RefCell<Vec<Instant>>,
 }
@@ -41,6 +44,7 @@ impl FakeGit {
                 remote_ref: "refs/heads/main".into(),
             }),
             fetch: Ok(()),
+            hooks_paths: RefCell::new(Vec::new()),
             calls: RefCell::new(Vec::new()),
             deadlines: RefCell::new(Vec::new()),
         }
@@ -57,6 +61,14 @@ impl FakeGit {
 
     fn stamp(&self) -> PathBuf {
         self.git_dir.as_ref().unwrap().join(STAMP)
+    }
+
+    fn backoff(&self) -> PathBuf {
+        self.git_dir.as_ref().unwrap().join(BACKOFF)
+    }
+
+    fn no_hooks(&self) -> PathBuf {
+        self.git_dir.as_ref().unwrap().join(NO_HOOKS)
     }
 }
 
@@ -75,8 +87,14 @@ impl FreshGit for FakeGit {
         }))
     }
 
-    fn upstream(&self, _dir: &Path, deadline: Instant) -> Result<Option<Upstream>, FreshError> {
+    fn upstream(
+        &self,
+        _dir: &Path,
+        no_hooks: &Path,
+        deadline: Instant,
+    ) -> Result<Option<Upstream>, FreshError> {
         self.log("upstream", deadline);
+        self.hooks_paths.borrow_mut().push(no_hooks.to_path_buf());
         Ok(self.upstream.clone())
     }
 
@@ -89,8 +107,10 @@ impl FreshGit for FakeGit {
         &self,
         _dir: &Path,
         upstream: &Upstream,
+        no_hooks: &Path,
         deadline: Instant,
     ) -> Result<(), FreshError> {
+        self.hooks_paths.borrow_mut().push(no_hooks.to_path_buf());
         self.log(
             &format!("fetch_objects {} {}", upstream.remote, upstream.remote_ref),
             deadline,
@@ -391,4 +411,123 @@ fn prompts_are_turned_off_without_overriding_the_users_ssh_command() {
     // An empty variable is not a setting.
     let empty = |k: &str| (k == "GIT_SSH_COMMAND").then(OsString::new);
     assert_eq!(prompt_env(empty, false).len(), 4);
+}
+
+#[test]
+fn every_git_after_rev_parse_runs_with_hooks_off() {
+    // `core.hooksPath` points at `<git dir>/kluris-sync/no-hooks`, which is
+    // never made; `rev-parse`, which finds the git dir, runs no hook.
+    let tmp = TempDir::new().unwrap();
+    let git = FakeGit::behind(&tmp);
+    assert_eq!(fresh_read(&git, &request(&brain(&tmp))), Fresh::Fetched);
+    assert_eq!(*git.hooks_paths.borrow(), [git.no_hooks(), git.no_hooks()]);
+    assert!(!git.no_hooks().exists());
+}
+
+#[test]
+fn something_at_the_no_hooks_path_stops_the_fetch() {
+    let tmp = TempDir::new().unwrap();
+    let brain = brain(&tmp);
+    let git = FakeGit::behind(&tmp);
+    fs::create_dir_all(git.no_hooks()).unwrap();
+    assert_eq!(fresh_read(&git, &request(&brain)), Fresh::HooksPathTaken);
+    assert_eq!(git.calls(), ["git_paths"]);
+    assert!(!git.stamp().exists());
+    fs::remove_dir(git.no_hooks()).unwrap();
+    fs::write(git.no_hooks(), "").unwrap();
+    assert_eq!(fresh_read(&git, &request(&brain)), Fresh::HooksPathTaken);
+}
+
+/// A read of `brain` at `at` (Unix seconds).
+fn read_at(git: &FakeGit, brain: &Path, at: u64) -> Fresh {
+    git.calls.borrow_mut().clear();
+    let mut req = request(brain);
+    req.now = UNIX_EPOCH + Duration::from_secs(at);
+    fresh_read(git, &req)
+}
+
+#[test]
+fn a_fetch_stopped_at_the_deadline_backs_off_an_hour_doubling_to_a_day() {
+    assert_eq!(BACKOFF_FIRST, Duration::from_secs(3600));
+    assert_eq!(BACKOFF_MAX, Duration::from_secs(24 * 3600));
+    let tmp = TempDir::new().unwrap();
+    let brain = brain(&tmp);
+    let mut git = FakeGit::behind(&tmp);
+    git.fetch = Err(FreshError::TimedOut);
+    let mut at = 1_000_000_000u64;
+    for window in [3600u64, 7200, 14400, 28800, 57600, 86400, 86400] {
+        assert_eq!(read_at(&git, &brain, at), Fresh::TimedOut, "at {at}");
+        assert_eq!(
+            fs::read_to_string(git.backoff()).unwrap(),
+            format!("{} {window}\n", at + window)
+        );
+        // Every read inside the window (past the throttle) fetches nothing.
+        for later in [61, window / 2, window - 1] {
+            assert_eq!(
+                read_at(&git, &brain, at + later),
+                Fresh::BackedOff,
+                "{later} s into {window}"
+            );
+            assert_eq!(git.calls(), ["git_paths"]);
+        }
+        at += window;
+    }
+}
+
+#[test]
+fn a_fetch_that_succeeds_ends_the_back_off() {
+    let tmp = TempDir::new().unwrap();
+    let brain = brain(&tmp);
+    let mut git = FakeGit::behind(&tmp);
+    let at = 1_000_000_000u64;
+    fs::create_dir_all(git.backoff().parent().unwrap()).unwrap();
+    // A window of two hours that has run out.
+    fs::write(git.backoff(), format!("{} 7200\n", at - 1)).unwrap();
+    assert_eq!(read_at(&git, &brain, at), Fresh::Fetched);
+    assert!(!git.backoff().exists());
+    // The next stop starts over at one hour.
+    git.fetch = Err(FreshError::TimedOut);
+    assert_eq!(read_at(&git, &brain, at + 61), Fresh::TimedOut);
+    assert_eq!(
+        fs::read_to_string(git.backoff()).unwrap(),
+        format!("{} 3600\n", at + 61 + 3600)
+    );
+    // A failure that is not the deadline (offline) leaves it as it is.
+    git.fetch = Err(FreshError::Failed(GitError {
+        args: vec!["fetch".into()],
+        code: Some(128),
+        detail: "fatal: unable to access".into(),
+    }));
+    fs::remove_file(git.backoff()).unwrap();
+    assert_eq!(read_at(&git, &brain, at + 200), Fresh::FetchFailed);
+    assert!(!git.backoff().exists());
+}
+
+#[test]
+fn a_back_off_that_does_not_read_or_lies_far_ahead_never_blocks_longer() {
+    let tmp = TempDir::new().unwrap();
+    let brain = brain(&tmp);
+    let git = FakeGit::behind(&tmp);
+    let at = 1_000_000_000u64;
+    fs::create_dir_all(git.backoff().parent().unwrap()).unwrap();
+    for (text, blocked) in [
+        ("yesterday\n".to_string(), false),
+        (String::new(), false),
+        (format!("{}\n", at + 100), false),
+        // Further ahead than its own window (the clock went back).
+        (format!("{} 3600\n", at + 3601), false),
+        // A window past the cap counts as the cap.
+        (format!("{} 999999999\n", at + 86_400), true),
+        (format!("{} 999999999\n", at + 86_401), false),
+        (format!("{} 3600\n", at + 3600), true),
+    ] {
+        fs::write(git.backoff(), &text).unwrap();
+        let _ = fs::remove_file(git.stamp());
+        let fresh = read_at(&git, &brain, at);
+        if blocked {
+            assert_eq!(fresh, Fresh::BackedOff, "{text:?}");
+        } else {
+            assert_eq!(fresh, Fresh::Fetched, "{text:?}");
+        }
+    }
 }

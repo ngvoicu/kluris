@@ -212,6 +212,9 @@ impl Reason {
             Ok(report) if !report.conflicts.is_empty() => {
                 Reason::Conflicts(report.conflicts.clone())
             }
+            Ok(SyncReport {
+                refused: Some(why), ..
+            }) => Reason::Refused(why.clone()),
             Ok(report) => Reason::Blocked(report.blocked.clone()),
             Err(why) => Reason::Refused(why.clone()),
         }
@@ -223,7 +226,9 @@ impl Reason {
 /// moves or its local state changes.
 fn parked(outcome: &Result<SyncReport, String>) -> bool {
     match outcome {
-        Ok(report) => !report.conflicts.is_empty() || !report.blocked.is_empty(),
+        Ok(report) => {
+            !report.conflicts.is_empty() || !report.blocked.is_empty() || report.refused.is_some()
+        }
         Err(_) => true,
     }
 }

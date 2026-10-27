@@ -187,3 +187,44 @@ fn an_open_conflict_is_reported_in_the_entry() {
     assert_eq!(code, 1);
     assert!(out.contains("kluris resolve"), "{out}");
 }
+
+#[test]
+fn a_locked_ref_is_reported_with_its_path_not_as_offline() {
+    // A fetch stopped while it held the ref (a Windows job terminated at
+    // the deadline) leaves its lock (review T-163, F163-3).
+    let mut h = Home::new();
+    let root = h.brain("alpha");
+    h.teammate_pushes("alpha", "notes/new.md", &neuron("New", ""));
+    let lock = root
+        .join(".git")
+        .join("refs")
+        .join("remotes")
+        .join("origin")
+        .join("main.lock");
+    fs::write(&lock, "0000000000000000000000000000000000000000\n").unwrap();
+    let (code, doc) = h.json(&["sync", "--brain", "alpha", "--json"]);
+    assert_eq!(code, 1, "{doc}");
+    let entry = &doc["brains"][0];
+    assert_eq!(keys(entry), BRAIN_KEYS);
+    assert_eq!(entry["fetched"], false, "{doc}");
+    assert_eq!(entry["offline"], false, "{doc}");
+    assert_eq!(entry["merged"], false, "{doc}");
+    let why = entry["refused"].as_str().unwrap();
+    assert!(why.starts_with("a ref is locked: "), "{why}");
+    assert!(why.contains("main.lock"), "{why}");
+    assert!(
+        why.contains("if no git is running in this brain, remove that file"),
+        "{why}"
+    );
+    let (code, out, _) = h.run(&["sync", "--brain", "alpha"]);
+    assert_eq!(code, 1);
+    assert_eq!(out, format!("alpha: refused: {why}\n"));
+    assert!(lock.is_file(), "kluris removed the lock");
+
+    fs::remove_file(&lock).unwrap();
+    let (code, doc) = h.json(&["sync", "--brain", "alpha", "--json"]);
+    assert_eq!(code, 0, "{doc}");
+    assert_eq!(doc["brains"][0]["fetched"], true);
+    assert_eq!(doc["brains"][0]["merged"], true);
+    assert!(h.read(&root, "notes/new.md").contains("# New"));
+}

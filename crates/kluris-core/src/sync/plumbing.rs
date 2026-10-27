@@ -132,6 +132,32 @@ pub trait SyncGit: Plumbing + FreshGit + TextMerger {
     fn push(&self, repo: &Repo, tracking: &Tracking, deadline: Instant) -> PushOutcome;
 }
 
+/// A fetch git stopped because a ref is locked: the lock file git named,
+/// or the ref whose lock is to be found.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum RefLock {
+    File(String),
+    Ref(String),
+}
+
+/// Whether git's stderr says a fetch failed on a ref lock: `Unable to
+/// create '<lock>': File exists`, `cannot lock ref '<ref>'`, or `fetching
+/// ref <ref> failed: reference already exists` (Git for Windows after a
+/// fetch was terminated while it held the ref).
+pub(crate) fn ref_lock(stderr: &str) -> Option<RefLock> {
+    let between = |text: &str, start: &str, end: &str| -> Option<String> {
+        let rest = &text[text.find(start)? + start.len()..];
+        Some(rest[..rest.find(end)?].to_string())
+    };
+    if let Some(path) = between(stderr, "Unable to create '", "': File exists") {
+        return Some(RefLock::File(path));
+    }
+    if let Some(name) = between(stderr, "cannot lock ref '", "'") {
+        return Some(RefLock::Ref(name));
+    }
+    between(stderr, "fetching ref ", " failed: reference already exists").map(RefLock::Ref)
+}
+
 /// NUL-separated names, the empty ones dropped.
 fn nul_separated(out: &[u8]) -> Vec<String> {
     out.split(|b| *b == 0)
@@ -413,5 +439,40 @@ mod tests {
             "!\tHEAD:refs/heads/main\t[remote rejected] (pre-receive hook declined)\n"
         ));
         assert!(!remote_moved("=\tHEAD:refs/heads/main\t[up to date]\n"));
+    }
+
+    #[test]
+    fn a_fetch_stopped_by_a_ref_lock_is_told_apart() {
+        // git 2.38 to 2.55 on macOS and Linux.
+        let unix = "error: cannot lock ref 'refs/remotes/origin/main': Unable to create '/b/.git/refs/remotes/origin/main.lock': File exists.\n\nAnother git process seems to be running in this repository, or the lock file may be stale";
+        assert_eq!(
+            ref_lock(unix),
+            Some(RefLock::File(
+                "/b/.git/refs/remotes/origin/main.lock".into()
+            ))
+        );
+        let packed = "error: Unable to create 'C:/b/.git/packed-refs.lock': File exists.";
+        assert_eq!(
+            ref_lock(packed),
+            Some(RefLock::File("C:/b/.git/packed-refs.lock".into()))
+        );
+        assert_eq!(
+            ref_lock("error: cannot lock ref 'refs/remotes/origin/main': is at 1 but expected 2"),
+            Some(RefLock::Ref("refs/remotes/origin/main".into()))
+        );
+        // Git for Windows after a terminated fetch (T-159's probe).
+        assert_eq!(
+            ref_lock(
+                "From C:/r\n   a8a671a..3b9f47e  main       -> origin/main\nerror: fetching ref refs/remotes/origin/main failed: reference already exists\n"
+            ),
+            Some(RefLock::Ref("refs/remotes/origin/main".into()))
+        );
+        for offline in [
+            "fatal: unable to access 'https://h/r.git/': Could not resolve host: h",
+            "fatal: '/gone.git' does not appear to be a git repository",
+            "",
+        ] {
+            assert_eq!(ref_lock(offline), None, "{offline}");
+        }
     }
 }
