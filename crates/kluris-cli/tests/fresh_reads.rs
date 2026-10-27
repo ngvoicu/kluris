@@ -1362,8 +1362,10 @@ fn fake_git_path(w: &World, on_merge: &str, on_checkout_index: &str) -> std::ffi
 /// and every file and folder of my clone outside `.git`, with the bytes or
 /// link target of each file: what a rollback must restore (the index file's
 /// own bytes carry stat data a checkout refreshes).
+#[cfg(unix)]
 type LogicalSnapshot = (String, String, Vec<(PathBuf, Vec<u8>)>);
 
+#[cfg(unix)]
 impl World {
     fn logical_snapshot(&self) -> LogicalSnapshot {
         let (head, _, files) = self.raw_snapshot();
@@ -1373,6 +1375,7 @@ impl World {
 }
 
 /// The line a rolled-back fast-forward prints.
+#[cfg(unix)]
 const ROLLED_BACK: &str = "kluris: team could not be updated from its remote; nothing changed. Run `kluris sync --brain team` to see why\n";
 
 #[cfg(unix)]
