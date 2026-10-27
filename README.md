@@ -403,7 +403,11 @@ credentials) or you made a commit, and when either did it runs one
 conflict, a block or a refusal is printed once; each tick that brain is
 looked at again (one `git status`), and it is synced as soon as its branch
 or the remote moves (`kluris resolve`, your commit, a teammate's push) or
-the cause clears without a commit (an edit undone, a rebase aborted).
+the cause clears without a commit (an edit undone, a rebase aborted). As
+some causes clear without anything `git status` shows (an ignored file
+deleted, a `pre-push` hook repaired), it is also synced again a minute
+later, then after 2, 4 and 8 minutes and every 10 minutes from then on;
+the wait starts over when a head moves or the local state changes.
 Offline it stays quiet and picks up when the remote answers again. Ctrl-C
 lets a sync in progress finish, then exits with 0.
 

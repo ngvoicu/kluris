@@ -495,7 +495,9 @@ runs one sync of that brain, printed as one line (with --json, the \
 document kluris sync --json prints). A conflict, a block or a refusal is \
 printed once; that brain is looked at again each tick (git status) and \
 synced once its branch or the remote moves or the cause clears (an edit \
-undone, a rebase aborted); offline is quiet. Ctrl-C (or SIGTERM) lets a sync in progress finish, then exits 0.
+undone, a rebase aborted), and tried again a minute later, then after 2, \
+4, 8 and every 10 minutes, for causes git status cannot see (an ignored \
+file removed, a hook repaired); offline is quiet. Ctrl-C (or SIGTERM) lets a sync in progress finish, then exits 0.
 
 --install-service writes a per-user service that runs `kluris sync --watch \
 --brain NAME` from login on and starts it (a launchd agent on macOS, a \

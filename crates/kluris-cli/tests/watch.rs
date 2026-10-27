@@ -38,7 +38,8 @@ use kluris_core::service::{
 };
 use kluris_core::sync::SyncReport;
 use kluris_core::sync::watch::{
-    self, Clock, Heads, MIN_INTERVAL_SECS, Probe, Report, WatchGit, WatchRequest, Watched,
+    self, Clock, Heads, MIN_INTERVAL_SECS, Probe, RETRY_FIRST, RETRY_MAX, Report, WatchGit,
+    WatchRequest, Watched,
 };
 use serde_json::Value;
 
@@ -361,7 +362,7 @@ fn a_sync_that_finds_the_remote_unreachable_is_quiet_and_tried_again() {
 }
 
 #[test]
-fn a_conflict_is_printed_once_and_not_retried_until_a_head_moves() {
+fn a_conflict_is_printed_once_and_synced_when_a_head_moves() {
     let git = FakeGit::new(vec![
         Probe::Heads(heads("L1", "R2")),
         Probe::Heads(heads("L1", "R2")),
@@ -369,16 +370,22 @@ fn a_conflict_is_printed_once_and_not_retried_until_a_head_moves() {
         // `kluris resolve` made the merge commit.
         Probe::Heads(heads("M", "R2")),
     ]);
-    let log = run_loop(&git, 4, vec![Ok(conflicted()), Ok(pushed())], |n| match n {
-        1 => Some(heads("L1", "R2")),
-        _ => Some(heads("M", "M")),
-    });
-    assert_eq!(log.syncs, ["acme", "acme"]);
+    // The one-minute retry at tick 3 finds the same conflict: silent (T-154).
+    let log = run_loop(
+        &git,
+        4,
+        vec![Ok(conflicted()), Ok(conflicted()), Ok(pushed())],
+        |n| match n {
+            3 => Some(heads("M", "M")),
+            _ => Some(heads("L1", "R2")),
+        },
+    );
+    assert_eq!(log.sync_ticks, [1, 3, 4]);
     assert_eq!(log.reports, ["acme: conflict", "acme: pushed"]);
 }
 
 #[test]
-fn a_block_is_printed_once_and_not_retried_until_a_head_moves() {
+fn a_block_is_printed_once_and_again_when_a_head_moves() {
     let git = FakeGit::new(vec![
         Probe::Heads(heads("L1", "R2")),
         Probe::Heads(heads("L1", "R2")),
@@ -386,7 +393,8 @@ fn a_block_is_printed_once_and_not_retried_until_a_head_moves() {
         Probe::Heads(heads("L1", "R3")),
     ]);
     let log = run_loop(&git, 4, vec![Ok(blocked())], |_| Some(heads("L1", "R1")));
-    assert_eq!(log.syncs, ["acme", "acme"]);
+    // The one-minute retry at tick 3 finds the same block: silent (T-154).
+    assert_eq!(log.sync_ticks, [1, 3, 4]);
     assert_eq!(log.reports, ["acme: blocked", "acme: blocked"]);
 }
 
@@ -410,15 +418,21 @@ fn a_block_that_clears_without_a_head_moving_syncs_again() {
             String::new()
         })
     });
-    let log = run_loop(&git, 5, vec![Ok(blocked()), Ok(pulled())], |n| match n {
-        1 => Some(heads("L1", "R1")),
-        _ => Some(heads("R2", "R2")),
-    });
-    assert_eq!(log.sync_ticks, [1, 4]);
+    // The one-minute retry at tick 3 is still blocked (silent, T-154).
+    let log = run_loop(
+        &git,
+        5,
+        vec![Ok(blocked()), Ok(blocked()), Ok(pulled())],
+        |n| match n {
+            3 => Some(heads("R2", "R2")),
+            _ => Some(heads("L1", "R1")),
+        },
+    );
+    assert_eq!(log.sync_ticks, [1, 3, 4]);
     assert_eq!(log.reports, ["acme: blocked", "acme: pulled"]);
-    // Once after the block, then once a tick (2, 3, 4) until it cleared;
+    // Once after each block, then once a tick (2, 3, 4) until it cleared;
     // none once the brain is in sync.
-    assert_eq!(*git.local_calls.borrow(), 4);
+    assert_eq!(*git.local_calls.borrow(), 5);
 }
 
 #[test]
@@ -433,7 +447,9 @@ fn a_block_that_changes_but_stays_is_synced_again_and_printed_once() {
         })
     });
     let log = run_loop(&git, 5, vec![Ok(blocked())], |_| Some(heads("L1", "R1")));
-    assert_eq!(log.sync_ticks, [1, 3]);
+    // The local change at tick 3 starts the backoff over: a retry a
+    // minute later, at tick 5 (T-154).
+    assert_eq!(log.sync_ticks, [1, 3, 5]);
     assert_eq!(log.reports, ["acme: blocked"]);
 }
 
@@ -476,6 +492,134 @@ fn a_refusal_that_stays_is_printed_once() {
     let log = run_loop(&git, 4, vec![Err(why.into())], |_| None);
     assert_eq!(log.sync_ticks, [1, 2, 3, 4]);
     assert_eq!(log.reports, [format!("acme: refused: {why}")]);
+}
+
+// A parked brain is also synced again on a backoff, whatever its status
+// says: some blockers clear without `git status` changing (T-150). The
+// loop's fake interval is 30 s, so tick k runs at (k - 1) * 30 s.
+
+fn blocked_by(path: &str) -> SyncReport {
+    SyncReport {
+        fetched: true,
+        blocked: vec![path.into()],
+        ..SyncReport::default()
+    }
+}
+
+/// The tick at which a run starting at 0 s reaches `secs`.
+fn tick_at(secs: u64) -> usize {
+    (secs / 30) as usize + 1
+}
+
+#[test]
+fn the_retry_backoff_is_one_minute_doubling_up_to_ten() {
+    assert_eq!(RETRY_FIRST, Duration::from_secs(60));
+    assert_eq!(RETRY_MAX, Duration::from_secs(600));
+    // Blocked for good; the status never changes.
+    let git = FakeGit::new(vec![Probe::Heads(heads("L1", "R2"))]);
+    let log = run_loop(&git, 72, vec![Ok(blocked())], |_| Some(heads("L1", "R1")));
+    // Parked at 0 s; retries at 60, 180 (+120), 420 (+240), 900 (+480),
+    // then every 600 s: 1500, 2100.
+    let expected: Vec<usize> = [0, 60, 180, 420, 900, 1500, 2100]
+        .iter()
+        .map(|s| tick_at(*s))
+        .collect();
+    assert_eq!(log.sync_ticks, expected);
+    // Printed once, however many retries.
+    assert_eq!(log.reports, ["acme: blocked"]);
+}
+
+#[test]
+fn an_ignored_file_in_the_way_removed_is_pulled_on_the_first_retry() {
+    // An ignored file does not show in `git status`: the local state
+    // stays the same; the retry a minute later gets through.
+    let mut probes = vec![Probe::Heads(heads("L1", "R2")); 3];
+    probes.push(Probe::Heads(heads("R2", "R2")));
+    let git = FakeGit::new(probes);
+    let log = run_loop(
+        &git,
+        5,
+        vec![Ok(blocked_by("private/draft.md")), Ok(pulled())],
+        |n| match n {
+            1 => Some(heads("L1", "R1")),
+            _ => Some(heads("R2", "R2")),
+        },
+    );
+    assert_eq!(log.sync_ticks, [1, tick_at(60)]);
+    assert_eq!(log.reports, ["acme: blocked", "acme: pulled"]);
+}
+
+#[test]
+fn a_repaired_pre_push_hook_pushes_on_a_retry() {
+    // The hook rejects the push (a refusal); it is fixed between the
+    // first and second retry, which nothing in `git status` shows.
+    let refused =
+        "merged locally, but the push was refused: error: failed to push some refs to '/r.git'";
+    let mut probes = vec![Probe::Heads(heads("L2", "R1")); 7];
+    probes.push(Probe::Heads(heads("L2", "L2")));
+    let git = FakeGit::new(probes);
+    let log = run_loop(
+        &git,
+        9,
+        vec![Err(refused.into()), Err(refused.into()), Ok(pushed())],
+        |n| match n {
+            3 => Some(heads("L2", "L2")),
+            _ => None,
+        },
+    );
+    assert_eq!(log.sync_ticks, [1, tick_at(60), tick_at(180)]);
+    assert_eq!(
+        log.reports,
+        [format!("acme: refused: {refused}"), "acme: pushed".into()]
+    );
+}
+
+#[test]
+fn a_local_change_resets_the_backoff() {
+    // Retries at 60 s and 180 s; at 210 s (tick 8) another file is edited:
+    // synced at once (still blocked, nothing printed) and the backoff
+    // starts over: 270 s, then 390 s (not 420 s).
+    let git = FakeGit::new(vec![Probe::Heads(heads("L1", "R2"))]).with_local(|tick| {
+        Some(if tick < 8 {
+            DIRTY.into()
+        } else {
+            format!("{DIRTY}\0?? notes/other.md")
+        })
+    });
+    let log = run_loop(&git, 15, vec![Ok(blocked())], |_| Some(heads("L1", "R1")));
+    assert_eq!(
+        log.sync_ticks,
+        [1, tick_at(60), tick_at(180), 8, tick_at(270), tick_at(390)]
+    );
+    assert_eq!(log.reports, ["acme: blocked"]);
+}
+
+#[test]
+fn a_head_move_resets_the_backoff() {
+    // The same, with a teammate's push at tick 8 instead: synced at once
+    // (a head move prints its outcome), then 270 s and 390 s.
+    let mut probes = vec![Probe::Heads(heads("L1", "R2")); 7];
+    probes.push(Probe::Heads(heads("L1", "R3")));
+    let git = FakeGit::new(probes);
+    let log = run_loop(&git, 15, vec![Ok(blocked())], |_| Some(heads("L1", "R1")));
+    assert_eq!(
+        log.sync_ticks,
+        [1, tick_at(60), tick_at(180), 8, tick_at(270), tick_at(390)]
+    );
+    assert_eq!(log.reports, ["acme: blocked", "acme: blocked"]);
+}
+
+#[test]
+fn a_retry_that_finds_a_new_reason_prints_it_once() {
+    let git = FakeGit::new(vec![Probe::Heads(heads("L1", "R2"))]);
+    let log = run_loop(
+        &git,
+        8,
+        vec![Ok(blocked()), Ok(blocked_by("notes/other.md"))],
+        |_| Some(heads("L1", "R1")),
+    );
+    assert_eq!(log.sync_ticks, [1, tick_at(60), tick_at(180)]);
+    assert_eq!(log.reports, ["acme: blocked", "acme: blocked"]);
 }
 
 #[test]
@@ -628,6 +772,53 @@ fn every_brain_is_watched_on_its_own() {
         &mut |_, _| {},
     );
     assert_eq!(syncs, ["alpha", "beta"]);
+}
+
+#[test]
+fn a_fix_made_as_soon_as_the_block_is_printed_is_seen_next_tick() {
+    // The person undoes the edit the moment the line appears: the local
+    // state the block was found in is the one before the line, so the next
+    // tick sees the change (not a minute later).
+    let acted = std::rc::Rc::new(std::cell::Cell::new(false));
+    let seen = acted.clone();
+    let git = FakeGit::new(vec![Probe::Heads(heads("L1", "R2"))]).with_local(move |_| {
+        Some(if seen.get() {
+            String::new()
+        } else {
+            DIRTY.into()
+        })
+    });
+    let stop = AtomicBool::new(false);
+    let interval = Duration::from_secs(30);
+    let clock = FakeClock {
+        now: RefCell::new(Instant::now()),
+        slept: RefCell::new(Vec::new()),
+        interval,
+        ticks: 2,
+        stop: &stop,
+    };
+    let root = PathBuf::from("/a");
+    let mut outcomes = VecDeque::from([Ok(blocked()), Ok(pulled())]);
+    let mut sync_ticks = Vec::new();
+    watch::watch(
+        &[Watched {
+            name: "acme",
+            root: &root,
+        }],
+        &git,
+        &clock,
+        &stop,
+        &WatchRequest {
+            interval,
+            probe_time_limit: Duration::from_secs(10),
+        },
+        &mut |_| {
+            sync_ticks.push(*git.probed.borrow());
+            outcomes.pop_front().unwrap_or(Ok(up_to_date()))
+        },
+        &mut |_, _| acted.set(true),
+    );
+    assert_eq!(sync_ticks, [1, 2]);
 }
 
 #[test]
@@ -986,9 +1177,13 @@ mod unix_signals {
         }
 
         fn line(&self) -> String {
+            self.line_within(Duration::from_secs(20))
+        }
+
+        fn line_within(&self, limit: Duration) -> String {
             self.lines
-                .recv_timeout(Duration::from_secs(20))
-                .expect("a line within 20 s")
+                .recv_timeout(limit)
+                .unwrap_or_else(|e| panic!("a line within {limit:?}: {e:?}"))
         }
 
         fn signal_group(&self, signal: &str) {
@@ -1182,6 +1377,57 @@ mod unix_signals {
                 .unwrap()
                 .contains("# Teammate"),
             "the teammate's change did not land"
+        );
+        watching.signal_group("INT");
+        let (code, err) = watching.exit(Duration::from_secs(5));
+        assert_eq!(code, Some(0), "{err}");
+    }
+
+    /// The narrow check's case (T-150): an ignored file is in the way of a
+    /// teammate's new file. Removing it changes nothing `git status` shows,
+    /// so the fast path cannot see it; the one-minute retry pulls.
+    #[test]
+    fn an_ignored_file_in_the_way_removed_is_pulled_on_the_retry() {
+        let w = World::new();
+        w.write(".gitignore", "kluris.yml\nprivate/\n");
+        w.git(&w.root(), &["commit", "-q", "-am", "ignore private/"]);
+        w.git(&w.root(), &["push", "-q"]);
+        // The teammate adds private/draft.md on purpose.
+        let mate = w.home().join("mate");
+        let bare = w.bare().to_string_lossy().into_owned();
+        let mate_s = mate.to_string_lossy().into_owned();
+        w.git(w.home(), &["clone", "-q", &bare, &mate_s]);
+        w.git(&mate, &["config", "user.name", "Bob"]);
+        w.git(&mate, &["config", "user.email", "bob@example.com"]);
+        fs::create_dir_all(mate.join("private")).unwrap();
+        fs::write(mate.join("private").join("draft.md"), "theirs\n").unwrap();
+        w.git(&mate, &["add", "-f", "private/draft.md"]);
+        w.git(&mate, &["commit", "-q", "-m", "draft"]);
+        w.git(&mate, &["push", "-q"]);
+        // Mine, ignored, at the same path.
+        w.write("private/draft.md", "mine\n");
+        let watching = Watching::start(&w, &[]);
+        let first = watching.line();
+        assert!(
+            first
+                .contains("acme: not synced, uncommitted changes are in the way: private/draft.md"),
+            "{first}"
+        );
+        let before = w.git(
+            &w.root(),
+            &["status", "--porcelain", "--untracked-files=all"],
+        );
+        fs::remove_file(w.root().join("private").join("draft.md")).unwrap();
+        let after = w.git(
+            &w.root(),
+            &["status", "--porcelain", "--untracked-files=all"],
+        );
+        assert_eq!(before, after, "the removal must not show in git status");
+        let next = watching.line_within(Duration::from_secs(90));
+        assert!(next.ends_with("acme: pulled"), "{next}");
+        assert_eq!(
+            fs::read_to_string(w.root().join("private").join("draft.md")).unwrap(),
+            "theirs\n"
         );
         watching.signal_group("INT");
         let (code, err) = watching.exit(Duration::from_secs(5));

@@ -15,8 +15,12 @@
 //!   the operation markers). It is reported once. Each tick it is synced
 //!   again when a head moved (a `kluris resolve`, a commit, a teammate's
 //!   push) or its local state changed (an edit undone, a rebase aborted, an
-//!   open conflict dropped), a sync that finds the same reason after a
-//!   local change printing nothing;
+//!   open conflict dropped); and, as some blockers clear without either (an
+//!   ignored file removed, a `pre-push` hook repaired), on a backoff:
+//!   [`RETRY_FIRST`] after it was parked, the wait doubling up to
+//!   [`RETRY_MAX`], starting over when a head moves or the local state
+//!   changes. A sync no head move started that finds the same reason
+//!   prints nothing;
 //! - after a sync that found the remote unreachable, where it was: the
 //!   next tick tries again.
 //!
@@ -42,6 +46,12 @@ pub const DEFAULT_INTERVAL_SECS: u64 = 30;
 
 /// The shortest interval, in seconds.
 pub const MIN_INTERVAL_SECS: u64 = 5;
+
+/// A parked brain's first real sync again, whatever its status says.
+pub const RETRY_FIRST: Duration = Duration::from_secs(60);
+
+/// The longest wait between two of those syncs (the wait doubles).
+pub const RETRY_MAX: Duration = Duration::from_secs(600);
 
 /// The time a probe of one brain may take.
 pub const PROBE_TIME_LIMIT: Duration = Duration::from_secs(15);
@@ -155,10 +165,25 @@ struct State {
     parked: Option<Parked>,
 }
 
-/// A conflict, a block or a refusal, and the local state it was found in.
+/// A conflict, a block or a refusal, the local state it was found in, and
+/// when to sync again though nothing seems to have changed.
 struct Parked {
     reason: Reason,
     local: Option<String>,
+    /// The wait before the next retry was scheduled.
+    backoff: Duration,
+    retry_at: Instant,
+}
+
+/// What made a parked brain's sync run.
+#[derive(PartialEq)]
+enum Trigger {
+    /// A head moved (or the brain was not parked).
+    Head,
+    /// Its local state changed.
+    Local,
+    /// The backoff ran out.
+    Retry,
 }
 
 /// What a person must see to, as it was reported.
@@ -265,30 +290,51 @@ fn tick(
     state.told_no_upstream = false;
     let deadline = || clock.now() + request.probe_time_limit;
     // Neither head moved: a brain in sync rests; one that waits for a
-    // person is synced again only if its local state changed.
-    let recheck = state.left_at.as_ref() == Some(&probed);
-    if recheck {
-        let Some(parked) = &state.parked else {
+    // person is synced again if its local state changed (the fast path), or
+    // when its backoff runs out, as some blockers clear unseen by `git
+    // status` (an ignored file removed, a hook repaired).
+    let trigger = if state.left_at.as_ref() != Some(&probed) {
+        Trigger::Head
+    } else {
+        let Some(parked) = &mut state.parked else {
             return;
         };
-        if git.local_state(brain.root, deadline()) == parked.local {
+        if git.local_state(brain.root, deadline()) != parked.local {
+            Trigger::Local
+        } else if clock.now() >= parked.retry_at {
+            parked.backoff = (parked.backoff * 2).min(RETRY_MAX);
+            parked.retry_at = clock.now() + parked.backoff;
+            Trigger::Retry
+        } else {
             return;
         }
-    }
+    };
     let outcome = sync(brain);
     if quiet(&outcome) {
         return;
     }
     if parked(&outcome) {
         let reason = Reason::of(&outcome);
-        // A recheck that finds the same reason says nothing new.
-        let same = recheck && state.parked.as_ref().is_some_and(|p| p.reason == reason);
+        // The state the reason was found in, read before the line goes out:
+        // what a person does on seeing it is then a change.
+        let local = git.local_state(brain.root, deadline());
+        // A sync no head move started that finds the same reason says
+        // nothing new.
+        let same =
+            trigger != Trigger::Head && state.parked.as_ref().is_some_and(|p| p.reason == reason);
         if !same {
             report(brain, Report::Synced(&outcome));
         }
+        // A head move or a local change starts the backoff over.
+        let (backoff, retry_at) = match (&trigger, &state.parked) {
+            (Trigger::Retry, Some(p)) => (p.backoff, p.retry_at),
+            _ => (RETRY_FIRST, clock.now() + RETRY_FIRST),
+        };
         state.parked = Some(Parked {
             reason,
-            local: git.local_state(brain.root, deadline()),
+            local,
+            backoff,
+            retry_at,
         });
         state.left_at = Some(probed);
         return;
