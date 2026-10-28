@@ -13,6 +13,7 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
+use std::sync::{PoisonError, RwLock};
 
 use sha2::{Digest, Sha256};
 use tempfile::TempDir;
@@ -41,6 +42,35 @@ fn archive_name(target: &str) -> String {
     } else {
         format!("kluris-{target}.tar.gz")
     }
+}
+
+/// A process this test binary starts while one of its threads has a file
+/// open for writing holds that descriptor until its exec, and Linux runs no
+/// file open for writing (ETXTBSY): a test that wrote the installed copy and
+/// ran it was refused now and then (T-183). Writing a file this binary runs
+/// takes this lock alone; starting a process shares it until `spawn`
+/// returns, when the child has exec'd and its inherited descriptors are
+/// closed.
+static EXEC_FILES: RwLock<()> = RwLock::new(());
+
+/// Write a file this test binary then runs (`write` opens, writes and
+/// closes it) while no process is being started.
+fn writing_exe<T>(write: impl FnOnce() -> T) -> T {
+    let _no_spawn = EXEC_FILES.write().unwrap_or_else(PoisonError::into_inner);
+    write()
+}
+
+/// `cmd.output()`, started while no file this binary runs is open for
+/// writing.
+fn output(cmd: &mut Command) -> std::io::Result<Output> {
+    let child = {
+        let _no_write = EXEC_FILES.read().unwrap_or_else(PoisonError::into_inner);
+        cmd.stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()?
+    };
+    child.wait_with_output()
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {
@@ -137,7 +167,7 @@ impl Fixture {
         fs::create_dir_all(&prefix).unwrap();
         fs::create_dir_all(config_home.join("kluris")).unwrap();
         let exe = prefix.join(exe_name());
-        fs::copy(assert_cmd::cargo::cargo_bin!("kluris"), &exe).unwrap();
+        writing_exe(|| fs::copy(assert_cmd::cargo::cargo_bin!("kluris"), &exe)).unwrap();
         let old_exe = fs::read(&exe).unwrap();
         let receipt = config_home.join("kluris").join("kluris-receipt.json");
         // dist 0.33.1's receipt, as its installer writes it (one line).
@@ -316,7 +346,7 @@ impl Fixture {
     }
 
     fn run(&self, args: &[&str]) -> Output {
-        self.cmd(&self.exe).args(args).output().unwrap()
+        output(self.cmd(&self.exe).args(args)).unwrap()
     }
 
     fn assert_untouched(&self) {
@@ -497,7 +527,7 @@ fn version_flag_installs_that_release() {
     let wanted = f.new_binary("3.98.0", 0, "wanted");
     f.serve(&[f.release("v3.99.0", &newest), f.release("v3.98.0", &wanted)]);
     for given in ["3.98.0", "v3.98.0"] {
-        fs::write(&f.exe, &f.old_exe).unwrap();
+        writing_exe(|| fs::write(&f.exe, &f.old_exe)).unwrap();
         fs::write(&f.receipt, &f.receipt_text).unwrap();
         let expected_code = 0;
         let out = f.run(&["self-update", "--version", given]);
@@ -628,22 +658,22 @@ fn kluris_github_token_is_sent_when_set_and_only_then() {
                     .set_body_json(vec![f.release_json(0, &f.release("v3.99.0", &new))]),
             ),
     );
-    let out = f
-        .cmd(&f.exe)
-        .args(["self-update", "--check", "--json"])
-        .env("KLURIS_GITHUB_TOKEN", "kt-123")
-        .output()
-        .unwrap();
+    let out = output(
+        f.cmd(&f.exe)
+            .args(["self-update", "--check", "--json"])
+            .env("KLURIS_GITHUB_TOKEN", "kt-123"),
+    )
+    .unwrap();
     assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
     assert!(stdout(&out).contains("\"latest\": \"3.99.0\""));
     // Without it (GITHUB_TOKEN is not Kluris's): no authorization header.
-    let out = f
-        .cmd(&f.exe)
-        .args(["self-update", "--check", "--json"])
-        .env("GITHUB_TOKEN", "gh-456")
-        .env("GH_TOKEN", "gh-789")
-        .output()
-        .unwrap();
+    let out = output(
+        f.cmd(&f.exe)
+            .args(["self-update", "--check", "--json"])
+            .env("GITHUB_TOKEN", "gh-456")
+            .env("GH_TOKEN", "gh-789"),
+    )
+    .unwrap();
     assert_eq!(out.status.code(), Some(1), "unanswered without the token");
     let received = f.rt.block_on(f.server.received_requests()).unwrap();
     assert_eq!(received.len(), 2);
@@ -719,11 +749,11 @@ fn refuses_when_the_running_binary_is_outside_the_install_prefix() {
     let new = f.new_binary("3.99.0", 0, "");
     f.serve(&[f.release("v3.99.0", &new)]);
     // The cargo build, not the installed copy.
-    let out = f
-        .cmd(Path::new(assert_cmd::cargo::cargo_bin!("kluris")))
-        .arg("self-update")
-        .output()
-        .unwrap();
+    let out = output(
+        f.cmd(Path::new(assert_cmd::cargo::cargo_bin!("kluris")))
+            .arg("self-update"),
+    )
+    .unwrap();
     assert_eq!(out.status.code(), Some(1));
     let err = stderr(&out);
     assert!(err.contains(&f.prefix.display().to_string()), "{err}");
@@ -768,7 +798,7 @@ fn a_plain_http_api_url_is_refused_unless_loopback() {
             if let Some(token) = token {
                 cmd.env("KLURIS_GITHUB_TOKEN", token);
             }
-            let out = cmd.output().unwrap();
+            let out = output(&mut cmd).unwrap();
             assert_eq!(out.status.code(), Some(1));
             let message = if json {
                 let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
@@ -782,12 +812,12 @@ fn a_plain_http_api_url_is_refused_unless_loopback() {
             );
         }
     }
-    let out = f
-        .cmd(&f.exe)
-        .args(["self-update"])
-        .env("KLURIS_GITHUB_API_URL", "http://github.example.invalid")
-        .output()
-        .unwrap();
+    let out = output(
+        f.cmd(&f.exe)
+            .args(["self-update"])
+            .env("KLURIS_GITHUB_API_URL", "http://github.example.invalid"),
+    )
+    .unwrap();
     assert_eq!(out.status.code(), Some(1));
     assert!(
         stderr(&out).contains("KLURIS_GITHUB_API_URL"),
@@ -1206,4 +1236,48 @@ fn interrupted_staging_files_are_swept_once_an_hour_old() {
             b"not ours"
         );
     }
+}
+
+/// A copy rewritten and run while other threads start processes, as the
+/// tests here do with the installed one, is never refused as "Text file
+/// busy" ([`EXEC_FILES`], T-183).
+#[cfg(target_os = "linux")]
+#[test]
+fn a_rewritten_copy_runs_while_other_threads_start_processes() {
+    use std::os::unix::fs::PermissionsExt;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    const RUNS: usize = 2000;
+    let dir = TempDir::new().unwrap();
+    let exe = dir.path().join(exe_name());
+    writing_exe(|| fs::write(&exe, "#!/bin/sh\nexit 0\n")).unwrap();
+    fs::set_permissions(&exe, fs::Permissions::from_mode(0o755)).unwrap();
+    let stop = AtomicBool::new(false);
+    let (busy, other) = std::thread::scope(|s| {
+        for _ in 0..4 {
+            s.spawn(|| {
+                while !stop.load(Ordering::Relaxed) {
+                    let _ = output(&mut Command::new("true"));
+                }
+            });
+        }
+        let (mut busy, mut other) = (0, Vec::new());
+        for i in 0..RUNS {
+            let script = format!("#!/bin/sh\nexit {}\n", i % 2);
+            if let Err(e) = writing_exe(|| fs::write(&exe, &script)) {
+                other.push(format!("write: {e}"));
+                continue;
+            }
+            match output(&mut Command::new(&exe)) {
+                Ok(out) if out.status.code() == Some((i % 2) as i32) => {}
+                Ok(out) => other.push(format!("exit {:?}", out.status.code())),
+                Err(e) if e.kind() == std::io::ErrorKind::ExecutableFileBusy => busy += 1,
+                Err(e) => other.push(format!("run: {e}")),
+            }
+        }
+        stop.store(true, Ordering::Relaxed);
+        (busy, other)
+    });
+    assert_eq!(busy, 0, "{busy} of {RUNS} runs refused: Text file busy");
+    assert!(other.is_empty(), "{other:?}");
 }
