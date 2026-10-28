@@ -821,31 +821,31 @@ fn marked_binary(f: &Fixture, version: &str, mark: &str) -> Vec<u8> {
 #[test]
 fn the_newest_release_is_never_a_prerelease() {
     let f = Fixture::new();
-    let rc = marked_binary(&f, "3.1.0-rc.1", "rc");
-    let stable = marked_binary(&f, "3.0.1", "stable");
+    let rc = marked_binary(&f, "3.2.0-rc.1", "rc");
+    let stable = marked_binary(&f, "3.1.1", "stable");
     // The candidate is the semver maximum and listed first.
-    f.serve(&[f.release("v3.1.0-rc.1", &rc), f.release("v3.0.1", &stable)]);
+    f.serve(&[f.release("v3.2.0-rc.1", &rc), f.release("v3.1.1", &stable)]);
     let out = f.run(&["self-update", "--check", "--json"]);
     assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
     assert_eq!(
         stdout(&out),
         format!(
-            "{{\"ok\": true, \"current\": \"{CURRENT}\", \"latest\": \"3.0.1\", \"update_available\": true}}\n"
+            "{{\"ok\": true, \"current\": \"{CURRENT}\", \"latest\": \"3.1.1\", \"update_available\": true}}\n"
         )
     );
-    assert_installed(&f, &["self-update"], &stable, "3.0.1");
+    assert_installed(&f, &["self-update"], &stable, "3.1.1");
     assert!(
         !f.requests()
-            .contains(&format!("GET {RELEASES}/tags/v3.1.0-rc.1"))
+            .contains(&format!("GET {RELEASES}/tags/v3.2.0-rc.1"))
     );
 }
 
 #[test]
 fn only_prereleases_newer_means_up_to_date() {
     let f = Fixture::new();
-    let rc = marked_binary(&f, "3.1.0-rc.1", "rc");
+    let rc = marked_binary(&f, "3.2.0-rc.1", "rc");
     f.serve(&[
-        f.release("v3.1.0-rc.1", &rc),
+        f.release("v3.2.0-rc.1", &rc),
         f.release(&format!("v{CURRENT}"), &rc),
     ]);
     let out = f.run(&["self-update", "--check", "--json"]);
@@ -868,36 +868,36 @@ fn only_prereleases_newer_means_up_to_date() {
 #[test]
 fn a_prerelease_installs_when_named() {
     let f = Fixture::new();
-    let rc = marked_binary(&f, "3.1.0-rc.1", "rc");
-    let stable = marked_binary(&f, "3.0.1", "stable");
-    f.serve(&[f.release("v3.1.0-rc.1", &rc), f.release("v3.0.1", &stable)]);
+    let rc = marked_binary(&f, "3.2.0-rc.1", "rc");
+    let stable = marked_binary(&f, "3.1.1", "stable");
+    f.serve(&[f.release("v3.2.0-rc.1", &rc), f.release("v3.1.1", &stable)]);
     assert_installed(
         &f,
-        &["self-update", "--version", "3.1.0-rc.1"],
+        &["self-update", "--version", "3.2.0-rc.1"],
         &rc,
-        "3.1.0-rc.1",
+        "3.2.0-rc.1",
     );
 }
 
 #[test]
 fn a_v2_release_published_after_v3_never_wins() {
     let f = Fixture::new();
-    // A v3 release newer than this build (3.0.0 itself would be no update).
-    let v3 = marked_binary(&f, "3.0.1", "v3");
+    // A v3 release newer than this build (3.1.0 itself would be no update).
+    let v3 = marked_binary(&f, "3.1.1", "v3");
     // Newest first, as GitHub lists them: v2.29.0 (no binaries) came later.
     let v2 = Release {
         tag: "v2.29.0".into(),
         assets: Vec::new(),
     };
-    f.serve(&[v2, f.release("v3.0.1", &v3)]);
+    f.serve(&[v2, f.release("v3.1.1", &v3)]);
     let out = f.run(&["self-update", "--check", "--json"]);
     assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
     assert!(
-        stdout(&out).contains("\"latest\": \"3.0.1\""),
+        stdout(&out).contains("\"latest\": \"3.1.1\""),
         "{}",
         stdout(&out)
     );
-    assert_installed(&f, &["self-update"], &v3, "3.0.1");
+    assert_installed(&f, &["self-update"], &v3, "3.1.1");
 }
 
 /// A v2 release as GitHub lists them: Python wheels, no Kluris 3 archive.

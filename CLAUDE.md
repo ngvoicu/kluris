@@ -1,7 +1,9 @@
-# Kluris 3 (branch `v3`)
+# Kluris 3
 
-Branch `v3` is the Kluris 3 Rust rewrite. Kluris 2 (Python, PyPI `kluris`) lives
-on `main`; its v2.28.11 tag is the frozen reference for everything here.
+`main` is Kluris 3, the Rust rewrite. Kluris 2 (Python) is the tag v2.29.0,
+and its PyPI project `kluris` is archived; v2's v2.28.11 tag is the frozen
+reference for everything here. Work goes on short-lived branches,
+fast-forwarded into `main` at release.
 
 Kluris turns AI agents into team subject matter experts by giving them shared,
 human-curated knowledge stored in git-backed **brains**. Kluris 3 keeps every v2
@@ -318,11 +320,9 @@ package, hence the package `kluris`.
   2026-10-26), not `v3.*`: dist cannot generate `v3.*` (`tag-namespace =
   "v3"` makes a glob that misses `v3.0.0`), and a hand edit would turn off
   its drift check. v2 and v3 stay apart by tree instead, as GitHub runs the
-  workflows of the tagged commit: v2.29.0 is tagged on a Python commit
-  before `main` becomes Rust and later v2 fixes on branch `v2`, which has no
-  release.yml, so they run v2's publish.yml; this tree has no publish.yml,
-  so a v3 tag can never reach PyPI; a v2 tag pushed onto a v3 commit makes
-  `dist plan` fail ("nothing to release"), never a release.
+  workflows of the tagged commit: this tree has no publish.yml, so a v3 tag
+  can never reach PyPI; a v2 tag pushed onto a v3 commit makes `dist plan`
+  fail ("nothing to release"), never a release.
   `scripts/release/check_workflows.sh` (ci.yml) fails if publish.yml, or any
   workflow publishing to PyPI, comes back.
 - **Tools** (`scripts/release/tool.sh dist|cargo-about|actionlint`): the
@@ -440,4 +440,5 @@ They live in the spec at
 `/Users/gabrielvoicu/Projects/ngvoicu/kluris/.specs/kluris-v3-rust/` (local to
 the `main` checkout, not in git): `SPEC.md` plus the research files
 (`research-03-v2-contract.md` is the v2 command contract with file:line
-references into v2.28.11). The v2 source on `main` is the read-only reference.
+references into v2.28.11). The v2 source at the tag v2.28.11 is the read-only
+reference.

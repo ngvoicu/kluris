@@ -85,7 +85,7 @@ fn picker(s: &Setup, req: Request) -> Picker {
 }
 
 const ALL_NOT_SUPPORTED: &str =
-    "--brain all is only supported on dream, status, mri, and companion commands.";
+    "--brain all is only supported on dream, status, mri, sync, and companion commands.";
 const NO_BRAINS: &str = "No brains registered. Run 'kluris create <name>' to create one.";
 
 // --- the cases of `_resolve_brains`, in v2's order ---------------------------

@@ -99,11 +99,11 @@ kluris doctor
 To install a particular release, set `KLURIS_VERSION`:
 
 ```sh
-curl -fsSL https://kluris.ngvoicu.dev/install.sh | KLURIS_VERSION=3.0.0 sh
+curl -fsSL https://kluris.ngvoicu.dev/install.sh | KLURIS_VERSION=3.1.0 sh
 ```
 
 ```powershell
-$env:KLURIS_VERSION = '3.0.0'; irm https://kluris.ngvoicu.dev/install.ps1 | iex
+$env:KLURIS_VERSION = '3.1.0'; irm https://kluris.ngvoicu.dev/install.ps1 | iex
 ```
 
 Set `KLURIS_NO_MODIFY_PATH=1` the same way to leave your PATH and shell files
@@ -118,7 +118,7 @@ old), Windows x86_64 and arm64.
 ```sh
 kluris self-update            # install the newest release, then run kluris doctor
 kluris self-update --check    # only show the installed and the newest version
-kluris self-update --version 3.0.0
+kluris self-update --version 3.1.0
 ```
 
 `self-update` checks the download's SHA-256 before it replaces the binary.

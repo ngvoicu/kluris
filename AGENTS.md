@@ -1,7 +1,9 @@
-# Kluris 3 (branch `v3`)
+# Kluris 3
 
-Branch `v3` is the Kluris 3 Rust rewrite. Kluris 2 (Python, PyPI `kluris`) lives
-on `main`; its v2.28.11 tag is the frozen reference for everything here.
+`main` is Kluris 3, the Rust rewrite. Kluris 2 (Python) is the tag v2.29.0,
+and its PyPI project `kluris` is archived; v2's v2.28.11 tag is the frozen
+reference for everything here. Work goes on short-lived branches,
+fast-forwarded into `main` at release.
 
 Kluris turns AI agents into team subject matter experts by giving them shared,
 human-curated knowledge stored in git-backed **brains**. Kluris 3 keeps every v2
@@ -60,7 +62,8 @@ has the whole design):
 ```bash
 cargo xtask windows --machine zeewin --parity     # cargo test --workspace --no-fail-fast, then parity
 cargo xtask windows --machine zeewin2 -- -p kluris-core   # extra cargo test args after --
-cargo xtask windows --parity                      # zeewin2 if free and allowed, else zeewin
+cargo xtask windows --parity                      # zeewin2 if none queued, free and allowed, else zeewin
+cargo xtask windows --machine zeewin2 --wait 0 --clippy   # ask once: 75 at once if busy or a run is queued
 cargo xtask windows --parity --parity-files parity/test_smoke.py   # only that parity file
 cargo xtask windows --machine zeewin --installer-smoke --wrapper ../sites/kluris-site/install.ps1
 cargo xtask windows --machine zeewin --installer-smoke --published 3.0.0-rc.1   # a GitHub release, live wrapper
@@ -75,20 +78,46 @@ cargo xtask windows --clippy                      # cargo clippy --workspace --a
 - **What goes.** `git archive` of HEAD, or of a `git stash create` commit when
   tracked files have uncommitted changes (untracked files do not go), without
   `target/`, `parity/.oracle/`, `parity/.venv/`.
+- **The queue, shared with ConsensFlow.** A busy machine is waited for, first
+  come first served, in the queue every runner on this Mac keeps: a folder
+  per machine in `~/.cf-windows-queues/` (or `CF_WINDOWS_QUEUES`), a ticket
+  per waiting or running run, `<arrival ms, 15 digits>-<pid, 10
+  digits>.ticket`, holding two lines (the tree's folder name, the command).
+  ConsensFlow's `cargo xtask windows` uses the same folder, names and rules
+  (its `tools/xtask/src/windows/queue.rs` is the protocol;
+  `xtask/src/ssh_ci/queue.rs` keeps it to the letter), so the two projects'
+  runs are served in the order they came. A ticket is alive while its run
+  touches it every 5 s; one untouched for 30 s (or touched more than 10 s
+  ahead of the clock) is a killed run, and whoever looks removes it. A live
+  ticket is removed only by its own run, when the run ends, however it ends
+  (success, failure, the bound, Ctrl-C, a lost connection). A run goes when
+  no older live ticket is there and the machine is ready, and holds its
+  ticket while it runs. `--wait MINUTES` (60 unless given, at most 1440)
+  bounds the wait; while waiting the run says its place and what holds the
+  machine, each minute or when that changes, and a wait that runs out says
+  how long it waited and what for, and ends with **75**. `--wait 0` asks
+  once and takes no ticket: 75 at once if the machine is busy, and before
+  asking it while a live run is queued for it.
 - **One run per machine, shared with ConsensFlow.** A run takes ConsensFlow's
   lock, `%USERPROFILE%\consensflow-build\.windows-run.lock` (opened for the run
   alone, ConsensFlow's `.windows-run.pid`/`.windows-run.id` records beside it),
-  before anything else. A held lock ends the command at once with **75**,
-  naming the holder (a Kluris or a ConsensFlow run, its id and process): it
-  never waits, takes or breaks it.
-- **zeewin2 is refused (75)** while poker-lab's `~/.compile-lock/owner` exists
-  on `zeelin` (a zeelin that does not answer is an Ubuntu that is not running,
-  and the check passes), while a Kluris Linux run holds zeelin's one-run lock
-  `~/.kluris-ci/.linux-run.lock` (the same laptop; asked with `flock -n` as
-  `cargo xtask linux` asks it, the holder named from `.linux-run.id`), and
-  while C: has under 50 GiB free. Those locks are only looked at: never held,
-  broken or waited on. With no `--machine`, a refused or busy zeewin2 sends
-  the run to zeewin.
+  before anything else. A held lock refuses the run with 75, naming the
+  holder (a Kluris or a ConsensFlow run, its id and process); the bootstrap
+  never waits on, takes or breaks it. The lock is the last word: a run it
+  refuses at the head of the queue goes back to its place and waits on (with
+  `--wait 0` the command ends with 75).
+- **zeewin2 is busy** (asked only at the head of its queue) while poker-lab's
+  `~/.compile-lock/owner` exists on `zeelin` (a zeelin that does not answer
+  is an Ubuntu that is not running, and the check passes), while a Kluris
+  Linux run holds zeelin's one-run lock `~/.kluris-ci/.linux-run.lock` (the
+  same laptop; asked with `flock -n` as `cargo xtask linux` asks it, the
+  holder named from `.linux-run.id`), and while C: has under 50 GiB free.
+  Those locks are only looked at: never held or broken, and never waited on
+  but through the queue. zeewin is asked nothing: its lock decides.
+- **No `--machine`** does what ConsensFlow's default choice does: zeewin2 while
+  no live run is queued in its folder (looked at first, and alone), it is
+  allowed and no run holds its lock; else zeewin, whose queue the run then
+  joins whatever it holds.
 - **Nothing on the machine changes.** No Windows settings, Defender, firewall,
   registry or PATH (user or machine) changes, no logins, no system-wide
   installs. Everything Kluris adds lives in `%USERPROFILE%\.kluris-ci\`:
@@ -146,6 +175,7 @@ cargo xtask linux --installer-smoke --wrapper ../sites/kluris-site/install.sh
 cargo xtask linux --installer-smoke --published 3.0.0-rc.1   # a GitHub release, live wrapper
 cargo xtask linux --installer-smoke --published 3.0.0 --unpinned   # GitHub's latest, which must be 3.0.0
 cargo xtask linux --clippy                        # clippy -D warnings on every target, no tests
+cargo xtask linux --wait 0 --clippy               # ask once: 75 at once if busy or a run is queued
 ```
 
 - **The machine.** `ssh zeelin` (10.6.0.6:22, user `zee`, bash; 16 threads,
@@ -153,18 +183,30 @@ cargo xtask linux --clippy                        # clippy -D warnings on every 
   the owner is logged in). It is poker-lab's compute box first. Facts:
   zeespirevpn-sme (`devices/agvlaptop.md`) and consensflow-sme
   (`operations/test-machines.md`). Builds run with 8 jobs.
-- **Refused with 75, nothing sent**, by a bounded probe (5 s to connect, 30 s
-  in all) and again by the bootstrap under its lock: zeelin not answering
-  ("zeelin not running": it is never started from here; an ssh that connected
-  but could not say is an error, 1), poker-lab's `~/.compile-lock/owner`
+- **The queue: zeewin2's.** zeelin and zeewin2 are one laptop, so a Linux run
+  waits its turn in zeewin2's folder of the queue the Windows runs and
+  ConsensFlow's runner keep (`~/.cf-windows-queues/zeewin2`, or
+  `$CF_WINDOWS_QUEUES/zeewin2`; the rules and `--wait` as in "Windows
+  machines" above): it waits behind the zeewin2 runs of either project that
+  came first, and theirs wait behind it. While it waits it says its place and
+  what holds the laptop, each minute or when that changes; a wait that runs
+  out ends with 75, and `--wait 0` asks once (75 at once while zeelin is busy
+  or a run is queued for zeewin2).
+- **Asked at the head of the queue, nothing sent until it may go**, by a
+  bounded probe (5 s to connect, 30 s in all) and again by the bootstrap
+  under its lock. zeelin not answering ends the command with **75** at once
+  ("zeelin not running": it is never started from here, nor waited on; an
+  ssh that connected but could not say is an error, 1). Busy, waited for,
+  each refusal naming the holder: poker-lab's `~/.compile-lock/owner`
   present, a run holding zeewin2 (its record
   `/mnt/c/Users/AGV/consensflow-build/.windows-run.id`, written by ConsensFlow's
   and Kluris's `cargo xtask windows`, or `/mnt/c/Users/AGV` out of sight), and
   Kluris's own one-run lock `~/.kluris-ci/.linux-run.lock` held (`flock -n`,
-  the holder's id and process in `.linux-run.id` beside it). Each refusal
-  names the holder. The other projects' locks are only looked at: never
-  taken, broken or waited on. They are checked when the run starts: a
-  poker-lab job or a Windows run that starts later runs beside it.
+  the holder's id and process in `.linux-run.id` beside it). The bootstrap's
+  75 is the last word: the run goes back to its place and waits on. The
+  other projects' locks are only looked at: never taken or broken, and never
+  waited on but through the queue. They are checked when the run starts: a
+  poker-lab job that starts later runs beside it.
 - **What goes.** The same tarball as for Windows (HEAD, or a `git stash
   create` commit with the uncommitted tracked changes; not `target/`,
   `parity/.oracle/`, `parity/.venv/`), by scp to
@@ -278,11 +320,9 @@ package, hence the package `kluris`.
   2026-10-26), not `v3.*`: dist cannot generate `v3.*` (`tag-namespace =
   "v3"` makes a glob that misses `v3.0.0`), and a hand edit would turn off
   its drift check. v2 and v3 stay apart by tree instead, as GitHub runs the
-  workflows of the tagged commit: v2.29.0 is tagged on a Python commit
-  before `main` becomes Rust and later v2 fixes on branch `v2`, which has no
-  release.yml, so they run v2's publish.yml; this tree has no publish.yml,
-  so a v3 tag can never reach PyPI; a v2 tag pushed onto a v3 commit makes
-  `dist plan` fail ("nothing to release"), never a release.
+  workflows of the tagged commit: this tree has no publish.yml, so a v3 tag
+  can never reach PyPI; a v2 tag pushed onto a v3 commit makes `dist plan`
+  fail ("nothing to release"), never a release.
   `scripts/release/check_workflows.sh` (ci.yml) fails if publish.yml, or any
   workflow publishing to PyPI, comes back.
 - **Tools** (`scripts/release/tool.sh dist|cargo-about|actionlint`): the
@@ -400,4 +440,5 @@ They live in the spec at
 `/Users/gabrielvoicu/Projects/ngvoicu/kluris/.specs/kluris-v3-rust/` (local to
 the `main` checkout, not in git): `SPEC.md` plus the research files
 (`research-03-v2-contract.md` is the v2 command contract with file:line
-references into v2.28.11). The v2 source on `main` is the read-only reference.
+references into v2.28.11). The v2 source at the tag v2.28.11 is the read-only
+reference.

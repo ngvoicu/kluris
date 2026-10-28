@@ -38,7 +38,7 @@ from pathlib import Path
 
 import pytest
 
-from harness import IS_WINDOWS, PARITY_DIR, Sandbox, normalize, oracle_kluris, run_both, run_v2, run_v3
+from harness import IS_WINDOWS, PARITY_DIR, Sandbox, normalize, oracle_kluris, par084, run_both, run_v2, run_v3
 from runs import brain_refs, clear_runs, fetched_teammates_push, parse_exact, team_brain, write_config
 
 WORKSPACE = PARITY_DIR.parent
@@ -266,9 +266,9 @@ def test_errors_match_v2(demo, args):
     r = run_both(demo, args)
     v2, v3 = r["v2"], r["v3"]
     assert v3.code == v2.code, (v2, v3)
-    assert normalize(v3.stdout, demo.root) == normalize(v2.stdout, demo.root)
+    assert normalize(v3.stdout, demo.root) == par084(normalize(v2.stdout, demo.root))
     if v2.stderr:
-        assert v3.stderr.splitlines()[-1] == v2.stderr.splitlines()[-1], (v2.stderr, v3.stderr)
+        assert v3.stderr.splitlines()[-1] == par084(v2.stderr.splitlines()[-1]), (v2.stderr, v3.stderr)
 
 
 def test_limit_that_is_not_an_integer_is_a_usage_error(demo):

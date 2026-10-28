@@ -398,6 +398,16 @@ def normalize_version_output(text: str) -> str:
     return text
 
 
+V2_BRAIN_ALL_REFUSED = "--brain all is only supported on dream, status, mri, and companion commands."
+V3_BRAIN_ALL_REFUSED = "--brain all is only supported on dream, status, mri, sync, and companion commands."
+
+
+def par084(v2_output: str) -> str:
+    """v2's output with the ``--brain all`` refusal worded as v3 words it
+    (PAR-084: ``sync`` takes ``--brain all`` too); any other text unchanged."""
+    return v2_output.replace(V2_BRAIN_ALL_REFUSED, V3_BRAIN_ALL_REFUSED)
+
+
 JsonPath = tuple[str | int, ...]
 
 

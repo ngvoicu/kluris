@@ -21,10 +21,10 @@ import re
 
 import pytest
 
-from harness import IS_WINDOWS, Sandbox, assert_json_equal, normalize
+from harness import IS_WINDOWS, V2_BRAIN_ALL_REFUSED, Sandbox, assert_json_equal, normalize, par084
 from runs import run_pair, run_pty, same_words, transcript, write_config
 
-ALL_NOT_SUPPORTED = "--brain all is only supported on dream, status, mri, and companion commands."
+ALL_NOT_SUPPORTED = V2_BRAIN_ALL_REFUSED
 NO_BRAINS = "No brains registered. Run 'kluris create <name>' to create one."
 
 
@@ -63,20 +63,21 @@ def single(*args: str) -> tuple[list[str], list[str]]:
 
 def assert_same_error(sb: Sandbox, pair, message: str | None = None, **kw) -> None:
     """Both fail alike: exit 1 and, under ``--json``, the same envelope on
-    stdout; otherwise ``Error: <message>`` on stderr and nothing on stdout."""
+    stdout; otherwise ``Error: <message>`` on stderr and nothing on stdout.
+    ``message`` is v2's; v3 words the ``--brain all`` refusal as PAR-084 has it."""
     v2_args, v3_args = pair
     r = run_pair(sb, v2_args, v3_args, **kw)
     v2, v3 = r["v2"], r["v3"]
     assert v2.code == 1, f"v2: exit {v2.code} {v2.stdout} {v2.stderr}"
     assert v3.code == v2.code, f"v3: exit {v3.code} {v3.stdout} {v3.stderr}"
     if "--json" in v2_args:
-        assert normalize(v3.stdout, sb.root) == normalize(v2.stdout, sb.root)
+        assert normalize(v3.stdout, sb.root) == par084(normalize(v2.stdout, sb.root))
         if message is not None:
             envelope = json.loads(normalize(v2.stdout, sb.root))
             assert envelope == {"ok": False, "error": normalize(message, sb.root)}
     else:
         assert v3.stdout == v2.stdout == ""
-        assert normalize(v3.stderr, sb.root) == normalize(v2.stderr, sb.root)
+        assert normalize(v3.stderr, sb.root) == par084(normalize(v2.stderr, sb.root))
         if message is not None:
             assert normalize(v2.stderr, sb.root) == normalize(f"Error: {message}\n", sb.root)
 

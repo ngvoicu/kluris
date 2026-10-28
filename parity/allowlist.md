@@ -560,3 +560,9 @@ One entry per difference, under its own heading:
 - Differs: its first line is `  Claude/Codex/Antigravity/etc: /kluris-<name>` where v2 prints `  Claude/Codex/Gemini/etc: /kluris-<name>`; the Hermes lines and everything else are v2's. `--json` output has no such line and is unchanged.
 - Decision: SPEC Decision Log 2026-10-27, "Among Google's agents Kluris supports only Antigravity CLI (`agy`); Gemini CLI is not a Kluris agent" (research-07: `agy` loads `~/.gemini/config/skills` and invokes skills as `/name`)
 - Tests: `crates/kluris-cli/tests/skill_refresh.rs::create_clean_keeps_v2s_output`, `parity/test_create_register_remove.py` (`par083`: v2's text output with this one line replaced is what every `create`/`register` text run must say; `test_create_text_output`)
+
+### PAR-084: the `--brain all` refusal names `sync`
+- Command: every command that works on one brain, given `--brain all` (`wake-up`, `search`, `commit`, `resolve`), with or without `--json`
+- Differs: the error reads `--brain all is only supported on dream, status, mri, sync, and companion commands.` where v2 says `... dream, status, mri, and companion commands.`: `sync` (PAR-074) takes `--brain all` too. The exit code (1), the JSON envelope's shape and the `Error: ` text form are v2's.
+- Decision: SPEC Decision Log 2026-10-26, "`kluris sync` details (T-130)" (`--brain all` syncs every brain; per-brain refusals with `--brain all`); the chief's T-176 brief (the refusal names every command that takes `--brain all`)
+- Tests: `crates/kluris-core/tests/resolve.rs::brain_all_without_allow_all_is_refused_first`, `crates/kluris-cli/tests/search.rs::brain_all_is_refused`, `parity/test_resolver.py::{test_brain_all_is_refused_on_single_brain_commands, test_brain_all_is_refused_before_counting_brains}`, `parity/test_search.py::test_errors_match_v2` (`all-json`, `all-text`), through `harness.par084`

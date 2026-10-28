@@ -232,7 +232,7 @@ fn brain_all_is_refused() {
         .args(["search", "jwt", "--brain", "all", "--json"])
         .assert()
         .code(1)
-        .stdout("{\"ok\": false, \"error\": \"--brain all is only supported on dream, status, mri, and companion commands.\"}\n");
+        .stdout("{\"ok\": false, \"error\": \"--brain all is only supported on dream, status, mri, sync, and companion commands.\"}\n");
 }
 
 #[test]

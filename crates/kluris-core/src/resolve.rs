@@ -70,7 +70,7 @@ impl fmt::Display for ResolveError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             ResolveError::AllNotSupported => f.write_str(
-                "--brain all is only supported on dream, status, mri, and companion commands.",
+                "--brain all is only supported on dream, status, mri, sync, and companion commands.",
             ),
             ResolveError::NoBrains => {
                 f.write_str("No brains registered. Run 'kluris create <name>' to create one.")
