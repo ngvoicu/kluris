@@ -781,10 +781,10 @@ enum Fetched {
 /// failed: one that turned into a symbolic ref or left `refs/remotes/`
 /// meanwhile refuses the brain before anything is merged. A compare-and-swap
 /// lost to a concurrent `git fetch` keeps that fetch's value; Kluris then
-/// fetches once more and goes on from that fetch's commit (from its own
-/// first one if it loses again). Offline when a fetch is stopped or the
-/// network is in the way; refused when the remote turned the fetch away
-/// ([`fetch_refused`]) or a lock stops the move ([`ref_locked`]).
+/// fetches once more and goes on from that second fetch's commit, whether
+/// its compare-and-swap wins or loses too. Offline when a fetch is stopped
+/// or the network is in the way; refused when the remote turned the fetch
+/// away ([`fetch_refused`]) or a lock stops the move ([`ref_locked`]).
 fn fetch_tracking<G: SyncGit>(
     git: &G,
     repo: &crate::git::Repo,
