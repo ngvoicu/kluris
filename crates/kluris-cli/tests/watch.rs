@@ -1681,6 +1681,17 @@ fn a_remote_repository_that_does_not_exist_is_printed_once() {
     refused_is_printed_once(&w, &[], "fatal: '");
 }
 
+#[test]
+fn a_missing_remote_named_with_network_words_is_printed_once() {
+    let w = World::new();
+    let gone = w.home().join("timed out.git");
+    w.git(
+        &w.root(),
+        &["remote", "set-url", "origin", &gone.to_string_lossy()],
+    );
+    refused_is_printed_once(&w, &[], "fatal: '");
+}
+
 /// Stop the process `pid`, one this test recorded as its own.
 #[cfg(unix)]
 fn stop_pid(pid: u32) {

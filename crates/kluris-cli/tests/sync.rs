@@ -344,3 +344,50 @@ fn a_host_that_does_not_resolve_is_still_offline() {
     assert_eq!(code, 0);
     assert_eq!(out, "alpha: offline, nothing changed\n");
 }
+
+#[test]
+fn a_missing_remote_named_with_network_words_is_refused_not_offline() {
+    let mut h = Home::new();
+    let root = h.brain("alpha");
+    for name in ["timed out.git", "Connection refused.git"] {
+        let gone = h.dir.path().join(name);
+        let gone = gone.to_string_lossy();
+        h.git(&root, &["remote", "set-url", "origin", &gone]);
+        let entry = assert_refused(&h, &root, "fatal: '", "fetch");
+        let why = entry["refused"].as_str().unwrap();
+        assert!(
+            why.contains(&format!("{name}' does not appear to be a git repository")),
+            "{why}"
+        );
+        assert_eq!(entry["fetched"], false);
+        assert_eq!(entry["merged"], false);
+    }
+}
+
+#[test]
+fn a_push_to_a_missing_remote_named_with_network_words_is_refused_not_offline() {
+    let mut h = Home::new();
+    let root = h.brain("alpha");
+    let gone = h.dir.path().join("Connection refused.git");
+    h.git(
+        &root,
+        &[
+            "remote",
+            "set-url",
+            "--push",
+            "origin",
+            &gone.to_string_lossy(),
+        ],
+    );
+    h.commit(&root, "notes/second.md", &neuron("Second", ""));
+    let bare = h.dir.path().join("alpha.git");
+    let remote = h.git(&bare, &["rev-parse", "main"]);
+    let entry = assert_refused(&h, &root, "fatal: '", "push");
+    let why = entry["refused"].as_str().unwrap();
+    assert!(
+        why.contains("Connection refused.git' does not appear to be a git repository"),
+        "{why}"
+    );
+    assert_eq!(entry["fetched"], true);
+    assert_eq!(h.git(&bare, &["rev-parse", "main"]), remote);
+}

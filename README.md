@@ -363,7 +363,8 @@ are), `offline` (no upstream, or no network: the host does not resolve,
 the connection is refused or times out, or the fetch or push runs past its
 minute), `blocked` (uncommitted files in the way) and `refused` (why the
 brain was left alone: an open conflict, listed in `conflicts`, a locked ref,
-a remote that turned it away, or under `--brain all` any other reason; else
+a remote-tracking ref Kluris will not move, a remote that turned it away, or
+under `--brain all` any other reason; else
 `null`). The exit
 code is 1 when a brain has a conflict, is blocked or was refused.
 
@@ -382,6 +383,18 @@ was stopped), `kluris sync` changes nothing and its `refused` names that
 file. If no git is running in the brain, remove the file and run `kluris
 sync` again; Kluris never removes it.
 
+Kluris moves only a remote-tracking ref of its own: one under
+`refs/remotes/` that is not a symbolic ref. When the branch's upstream maps
+somewhere else (a `remote.origin.fetch` such as
+`+refs/heads/main:refs/heads/main`, which makes `refs/heads/main` its own
+tracking ref) or `origin/main` is a symbolic ref (to `refs/heads/main`, say),
+moving it would move a branch while its files stayed behind, so `kluris
+sync` changes nothing and its `refused` names the ref and the fix: map the
+branch into `refs/remotes/origin/` with `git config --replace-all
+remote.origin.fetch '+refs/heads/*:refs/remotes/origin/*'`, or remove the
+symbolic ref with `git symbolic-ref --delete refs/remotes/origin/main`; the
+next sync makes it a plain ref.
+
 When the remote answers but turns the brain away (an ssh key or a token it
 rejects, a repository you cannot access or that does not exist), `kluris
 sync` stops and its `refused` gives git's message on one line, then the
@@ -391,7 +404,10 @@ refused fetch changes nothing. A refused push keeps what the sync brought
 in or merged locally (`merged` is `true`, `pushed` is `false`), and the
 next sync that can push sends it. Kluris never asks for credentials, so
 whatever needs a prompt there fails here too. Anything git says that is not
-known network trouble is shown this way, never taken for offline.
+known network trouble is shown this way, never taken for offline: Kluris
+reads network trouble only in the lines git, ssh and curl print for it,
+never in a quoted URL or path or in what the remote sent, so a missing
+repository named `timed out.git` is still refused.
 
 ### Settle a conflict
 

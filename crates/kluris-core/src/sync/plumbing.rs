@@ -126,9 +126,15 @@ pub trait SyncGit: Plumbing + FreshGit + TextMerger {
     /// The object a ref holds; `None` when there is no such ref.
     fn ref_value(&self, repo: &Repo, refname: &str) -> Result<Option<String>, GitError>;
 
-    /// `git update-ref -m <message> <refname> <new> <old>`: move a ref
-    /// only while it still holds `old` (`None`: only while there is no such
-    /// ref). Local and quick: no deadline.
+    /// The ref a symbolic ref points to (`git symbolic-ref --quiet`);
+    /// `None` when `refname` is a plain ref or there is no such ref.
+    fn symbolic_target(&self, repo: &Repo, refname: &str) -> Result<Option<String>, GitError>;
+
+    /// `git update-ref --no-deref -m <message> <refname> <new> <old>`: move
+    /// a ref only while it still holds `old` (`None`: only while there is
+    /// no such ref). A symbolic ref is replaced, never followed, so the
+    /// update cannot reach the ref it points to. Local and quick: no
+    /// deadline.
     fn move_ref(
         &self,
         repo: &Repo,
@@ -188,49 +194,70 @@ pub(crate) fn ref_lock(stderr: &str) -> Option<RefLock> {
     between(stderr, "fetching ref ", " failed: reference already exists").map(RefLock::Ref)
 }
 
-/// What git (or the ssh or curl it runs) says when the network is in the
-/// way, each from its source:
+/// Whether git's stderr says the network is in the way, in a form git, or
+/// the ssh or curl it runs, prints it, each from its source:
 ///
-/// - the host does not resolve: curl's `Could not resolve host: <host>`
-///   and `Could not resolve proxy: <proxy>` (`lib/hostip.c`, curl 8.11),
-///   which git prints after `unable to access '<url>': ` (`remote-curl.c`);
-///   OpenSSH's `ssh: Could not resolve hostname <host>: <reason>` (`ssh.c`,
-///   9.9p1); git's own `unable to look up <host> (port <port>) (<reason>)`
-///   for `git://` (`connect.c`, `git_tcp_connect_sock`, 2.55);
-/// - the connection is refused, times out or finds no route: curl's
-///   `Failed to connect to <host> port <port> after <n> ms: <reason>`
-///   (`lib/connect.c`); OpenSSH's `ssh: connect to host <host> port
-///   <port>: <strerror>` (`sshconnect.c`, `ssh_connect_direct`); git's
-///   `unable to connect to <host>:` with `errno=<strerror>` for `git://`
-///   (`connect.c`); and the C library's words for the errors themselves,
-///   `Connection refused`, `Network is unreachable`, `No route to host`;
-/// - a time limit: curl's `Resolving timed out after`, `Connection timed
-///   out after`, `Operation timed out after` (`lib/multi.c`), `name lookup
-///   timed out` (`lib/hostip.c`) and `Timeout was reached`
-///   (`lib/strerror.c`), and `ETIMEDOUT`'s `Connection timed out` (glibc,
-///   Windows) or `Operation timed out` (macOS).
+/// - curl's reason after git's `unable to access '<url>': `
+///   (`remote-curl.c`), the text after the last `': ` on that line, when it
+///   holds `Could not resolve host` or `Could not resolve proxy`
+///   (`lib/hostip.c`, curl 8.11), `Failed to connect to ` (`lib/connect.c`),
+///   `timed out` (`Resolving timed out after`, `Connection timed out after`,
+///   `Operation timed out after` from `lib/multi.c`, `name lookup timed out`
+///   from `lib/hostip.c`), `Timeout was reached` (`lib/strerror.c`), or the
+///   C library's words for the errors themselves, `Connection refused`,
+///   `Network is unreachable`, `No route to host`;
+/// - OpenSSH's `ssh: connect to host <host> port <port>: <strerror>`
+///   (`sshconnect.c`, `ssh_connect_direct`, 9.9p1) and `ssh: Could not
+///   resolve hostname <host>: <reason>` (`ssh.c`);
+/// - git's own `unable to look up <host> (port <port>) (<reason>)` and
+///   `unable to connect to <host>:` for `git://` (`connect.c`,
+///   `git_tcp_connect_sock`, 2.55).
 ///
-/// Anything else (`Permission denied (publickey).`, `Authentication
-/// failed`, `does not appear to be a git repository`, `Repository not
-/// found`, and git's `Could not read from remote repository.` after any
-/// of them) is not network trouble. git translates its own messages
-/// (`unable to look up`, `unable to connect to`); under another language
+/// Each line is read from its start, after git's `fatal: ` or `error: `:
+/// a line the remote sent (`remote: ...`) is never one of them, and a
+/// quoted URL or path is never read for the words, so a remote or a path
+/// named `timed out.git` stays what git says it is. Anything else
+/// (`Permission denied (publickey).`, `Authentication failed`, `does not
+/// appear to be a git repository`, `Repository not found`, and git's
+/// `Could not read from remote repository.` after any of them) is not
+/// network trouble. git translates its own messages (`unable to access`,
+/// `unable to look up`, `unable to connect to`); under another language
 /// those read as a refusal, shown rather than hidden.
 pub(crate) fn network_failure(stderr: &str) -> bool {
-    const NETWORK: [&str; 11] = [
-        "Could not resolve host",
-        "Could not resolve proxy",
+    stderr.lines().any(network_line)
+}
+
+/// One line of [`network_failure`].
+fn network_line(line: &str) -> bool {
+    const BY_THEMSELVES: [&str; 4] = [
+        "ssh: connect to host ",
+        "ssh: Could not resolve hostname ",
         "unable to look up ",
         "unable to connect to ",
+    ];
+    const CURL_REASONS: [&str; 8] = [
+        "Could not resolve host",
+        "Could not resolve proxy",
         "Failed to connect to ",
-        "ssh: connect to host ",
         "Connection refused",
         "Network is unreachable",
         "No route to host",
         "timed out",
         "Timeout was reached",
     ];
-    NETWORK.iter().any(|words| stderr.contains(words))
+    let line = line.trim();
+    let line = ["fatal: ", "error: "]
+        .iter()
+        .find_map(|prefix| line.strip_prefix(prefix))
+        .unwrap_or(line);
+    if BY_THEMSELVES.iter().any(|form| line.starts_with(form)) {
+        return true;
+    }
+    let Some(rest) = line.strip_prefix("unable to access '") else {
+        return false;
+    };
+    rest.rsplit_once("': ")
+        .is_some_and(|(_url, reason)| CURL_REASONS.iter().any(|words| reason.contains(words)))
 }
 
 /// git's stderr on one line: its lines trimmed, the empty ones dropped,
@@ -380,6 +407,17 @@ impl SyncGit for SystemGit {
         }
     }
 
+    fn symbolic_target(&self, repo: &Repo, refname: &str) -> Result<Option<String>, GitError> {
+        let args = ["symbolic-ref", "--quiet", refname];
+        let out = self.output(self.command(Some(&repo.dir), &args), &args);
+        match out {
+            Ok(out) => Ok(Some(first_line(&out.stdout))),
+            // A plain ref, or none.
+            Err(e) if e.code == Some(1) => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+
     fn move_ref(
         &self,
         repo: &Repo,
@@ -389,7 +427,8 @@ impl SyncGit for SystemGit {
         message: &str,
     ) -> Result<(), GitError> {
         // An empty old value: the ref must not exist.
-        let args = ["update-ref", "-m", message, refname, new, old.unwrap_or("")];
+        let old = old.unwrap_or("");
+        let args = ["update-ref", "--no-deref", "-m", message, refname, new, old];
         self.run(&repo.dir, &args).map(drop)
     }
 
@@ -689,6 +728,30 @@ mod tests {
             format!("ERROR: Permission to a/b.git denied to deploy-key.{read}"),
             "fatal: could not read Username for 'https://h': terminal prompts disabled".into(),
             String::new(),
+        ] {
+            assert!(!network_failure(&refused), "{refused}");
+        }
+    }
+
+    #[test]
+    fn network_words_in_a_path_a_url_or_a_remote_line_are_a_refusal() {
+        // What git 2.55 printed on macOS for each.
+        let read = "\nfatal: Could not read from remote repository.\n\nPlease make sure you have the correct access rights\nand the repository exists.\n";
+        for refused in [
+            format!("fatal: '/h/timed out.git' does not appear to be a git repository{read}"),
+            format!(
+                "fatal: '/h/Connection refused.git' does not appear to be a git repository{read}"
+            ),
+            format!("fatal: '/x/No route to host.git' does not appear to be a git repository{read}"),
+            "fatal: unable to access 'https://github.com/a/Could not resolve host.git/': URL rejected: Malformed input to a URL function\n".into(),
+            "remote: Repository not found.\nfatal: repository 'https://github.com/a/Could%20not%20resolve%20host.git/' not found\n".into(),
+            // A URL that holds `': ` and the words: curl's reason is after
+            // the last `': `.
+            "fatal: unable to access 'https://h/a': Failed to connect to x/': The requested URL returned error: 404\n".into(),
+            // A fetch whose upload-pack failed with these words.
+            "remote: fatal: the operation timed out on the server        \nerror: git upload-pack: git-pack-objects died with error.\nfatal: git upload-pack: aborting due to possible repository corruption on the remote side.\nremote: aborting due to possible repository corruption on the remote side.\nfatal: protocol error: bad pack header\n".into(),
+            // A push a pre-receive hook turned away with these words.
+            "remote: fatal: unable to access x: Connection timed out after 300001 milliseconds        \nremote: ssh: connect to host h port 22: Operation timed out        \nerror: failed to push some refs to '/h/hooked.git'\n".into(),
         ] {
             assert!(!network_failure(&refused), "{refused}");
         }
