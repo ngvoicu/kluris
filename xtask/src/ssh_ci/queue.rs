@@ -528,10 +528,10 @@ impl<'a> Turn<'a> {
 
     /// The machine's own lock refused the run although it was at the head
     /// (`why`, what the bootstrap said): the run keeps its place, and its next
-    /// look is this refusal.
+    /// look is this refusal, counted with the busy looks before it, so the
+    /// tree goes again after half a minute the first time, then every minute.
     pub fn refused_there(&mut self, why: String) {
         self.refused = Some(why);
-        self.machine_looks = 0;
     }
 
     /// Waits for this run's turn, and for the machine to be ready (`ready`),
@@ -574,7 +574,9 @@ impl<'a> Turn<'a> {
                     return Ok(Waited::Stopped);
                 }
                 let pause = pace.look_ms(Some(self.machine_looks));
-                self.machine_looks += 1;
+                if !matches!(asked, Ok(Look::Go(_))) {
+                    self.machine_looks += 1;
+                }
                 match asked {
                     Ok(Look::Go(lines)) => return Ok(Waited::Go(lines)),
                     Ok(Look::Gone(why)) => return Ok(Waited::Refused(why)),

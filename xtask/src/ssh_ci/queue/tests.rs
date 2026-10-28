@@ -657,6 +657,37 @@ mod waits {
     }
 
     #[test]
+    fn refusals_by_the_machines_lock_back_off_to_a_minute() {
+        let (_dir, queues) = queues();
+        let mut pace = Slow::at(DAY);
+        let mut say = |_: &str| Ok(());
+        let (mut turn, _) = Turn::take(
+            Some(&queues),
+            ZEEWIN2,
+            &who("mine"),
+            60,
+            &mut pace,
+            &mut say,
+        )
+        .unwrap();
+        let mut ready = || go();
+        assert_eq!(
+            turn.wait(&mut ready, &mut pace, &mut say).unwrap(),
+            Waited::Go(vec!["on it".into()])
+        );
+        // Each refusal sends the tree again at the next look: after the first,
+        // those looks are a minute apart, as at a busy machine.
+        for _ in 0..3 {
+            turn.refused_there("the lock is held by a ConsensFlow run".into());
+            assert_eq!(
+                turn.wait(&mut ready, &mut pace, &mut say).unwrap(),
+                Waited::Go(vec!["on it".into()])
+            );
+        }
+        assert_eq!(pace.pauses, [30_000, 60_000, 60_000]);
+    }
+
+    #[test]
     fn a_stop_ends_the_wait_and_the_ticket_goes() {
         let (dir, queues) = queues();
         let mut pace = Slow::at(DAY);
