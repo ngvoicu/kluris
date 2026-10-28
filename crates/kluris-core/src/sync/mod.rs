@@ -103,7 +103,8 @@ pub struct Conflict {
 /// How to sync.
 #[derive(Debug, Clone, Copy)]
 pub struct SyncRequest<'a> {
-    /// Skip the `pre-merge-commit` hook (`pre-push` always runs).
+    /// Skip the `pre-merge-commit` and `commit-msg` hooks (`pre-push`
+    /// always runs).
     pub no_verify: bool,
     /// For the maps rebuilt after a merge.
     pub maps: DreamOptions<'a>,

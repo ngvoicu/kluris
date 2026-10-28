@@ -265,7 +265,7 @@ enum Command {
         /// Brain name or 'all'
         #[arg(long = "brain", value_name = "BRAIN", allow_hyphen_values = true)]
         brain: Option<String>,
-        /// Skip the pre-merge-commit hook
+        /// Skip the pre-merge-commit and commit-msg hooks
         #[arg(long = "no-verify")]
         no_verify: bool,
         /// Keep syncing: check every --interval seconds, sync on a change, until Ctrl-C
@@ -322,7 +322,7 @@ enum Command {
         /// Drop the open conflict and change nothing else
         #[arg(long)]
         abort: bool,
-        /// Skip the pre-merge-commit hook
+        /// Skip the pre-merge-commit and commit-msg hooks
         #[arg(long = "no-verify")]
         no_verify: bool,
         /// JSON output
@@ -485,8 +485,9 @@ overlapping edits, a delete against an edit, different parents and other \
 frontmatter changed on both sides are left for you, with nothing changed \
 until `kluris resolve`. A file with uncommitted changes is never \
 overwritten: if incoming changes touch one, that brain is not synced. The \
-repository's pre-merge-commit, post-merge and pre-push hooks run \
-(--no-verify skips pre-merge-commit). Needs git 2.38 or newer.
+repository's pre-merge-commit, prepare-commit-msg, commit-msg, post-merge \
+and pre-push hooks run (--no-verify skips pre-merge-commit and commit-msg). \
+Needs git 2.38 or newer.
 
 --watch keeps going in the foreground: every --interval seconds (30, at \
 least 5) it asks the remote what its branch points at (git ls-remote, \
@@ -521,7 +522,9 @@ remote's (a deletion included), --file the content you merged by hand \
 is committed under your git identity, the brain moves to it and the result \
 is pushed. A file with uncommitted changes in the way stops it until you \
 commit or stash it; the choices are kept. --abort drops the open conflict \
-and changes nothing else.
+and changes nothing else. The repository's pre-merge-commit, \
+prepare-commit-msg, commit-msg, post-merge and pre-push hooks run \
+(--no-verify skips pre-merge-commit and commit-msg).
 
   kluris resolve --brain acme knowledge/auth.md --theirs
   kluris resolve --brain acme knowledge/auth.md --file merged.md
@@ -564,8 +567,9 @@ uncommitted. The author is your git identity; the message ends with a \
 Kluris-Approved-By trailer (git user.name) and, when KLURIS_AGENT is set, a \
 Co-Authored-By trailer naming the agent. The maps are built from what is \
 committed, so an uncommitted file never shows up in them. The repository's \
-hooks run as git commit runs them (--no-verify skips pre-commit and \
-commit-msg). Needs git 2.38 or newer.
+pre-commit, prepare-commit-msg, commit-msg and post-commit hooks run as git \
+commit runs them (--no-verify skips pre-commit and commit-msg). Needs git \
+2.38 or newer.
 
   kluris commit --brain acme --paths knowledge/auth.md,knowledge/oauth.md
   kluris commit --brain acme --paths old.md -m \"Remove the old note\" --json";

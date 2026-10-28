@@ -1,4 +1,4 @@
-# Kluris 3 checks on every pull request and on pushes to main and v3: format,
+# Kluris 3 checks on every pull request and on pushes to main: format,
 # clippy and the Rust tests on the three OSes, the line-coverage gate, the
 # third-party license report, dist's plan, and the release installers built
 # and run on each OS. The parity suite is parity.yml; releases are

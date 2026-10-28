@@ -92,6 +92,50 @@ fn commands_section(help: &str) -> Vec<&str> {
     names
 }
 
+/// The commands that run git hooks name each one in their `--help`, and
+/// which of them `--no-verify` skips (T-179).
+#[test]
+fn help_names_the_hooks_a_command_runs() {
+    let home = TempDir::new().unwrap();
+    // Whitespace goes first: a wrapped help line must not hide a hook name.
+    let flat = |args: &[&str]| {
+        let out = kluris(home.path()).args(args).output().unwrap();
+        String::from_utf8(out.stdout)
+            .unwrap()
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+    for command in ["sync", "resolve"] {
+        let help = flat(&[command, "--help"]);
+        for text in [
+            "pre-merge-commit",
+            "prepare-commit-msg",
+            "post-merge",
+            "pre-push",
+            "Skip the pre-merge-commit and commit-msg hooks",
+            "--no-verify skips pre-merge-commit and commit-msg",
+        ] {
+            assert!(
+                help.contains(text),
+                "kluris {command} --help lacks {text:?}:\n{help}"
+            );
+        }
+    }
+    let help = flat(&["commit", "--help"]);
+    for text in [
+        "pre-commit",
+        "prepare-commit-msg",
+        "post-commit",
+        "--no-verify skips pre-commit and commit-msg",
+    ] {
+        assert!(
+            help.contains(text),
+            "kluris commit --help lacks {text:?}:\n{help}"
+        );
+    }
+}
+
 #[test]
 fn help_prints_no_implementation_notes() {
     let home = TempDir::new().unwrap();
