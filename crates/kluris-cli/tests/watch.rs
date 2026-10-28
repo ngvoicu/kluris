@@ -1076,7 +1076,6 @@ impl World {
     }
 
     /// A teammate's clone at `<home>/mate` commits `rel` and pushes.
-    #[cfg_attr(not(unix), allow(dead_code))]
     fn teammate_pushes(&self, rel: &str) {
         let mate = self.home().join("mate");
         if !mate.exists() {
@@ -1679,6 +1678,78 @@ fn a_remote_repository_that_does_not_exist_is_printed_once() {
     let w = World::new();
     fs::rename(w.bare(), w.home().join("gone.git")).unwrap();
     refused_is_printed_once(&w, &[], "fatal: '");
+}
+
+/// HEAD, every ref (a symbolic one with its target), the index's entries,
+/// `git status`, `FETCH_HEAD` and every file of the brain.
+fn brain_state(w: &World) -> Vec<String> {
+    let root = w.root();
+    let mut state = vec![
+        w.git(&root, &["symbolic-ref", "HEAD"]),
+        w.git(
+            &root,
+            &[
+                "for-each-ref",
+                "--format=%(refname) %(objectname) %(symref)",
+            ],
+        ),
+        w.git(&root, &["ls-files", "--stage"]),
+        w.git(&root, &["status", "--porcelain"]),
+        format!("{:?}", fs::read(root.join(".git").join("FETCH_HEAD")).ok()),
+    ];
+    let mut stack = vec![root.clone()];
+    while let Some(dir) = stack.pop() {
+        for entry in fs::read_dir(&dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.file_name().is_some_and(|n| n == ".git") {
+                continue;
+            }
+            if path.is_dir() {
+                stack.push(path);
+            } else {
+                let bytes = fs::read(&path).unwrap();
+                state.push(format!("{} {bytes:?}", path.display()));
+            }
+        }
+    }
+    state.sort();
+    state
+}
+
+/// A tracking ref sync will not move (a symbolic ref to the checked-out
+/// branch) is printed once; the brain stays exactly as it was across the
+/// next ticks and the watch keeps running.
+#[test]
+fn a_tracking_ref_sync_will_not_move_is_printed_once() {
+    let w = World::new();
+    w.commit_locally();
+    w.teammate_pushes("notes/new.md");
+    w.git(
+        &w.root(),
+        &[
+            "symbolic-ref",
+            "refs/remotes/origin/main",
+            "refs/heads/main",
+        ],
+    );
+    let before = brain_state(&w);
+    let mut watching = Watching::start(&w, &[]);
+    let first = watching.line();
+    let (_, why) = first
+        .split_once(" acme: refused: ")
+        .unwrap_or_else(|| panic!("{first}"));
+    assert_eq!(
+        why,
+        "the upstream's remote-tracking ref refs/remotes/origin/main is a symbolic ref to refs/heads/main: moving it would move refs/heads/main, so Kluris leaves it alone; remove it with `git symbolic-ref --delete refs/remotes/origin/main` and run kluris sync again"
+    );
+    // Two more ticks at the 5 s interval.
+    let next = watching.lines.recv_timeout(Duration::from_secs(12));
+    assert!(next.is_err(), "printed again: {next:?}");
+    assert_eq!(brain_state(&w), before);
+    assert!(
+        watching.owned.child.try_wait().unwrap().is_none(),
+        "the watch ended"
+    );
 }
 
 #[test]

@@ -198,8 +198,10 @@ pub(crate) fn ref_lock(stderr: &str) -> Option<RefLock> {
 /// the ssh or curl it runs, prints it, each from its source:
 ///
 /// - curl's reason after git's `unable to access '<url>': `
-///   (`remote-curl.c`), the text after the last `': ` on that line, when it
-///   holds `Could not resolve host` or `Could not resolve proxy`
+///   (`remote-curl.c`), the text after the last `': ` on that line, or
+///   after git's `RPC failed; curl <n> ` when an http transfer failed once
+///   it had started (`remote-curl.c`; with an `HTTP <code>` before `curl`
+///   the server answered, so it is never this form), when it holds `Could not resolve host` or `Could not resolve proxy`
 ///   (`lib/hostip.c`, curl 8.11), `Failed to connect to ` (`lib/connect.c`),
 ///   `timed out` (`Resolving timed out after`, `Connection timed out after`,
 ///   `Operation timed out after` from `lib/multi.c`, `name lookup timed out`
@@ -235,6 +237,28 @@ fn network_line(line: &str) -> bool {
         "unable to look up ",
         "unable to connect to ",
     ];
+    let line = line.trim();
+    let line = ["fatal: ", "error: "]
+        .iter()
+        .find_map(|prefix| line.strip_prefix(prefix))
+        .unwrap_or(line);
+    if BY_THEMSELVES.iter().any(|form| line.starts_with(form)) {
+        return true;
+    }
+    if let Some(rest) = line.strip_prefix("RPC failed; curl ") {
+        let reason = rest.trim_start_matches(|c: char| c.is_ascii_digit());
+        return reason.len() < rest.len() && reason.strip_prefix(' ').is_some_and(curl_reason);
+    }
+    let Some(rest) = line.strip_prefix("unable to access '") else {
+        return false;
+    };
+    rest.rsplit_once("': ")
+        .is_some_and(|(_url, reason)| curl_reason(reason))
+}
+
+/// Whether curl's reason, as git prints it, says the network is in the way
+/// (see [`network_failure`]).
+fn curl_reason(reason: &str) -> bool {
     const CURL_REASONS: [&str; 8] = [
         "Could not resolve host",
         "Could not resolve proxy",
@@ -245,19 +269,7 @@ fn network_line(line: &str) -> bool {
         "timed out",
         "Timeout was reached",
     ];
-    let line = line.trim();
-    let line = ["fatal: ", "error: "]
-        .iter()
-        .find_map(|prefix| line.strip_prefix(prefix))
-        .unwrap_or(line);
-    if BY_THEMSELVES.iter().any(|form| line.starts_with(form)) {
-        return true;
-    }
-    let Some(rest) = line.strip_prefix("unable to access '") else {
-        return false;
-    };
-    rest.rsplit_once("': ")
-        .is_some_and(|(_url, reason)| CURL_REASONS.iter().any(|words| reason.contains(words)))
+    CURL_REASONS.iter().any(|words| reason.contains(words))
 }
 
 /// git's stderr on one line: its lines trimmed, the empty ones dropped,
@@ -716,6 +728,9 @@ mod tests {
             format!("ssh: connect to host 10.0.0.1 port 22: Network is unreachable{read}"),
             "fatal: unable to access 'https://h/x.git/': Connection timed out after 300001 milliseconds".into(),
             "fatal: unable to access 'https://h/x.git/': Could not resolve proxy: p".into(),
+            // An http transfer that failed after it started: curl's
+            // `lib/multi.c` text after git's `RPC failed; curl <n> `.
+            "error: RPC failed; curl 28 Operation timed out after 300000 milliseconds with 0 bytes received\nfetch-pack: unexpected disconnect while reading sideband packet\nfatal: early EOF\n".into(),
         ] {
             assert!(network_failure(&network), "{network}");
         }
@@ -727,6 +742,11 @@ mod tests {
             "fatal: unable to access 'https://h/x.git/': The requested URL returned error: 403".into(),
             format!("ERROR: Permission to a/b.git denied to deploy-key.{read}"),
             "fatal: could not read Username for 'https://h': terminal prompts disabled".into(),
+            // An http transfer that failed after it started, for a reason
+            // that is not network trouble.
+            "error: RPC failed; curl 22 The requested URL returned error: 403\nfatal: the remote end hung up unexpectedly\n".into(),
+            "error: RPC failed; HTTP 403 curl 22 The requested URL returned error: 403\nfatal: the remote end hung up unexpectedly\n".into(),
+            "error: RPC failed; curl 18 transfer closed with 99992 bytes remaining to read\nfetch-pack: unexpected disconnect while reading sideband packet\nfatal: protocol error: bad pack header\n".into(),
             String::new(),
         ] {
             assert!(!network_failure(&refused), "{refused}");
