@@ -279,7 +279,8 @@ package, hence the package `kluris`.
   and `env.fish` beside the receipt `~/.config/kluris/kluris-receipt.json`,
   and adds `. "$HOME/.config/kluris/env.sh"` to `~/.profile` and `~/.zshrc`
   (or the existing bash/zsh rc files) plus fish's `conf.d/kluris.env.fish`;
-  the PowerShell one checks no checksum, prepends to `HKCU\Environment\Path`
+  the PowerShell one checks no checksum itself (the site's `install.ps1`
+  does it first, see "Checksums"), prepends to `HKCU\Environment\Path`
   as REG_EXPAND_SZ and writes the receipt to `%LOCALAPPDATA%\kluris\`
   (one line, CRLF, no BOM; `binaries` `["kluris.exe"]`, `install_prefix` in
   backslashes, the same text it puts first in PATH). It rebuilds the user
@@ -419,12 +420,28 @@ package, hence the package `kluris`.
   a temp `sha256sum` that is `exec shasum -a 256 "$@"` first on PATH for
   the installer alone, and refuses with neither command;
   `installer-smoke.sh --wrapper` tests it with `sha256sum` off PATH and a
-  corrupted archive. **dist's PowerShell installer checks no checksum at
-  all**: a known dist 0.33.1 limitation, not fixed here (the download is
-  over https from GitHub; `kluris self-update` does check `sha256.sum`).
+  corrupted archive. dist's PowerShell installer checks no checksum at
+  all, so the site's `install.ps1` checks the archive before it runs it:
+  it reads the installer's own release from its `$app_version` line, picks
+  this machine's `kluris-<target>.zip` as the installer does (x86_64 or
+  arm64 from `OSArchitecture`), downloads it and its `.zip.sha256` from
+  where the installer would (`KLURIS_DOWNLOAD_URL`,
+  `INSTALLER_DOWNLOAD_URL`, the `KLURIS_INSTALLER_GHE_BASE_URL` /
+  `_GITHUB_BASE_URL` forms, else `<KLURIS_RELEASES_URL>/download/v<release>`),
+  compares their SHA-256, and only then runs the installer with
+  `KLURIS_DOWNLOAD_URL` set to the `file://` URL of the temp folder that
+  holds the checked zip (dist's supported override; it is given back as it
+  was afterwards). A mismatch ("kluris: <zip> does not match its published
+  SHA-256, so nothing was installed") or a `.sha256` it cannot download
+  throws before the installer runs: nothing installed, user PATH
+  untouched. `installer-smoke.ps1 -Wrapper` tests both refusals (no
+  `.kluris`, no receipt, the user PATH byte for byte as before) and that
+  each install fetches exactly the installer, the `.sha256` and the zip.
+  `kluris self-update` checks `sha256.sum` itself.
 - **Site wrappers** live in `../sites/kluris-site` (`install.sh`,
   `install.ps1`): thin pass-throughs to `releases/latest/download/` or
-  `releases/download/v$KLURIS_VERSION/`; a push there deploys the site.
+  `releases/download/v$KLURIS_VERSION/` (`install.ps1` checks the archive
+  before the installer runs, see "Checksums"); a push there deploys the site.
 
 ## Parity rule
 
