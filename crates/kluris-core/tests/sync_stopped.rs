@@ -252,3 +252,109 @@ fn moving_the_tracking_ref_replaces_a_symbolic_ref_and_never_follows_it() {
         .unwrap();
     assert_eq!(symbolic.status.code(), Some(1), "still symbolic");
 }
+
+/// The git's version, as `(major, minor)`.
+fn git_version(w: &World) -> (u32, u32) {
+    let text = w.run(w.dir.path(), &["--version"]);
+    let version = kluris_core::git::parse_version(&text).unwrap_or_else(|| panic!("{text}"));
+    (version.0, version.1)
+}
+
+/// A partial clone (`--filter=blob:none`) of the remote whose listed commit
+/// is not here after the fetch: the remote's upload-pack makes a commit to
+/// advertise to `git ls-remote`, then moves `main` to a sibling, which the
+/// fetch brings. Each contact with the remote is logged with its
+/// `GIT_TERMINAL_PROMPT` and `GIT_NO_LAZY_FETCH`, and one that could prompt,
+/// or that comes from a check meant to stay local, stalls for 20 s, so a
+/// lazy fetch of the missing commit shows. Sync checks the commit locally
+/// and inside the bound: it fetches nothing for the check, lists and
+/// fetches again, and fast-forwards to the sibling.
+#[test]
+fn a_listed_commit_missing_from_a_partial_clone_is_never_fetched_lazily() {
+    let w = World::new();
+    for (key, value) in [
+        ("uploadpack.allowFilter", "true"),
+        ("uploadpack.allowAnySHA1InWant", "true"),
+    ] {
+        w.run(&w.remote, &["config", key, value]);
+    }
+    let remote = sh_path(&w.remote);
+    let url = if remote.starts_with('/') {
+        format!("file://{remote}")
+    } else {
+        format!("file:///{remote}")
+    };
+    let partial = w.dir.path().join("partial");
+    w.run(
+        w.dir.path(),
+        &[
+            "clone",
+            "-q",
+            "--filter=blob:none",
+            &url,
+            &partial.to_string_lossy(),
+        ],
+    );
+    w.configure(&partial, "Ana Tester", "ana@example.com");
+    w.write(
+        &partial,
+        "kluris.yml",
+        "name: demo\ndescription: A demo brain\n",
+    );
+    let counter = w.dir.path().join("upload-pack-runs");
+    let log = w.dir.path().join("upload-pack-contacts");
+    let commit = |message: &str| {
+        format!(
+            "git -C '{remote}' -c user.name=Remote -c user.email=r@example.com commit-tree \"$t\" -p \"$p\" -m '{message}'"
+        )
+    };
+    let script = w.dir.path().join("partial-upload-pack.sh");
+    fs::write(
+        &script,
+        format!(
+            "#!/bin/sh\nn=$(($(cat '{counter}' 2>/dev/null || echo 0) + 1))\necho $n > '{counter}'\necho \"$n prompt=${{GIT_TERMINAL_PROMPT-}} nolazy=${{GIT_NO_LAZY_FETCH-}}\" >> '{log}'\nif [ \"${{GIT_TERMINAL_PROMPT-}}\" != 0 ] || [ \"${{GIT_NO_LAZY_FETCH-}}\" = 1 ]; then sleep 20; fi\nif [ $n = 1 ]; then\n  t=$(git -C '{remote}' rev-parse 'main^{{tree}}')\n  p=$(git -C '{remote}' rev-parse main)\n  git -C '{remote}' update-ref refs/heads/main \"$({advertised})\"\n  git upload-pack \"$@\" || exit $?\n  git -C '{remote}' update-ref refs/heads/main \"$({sibling})\"\n  exit 0\nfi\nexec git upload-pack \"$@\"\n",
+            counter = sh_path(&counter),
+            log = sh_path(&log),
+            advertised = commit("advertised"),
+            sibling = commit("sibling"),
+        ),
+    )
+    .unwrap();
+    w.run(
+        &partial,
+        &[
+            "config",
+            "remote.origin.uploadpack",
+            &format!("sh '{}'", sh_path(&script)),
+        ],
+    );
+    let limit = Duration::from_secs(5);
+    let mut request = w.request();
+    request.network_time_limit = limit;
+    let started = Instant::now();
+    let report = sync(&partial, &w.git(), &request).unwrap();
+    let took = started.elapsed();
+    let contacts = fs::read_to_string(&log).unwrap();
+    // Two rounds, each within its own bound.
+    assert!(
+        took < 2 * limit + Duration::from_secs(2),
+        "{took:?}\n{contacts}"
+    );
+    for line in contacts.lines() {
+        assert!(
+            line.contains("prompt=0"),
+            "a contact that could prompt\n{contacts}"
+        );
+    }
+    if git_version(&w) >= (2, 45) {
+        // `GIT_NO_LAZY_FETCH`: the missing commit is reported absent.
+        assert!(!contacts.contains("nolazy=1"), "a lazy fetch\n{contacts}");
+        assert_eq!(contacts.lines().count(), 4, "{contacts}");
+        assert!(report.fetched && report.merged, "{report:?}");
+        assert_eq!(w.head(&partial), w.remote_head());
+    } else {
+        // Older git fetches it lazily, never prompting, and the bound stops
+        // it: offline.
+        assert!(report.offline, "{report:?}\n{contacts}");
+    }
+}

@@ -13,7 +13,9 @@
 //!    other branches, pruning or `refs/remotes/<remote>/HEAD`) brings the
 //!    objects and writes nothing else (no ref, no `FETCH_HEAD`), so a fetch
 //!    stopped at the limit holds no ref lock (a terminated job on Windows
-//!    removes none); `git cat-file -e` then checks the commit is here.
+//!    removes none); `git cat-file -e` then checks the commit is here,
+//!    locally (a partial clone never fetches it for the check) and within
+//!    the same limit.
 //!    Offline (the time limit, or network trouble:
 //!    [`plumbing::network_failure`]) or without an upstream nothing
 //!    changes; any other failed `ls-remote` or fetch (a key or token

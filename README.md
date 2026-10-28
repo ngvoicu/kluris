@@ -372,8 +372,9 @@ The fetch has a one-minute limit. Sync learns the upstream's commit from
 its own `git ls-remote origin main`, then fetches that branch alone (no
 tags, other branches or pruning) for its objects, writing no ref and no
 `FETCH_HEAD`, so a fetch stopped at the limit leaves no lock behind; then it
-checks the commit is here. It reads nothing another git in the brain can
-rewrite (an editor's fetch, or one of yours), so what sync merges and
+checks the commit is here, locally (a partial clone never fetches it for
+that) and within the same minute. It reads nothing another git in the brain
+can rewrite (an editor's fetch, or one of yours), so what sync merges and
 pushes is always the commit origin listed. Kluris then moves the
 remote-tracking ref (`origin/main`) to that commit, unless another `git
 fetch` moved it meanwhile, in which case Kluris keeps that and fetches once

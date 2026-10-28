@@ -130,7 +130,8 @@ pub trait SyncGit: Plumbing + FreshGit + TextMerger {
     /// `git ls-remote <remote> <branch>` says the commit (its own output),
     /// then a fetch of the branch brings the objects and writes nothing
     /// else (no ref, `FETCH_HEAD`, tag, `packed-refs` or commit-graph),
-    /// then `git cat-file -e <commit>^{commit}` checks the commit is here.
+    /// then `git cat-file -e <commit>^{commit}` checks the commit is here,
+    /// locally and within the same bound.
     /// `ls-remote <remote>` and `fetch <remote>` both take the remote's
     /// own settings (git 2.38 to 2.55, `builtin/ls-remote.c` and
     /// `builtin/fetch.c`: `remote_get`, then `transport_get(remote,
@@ -420,13 +421,18 @@ impl SyncGit for SystemGit {
             }
             Err(e) => return Err(e),
         }
+        // Local only: in a partial clone git 2.45 and newer report a missing
+        // commit absent instead of fetching it (`GIT_NO_LAZY_FETCH`); older
+        // git fetches it, but never prompting and within the bound.
         let spec = format!("{commit}^{{commit}}");
         let check = ["cat-file", "-e", &spec];
-        match self.output(self.command(Some(dir), &check), &check) {
+        let mut local = env;
+        local.push(("GIT_NO_LAZY_FETCH", "1"));
+        match self.checked(dir, &check, &local, deadline) {
             Ok(_) => Ok(Fetch::Commit(commit)),
             // Not here (git cannot name it, or it is no commit).
-            Err(e) if e.code.is_some() => Ok(Fetch::Gone),
-            Err(e) => Err(FreshError::Failed(e)),
+            Err(FreshError::Failed(e)) if e.code.is_some() => Ok(Fetch::Gone),
+            Err(e) => Err(e),
         }
     }
 
