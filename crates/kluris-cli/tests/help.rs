@@ -93,7 +93,7 @@ fn commands_section(help: &str) -> Vec<&str> {
 }
 
 /// The commands that run git hooks name each one in their `--help`, and
-/// which of them `--no-verify` skips (T-179).
+/// which of them `--no-verify` skips.
 #[test]
 fn help_names_the_hooks_a_command_runs() {
     let home = TempDir::new().unwrap();

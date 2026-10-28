@@ -46,8 +46,8 @@ fn archive_name(target: &str) -> String {
 
 /// A process this test binary starts while one of its threads has a file
 /// open for writing holds that descriptor until its exec, and Linux runs no
-/// file open for writing (ETXTBSY): a test that wrote the installed copy and
-/// ran it was refused now and then (T-183). Writing a file this binary runs
+/// file open for writing (ETXTBSY): a test that writes the installed copy
+/// and runs it can be refused. Writing a file this binary runs
 /// takes this lock alone; starting a process shares it until `spawn`
 /// returns, when the child has exec'd and its inherited descriptors are
 /// closed.
@@ -1240,7 +1240,7 @@ fn interrupted_staging_files_are_swept_once_an_hour_old() {
 
 /// A copy rewritten and run while other threads start processes, as the
 /// tests here do with the installed one, is never refused as "Text file
-/// busy" ([`EXEC_FILES`], T-183).
+/// busy" ([`EXEC_FILES`]).
 #[cfg(target_os = "linux")]
 #[test]
 fn a_rewritten_copy_runs_while_other_threads_start_processes() {
