@@ -7,9 +7,13 @@
 //!    one with a merge, rebase, cherry-pick or revert in progress, and one
 //!    with an open sync conflict ([`PENDING`], for `kluris resolve`);
 //! 2. fetches the current branch's upstream, never prompting, within the
-//!    network time limit; offline (or without an upstream) nothing changes;
-//!    a fetch git stopped on a ref lock refuses the brain, naming the lock
-//!    file ([`ref_locked`]), which Kluris never removes;
+//!    network time limit; offline (the time limit, or network trouble:
+//!    [`plumbing::network_failure`]) or without an upstream nothing
+//!    changes; a fetch git stopped on a ref lock refuses the brain, naming
+//!    the lock file ([`ref_locked`]), which Kluris never removes; any other
+//!    failed fetch (a key or token turned away, no such repository) refuses
+//!    it with git's message and the fix ([`refused_access`]), and so does
+//!    a push git could not make for such a reason;
 //! 3. behind only: fast-forwards; ahead only: pushes; diverged: merges in
 //!    memory ([`merge`]) and, without conflicts, commits the merge
 //!    (`commit-tree`, two parents, `kluris: sync` with `Kluris-Sync: auto`,
@@ -126,13 +130,14 @@ pub struct SyncReport {
     /// Every file with uncommitted changes (untracked included), left as
     /// it is.
     pub skipped_dirty: Vec<String>,
-    /// No upstream, or the remote could not be reached.
+    /// No upstream, or the remote could not be reached (network trouble,
+    /// or the time limit).
     pub offline: bool,
     /// The uncommitted files the incoming changes would overwrite; when
     /// any, nothing changed.
     pub blocked: Vec<String>,
-    /// Why the brain was left alone (an open conflict, a locked ref), else
-    /// `None`.
+    /// Why the brain was left alone (an open conflict, a locked ref, a
+    /// remote that turned it away), else `None`.
     pub refused: Option<String>,
 }
 
@@ -628,8 +633,8 @@ pub fn sync<G: SyncGit>(
     for _ in 0..PUSH_ATTEMPTS {
         let deadline = Instant::now() + request.network_time_limit;
         if let Err(e) = git.fetch(&repo.dir, &tracking.remote, deadline) {
-            match locked_ref(git, &repo, &e) {
-                Some(lock) => report.refused = Some(ref_locked(&lock)),
+            match fetch_refused(git, &repo, &tracking.remote, &e) {
+                Some(why) => report.refused = Some(why),
                 None => report.offline = true,
             }
             return Ok(report);
@@ -715,6 +720,10 @@ pub fn sync<G: SyncGit>(
                 report.offline = true;
                 return Ok(report);
             }
+            PushOutcome::Refused(stderr) => {
+                report.refused = Some(refused_access("push", &tracking.remote, &stderr));
+                return Ok(report);
+            }
             PushOutcome::Failed(detail) => return Err(SyncError::Push(detail)),
         }
     }
@@ -727,6 +736,42 @@ pub fn ref_locked(lock: &str) -> String {
     format!(
         "a ref is locked: {lock} exists, so git cannot update the brain's refs; if no git is running in this brain, remove that file and run kluris sync again"
     )
+}
+
+/// Why sync leaves a brain whose remote turned it away (a key or token
+/// that does not work, no access, no such repository: anything but network
+/// trouble): git's message on one line, then the fix. `command` is `fetch`
+/// or `push`.
+pub fn refused_access(command: &str, remote: &str, stderr: &str) -> String {
+    let mut message = plumbing::one_line(stderr);
+    if message.is_empty() {
+        message = format!("git {command} {remote} failed");
+    }
+    format!(
+        "{message}; check that this machine can run `git {command} {remote}` in this brain without a prompt"
+    )
+}
+
+/// Why a failed fetch leaves the brain alone, or `None` when it is offline:
+/// the time limit, or network trouble ([`plumbing::network_failure`]).
+/// A ref lock is named ([`ref_locked`]); anything else is a refusal
+/// ([`refused_access`]), shown, never taken for offline.
+fn fetch_refused<G: SyncGit>(
+    git: &G,
+    repo: &crate::git::Repo,
+    remote: &str,
+    error: &fresh::FreshError,
+) -> Option<String> {
+    let fresh::FreshError::Failed(e) = error else {
+        return None;
+    };
+    if let Some(lock) = locked_ref(git, repo, error) {
+        return Some(ref_locked(&lock));
+    }
+    if plumbing::network_failure(&e.detail) {
+        return None;
+    }
+    Some(refused_access("fetch", remote, &e.detail))
 }
 
 /// The lock file a failed fetch was stopped by, if that is why it failed:

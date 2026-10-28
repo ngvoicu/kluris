@@ -421,6 +421,35 @@ fn a_locked_ref_is_printed_once() {
 }
 
 #[test]
+fn a_remote_that_turns_the_brain_away_is_printed_once() {
+    // The probe's `ls-remote` is refused (not network trouble): one sync
+    // says why, then the retry backoff (60 s, then 120 s); access back at
+    // tick 5.
+    let why = "Permission denied (publickey); check that this machine can run `git fetch origin` in this brain without a prompt";
+    let refused = SyncReport {
+        refused: Some(why.into()),
+        ..SyncReport::default()
+    };
+    let mut probes = vec![Probe::Refused { local: "L1".into() }; 4];
+    probes.push(Probe::Heads(heads("L1", "L1")));
+    let git = FakeGit::new(probes);
+    let log = run_loop(
+        &git,
+        5,
+        vec![Ok(refused.clone()), Ok(refused), Ok(up_to_date())],
+        |n| match n {
+            3 => Some(heads("L1", "L1")),
+            _ => None,
+        },
+    );
+    assert_eq!(log.sync_ticks, [1, 3, 5]);
+    assert_eq!(
+        log.reports,
+        [format!("acme: refused: {why}"), "acme: up to date".into()]
+    );
+}
+
+#[test]
 fn a_block_is_printed_once_and_again_when_a_head_moves() {
     let git = FakeGit::new(vec![
         Probe::Heads(heads("L1", "R2")),
@@ -1495,9 +1524,17 @@ struct Watching {
 
 impl Watching {
     fn start(w: &World, extra: &[&str]) -> Watching {
+        Watching::start_with(w, extra, &[])
+    }
+
+    /// [`Watching::start`] with these variables set for the watch.
+    fn start_with(w: &World, extra: &[&str], env: &[(&str, &str)]) -> Watching {
         let mut args = vec!["sync", "--watch", "--brain", "acme", "--interval", "5"];
         args.extend(extra);
         let mut cmd = w.command(&args);
+        for (key, value) in env {
+            cmd.env(key, value);
+        }
         cmd.stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .stdin(Stdio::null());
@@ -1574,9 +1611,9 @@ impl Watching {
 }
 
 /// F163-4: a watch test that fails leaves no watch running. The remote is
-/// gone, so the watch's fetch fails and it stays quiet (the review's probe);
-/// waiting for its first line panics, and the panic unwinds through the
-/// guard, which stops the watch and waits for it.
+/// gone, so the watch prints a refusal, not the line the test waits for;
+/// the assertion panics, and the panic unwinds through the guard, which
+/// stops the watch and waits for it.
 #[test]
 fn a_failing_watch_test_leaves_no_watch_running() {
     let pid = Mutex::new(None);
@@ -1599,6 +1636,49 @@ fn a_failing_watch_test_leaves_no_watch_running() {
         stop_pid(pid);
     }
     assert!(!survived, "watch {pid} outlived its failed test");
+}
+
+/// A remote that turns the brain away is printed once, with git's
+/// message and the fix, and nothing more on the next ticks (the retry is
+/// 60 s away).
+fn refused_is_printed_once(w: &World, env: &[(&str, &str)], message: &str) {
+    let watching = Watching::start_with(w, &[], env);
+    let first = watching.line_within(Duration::from_secs(20));
+    let fix = "; check that this machine can run `git fetch origin` in this brain without a prompt";
+    let (_, line) = first
+        .split_once(" acme: refused: ")
+        .unwrap_or_else(|| panic!("{first}"));
+    assert!(line.starts_with(message), "{first}");
+    assert!(line.ends_with(fix), "{first}");
+    // Two more ticks at the 5 s interval.
+    let next = watching.lines.recv_timeout(Duration::from_secs(12));
+    assert!(next.is_err(), "printed again: {next:?}");
+}
+
+#[test]
+fn a_key_the_server_rejects_is_printed_once() {
+    let w = World::new();
+    let script = w.home().join("fake-ssh");
+    fs::write(
+        &script,
+        "#!/bin/sh\necho 'Permission denied (publickey).' >&2\nexit 255\n",
+    )
+    .unwrap();
+    let ssh = format!("sh '{}'", script.display().to_string().replace('\\', "/"));
+    let url = "ssh://git@example.invalid/acme.git";
+    w.git(&w.root(), &["remote", "set-url", "origin", url]);
+    refused_is_printed_once(
+        &w,
+        &[("GIT_SSH_COMMAND", &ssh)],
+        "Permission denied (publickey). fatal: Could not read from remote repository. Please make sure you have the correct access rights and the repository exists; check",
+    );
+}
+
+#[test]
+fn a_remote_repository_that_does_not_exist_is_printed_once() {
+    let w = World::new();
+    fs::rename(w.bare(), w.home().join("gone.git")).unwrap();
+    refused_is_printed_once(&w, &[], "fatal: '");
 }
 
 /// Stop the process `pid`, one this test recorded as its own.

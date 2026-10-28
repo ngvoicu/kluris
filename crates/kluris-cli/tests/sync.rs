@@ -228,3 +228,119 @@ fn a_locked_ref_is_reported_with_its_path_not_as_offline() {
     assert_eq!(doc["brains"][0]["merged"], true);
     assert!(h.read(&root, "notes/new.md").contains("# New"));
 }
+
+/// A fetch the remote turns away is `refused`, with git's message
+/// on one line and the fix, never `offline`: nothing fetched, exit 1, and
+/// the text says the same.
+fn assert_refused(h: &Home, root: &std::path::Path, message: &str, command: &str) -> Value {
+    let head = h.git(root, &["rev-parse", "HEAD"]);
+    let (code, doc) = h.json(&["sync", "--brain", "alpha", "--json"]);
+    assert_eq!(code, 1, "{doc}");
+    let entry = &doc["brains"][0];
+    assert_eq!(keys(entry), BRAIN_KEYS);
+    assert_eq!(entry["offline"], false, "{doc}");
+    assert_eq!(entry["pushed"], false, "{doc}");
+    let why = entry["refused"].as_str().unwrap_or_else(|| panic!("{doc}"));
+    assert!(why.starts_with(message), "{why}");
+    assert!(why.ends_with(&the_fix(command)), "{why}");
+    assert!(!why.contains('\n'), "{why}");
+    let (code, out, _) = h.run(&["sync", "--brain", "alpha"]);
+    assert_eq!(code, 1);
+    assert_eq!(out, format!("alpha: refused: {why}\n"));
+    if command == "fetch" {
+        assert_eq!(h.git(root, &["rev-parse", "HEAD"]), head);
+    }
+    entry.clone()
+}
+
+#[test]
+fn a_key_the_server_rejects_is_refused_not_offline() {
+    let mut h = Home::new();
+    let root = h.brain("alpha");
+    let ssh = fake_ssh(h.dir.path());
+    h.env.push(("GIT_SSH_COMMAND".into(), ssh));
+    h.git(
+        &root,
+        &[
+            "remote",
+            "set-url",
+            "origin",
+            "ssh://git@example.invalid/alpha.git",
+        ],
+    );
+    let entry = assert_refused(&h, &root, DENIED, "fetch");
+    assert_eq!(
+        entry["refused"].as_str().unwrap(),
+        format!("{DENIED}{}", the_fix("fetch"))
+    );
+    assert_eq!(entry["fetched"], false);
+    assert_eq!(entry["merged"], false);
+}
+
+#[test]
+fn a_remote_repository_that_does_not_exist_is_refused_not_offline() {
+    let mut h = Home::new();
+    let root = h.brain("alpha");
+    let gone = h.dir.path().join("gone.git");
+    h.git(&root, &["remote", "set-url", "origin", &file_url(&gone)]);
+    let entry = assert_refused(&h, &root, "fatal: '", "fetch");
+    let why = entry["refused"].as_str().unwrap();
+    assert!(
+        why.contains("gone.git' does not appear to be a git repository"),
+        "{why}"
+    );
+    assert_eq!(entry["fetched"], false);
+}
+
+#[test]
+fn a_push_the_server_rejects_is_refused_not_offline() {
+    // The fetch URL answers; the push URL turns the key away.
+    let mut h = Home::new();
+    let root = h.brain("alpha");
+    let ssh = fake_ssh(h.dir.path());
+    h.env.push(("GIT_SSH_COMMAND".into(), ssh));
+    h.git(
+        &root,
+        &[
+            "remote",
+            "set-url",
+            "--push",
+            "origin",
+            "ssh://git@example.invalid/alpha.git",
+        ],
+    );
+    h.commit(&root, "notes/second.md", &neuron("Second", ""));
+    let bare = h.dir.path().join("alpha.git");
+    let remote = h.git(&bare, &["rev-parse", "main"]);
+    let entry = assert_refused(&h, &root, DENIED, "push");
+    assert_eq!(
+        entry["refused"].as_str().unwrap(),
+        format!("{DENIED}{}", the_fix("push"))
+    );
+    assert_eq!(entry["fetched"], true);
+    assert_eq!(h.git(&bare, &["rev-parse", "main"]), remote);
+}
+
+#[test]
+fn a_host_that_does_not_resolve_is_still_offline() {
+    let mut h = Home::new();
+    let root = h.brain("alpha");
+    h.git(
+        &root,
+        &[
+            "remote",
+            "set-url",
+            "origin",
+            "ssh://git@nonexistent.invalid/x.git",
+        ],
+    );
+    let (code, doc) = h.json(&["sync", "--brain", "alpha", "--json"]);
+    assert_eq!(code, 0, "{doc}");
+    let entry = &doc["brains"][0];
+    assert_eq!(entry["offline"], true, "{doc}");
+    assert_eq!(entry["fetched"], false, "{doc}");
+    assert_eq!(entry["refused"], Value::Null, "{doc}");
+    let (code, out, _) = h.run(&["sync", "--brain", "alpha"]);
+    assert_eq!(code, 0);
+    assert_eq!(out, "alpha: offline, nothing changed\n");
+}

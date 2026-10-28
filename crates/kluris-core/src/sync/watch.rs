@@ -24,7 +24,10 @@
 //! - after a sync that found the remote unreachable, where it was: the
 //!   next tick tries again.
 //!
-//! Offline (the remote does not answer) is quiet: nothing is reported. A
+//! Offline (the remote does not answer: network trouble or the probe's
+//! time limit) is quiet: nothing is reported. A remote that answers with
+//! anything else (a key or token turned away, no such repository) runs one
+//! sync, which says why, and the brain waits as after a refusal. A
 //! branch without an upstream is reported once, and so is a brain that is
 //! not a git repository (one sync runs and says so). The first tick runs at
 //! once; then every [`WatchRequest::interval`], waited in short slices so a
@@ -38,7 +41,7 @@ use std::time::{Duration, Instant};
 
 use super::SyncReport;
 use super::fresh::{FreshError, prompt_env};
-use super::plumbing::SyncGit;
+use super::plumbing::{SyncGit, network_failure};
 use crate::git::{Git, Plumbing, SystemGit};
 
 /// The interval when none is given, in seconds.
@@ -67,6 +70,10 @@ const IN_PROGRESS: [&str; 6] = [
 /// The time a probe of one brain may take.
 pub const PROBE_TIME_LIMIT: Duration = Duration::from_secs(15);
 
+/// The remote's head while the remote turns the brain away: no object id
+/// reads like it.
+const REFUSED: &str = "(refused)";
+
 /// The longest single sleep while waiting for the next tick.
 const SLICE: Duration = Duration::from_millis(200);
 
@@ -88,6 +95,12 @@ pub enum Probe {
     NotARepo,
     /// The remote did not answer in time, or the brain could not be read.
     Offline,
+    /// The remote answered with something other than network trouble (a
+    /// key or token turned away, no such repository): one sync says why.
+    /// `local` is the brain's `HEAD`.
+    Refused {
+        local: String,
+    },
 }
 
 /// The git steps of the watch.
@@ -287,6 +300,12 @@ fn tick(
 ) {
     let probed = match git.probe(brain.root, clock.now() + request.probe_time_limit) {
         Probe::Offline => return,
+        // The sync says why, once; the brain then waits on the retry
+        // backoff, or for its HEAD to move or the remote to answer.
+        Probe::Refused { local } => Heads {
+            local,
+            remote: REFUSED.into(),
+        },
         Probe::NoUpstream => {
             if !state.told_no_upstream {
                 report(brain, Report::NoUpstream);
@@ -408,7 +427,9 @@ impl WatchGit for SystemGit {
                 local,
                 remote: first_word(&done.stdout),
             }),
-            Ok(_) | Err(FreshError::TimedOut | FreshError::Failed(_)) => Probe::Offline,
+            Ok(done) if network_failure(&String::from_utf8_lossy(&done.stderr)) => Probe::Offline,
+            Err(FreshError::TimedOut) => Probe::Offline,
+            Ok(_) | Err(FreshError::Failed(_)) => Probe::Refused { local },
         }
     }
 

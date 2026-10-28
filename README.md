@@ -357,9 +357,12 @@ With `--json`, each brain's entry has `name`, `fetched`, `merged`, `pushed`,
 `kind` (`content`, `delete_edit`, `parent`, `frontmatter`, `structure` or
 `ambiguous_base`) and the `base`, `ours` and `theirs` blob ids, `null` where
 a side has no file there), `skipped_dirty` (uncommitted files left as they
-are), `offline`, `blocked` (uncommitted files in the way) and `refused` (why
-the brain was left alone: an open conflict, listed in `conflicts`, a locked
-ref, or under `--brain all` any other reason; else `null`). The exit
+are), `offline` (no upstream, or no network: the host does not resolve,
+the connection is refused or times out, or the fetch or push runs past its
+minute), `blocked` (uncommitted files in the way) and `refused` (why the
+brain was left alone: an open conflict, listed in `conflicts`, a locked ref,
+a remote that turned it away, or under `--brain all` any other reason; else
+`null`). The exit
 code is 1 when a brain has a conflict, is blocked or was refused.
 
 When git cannot update the brain's refs because a lock file is in the way
@@ -367,6 +370,15 @@ When git cannot update the brain's refs because a lock file is in the way
 stopped), `kluris sync` changes nothing and its `refused` names that file. If
 no git is running in the brain, remove the file and run `kluris sync` again;
 Kluris never removes it.
+
+When the remote answers but turns the brain away (an ssh key or a token it
+rejects, a repository you cannot access or that does not exist), `kluris
+sync` changes nothing and its `refused` gives git's message on one line,
+then the fix: check that this machine can run `git fetch origin` in this
+brain without a prompt (`git push origin` when only the push is turned
+away). Kluris never asks for credentials, so whatever needs a prompt there
+fails here too. Anything git says that is not known network trouble is
+shown this way, never taken for offline.
 
 ### Settle a conflict
 
@@ -418,7 +430,9 @@ some causes clear without anything `git status` shows (an ignored file
 deleted, a `pre-push` hook repaired), it is also synced again a minute
 later, then after 2, 4 and 8 minutes and every 10 minutes from then on;
 the wait starts over when a head moves or the local state changes.
-Offline it stays quiet and picks up when the remote answers again. Ctrl-C
+Offline it stays quiet and picks up when the remote answers again; a remote
+that turns the brain away is a refusal, printed once and tried again on
+that schedule. Ctrl-C
 lets a sync in progress finish, then exits with 0.
 
 `--install-service` makes your system run that watch for one brain, from

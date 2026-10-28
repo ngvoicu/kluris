@@ -58,14 +58,63 @@ fn no_upstream_is_offline_and_keeps_local_commits() {
 }
 
 #[test]
-fn an_unreachable_remote_is_offline_with_nothing_changed() {
+fn a_host_that_does_not_resolve_is_offline_with_nothing_changed() {
+    let w = World::new();
+    w.ours_commit(&[("notes/second.md", &neuron("", "# Second\n"))], &[]);
+    let url = "ssh://git@nonexistent.invalid/x.git";
+    w.run(&w.ours, &["remote", "set-url", "origin", url]);
+    let before = w.snapshot();
+    let r = w.sync().unwrap();
+    assert!(r.offline && !r.fetched && !r.merged && !r.pushed, "{r:?}");
+    assert_eq!(r.refused, None);
+    assert_eq!(w.snapshot(), before);
+}
+
+/// A remote path with no repository is not network trouble: git's
+/// message and the fix.
+#[test]
+fn a_remote_repository_that_does_not_exist_is_refused_with_nothing_changed() {
     let w = World::new();
     w.ours_commit(&[("notes/second.md", &neuron("", "# Second\n"))], &[]);
     let gone = w.dir.path().join("gone.git").to_string_lossy().into_owned();
     w.run(&w.ours, &["remote", "set-url", "origin", &gone]);
     let before = w.snapshot();
     let r = w.sync().unwrap();
+    assert!(!r.offline && !r.fetched && !r.merged && !r.pushed, "{r:?}");
+    let why = r.refused.unwrap_or_default();
+    assert!(why.starts_with("fatal: '"), "{why}");
+    assert!(
+        why.contains("gone.git' does not appear to be a git repository"),
+        "{why}"
+    );
+    assert!(
+        why.ends_with(
+            "; check that this machine can run `git fetch origin` in this brain without a prompt"
+        ),
+        "{why}"
+    );
+    assert_eq!(w.snapshot(), before);
+}
+
+/// A fetch stopped at the time limit is offline (an upload-pack that
+/// starts late holds it past a 1 s limit).
+#[test]
+fn a_fetch_held_past_the_time_limit_is_offline() {
+    let w = World::new();
+    w.theirs_push(&[("ideas/new.md", &neuron("", "# New\n"))], &[]);
+    let slow = w.dir.path().join("slow-upload-pack.sh");
+    fs::write(&slow, "#!/bin/sh\nsleep 10\nexec git upload-pack \"$@\"\n").unwrap();
+    let slow = slow.display().to_string().replace('\\', "/");
+    let pack = format!("sh '{slow}'");
+    w.run(&w.ours, &["config", "remote.origin.uploadpack", &pack]);
+    let before = w.snapshot();
+    let request = SyncRequest {
+        network_time_limit: std::time::Duration::from_secs(1),
+        ..w.request()
+    };
+    let r = sync(&w.ours, &w.git(), &request).unwrap();
     assert!(r.offline && !r.fetched && !r.merged && !r.pushed, "{r:?}");
+    assert_eq!(r.refused, None);
     assert_eq!(w.snapshot(), before);
 }
 

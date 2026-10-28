@@ -43,6 +43,8 @@ pub struct Home {
     pub _serial: MutexGuard<'static, ()>,
     pub dir: TempDir,
     pub brains: Vec<(String, PathBuf)>,
+    /// Variables every `kluris` run gets on top of the hermetic ones.
+    pub env: Vec<(String, String)>,
 }
 
 impl Home {
@@ -54,6 +56,7 @@ impl Home {
             _serial: serial,
             dir,
             brains: Vec::new(),
+            env: Vec::new(),
         }
     }
 
@@ -179,6 +182,9 @@ impl Home {
     pub fn run(&self, args: &[&str]) -> (i32, String, String) {
         let mut std = StdCommand::new(assert_cmd::cargo::cargo_bin!("kluris"));
         self.hermetic(&mut std);
+        for (key, value) in &self.env {
+            std.env(key, value);
+        }
         let out = Command::from_std(std).args(args).output().unwrap();
         (
             out.status.code().unwrap(),
@@ -206,6 +212,39 @@ impl Home {
             &neuron("First", &BODY.replace("Three.", "Three, ours.")),
         );
     }
+}
+
+/// A fake ssh at `<home>/fake-ssh` that turns every key away as an ssh
+/// server does (`Permission denied (publickey).`, exit 255), as a
+/// `GIT_SSH_COMMAND` (Git for Windows' sh runs it too).
+pub fn fake_ssh(home: &Path) -> String {
+    let script = home.join("fake-ssh");
+    fs::write(
+        &script,
+        "#!/bin/sh\necho 'Permission denied (publickey).' >&2\nexit 255\n",
+    )
+    .unwrap();
+    format!("sh '{}'", script.display().to_string().replace('\\', "/"))
+}
+
+/// A `file://` URL of `path`.
+pub fn file_url(path: &Path) -> String {
+    let path = path.display().to_string().replace('\\', "/");
+    if path.starts_with('/') {
+        format!("file://{path}")
+    } else {
+        format!("file:///{path}")
+    }
+}
+
+/// What git says when ssh turns the key away, on one line.
+pub const DENIED: &str = "Permission denied (publickey). fatal: Could not read from remote repository. Please make sure you have the correct access rights and the repository exists";
+
+/// The fix `refused` ends with, after git's message.
+pub fn the_fix(command: &str) -> String {
+    format!(
+        "; check that this machine can run `git {command} origin` in this brain without a prompt"
+    )
 }
 
 pub fn keys(doc: &Value) -> Vec<String> {

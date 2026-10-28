@@ -336,3 +336,25 @@ fn resolve_is_in_help() {
         assert!(out.contains(text), "{text}: {out}");
     }
 }
+
+/// The merge is committed, but the push is turned away: the text
+/// says why, not "offline".
+#[test]
+fn a_push_the_server_rejects_after_resolve_says_why() {
+    let mut h = Home::new();
+    let root = two_conflicts(&mut h);
+    let ssh = fake_ssh(h.dir.path());
+    h.env.push(("GIT_SSH_COMMAND".into(), ssh));
+    let url = "ssh://git@example.invalid/alpha.git";
+    h.git(&root, &["remote", "set-url", "--push", "origin", url]);
+    let (code, _, err) = h.run(&["resolve", "--brain", "alpha", "notes/first.md", "--ours"]);
+    assert_eq!(code, 0, "{err}");
+    let (code, out, err) = h.run(&["resolve", "--brain", "alpha", "notes/second.md", "--ours"]);
+    assert_eq!(code, 0, "{err}");
+    let not_pushed = format!(", not pushed: {DENIED}{}\n", the_fix("push"));
+    assert!(
+        out.starts_with("Resolved notes/second.md (ours); committed ")
+            && out.ends_with(&not_pushed),
+        "{out}"
+    );
+}

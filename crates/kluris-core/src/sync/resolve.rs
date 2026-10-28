@@ -328,6 +328,9 @@ pub fn resolve<G: SyncGit>(
         Ok(synced) => {
             report.pushed = synced.pushed;
             report.remaining = synced.conflicts.into_iter().map(|c| c.path).collect();
+            // A locked ref or a remote that turned the brain away, not
+            // offline.
+            report.sync_error = synced.refused;
         }
         Err(e) => report.sync_error = Some(e.to_string()),
     }

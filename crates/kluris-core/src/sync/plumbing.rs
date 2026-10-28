@@ -96,8 +96,11 @@ pub enum PushOutcome {
     Pushed,
     /// Rejected because the remote branch moved: fetch, merge, push again.
     RemoteMoved,
-    /// The remote could not be reached in time.
+    /// The remote could not be reached ([`network_failure`]) or not in time.
     Unreachable,
+    /// git could not talk to the remote for another reason (a key or token
+    /// turned away, no such repository, no write access): git's stderr.
+    Refused(String),
     /// Refused for another reason (a hook, the remote's rules): git's words.
     Failed(String),
 }
@@ -156,6 +159,63 @@ pub(crate) fn ref_lock(stderr: &str) -> Option<RefLock> {
         return Some(RefLock::Ref(name));
     }
     between(stderr, "fetching ref ", " failed: reference already exists").map(RefLock::Ref)
+}
+
+/// What git (or the ssh or curl it runs) says when the network is in the
+/// way, each from its source:
+///
+/// - the host does not resolve: curl's `Could not resolve host: <host>`
+///   and `Could not resolve proxy: <proxy>` (`lib/hostip.c`, curl 8.11),
+///   which git prints after `unable to access '<url>': ` (`remote-curl.c`);
+///   OpenSSH's `ssh: Could not resolve hostname <host>: <reason>` (`ssh.c`,
+///   9.9p1); git's own `unable to look up <host> (port <port>) (<reason>)`
+///   for `git://` (`connect.c`, `git_tcp_connect_sock`, 2.55);
+/// - the connection is refused, times out or finds no route: curl's
+///   `Failed to connect to <host> port <port> after <n> ms: <reason>`
+///   (`lib/connect.c`); OpenSSH's `ssh: connect to host <host> port
+///   <port>: <strerror>` (`sshconnect.c`, `ssh_connect_direct`); git's
+///   `unable to connect to <host>:` with `errno=<strerror>` for `git://`
+///   (`connect.c`); and the C library's words for the errors themselves,
+///   `Connection refused`, `Network is unreachable`, `No route to host`;
+/// - a time limit: curl's `Resolving timed out after`, `Connection timed
+///   out after`, `Operation timed out after` (`lib/multi.c`), `name lookup
+///   timed out` (`lib/hostip.c`) and `Timeout was reached`
+///   (`lib/strerror.c`), and `ETIMEDOUT`'s `Connection timed out` (glibc,
+///   Windows) or `Operation timed out` (macOS).
+///
+/// Anything else (`Permission denied (publickey).`, `Authentication
+/// failed`, `does not appear to be a git repository`, `Repository not
+/// found`, and git's `Could not read from remote repository.` after any
+/// of them) is not network trouble. git translates its own messages
+/// (`unable to look up`, `unable to connect to`); under another language
+/// those read as a refusal, shown rather than hidden.
+pub(crate) fn network_failure(stderr: &str) -> bool {
+    const NETWORK: [&str; 11] = [
+        "Could not resolve host",
+        "Could not resolve proxy",
+        "unable to look up ",
+        "unable to connect to ",
+        "Failed to connect to ",
+        "ssh: connect to host ",
+        "Connection refused",
+        "Network is unreachable",
+        "No route to host",
+        "timed out",
+        "Timeout was reached",
+    ];
+    NETWORK.iter().any(|words| stderr.contains(words))
+}
+
+/// git's stderr on one line: its lines trimmed, the empty ones dropped,
+/// joined by a space; without a final full stop.
+pub(crate) fn one_line(stderr: &str) -> String {
+    let joined = stderr
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ");
+    joined.trim_end_matches('.').to_string()
 }
 
 /// NUL-separated names, the empty ones dropped.
@@ -327,10 +387,20 @@ impl SyncGit for SystemGit {
             Ok(done) if done.status.success() => PushOutcome::Pushed,
             Ok(done) => {
                 let stdout = String::from_utf8_lossy(&done.stdout);
+                let stderr = String::from_utf8_lossy(&done.stderr);
                 if remote_moved(&stdout) {
                     PushOutcome::RemoteMoved
+                } else if done.status.code() == Some(128) {
+                    // git died (`die()`, 128) before any ref was sent: it
+                    // could not talk to the remote. A hook or a ref the
+                    // remote rejected ends with 1 and `failed to push some
+                    // refs` (`builtin/push.c`).
+                    if network_failure(&stderr) {
+                        PushOutcome::Unreachable
+                    } else {
+                        PushOutcome::Refused(stderr.into_owned())
+                    }
                 } else {
-                    let stderr = String::from_utf8_lossy(&done.stderr);
                     let detail = [stdout.trim(), stderr.trim()]
                         .iter()
                         .filter(|s| !s.is_empty())
@@ -467,12 +537,55 @@ mod tests {
             ),
             Some(RefLock::Ref("refs/remotes/origin/main".into()))
         );
-        for offline in [
+        for other in [
             "fatal: unable to access 'https://h/r.git/': Could not resolve host: h",
             "fatal: '/gone.git' does not appear to be a git repository",
             "",
         ] {
-            assert_eq!(ref_lock(offline), None, "{offline}");
+            assert_eq!(ref_lock(other), None, "{other}");
         }
+    }
+
+    #[test]
+    fn network_trouble_is_told_apart_from_a_refusal() {
+        // What git 2.55 printed on macOS for each.
+        let read = "\nfatal: Could not read from remote repository.\n\nPlease make sure you have the correct access rights\nand the repository exists.\n";
+        for network in [
+            format!("ssh: Could not resolve hostname nonexistent.invalid: nodename nor servname provided, or not known{read}"),
+            "fatal: unable to access 'https://nonexistent.invalid/x.git/': Could not resolve host: nonexistent.invalid".into(),
+            "fatal: unable to access 'http://127.0.0.1:9/x.git/': Failed to connect to 127.0.0.1 port 9 after 0 ms: Couldn't connect to server".into(),
+            "fatal: unable to connect to 127.0.0.1:\n127.0.0.1[0: 127.0.0.1]: errno=Connection refused\n".into(),
+            "fatal: unable to look up nonexistent.invalid (port 9418) (nodename nor servname provided, or not known)".into(),
+            format!("ssh: connect to host 127.0.0.1 port 9: Connection refused{read}"),
+            format!("ssh: connect to host 10.0.0.1 port 22: Operation timed out{read}"),
+            format!("ssh: connect to host 10.0.0.1 port 22: Network is unreachable{read}"),
+            "fatal: unable to access 'https://h/x.git/': Connection timed out after 300001 milliseconds".into(),
+            "fatal: unable to access 'https://h/x.git/': Could not resolve proxy: p".into(),
+        ] {
+            assert!(network_failure(&network), "{network}");
+        }
+        for refused in [
+            format!("Permission denied (publickey).{read}"),
+            format!("fatal: '/gone.git' does not appear to be a git repository{read}"),
+            "remote: Repository not found.\nfatal: repository 'https://github.com/a/b.git/' not found".into(),
+            "fatal: Authentication failed for 'https://h/x.git/'".into(),
+            "fatal: unable to access 'https://h/x.git/': The requested URL returned error: 403".into(),
+            format!("ERROR: Permission to a/b.git denied to deploy-key.{read}"),
+            "fatal: could not read Username for 'https://h': terminal prompts disabled".into(),
+            String::new(),
+        ] {
+            assert!(!network_failure(&refused), "{refused}");
+        }
+    }
+
+    #[test]
+    fn stderr_goes_on_one_line() {
+        assert_eq!(
+            one_line(
+                "Permission denied (publickey).\r\nfatal: Could not read from remote repository.\n\nPlease make sure you have the correct access rights\nand the repository exists.\n"
+            ),
+            "Permission denied (publickey). fatal: Could not read from remote repository. Please make sure you have the correct access rights and the repository exists"
+        );
+        assert_eq!(one_line("  \n"), "");
     }
 }
