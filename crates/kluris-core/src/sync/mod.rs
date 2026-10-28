@@ -6,15 +6,19 @@
 //! 1. refuses a brain nested in a larger repo, one that is not a work tree,
 //!    one with a merge, rebase, cherry-pick or revert in progress, and one
 //!    with an open sync conflict ([`PENDING`], for `kluris resolve`);
-//! 2. fetches the objects of the current branch's upstream, never
-//!    prompting, within the network time limit: that branch alone (no tags,
-//!    other branches, pruning or `refs/remotes/<remote>/HEAD`), writing no
-//!    ref, only the objects and `FETCH_HEAD`, so a fetch stopped at the
-//!    limit holds no ref lock (a terminated job on Windows removes none).
+//! 2. learns the current branch's upstream commit and fetches it, never
+//!    prompting, within the network time limit, reading nothing another
+//!    git in the brain can rewrite: its own `git ls-remote <remote>
+//!    <branch>` says the commit; a fetch of that branch alone (no tags,
+//!    other branches, pruning or `refs/remotes/<remote>/HEAD`) brings the
+//!    objects and writes nothing else (no ref, no `FETCH_HEAD`), so a fetch
+//!    stopped at the limit holds no ref lock (a terminated job on Windows
+//!    removes none); `git cat-file -e` then checks the commit is here.
 //!    Offline (the time limit, or network trouble:
 //!    [`plumbing::network_failure`]) or without an upstream nothing
-//!    changes; any other failed fetch (a key or token turned away, no such
-//!    repository) refuses the brain with git's message and the fix
+//!    changes; any other failed `ls-remote` or fetch (a key or token
+//!    turned away, no such repository) refuses the brain with git's
+//!    message and the fix
 //!    ([`refused_access`]), and so does a push git could not make for such
 //!    a reason. It refuses a brain whose upstream's remote-tracking ref is
 //!    outside `refs/remotes/` or a symbolic ref ([`unmovable_tracking`]),
@@ -29,11 +33,10 @@
 //!    An update git stopped on a ref lock refuses the brain, naming the
 //!    lock file ([`ref_locked`]), which Kluris never removes. What sync
 //!    merges, fast-forwards to and records in a conflict is the commit its
-//!    own fetch brought: its line in `FETCH_HEAD`, the one for the
-//!    remote's URL as git writes it ([`plumbing::fetched_head`]), never a
-//!    value read back from the ref nor another fetch's line. When another
-//!    `git fetch` rewrote `FETCH_HEAD` so that no line of Kluris's is left,
-//!    it fetches once more, and refuses the brain if that happens again;
+//!    own `ls-remote` gave, never a value read back from the ref or from
+//!    `FETCH_HEAD`. When the remote moved its branch away from that commit
+//!    before the fetch brought it, sync fetches once more, and refuses the
+//!    brain if that happens again;
 //! 3. behind only: fast-forwards; ahead only: pushes; diverged: merges in
 //!    memory ([`merge`]) and, without conflicts, commits the merge
 //!    (`commit-tree`, two parents, `kluris: sync` with `Kluris-Sync: auto`,
@@ -778,11 +781,11 @@ enum Fetched {
 /// Fetch the upstream's branch within the network time limit, then move
 /// its remote-tracking ref there outside it, only while the ref still holds
 /// what it held before the fetch. Sync goes on from the commit its own
-/// fetch brought, its line in `FETCH_HEAD` for the remote's URL
-/// ([`plumbing::fetched_head`]), never from a value read back from the ref
-/// nor another fetch's line. When another `git fetch` rewrote `FETCH_HEAD`
-/// so that no line of Kluris's is left, Kluris fetches once more, and
-/// refuses the brain if that happens again ([`fetch_head_rewritten`]).
+/// `git ls-remote` gave, once its fetch has brought it
+/// ([`plumbing::SyncGit::fetch`]), never from a value read back from the
+/// ref or from `FETCH_HEAD`. When the remote moved its branch away from
+/// that commit before the fetch brought it, Kluris fetches once more, and
+/// refuses the brain if that happens again ([`remote_moved_away`]).
 ///
 /// The ref is checked ([`unmovable_tracking`]) before the fetch, again
 /// after it whatever it brought, and again after a compare-and-swap that
@@ -799,7 +802,7 @@ fn fetch_tracking<G: SyncGit>(
     tracking: &plumbing::Tracking,
     request: &SyncRequest,
 ) -> Result<Fetched, SyncError> {
-    let (mut lost_once, mut rewritten_once) = (false, false);
+    let (mut lost_once, mut gone_once) = (false, false);
     loop {
         if let Some(why) = unmovable_tracking(git, repo, tracking)? {
             return Ok(Fetched::Refused(why));
@@ -826,14 +829,14 @@ fn fetch_tracking<G: SyncGit>(
                     None => Err(SyncError::Git(no_remote_branch(tracking))),
                 };
             }
-            // Another `git fetch` rewrote `FETCH_HEAD` before Kluris read
-            // its line: nothing it holds is taken; fetch again.
-            plumbing::Fetch::Rewritten if !rewritten_once => {
-                rewritten_once = true;
+            // The remote moved its branch away from the commit `ls-remote`
+            // gave before the fetch brought it: fetch again.
+            plumbing::Fetch::Gone if !gone_once => {
+                gone_once = true;
                 continue;
             }
-            plumbing::Fetch::Rewritten => {
-                return Ok(Fetched::Refused(fetch_head_rewritten(&tracking.remote)));
+            plumbing::Fetch::Gone => {
+                return Ok(Fetched::Refused(remote_moved_away(tracking)));
             }
         };
         if before.as_ref() == Some(&fetched) {
@@ -891,11 +894,16 @@ fn unmovable_tracking<G: SyncGit>(
     }))
 }
 
-/// Why sync leaves a brain whose `FETCH_HEAD` another `git fetch` rewrote
-/// on each of its fetches from `remote`.
-fn fetch_head_rewritten(remote: &str) -> String {
+/// Why sync leaves a brain whose remote moved its branch away from the
+/// commit `ls-remote` gave, before the fetch brought it, on each try.
+fn remote_moved_away(tracking: &plumbing::Tracking) -> String {
+    let branch = tracking
+        .remote_ref
+        .strip_prefix("refs/heads/")
+        .unwrap_or(&tracking.remote_ref);
     format!(
-        "another git fetch in this brain rewrote FETCH_HEAD while Kluris fetched {remote}, on each try; nothing was merged or pushed: run kluris sync again"
+        "{}'s {branch} moved while Kluris fetched it, on each try; nothing was merged or pushed: run kluris sync again",
+        tracking.remote
     )
 }
 

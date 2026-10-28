@@ -368,18 +368,18 @@ under `--brain all` any other reason; else
 `null`). The exit
 code is 1 when a brain has a conflict, is blocked or was refused.
 
-The fetch has a one-minute limit and brings the upstream branch alone (no
-tags, other branches or pruning). While it talks to the remote it writes no
-ref, so a fetch stopped at the limit leaves no lock behind; Kluris then moves
-the remote-tracking ref (`origin/main`) to what was fetched, unless another
-`git fetch` moved it meanwhile, in which case Kluris keeps that and fetches
-once more. What sync merges and pushes is always the commit its own fetch
-brought: its line in `.git/FETCH_HEAD`, the one for origin's URL, never
-another fetch's line nor what `origin/main` reads afterwards. When another
-`git fetch` in the brain (an editor's, or one of yours) rewrites
-`FETCH_HEAD` before Kluris reads it, Kluris fetches again; if that happens
-on the second try too, `kluris sync` changes nothing and its `refused` says
-so: run it again.
+The fetch has a one-minute limit. Sync learns the upstream's commit from
+its own `git ls-remote origin main`, then fetches that branch alone (no
+tags, other branches or pruning) for its objects, writing no ref and no
+`FETCH_HEAD`, so a fetch stopped at the limit leaves no lock behind; then it
+checks the commit is here. It reads nothing another git in the brain can
+rewrite (an editor's fetch, or one of yours), so what sync merges and
+pushes is always the commit origin listed. Kluris then moves the
+remote-tracking ref (`origin/main`) to that commit, unless another `git
+fetch` moved it meanwhile, in which case Kluris keeps that and fetches once
+more. When origin moves its branch away from the listed commit before the
+fetch brings it, Kluris fetches again; if that happens on the second try
+too, `kluris sync` changes nothing and its `refused` says so: run it again.
 A push has the same limit; once the remote took it, git moves `origin/main`
 itself, so a push stopped at that very moment can leave that ref's lock
 behind on Windows.

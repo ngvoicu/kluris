@@ -1716,15 +1716,14 @@ fn brain_state(w: &World) -> Vec<String> {
     state
 }
 
-/// Another `git fetch` in the brain, of a remote that holds origin's
-/// commits and one nobody approved for origin, runs during each of the
-/// watch's fetches (origin's upload-pack starts it) and rewrites
-/// `FETCH_HEAD` after the watch's fetch wrote its line: the watch's sync
-/// never takes the other fetch's line, fetches again, and refuses the
-/// brain, printed once; the private commit reaches neither origin nor the
-/// brain.
-#[test]
-fn a_watch_never_takes_another_fetchs_line_in_fetch_head() {
+/// A watch of a brain with a commit of its own, a teammate's commit on
+/// origin and a remote `vault` holding a private clone of origin with a
+/// commit nobody approved for origin; origin's upload-pack starts a `git
+/// fetch vault` each time it has served the watch. `same_url`: `vault` has
+/// origin's very URL and an upload-pack that serves the private clone.
+/// The watch's sync merges and pushes origin's commit alone, and the
+/// private commit reaches neither origin nor the brain.
+fn watch_with_another_fetch_running(same_url: bool) {
     let w = World::new();
     let root = w.root();
     w.commit_locally();
@@ -1741,8 +1740,26 @@ fn a_watch_never_takes_another_fetchs_line_in_fetch_head() {
     .unwrap();
     w.git(&vault, &["add", "-A"]);
     w.git(&vault, &["commit", "-q", "-m", "private"]);
-    w.git(&root, &["remote", "add", "vault", &vault.to_string_lossy()]);
     let shell = |p: &Path| p.display().to_string().replace('\\', "/");
+    if same_url {
+        w.git(&root, &["remote", "add", "vault", &bare]);
+        let script = w.home().join("vault-upload-pack.sh");
+        fs::write(
+            &script,
+            format!("#!/bin/sh\nexec git upload-pack '{}'\n", shell(&vault)),
+        )
+        .unwrap();
+        w.git(
+            &root,
+            &[
+                "config",
+                "remote.vault.uploadpack",
+                &format!("sh '{}'", shell(&script)),
+            ],
+        );
+    } else {
+        w.git(&root, &["remote", "add", "vault", &vault.to_string_lossy()]);
+    }
     let script = w.home().join("concurrent-upload-pack.sh");
     fs::write(
         &script,
@@ -1760,21 +1777,25 @@ fn a_watch_never_takes_another_fetchs_line_in_fetch_head() {
             &format!("sh '{}'", shell(&script)),
         ],
     );
-    let origin = w.remote_head();
     let watching = Watching::start(&w, &[]);
     let first = watching.line();
-    assert!(
-        first.ends_with(
-            " acme: refused: another git fetch in this brain rewrote FETCH_HEAD while Kluris fetched origin, on each try; nothing was merged or pushed: run kluris sync again"
-        ),
-        "{first}"
-    );
-    assert_eq!(w.remote_head(), origin);
+    assert!(first.ends_with(" acme: pulled, pushed"), "{first}");
     let published = w.git(&w.bare(), &["ls-tree", "-r", "--name-only", "main"]);
+    assert!(published.contains("notes/remote.md"), "{published}");
     assert!(!published.contains("notes/private.md"), "{published}");
     let head = w.git(&root, &["ls-tree", "-r", "--name-only", "HEAD"]);
     assert!(!head.contains("notes/private.md"), "{head}");
     assert!(!root.join("notes").join("private.md").exists());
+}
+
+#[test]
+fn a_watch_with_another_fetch_running_pushes_origin_alone() {
+    watch_with_another_fetch_running(false);
+}
+
+#[test]
+fn a_watch_with_a_same_url_remote_fetched_meanwhile_pushes_origin_alone() {
+    watch_with_another_fetch_running(true);
 }
 
 /// A tracking ref sync will not move (a symbolic ref to the checked-out
