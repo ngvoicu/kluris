@@ -6,14 +6,23 @@
 //! 1. refuses a brain nested in a larger repo, one that is not a work tree,
 //!    one with a merge, rebase, cherry-pick or revert in progress, and one
 //!    with an open sync conflict ([`PENDING`], for `kluris resolve`);
-//! 2. fetches the current branch's upstream, never prompting, within the
-//!    network time limit; offline (the time limit, or network trouble:
+//! 2. fetches the objects of the current branch's upstream, never
+//!    prompting, within the network time limit: that branch alone (no tags,
+//!    other branches, pruning or `refs/remotes/<remote>/HEAD`), writing no
+//!    ref, only the objects and `FETCH_HEAD`, so a fetch stopped at the
+//!    limit holds no ref lock (a terminated job on Windows removes none).
+//!    Offline (the time limit, or network trouble:
 //!    [`plumbing::network_failure`]) or without an upstream nothing
-//!    changes; a fetch git stopped on a ref lock refuses the brain, naming
-//!    the lock file ([`ref_locked`]), which Kluris never removes; any other
-//!    failed fetch (a key or token turned away, no such repository) refuses
-//!    it with git's message and the fix ([`refused_access`]), and so does
-//!    a push git could not make for such a reason;
+//!    changes; any other failed fetch (a key or token turned away, no such
+//!    repository) refuses the brain with git's message and the fix
+//!    ([`refused_access`]), and so does a push git could not make for such
+//!    a reason. Then, outside the limit, it moves the remote-tracking ref to
+//!    what was fetched itself ([`fetch_tracking`]: `git update-ref` from the
+//!    value the ref held before the fetch, a compare-and-swap), so it
+//!    points where a plain `git fetch` leaves it; a concurrent `git fetch`
+//!    that moved it meanwhile is kept, and the sync goes on from there. An
+//!    update git stopped on a ref lock refuses the brain, naming the lock
+//!    file ([`ref_locked`]), which Kluris never removes;
 //! 3. behind only: fast-forwards; ahead only: pushes; diverged: merges in
 //!    memory ([`merge`]) and, without conflicts, commits the merge
 //!    (`commit-tree`, two parents, `kluris: sync` with `Kluris-Sync: auto`,
@@ -23,7 +32,11 @@
 //!    changes touch one (or a new file would land on an untracked or
 //!    ignored file), nothing changes and those paths are `blocked`;
 //! 5. a push rejected because the remote moved fetches, merges and pushes
-//!    again, [`PUSH_ATTEMPTS`] times at most.
+//!    again, [`PUSH_ATTEMPTS`] times at most; one stopped at the network
+//!    time limit is offline. Once the remote took a push, git moves the
+//!    remote-tracking ref itself (nothing turns that off): a push stopped
+//!    at that moment on Windows can leave the ref's lock, and the next sync
+//!    refuses the brain, naming it, as in step 2.
 
 pub mod commit;
 pub mod fresh;
@@ -631,12 +644,11 @@ pub fn sync<G: SyncGit>(
     };
 
     for _ in 0..PUSH_ATTEMPTS {
-        let deadline = Instant::now() + request.network_time_limit;
-        if let Err(e) = git.fetch(&repo.dir, &tracking.remote, deadline) {
-            match fetch_refused(git, &repo, &tracking.remote, &e) {
-                Some(why) => report.refused = Some(why),
-                None => report.offline = true,
-            }
+        if let Some(why) = fetch_tracking(git, &repo, &tracking, request, &mut report)? {
+            report.refused = Some(why);
+            return Ok(report);
+        }
+        if report.offline {
             return Ok(report);
         }
         if let Ok(path) = git.git_dir_path(&repo, fresh::BACKOFF) {
@@ -730,6 +742,53 @@ pub fn sync<G: SyncGit>(
     Err(SyncError::RemoteKeptMoving)
 }
 
+/// Fetch the upstream's branch within the network time limit, then move
+/// its remote-tracking ref there outside it, only while the ref still holds
+/// what it held before the fetch: a concurrent `git fetch` that moved it
+/// meanwhile is kept, and the sync goes on from there. Offline (`offline`
+/// set) when the fetch is stopped or the network is in the way; why the
+/// brain is refused when the remote turned the fetch away
+/// ([`fetch_refused`]) or a lock stops the move ([`ref_locked`]).
+fn fetch_tracking<G: SyncGit>(
+    git: &G,
+    repo: &crate::git::Repo,
+    tracking: &plumbing::Tracking,
+    request: &SyncRequest,
+    report: &mut SyncReport,
+) -> Result<Option<String>, SyncError> {
+    let before = git.ref_value(repo, &tracking.refname)?;
+    let deadline = Instant::now() + request.network_time_limit;
+    let fetched = match git.fetch(repo, tracking, deadline) {
+        Ok(fetched) => fetched,
+        Err(e) => {
+            let refused = fetch_refused(git, repo, &tracking.remote, &e);
+            report.offline = refused.is_none();
+            return Ok(refused);
+        }
+    };
+    let Some(fetched) = fetched.filter(|f| before.as_ref() != Some(f)) else {
+        return Ok(None);
+    };
+    let message = format!("kluris sync: fetch {}", tracking.remote);
+    let Err(e) = git.move_ref(
+        repo,
+        &tracking.refname,
+        &fetched,
+        before.as_deref(),
+        &message,
+    ) else {
+        return Ok(None);
+    };
+    if git.ref_value(repo, &tracking.refname)? != before {
+        // Another git moved it: its value is a tip of the remote's branch too.
+        return Ok(None);
+    }
+    match locked_ref(git, repo, &e.detail) {
+        Some(lock) => Ok(Some(ref_locked(&lock))),
+        None => Err(e.into()),
+    }
+}
+
 /// Why sync leaves a brain whose fetch found a ref locked alone: `lock`,
 /// and how to clear it.
 pub fn ref_locked(lock: &str) -> String {
@@ -765,7 +824,7 @@ fn fetch_refused<G: SyncGit>(
     let fresh::FreshError::Failed(e) = error else {
         return None;
     };
-    if let Some(lock) = locked_ref(git, repo, error) {
+    if let Some(lock) = locked_ref(git, repo, &e.detail) {
         return Some(ref_locked(&lock));
     }
     if plumbing::network_failure(&e.detail) {
@@ -774,17 +833,11 @@ fn fetch_refused<G: SyncGit>(
     Some(refused_access("fetch", remote, &e.detail))
 }
 
-/// The lock file a failed fetch was stopped by, if that is why it failed:
-/// the one git named, or the named ref's `<ref>.lock` when it exists.
-fn locked_ref<G: SyncGit>(
-    git: &G,
-    repo: &crate::git::Repo,
-    error: &fresh::FreshError,
-) -> Option<String> {
-    let fresh::FreshError::Failed(e) = error else {
-        return None;
-    };
-    match plumbing::ref_lock(&e.detail)? {
+/// The lock file a failed ref update was stopped by, if that is why it
+/// failed (git's stderr in `detail`): the one git named, or the named ref's
+/// `<ref>.lock` when it exists.
+fn locked_ref<G: SyncGit>(git: &G, repo: &crate::git::Repo, detail: &str) -> Option<String> {
+    match plumbing::ref_lock(detail)? {
         plumbing::RefLock::File(path) => Some(path),
         plumbing::RefLock::Ref(name) => {
             let path = git.git_dir_path(repo, &format!("{name}.lock")).ok()?;

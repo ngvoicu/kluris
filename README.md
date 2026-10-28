@@ -365,6 +365,15 @@ a remote that turned it away, or under `--brain all` any other reason; else
 `null`). The exit
 code is 1 when a brain has a conflict, is blocked or was refused.
 
+The fetch has a one-minute limit and brings the upstream branch alone (no
+tags, other branches or pruning). While it talks to the remote it writes no
+ref, so a fetch stopped at the limit leaves no lock behind; Kluris then moves
+the remote-tracking ref (`origin/main`) to what was fetched, unless another
+`git fetch` moved it meanwhile, in which case the sync goes on from there.
+A push has the same limit; once the remote took it, git moves `origin/main`
+itself, so a push stopped at that very moment can leave that ref's lock
+behind on Windows.
+
 When git cannot update the brain's refs because a lock file is in the way
 (such as `.git/refs/remotes/origin/main.lock`, left by a git that was
 stopped), `kluris sync` changes nothing and its `refused` names that file. If

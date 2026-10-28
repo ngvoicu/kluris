@@ -153,8 +153,7 @@ pub enum FreshError {
     Failed(GitError),
 }
 
-/// The git steps of a fresh read (and of `kluris sync`'s fetch), each
-/// bounded by `deadline`.
+/// The git steps of a fresh read, each bounded by `deadline`.
 pub trait FreshGit {
     /// Where `dir` sits in its work tree, whether the repository is
     /// shallow, and each of `names` inside its git directory (`git rev-parse
@@ -176,9 +175,6 @@ pub trait FreshGit {
         no_hooks: &Path,
         deadline: Instant,
     ) -> Result<Option<Upstream>, FreshError>;
-
-    /// `git fetch <remote>`, never prompting (`kluris sync`'s fetch).
-    fn fetch(&self, dir: &Path, remote: &str, deadline: Instant) -> Result<(), FreshError>;
 
     /// Fetch the objects of the upstream's branch and write nothing else:
     /// no ref, `FETCH_HEAD`, tag, `packed-refs`, `.git/shallow`, commit-graph
@@ -482,7 +478,7 @@ impl SystemGit {
 impl SystemGit {
     /// [`prompt_env`] and [`READ_ENV`] for a fetch from `dir`; `config`
     /// options (`-c ...`) go before `git config`'s own arguments.
-    fn no_prompt_env(
+    pub(crate) fn no_prompt_env(
         &self,
         dir: &Path,
         options: &[&str],
@@ -594,13 +590,6 @@ impl FreshGit for SystemGit {
             refname: refname.to_string(),
             remote_ref: remote_ref.to_string(),
         }))
-    }
-
-    fn fetch(&self, dir: &Path, remote: &str, deadline: Instant) -> Result<(), FreshError> {
-        let env = self.no_prompt_env(dir, &[], deadline)?;
-        let args =
-            SystemGit::with_no_background(&["fetch", "--quiet", "--no-recurse-submodules", remote]);
-        self.checked(dir, &args, &env, deadline).map(drop)
     }
 
     fn fetch_objects(

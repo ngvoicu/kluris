@@ -1,6 +1,7 @@
 //! The git steps of `kluris sync` beyond [`Plumbing`] and [`FreshGit`]:
-//! the current branch's upstream, merge bases, the in-memory merge, the
-//! fast-forward that moves the branch and work tree, and the push.
+//! the current branch's upstream, the fetch and the move of its
+//! remote-tracking ref, merge bases, the in-memory merge, the fast-forward
+//! that moves the branch and work tree, and the push.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -111,6 +112,32 @@ pub trait SyncGit: Plumbing + FreshGit + TextMerger {
     /// or without one.
     fn tracking(&self, repo: &Repo) -> Result<Option<Tracking>, GitError>;
 
+    /// Fetch the objects of the upstream's branch, never prompting, by
+    /// `deadline`, and write no ref, tag, `packed-refs` or commit-graph:
+    /// only the objects and `FETCH_HEAD`. The commit fetched; `None` when
+    /// the remote has no such branch.
+    fn fetch(
+        &self,
+        repo: &Repo,
+        tracking: &Tracking,
+        deadline: Instant,
+    ) -> Result<Option<String>, FreshError>;
+
+    /// The object a ref holds; `None` when there is no such ref.
+    fn ref_value(&self, repo: &Repo, refname: &str) -> Result<Option<String>, GitError>;
+
+    /// `git update-ref -m <message> <refname> <new> <old>`: move a ref
+    /// only while it still holds `old` (`None`: only while there is no such
+    /// ref). Local and quick: no deadline.
+    fn move_ref(
+        &self,
+        repo: &Repo,
+        refname: &str,
+        new: &str,
+        old: Option<&str>,
+        message: &str,
+    ) -> Result<(), GitError>;
+
     /// The commit `rev` names.
     fn rev_parse(&self, repo: &Repo, rev: &str) -> Result<String, GitError>;
 
@@ -218,6 +245,20 @@ pub(crate) fn one_line(stderr: &str) -> String {
     joined.trim_end_matches('.').to_string()
 }
 
+/// The commit `FETCH_HEAD` records for `remote_ref` (`<oid>\t\t<branch
+/// 'main' of <url>>`, as git writes a fetched refspec without `:dst`).
+pub(crate) fn fetched_head(text: &str, remote_ref: &str) -> Option<String> {
+    let note = match remote_ref.strip_prefix("refs/heads/") {
+        Some(branch) => format!("branch '{branch}' of "),
+        None => format!("'{remote_ref}' of "),
+    };
+    text.lines().find_map(|line| {
+        let mut fields = line.splitn(3, '\t');
+        let (oid, _merge, what) = (fields.next()?, fields.next()?, fields.next()?);
+        (what.starts_with(&note) && !oid.is_empty()).then(|| oid.to_string())
+    })
+}
+
 /// NUL-separated names, the empty ones dropped.
 fn nul_separated(out: &[u8]) -> Vec<String> {
     out.split(|b| *b == 0)
@@ -275,6 +316,81 @@ impl SyncGit for SystemGit {
             refname: refname.to_string(),
             remote_ref: remote_ref.to_string(),
         }))
+    }
+
+    fn fetch(
+        &self,
+        repo: &Repo,
+        tracking: &Tracking,
+        deadline: Instant,
+    ) -> Result<Option<String>, FreshError> {
+        let dir = &repo.dir;
+        let env = self.no_prompt_env(dir, &[], deadline)?;
+        // As a fresh read's fetch (`FreshGit::fetch_objects`), but with
+        // `FETCH_HEAD`, which says what was fetched: git writes it without
+        // a lock file. Kluris moves the remote-tracking ref after, outside
+        // the bound (`move_ref`), so a fetch stopped at the deadline holds
+        // no ref lock (a terminated job on Windows removes none).
+        let args = SystemGit::with_no_background(&[
+            "-c",
+            "fetch.writeCommitGraph=false",
+            "-c",
+            "fetch.bundleURI=",
+            "fetch",
+            "--quiet",
+            "--no-tags",
+            "--no-prune",
+            "--no-recurse-submodules",
+            "--write-fetch-head",
+            "--refmap=",
+            &tracking.remote,
+            &tracking.remote_ref,
+        ]);
+        match self.checked(dir, &args, &env, deadline) {
+            Ok(_) => {}
+            Err(FreshError::Failed(e)) if e.detail.contains("couldn't find remote ref") => {
+                return Ok(None);
+            }
+            Err(e) => return Err(e),
+        }
+        let failed = |detail: String| {
+            FreshError::Failed(GitError {
+                args: args.iter().map(|a| a.to_string()).collect(),
+                code: Some(0),
+                detail,
+            })
+        };
+        let path = self
+            .git_dir_path(repo, "FETCH_HEAD")
+            .map_err(FreshError::Failed)?;
+        let text = std::fs::read_to_string(&path)
+            .map_err(|e| failed(format!("cannot read {}: {e}", path.display())))?;
+        fetched_head(&text, &tracking.remote_ref)
+            .map(Some)
+            .ok_or_else(|| failed(format!("FETCH_HEAD names no {}", tracking.remote_ref)))
+    }
+
+    fn ref_value(&self, repo: &Repo, refname: &str) -> Result<Option<String>, GitError> {
+        let args = ["rev-parse", "--verify", "--quiet", refname];
+        let out = self.output(self.command(Some(&repo.dir), &args), &args);
+        match out {
+            Ok(out) => Ok(Some(first_line(&out.stdout))),
+            Err(e) if e.code == Some(1) => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+
+    fn move_ref(
+        &self,
+        repo: &Repo,
+        refname: &str,
+        new: &str,
+        old: Option<&str>,
+        message: &str,
+    ) -> Result<(), GitError> {
+        // An empty old value: the ref must not exist.
+        let args = ["update-ref", "-m", message, refname, new, old.unwrap_or("")];
+        self.run(&repo.dir, &args).map(drop)
     }
 
     fn rev_parse(&self, repo: &Repo, rev: &str) -> Result<String, GitError> {

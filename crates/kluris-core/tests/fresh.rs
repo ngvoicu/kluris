@@ -108,11 +108,6 @@ impl FreshGit for FakeGit {
         Ok(self.upstream.clone())
     }
 
-    fn fetch(&self, _dir: &Path, remote: &str, deadline: Instant) -> Result<(), FreshError> {
-        self.log(&format!("fetch {remote}"), deadline);
-        self.fetch.clone()
-    }
-
     fn fetch_objects(
         &self,
         _dir: &Path,
