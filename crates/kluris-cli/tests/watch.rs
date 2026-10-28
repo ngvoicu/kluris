@@ -1716,6 +1716,67 @@ fn brain_state(w: &World) -> Vec<String> {
     state
 }
 
+/// Another `git fetch` in the brain, of a remote that holds origin's
+/// commits and one nobody approved for origin, runs during each of the
+/// watch's fetches (origin's upload-pack starts it) and rewrites
+/// `FETCH_HEAD` after the watch's fetch wrote its line: the watch's sync
+/// never takes the other fetch's line, fetches again, and refuses the
+/// brain, printed once; the private commit reaches neither origin nor the
+/// brain.
+#[test]
+fn a_watch_never_takes_another_fetchs_line_in_fetch_head() {
+    let w = World::new();
+    let root = w.root();
+    w.commit_locally();
+    w.teammate_pushes("notes/remote.md");
+    let vault = w.home().join("vault");
+    let bare = w.bare().to_string_lossy().into_owned();
+    w.git(w.home(), &["clone", "-q", &bare, &vault.to_string_lossy()]);
+    w.git(&vault, &["config", "user.name", "Eve"]);
+    w.git(&vault, &["config", "user.email", "eve@example.com"]);
+    fs::write(
+        vault.join("notes").join("private.md"),
+        "PRIVATE: NEVER APPROVED FOR ORIGIN\n",
+    )
+    .unwrap();
+    w.git(&vault, &["add", "-A"]);
+    w.git(&vault, &["commit", "-q", "-m", "private"]);
+    w.git(&root, &["remote", "add", "vault", &vault.to_string_lossy()]);
+    let shell = |p: &Path| p.display().to_string().replace('\\', "/");
+    let script = w.home().join("concurrent-upload-pack.sh");
+    fs::write(
+        &script,
+        format!(
+            "#!/bin/sh\ngit upload-pack \"$@\" || exit $?\ngit -C '{}' fetch -q --no-tags --refmap= vault refs/heads/main >&2\n",
+            shell(&root)
+        ),
+    )
+    .unwrap();
+    w.git(
+        &root,
+        &[
+            "config",
+            "remote.origin.uploadpack",
+            &format!("sh '{}'", shell(&script)),
+        ],
+    );
+    let origin = w.remote_head();
+    let watching = Watching::start(&w, &[]);
+    let first = watching.line();
+    assert!(
+        first.ends_with(
+            " acme: refused: another git fetch in this brain rewrote FETCH_HEAD while Kluris fetched origin, on each try; nothing was merged or pushed: run kluris sync again"
+        ),
+        "{first}"
+    );
+    assert_eq!(w.remote_head(), origin);
+    let published = w.git(&w.bare(), &["ls-tree", "-r", "--name-only", "main"]);
+    assert!(!published.contains("notes/private.md"), "{published}");
+    let head = w.git(&root, &["ls-tree", "-r", "--name-only", "HEAD"]);
+    assert!(!head.contains("notes/private.md"), "{head}");
+    assert!(!root.join("notes").join("private.md").exists());
+}
+
 /// A tracking ref sync will not move (a symbolic ref to the checked-out
 /// branch) is printed once; the brain stays exactly as it was across the
 /// next ticks and the watch keeps running.

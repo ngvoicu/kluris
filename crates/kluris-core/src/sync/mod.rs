@@ -29,7 +29,11 @@
 //!    An update git stopped on a ref lock refuses the brain, naming the
 //!    lock file ([`ref_locked`]), which Kluris never removes. What sync
 //!    merges, fast-forwards to and records in a conflict is the commit its
-//!    own fetch brought, never a value read back from the ref;
+//!    own fetch brought: its line in `FETCH_HEAD`, the one for the
+//!    remote's URL as git writes it ([`plumbing::fetched_head`]), never a
+//!    value read back from the ref nor another fetch's line. When another
+//!    `git fetch` rewrote `FETCH_HEAD` so that no line of Kluris's is left,
+//!    it fetches once more, and refuses the brain if that happens again;
 //! 3. behind only: fast-forwards; ahead only: pushes; diverged: merges in
 //!    memory ([`merge`]) and, without conflicts, commits the merge
 //!    (`commit-tree`, two parents, `kluris: sync` with `Kluris-Sync: auto`,
@@ -774,7 +778,11 @@ enum Fetched {
 /// Fetch the upstream's branch within the network time limit, then move
 /// its remote-tracking ref there outside it, only while the ref still holds
 /// what it held before the fetch. Sync goes on from the commit its own
-/// fetch brought, never from a value read back from the ref.
+/// fetch brought, its line in `FETCH_HEAD` for the remote's URL
+/// ([`plumbing::fetched_head`]), never from a value read back from the ref
+/// nor another fetch's line. When another `git fetch` rewrote `FETCH_HEAD`
+/// so that no line of Kluris's is left, Kluris fetches once more, and
+/// refuses the brain if that happens again ([`fetch_head_rewritten`]).
 ///
 /// The ref is checked ([`unmovable_tracking`]) before the fetch, again
 /// after it whatever it brought, and again after a compare-and-swap that
@@ -791,7 +799,7 @@ fn fetch_tracking<G: SyncGit>(
     tracking: &plumbing::Tracking,
     request: &SyncRequest,
 ) -> Result<Fetched, SyncError> {
-    let mut lost_once = false;
+    let (mut lost_once, mut rewritten_once) = (false, false);
     loop {
         if let Some(why) = unmovable_tracking(git, repo, tracking)? {
             return Ok(Fetched::Refused(why));
@@ -810,11 +818,23 @@ fn fetch_tracking<G: SyncGit>(
         if let Some(why) = unmovable_tracking(git, repo, tracking)? {
             return Ok(Fetched::Refused(why));
         }
-        let Some(fetched) = fetched else {
-            return match before {
-                Some(held) => Ok(Fetched::Commit(held)),
-                None => Err(SyncError::Git(no_remote_branch(tracking))),
-            };
+        let fetched = match fetched {
+            plumbing::Fetch::Commit(fetched) => fetched,
+            plumbing::Fetch::NoBranch => {
+                return match before {
+                    Some(held) => Ok(Fetched::Commit(held)),
+                    None => Err(SyncError::Git(no_remote_branch(tracking))),
+                };
+            }
+            // Another `git fetch` rewrote `FETCH_HEAD` before Kluris read
+            // its line: nothing it holds is taken; fetch again.
+            plumbing::Fetch::Rewritten if !rewritten_once => {
+                rewritten_once = true;
+                continue;
+            }
+            plumbing::Fetch::Rewritten => {
+                return Ok(Fetched::Refused(fetch_head_rewritten(&tracking.remote)));
+            }
         };
         if before.as_ref() == Some(&fetched) {
             return Ok(Fetched::Commit(fetched));
@@ -869,6 +889,14 @@ fn unmovable_tracking<G: SyncGit>(
             "the upstream's remote-tracking ref {refname} is a symbolic ref to {target}: moving it would move {target}, so Kluris leaves it alone; remove it with `git symbolic-ref --delete {refname}` and run kluris sync again"
         )
     }))
+}
+
+/// Why sync leaves a brain whose `FETCH_HEAD` another `git fetch` rewrote
+/// on each of its fetches from `remote`.
+fn fetch_head_rewritten(remote: &str) -> String {
+    format!(
+        "another git fetch in this brain rewrote FETCH_HEAD while Kluris fetched {remote}, on each try; nothing was merged or pushed: run kluris sync again"
+    )
 }
 
 /// Why sync leaves a brain whose fetch found a ref locked alone: `lock`,

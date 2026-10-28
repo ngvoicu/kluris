@@ -91,6 +91,19 @@ fn parse_merge_tree(out: &[u8]) -> MergeTree {
     }
 }
 
+/// What a fetch of the upstream's branch brought.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Fetch {
+    /// The commit the remote's branch is at, from this fetch's line in
+    /// `FETCH_HEAD`.
+    Commit(String),
+    /// The remote has no such branch.
+    NoBranch,
+    /// `FETCH_HEAD` has no line for this fetch: another `git fetch` in the
+    /// brain rewrote it after this one wrote it.
+    Rewritten,
+}
+
 /// How a push ended.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PushOutcome {
@@ -114,14 +127,15 @@ pub trait SyncGit: Plumbing + FreshGit + TextMerger {
 
     /// Fetch the objects of the upstream's branch, never prompting, by
     /// `deadline`, and write no ref, tag, `packed-refs` or commit-graph:
-    /// only the objects and `FETCH_HEAD`. The commit fetched; `None` when
-    /// the remote has no such branch.
+    /// only the objects and `FETCH_HEAD`. What `FETCH_HEAD` says this
+    /// fetch brought: the line for the upstream's branch of the remote's
+    /// URL ([`fetched_head`]), never another fetch's.
     fn fetch(
         &self,
         repo: &Repo,
         tracking: &Tracking,
         deadline: Instant,
-    ) -> Result<Option<String>, FreshError>;
+    ) -> Result<Fetch, FreshError>;
 
     /// The object a ref holds; `None` when there is no such ref.
     fn ref_value(&self, repo: &Repo, refname: &str) -> Result<Option<String>, GitError>;
@@ -284,17 +298,101 @@ pub(crate) fn one_line(stderr: &str) -> String {
     joined.trim_end_matches('.').to_string()
 }
 
-/// The commit `FETCH_HEAD` records for `remote_ref` (`<oid>\t\t<branch
-/// 'main' of <url>>`, as git writes a fetched refspec without `:dst`).
-pub(crate) fn fetched_head(text: &str, remote_ref: &str) -> Option<String> {
-    let note = match remote_ref.strip_prefix("refs/heads/") {
-        Some(branch) => format!("branch '{branch}' of "),
-        None => format!("'{remote_ref}' of "),
+/// The URL git writes in `FETCH_HEAD` for a fetch from `url` (the URL the
+/// fetch's transport has: the remote's first, after `insteadOf`), as git
+/// 2.38 to 2.55 write it: `transport_anonymize_url` (`transport.c`) drops a
+/// user and password before an `@` unless the URL is a local path
+/// (`url_is_local_not_ssh`, `connect.c`: no `:`, a `/` before the first
+/// `:`, or on Windows a drive prefix); then `store_updated_refs` (2.38) or
+/// `display_state_init` (2.55, `builtin/fetch.c`) cut every trailing `/`
+/// and then a trailing `.git`; `append_fetch_head` writes a newline as
+/// `\n`. Windows' `is_valid_path` is not checked: a drive path it rejects
+/// would only make the URLs differ, so the fetch finds no line of its own.
+pub fn fetch_head_url(url: &str) -> String {
+    let url = anonymize_url(url);
+    let bytes = url.as_bytes();
+    let mut i = bytes.len() as isize - 1;
+    while i >= 0 && bytes[i as usize] == b'/' {
+        i -= 1;
+    }
+    let mut len = (i + 1) as usize;
+    if i > 4 && &bytes[(i - 3) as usize..=i as usize] == b".git" {
+        len = (i - 3) as usize;
+    }
+    url[..len].replace('\n', "\\n")
+}
+
+/// `transport_anonymize_url`: `scheme://user@host/...` and
+/// `user@host:path` lose their `user@`.
+fn anonymize_url(url: &str) -> String {
+    let Some(at) = url.find('@') else {
+        return url.to_string();
+    };
+    if url_is_local_not_ssh(url) {
+        return url.to_string();
+    }
+    let anon = &url[at + 1..];
+    let Some(scheme) = url.find("://") else {
+        // Only `user@host:path`.
+        return if anon.contains(':') {
+            anon.to_string()
+        } else {
+            url.to_string()
+        };
+    };
+    let reasonable = url[..scheme]
+        .bytes()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, b'+' | b'.' | b'-'));
+    // An `@` past the first `/` after the scheme is not a user's.
+    let slash_first = url[scheme + 3..]
+        .find('/')
+        .is_some_and(|slash| scheme + 3 + slash < at);
+    if !reasonable || slash_first {
+        return url.to_string();
+    }
+    format!("{}{anon}", &url[..scheme + 3])
+}
+
+/// `url_is_local_not_ssh`.
+fn url_is_local_not_ssh(url: &str) -> bool {
+    let Some(colon) = url.find(':') else {
+        return true;
+    };
+    url.find('/').is_some_and(|slash| slash < colon) || (cfg!(windows) && has_dos_drive_prefix(url))
+}
+
+/// `win32_has_dos_drive_prefix` (`compat/mingw.c`): a letter, or one
+/// UTF-8 character (`subst` takes any), then `:`.
+fn has_dos_drive_prefix(path: &str) -> bool {
+    let bytes = path.as_bytes();
+    match bytes.first() {
+        None => false,
+        Some(b) if b & 0x80 == 0 => bytes.get(1) == Some(&b':'),
+        Some(_) => {
+            let mut i = 1;
+            while i < 4 && bytes.get(i).is_some_and(|b| b & 0x80 != 0) {
+                i += 1;
+            }
+            bytes.get(i) == Some(&b':')
+        }
+    }
+}
+
+/// The commit `FETCH_HEAD` records for `remote_ref` fetched from `url` (the
+/// remote's URL, as `git remote get-url` prints it): the line
+/// `<oid>\t\t<branch 'main' of <url>>`, as git writes a fetched refspec
+/// without `:dst`, for exactly that URL ([`fetch_head_url`]); `None` when
+/// there is none. A line of another remote, or another branch, is never
+/// taken.
+pub(crate) fn fetched_head(text: &str, remote_ref: &str, url: &str) -> Option<String> {
+    let what = match remote_ref.strip_prefix("refs/heads/") {
+        Some(branch) => format!("branch '{branch}' of {}", fetch_head_url(url)),
+        None => format!("'{remote_ref}' of {}", fetch_head_url(url)),
     };
     text.lines().find_map(|line| {
         let mut fields = line.splitn(3, '\t');
-        let (oid, _merge, what) = (fields.next()?, fields.next()?, fields.next()?);
-        (what.starts_with(&note) && !oid.is_empty()).then(|| oid.to_string())
+        let (oid, _merge, written) = (fields.next()?, fields.next()?, fields.next()?);
+        (written == what && !oid.is_empty()).then(|| oid.to_string())
     })
 }
 
@@ -362,9 +460,14 @@ impl SyncGit for SystemGit {
         repo: &Repo,
         tracking: &Tracking,
         deadline: Instant,
-    ) -> Result<Option<String>, FreshError> {
+    ) -> Result<Fetch, FreshError> {
         let dir = &repo.dir;
         let env = self.no_prompt_env(dir, &[], deadline)?;
+        let url = self
+            .run(dir, &["remote", "get-url", &tracking.remote])
+            .map_err(FreshError::Failed)?;
+        let url = String::from_utf8_lossy(&url);
+        let url = url.strip_suffix('\n').unwrap_or(&url);
         // As a fresh read's fetch (`FreshGit::fetch_objects`), but with
         // `FETCH_HEAD`, which says what was fetched: git writes it without
         // a lock file. Kluris moves the remote-tracking ref after, outside
@@ -388,7 +491,7 @@ impl SyncGit for SystemGit {
         match self.checked(dir, &args, &env, deadline) {
             Ok(_) => {}
             Err(FreshError::Failed(e)) if e.detail.contains("couldn't find remote ref") => {
-                return Ok(None);
+                return Ok(Fetch::NoBranch);
             }
             Err(e) => return Err(e),
         }
@@ -404,9 +507,7 @@ impl SyncGit for SystemGit {
             .map_err(FreshError::Failed)?;
         let text = std::fs::read_to_string(&path)
             .map_err(|e| failed(format!("cannot read {}: {e}", path.display())))?;
-        fetched_head(&text, &tracking.remote_ref)
-            .map(Some)
-            .ok_or_else(|| failed(format!("FETCH_HEAD names no {}", tracking.remote_ref)))
+        Ok(fetched_head(&text, &tracking.remote_ref, url).map_or(Fetch::Rewritten, Fetch::Commit))
     }
 
     fn ref_value(&self, repo: &Repo, refname: &str) -> Result<Option<String>, GitError> {
@@ -774,6 +875,61 @@ mod tests {
             "remote: fatal: unable to access x: Connection timed out after 300001 milliseconds        \nremote: ssh: connect to host h port 22: Operation timed out        \nerror: failed to push some refs to '/h/hooked.git'\n".into(),
         ] {
             assert!(!network_failure(&refused), "{refused}");
+        }
+    }
+
+    #[test]
+    fn fetch_head_is_read_for_this_remotes_url_alone() {
+        let ours = "aaaa\t\tbranch 'main' of /h/origin\n";
+        let vault = "bbbb\t\tbranch 'main' of /h/vault\n";
+        // Another fetch's line before ours (git appends to `FETCH_HEAD`).
+        let both = format!("{vault}{ours}");
+        assert_eq!(
+            fetched_head(&both, "refs/heads/main", "/h/origin.git"),
+            Some("aaaa".into())
+        );
+        // Another fetch rewrote it: no line of ours.
+        assert_eq!(
+            fetched_head(vault, "refs/heads/main", "/h/origin.git"),
+            None
+        );
+        // A URL that only starts like ours.
+        let longer = "cccc\t\tbranch 'main' of /h/origin-fork\n";
+        assert_eq!(fetched_head(longer, "refs/heads/main", "/h/origin"), None);
+        // Another branch of the same remote.
+        let dev = "dddd\t\tbranch 'dev' of /h/origin\n";
+        assert_eq!(fetched_head(dev, "refs/heads/main", "/h/origin"), None);
+        // A newline in the URL, as git writes it.
+        let newline = "eeee\t\tbranch 'main' of /h/a\\nb\n";
+        assert_eq!(
+            fetched_head(newline, "refs/heads/main", "/h/a\nb"),
+            Some("eeee".into())
+        );
+    }
+
+    #[test]
+    fn fetch_head_urls_are_anonymized_and_stripped_as_git_does() {
+        for (url, written) in [
+            ("https://user:token@h/x.git/", "https://h/x"),
+            ("https://h/x.git", "https://h/x"),
+            ("ssh://git@h:22/x.git", "ssh://h:22/x"),
+            ("git@h:x.git", "h:x"),
+            // `@` past the first `/` after the scheme is not a user.
+            ("https://h/a@b/x.git", "https://h/a@b/x"),
+            // A local path with `@` keeps it.
+            ("/srv/a@b:c/x.git", "/srv/a@b:c/x"),
+            ("../x@y.git", "../x@y"),
+            // No `:` after the `@`: not `user@host:path`.
+            ("a@b", "a@b"),
+            // A scheme with other characters is no scheme.
+            ("a_b://u@h/x", "a_b://u@h/x"),
+            ("/x.git//", "/x"),
+            // `.git` is stripped only past the fifth character.
+            ("a.git", "a.git"),
+            ("ab.git", "ab"),
+            ("/x/.git", "/x/"),
+        ] {
+            assert_eq!(fetch_head_url(url), written, "{url}");
         }
     }
 

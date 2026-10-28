@@ -374,7 +374,12 @@ ref, so a fetch stopped at the limit leaves no lock behind; Kluris then moves
 the remote-tracking ref (`origin/main`) to what was fetched, unless another
 `git fetch` moved it meanwhile, in which case Kluris keeps that and fetches
 once more. What sync merges and pushes is always the commit its own fetch
-brought, never what `origin/main` reads afterwards.
+brought: its line in `.git/FETCH_HEAD`, the one for origin's URL, never
+another fetch's line nor what `origin/main` reads afterwards. When another
+`git fetch` in the brain (an editor's, or one of yours) rewrites
+`FETCH_HEAD` before Kluris reads it, Kluris fetches again; if that happens
+on the second try too, `kluris sync` changes nothing and its `refused` says
+so: run it again.
 A push has the same limit; once the remote took it, git moves `origin/main`
 itself, so a push stopped at that very moment can leave that ref's lock
 behind on Windows.
