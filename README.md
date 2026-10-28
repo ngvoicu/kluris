@@ -149,7 +149,7 @@ shasum -a 256 -c kluris-aarch64-apple-darwin.tar.gz.sha256   # or sha256sum -c
 gh attestation verify kluris-aarch64-apple-darwin.tar.gz --repo ngvoicu/kluris
 ```
 
-The macOS and Linux installer checks the SHA-256 for you.
+The install commands above check the archive's SHA-256 for you, on every OS.
 
 ## Quick start
 

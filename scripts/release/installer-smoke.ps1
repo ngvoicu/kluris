@@ -32,6 +32,15 @@
 # Restricted (the wrapper's own process-scope Bypass must make it work), with
 # KLURIS_VERSION=<v> and v<v> fetching releases/download/v<v>/, without it
 # releases/latest/download/, and a malformed KLURIS_VERSION fetching nothing.
+# The wrapper checks the archive against the release's
+# kluris-<target>.zip.sha256 before it runs the release installer, which then
+# takes that checked archive from a local folder (KLURIS_DOWNLOAD_URL) and
+# fetches nothing itself: each run's requests are exactly the installer, the
+# .sha256 and the zip of the installer's own release (through
+# KLURIS_DOWNLOAD_URL, KLURIS_INSTALLER_GITHUB_BASE_URL, or KLURIS_RELEASES_URL
+# alone), and KLURIS_DOWNLOAD_URL is as it was afterwards. A corrupted archive,
+# and an archive without its .sha256, are refused with the wrapper's message:
+# no exit 0, no .kluris, no receipt, the user PATH unchanged.
 #
 # Exits 0 when every check passes and the PATH comparison holds, 1 otherwise.
 param(
@@ -84,6 +93,7 @@ $sandbox = Join-Path $work 'home'
 $localAppData = Join-Path $sandbox 'AppData\Local'
 $served = Join-Path $work 'served'
 $server = $null
+$server2 = $null
 $failure = $null
 $restored = $false
 
@@ -107,6 +117,8 @@ function Invoke-Child([string]$exe, [string]$arguments, [hashtable]$environment,
 $sandboxEnv = @{
     HOME = $sandbox; USERPROFILE = $sandbox; LOCALAPPDATA = $localAppData
     XDG_CONFIG_HOME = $null; GITHUB_PATH = $null; KLURIS_INSTALL_DIR = $null; KLURIS_NO_MODIFY_PATH = $null
+    KLURIS_VERSION = $null; KLURIS_RELEASES_URL = $null; KLURIS_DOWNLOAD_URL = $null; INSTALLER_DOWNLOAD_URL = $null
+    KLURIS_INSTALLER_GHE_BASE_URL = $null; KLURIS_INSTALLER_GITHUB_BASE_URL = $null
 }
 # `powershell -ExecutionPolicy <policy> -Command <command>` with the sandbox's
 # environment, PowerShell's own $HOME set to the sandbox first.
@@ -155,23 +167,75 @@ try {
         if ((Requests).Count) { throw "the wrapper fetched $((Requests) -join ', ') for a malformed KLURIS_VERSION" }
         if (Test-Path -LiteralPath (Join-Path $sandbox '.kluris')) { throw 'the wrapper wrote .kluris for a malformed KLURIS_VERSION' }
         Step "wrapper refuses a malformed KLURIS_VERSION (exit $($bad.Code))"
+
+        # The archive is checked against its published .sha256 before the
+        # release installer runs: a corrupted archive, or one without its
+        # .sha256, installs nothing and leaves the user PATH as it was.
+        $zip = @(Get-ChildItem -LiteralPath $Release -File -Filter 'kluris-*.zip')
+        if ($zip.Count -ne 1) { throw "$Release holds $($zip.Count) kluris-*.zip archives, not one" }
+        $zip = $zip[0].Name
+        $corrupt = Join-Path $work 'corrupt'
+        $null = New-Item -ItemType Directory -Force -Path $corrupt
+        Get-ChildItem -LiteralPath $served -File | ForEach-Object { Copy-Item -LiteralPath $_.FullName -Destination $corrupt }
+        $corruptZip = Join-Path $corrupt $zip
+        $stream = [IO.File]::Open($corruptZip, 'Append')
+        try { $stream.Write([byte[]](0x63, 0x6f, 0x72, 0x72, 0x75, 0x70, 0x74), 0, 7) } finally { $stream.Close() }
+        $port2File = Join-Path $work 'port2'
+        $server2 = Start-Process -FilePath $Python -ArgumentList @('-I', "`"$serve`"", "`"$corrupt`"", "`"$port2File`"", "`"$(Join-Path $work 'requests2.log')`"") `
+            -WorkingDirectory $work -NoNewWindow -PassThru
+        for ($i = 0; -not (Test-Path -LiteralPath $port2File); $i++) {
+            if ($server2.HasExited) { throw 'the second local server exited' }
+            if ($i -ge 600) { throw 'the second local server did not start in 60 s' }
+            Start-Sleep -Milliseconds 100
+        }
+        $badReleases = "http://127.0.0.1:$(([IO.File]::ReadAllText($port2File)).Trim())/ngvoicu/kluris/releases"
+        # The words of a refusal, whatever line breaks, CLIXML elements
+        # (<S S="Error">, one per line) and escapes Windows PowerShell puts in
+        # a redirected error.
+        function Squeezed([string]$text) { (($text -replace '<[^>]*>', '') -replace '_x000D_|_x000A_', '') -replace '\s+', '' }
+        function Assert-Refused([string]$case, [string]$words) {
+            $pathBefore = Read-Environment ([Microsoft.Win32.Registry]::CurrentUser) 'Environment'
+            $run = Invoke-Installer 'Restricted' "irm '$site' | iex" @{ KLURIS_RELEASES_URL = $badReleases; KLURIS_DOWNLOAD_URL = "$badReleases/download/v$version" }
+            $pathAfter = Read-Environment ([Microsoft.Win32.Registry]::CurrentUser) 'Environment'
+            if ($run.Code -eq 0) { throw "the wrapper installed $case`: $($run.Out) $($run.Err)" }
+            if ((Squeezed "$($run.Out) $($run.Err)") -notlike "*$(Squeezed $words)*") { throw "$case was not refused by its checksum (no '$words'): $($run.Out) $($run.Err)" }
+            if (Test-Path -LiteralPath (Join-Path $sandbox '.kluris')) { throw "$case left $(Join-Path $sandbox '.kluris')" }
+            if (Test-Path -LiteralPath (Join-Path $localAppData 'kluris')) { throw "$case left a receipt folder $(Join-Path $localAppData 'kluris')" }
+            if ($pathAfter.Kind -ne $pathBefore.Kind -or $pathAfter.Text -cne $pathBefore.Text) { throw "$case changed the user PATH: $($pathBefore.Kind) '$($pathBefore.Text)' -> $($pathAfter.Kind) '$($pathAfter.Text)'" }
+            Step "wrapper refuses $case (exit $($run.Code)): '$words'; nothing installed, user PATH unchanged ($($pathAfter.Kind))"
+        }
+        Assert-Refused 'a corrupted archive' "kluris: $zip does not match its published SHA-256, so nothing was installed"
+        Copy-Item -LiteralPath (Join-Path $served $zip) -Destination $corruptZip -Force
+        Remove-Item -LiteralPath "$corruptZip.sha256"
+        Assert-Refused 'an archive without its .sha256' "kluris: could not download $badReleases/download/v$version/$zip.sha256, the archive's published SHA-256, so nothing was installed"
+        Stop-Process -Id $server2.Id -Force -ErrorAction SilentlyContinue
+
+        # Pinned: through KLURIS_DOWNLOAD_URL (given back as it was once the
+        # wrapper is done), then through the release installer's
+        # KLURIS_INSTALLER_GITHUB_BASE_URL. The archive and its .sha256 come
+        # from that release, and the installer fetches nothing itself.
+        $checked = @("/ngvoicu/kluris/releases/download/v$version/$zip.sha256", "/ngvoicu/kluris/releases/download/v$version/$zip")
         foreach ($pin in @($version, "v$version")) {
             Clear-Requests
             $pinned = Join-Path $work 'pinned'
-            $run = Invoke-Installer 'Restricted' "irm '$site' | iex" @{ KLURIS_RELEASES_URL = $releases; KLURIS_VERSION = $pin; KLURIS_DOWNLOAD_URL = $download; KLURIS_NO_MODIFY_PATH = '1'; KLURIS_INSTALL_DIR = $pinned }
+            $environment = @{ KLURIS_RELEASES_URL = $releases; KLURIS_VERSION = $pin; KLURIS_NO_MODIFY_PATH = '1'; KLURIS_INSTALL_DIR = $pinned }
+            if ($pin -eq $version) { $environment['KLURIS_DOWNLOAD_URL'] = $download } else { $environment['KLURIS_INSTALLER_GITHUB_BASE_URL'] = "http://127.0.0.1:$port" }
+            $run = Invoke-Installer 'Restricted' "irm '$site' | iex; 'KLURIS_DOWNLOAD_URL after the wrapper: [' + `$env:KLURIS_DOWNLOAD_URL + ']'" $environment
             if ($run.Code -ne 0) { throw "the wrapper failed with KLURIS_VERSION=${pin}: $($run.Out) $($run.Err)" }
             if (-not (Test-Path -LiteralPath (Join-Path $pinned 'kluris.exe'))) { throw "KLURIS_VERSION=$pin installed nothing: $($run.Out) $($run.Err)" }
-            $first = @(Requests)[0]
-            if ($first -ne "/ngvoicu/kluris/releases/download/v$version/kluris-installer.ps1") { throw "KLURIS_VERSION=$pin fetched $first" }
-            Step "wrapper with KLURIS_VERSION=$pin fetched $first"
+            $expected = @("/ngvoicu/kluris/releases/download/v$version/kluris-installer.ps1") + $checked
+            if ((@(Requests) -join ' ') -ne ($expected -join ' ')) { throw "KLURIS_VERSION=$pin fetched $((Requests) -join ', '), not $($expected -join ', ')" }
+            $after = "KLURIS_DOWNLOAD_URL after the wrapper: [$(if ($pin -eq $version) { $download })]"
+            if ($run.Out -notmatch [regex]::Escape($after)) { throw "KLURIS_VERSION=$pin did not give KLURIS_DOWNLOAD_URL back: $($run.Out)" }
+            Step "wrapper with KLURIS_VERSION=$pin ($(if ($pin -eq $version) { 'KLURIS_DOWNLOAD_URL' } else { 'KLURIS_INSTALLER_GITHUB_BASE_URL' })) fetched $((Requests) -join ', '); $after"
             Remove-Item -LiteralPath $pinned -Recurse -Force
         }
         Remove-Item -LiteralPath (Join-Path $localAppData 'kluris') -Recurse -Force -ErrorAction SilentlyContinue
         Clear-Requests
-        $install = Invoke-Installer 'Restricted' "irm '$site' | iex" @{ KLURIS_RELEASES_URL = $releases; KLURIS_DOWNLOAD_URL = $download }
-        $first = @(Requests)[0]
-        if ($first -ne '/ngvoicu/kluris/releases/latest/download/kluris-installer.ps1') { throw "the wrapper without KLURIS_VERSION fetched $first" }
-        Step "wrapper without KLURIS_VERSION, under a Restricted policy, fetched $first"
+        $install = Invoke-Installer 'Restricted' "irm '$site' | iex" @{ KLURIS_RELEASES_URL = $releases }
+        $expected = @('/ngvoicu/kluris/releases/latest/download/kluris-installer.ps1') + $checked
+        if ((@(Requests) -join ' ') -ne ($expected -join ' ')) { throw "the wrapper without KLURIS_VERSION fetched $((Requests) -join ', '), not $($expected -join ', ')" }
+        Step "wrapper without KLURIS_VERSION, under a Restricted policy, fetched $((Requests) -join ', ')"
     } else {
         $install = Invoke-Installer 'ByPass' "irm '$download/kluris-installer.ps1' | iex" @{ KLURIS_DOWNLOAD_URL = $download }
     }
@@ -229,6 +293,7 @@ try {
     $restored = ($LASTEXITCODE -eq 0)
     $back | ForEach-Object { Write-Output "installer-smoke: $_" }
     if ($server -and -not $server.HasExited) { Stop-Process -Id $server.Id -Force -ErrorAction SilentlyContinue }
+    if ($server2 -and -not $server2.HasExited) { Stop-Process -Id $server2.Id -Force -ErrorAction SilentlyContinue }
     Start-Sleep -Milliseconds 300
     Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
 }
