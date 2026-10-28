@@ -113,6 +113,8 @@ fn help_names_the_hooks_a_command_runs() {
             "prepare-commit-msg",
             "post-merge",
             "pre-push",
+            "reference-transaction",
+            "post-index-change",
             "Skip the pre-merge-commit and commit-msg hooks",
             "--no-verify skips pre-merge-commit and commit-msg",
         ] {
@@ -127,6 +129,8 @@ fn help_names_the_hooks_a_command_runs() {
         "pre-commit",
         "prepare-commit-msg",
         "post-commit",
+        "reference-transaction",
+        "post-index-change",
         "--no-verify skips pre-commit and commit-msg",
     ] {
         assert!(

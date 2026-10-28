@@ -346,11 +346,13 @@ ahead, and merges when both sides have new commits:
 A file with uncommitted changes is never overwritten, nor is an untracked or
 ignored file where an incoming file lands: that brain is not synced until you
 commit, stash or move it. The repository's `pre-merge-commit`,
-`prepare-commit-msg`, `commit-msg`, `post-merge` and `pre-push` hooks run
-(`--no-verify` skips `pre-merge-commit` and `commit-msg`); a merge hook may
-change the message, but one that stages files into the merge stops it, with
-nothing merged. The brain must be the root of its
-own git repository, and git must be 2.38 or newer.
+`prepare-commit-msg`, `commit-msg`, `post-merge` and `pre-push` hooks run as
+git runs them, and git's `reference-transaction` and `post-index-change`
+hooks run on every ref and index update (`--no-verify` skips
+`pre-merge-commit` and `commit-msg`); a merge hook may change the message,
+but one that stages files into the merge stops it, with nothing merged. The
+brain must be the root of its own git repository, and git must be 2.38 or
+newer.
 
 With `--json`, each brain's entry has `name`, `fetched`, `merged`, `pushed`,
 `auto_merged` (neurons merged on their own), `conflicts` (each with `path`,
@@ -374,20 +376,22 @@ A push has the same limit; once the remote took it, git moves `origin/main`
 itself, so a push stopped at that very moment can leave that ref's lock
 behind on Windows.
 
-When git cannot update the brain's refs because a lock file is in the way
-(such as `.git/refs/remotes/origin/main.lock`, left by a git that was
-stopped), `kluris sync` changes nothing and its `refused` names that file. If
-no git is running in the brain, remove the file and run `kluris sync` again;
-Kluris never removes it.
+When the fetch cannot update the remote-tracking ref because a lock file is
+in the way (such as `.git/refs/remotes/origin/main.lock`, left by a git that
+was stopped), `kluris sync` changes nothing and its `refused` names that
+file. If no git is running in the brain, remove the file and run `kluris
+sync` again; Kluris never removes it.
 
 When the remote answers but turns the brain away (an ssh key or a token it
 rejects, a repository you cannot access or that does not exist), `kluris
-sync` changes nothing and its `refused` gives git's message on one line,
-then the fix: check that this machine can run `git fetch origin` in this
-brain without a prompt (`git push origin` when only the push is turned
-away). Kluris never asks for credentials, so whatever needs a prompt there
-fails here too. Anything git says that is not known network trouble is
-shown this way, never taken for offline.
+sync` stops and its `refused` gives git's message on one line, then the
+fix: check that this machine can run `git fetch origin` in this brain
+without a prompt (`git push origin` when only the push is turned away). A
+refused fetch changes nothing. A refused push keeps what the sync brought
+in or merged locally (`merged` is `true`, `pushed` is `false`), and the
+next sync that can push sends it. Kluris never asks for credentials, so
+whatever needs a prompt there fails here too. Anything git says that is not
+known network trouble is shown this way, never taken for offline.
 
 ### Settle a conflict
 

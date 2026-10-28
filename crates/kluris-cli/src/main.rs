@@ -486,8 +486,9 @@ frontmatter changed on both sides are left for you, with nothing changed \
 until `kluris resolve`. A file with uncommitted changes is never \
 overwritten: if incoming changes touch one, that brain is not synced. The \
 repository's pre-merge-commit, prepare-commit-msg, commit-msg, post-merge \
-and pre-push hooks run (--no-verify skips pre-merge-commit and commit-msg). \
-Needs git 2.38 or newer.
+and pre-push hooks run as git runs them, and git's reference-transaction \
+and post-index-change hooks run on every ref and index update (--no-verify \
+skips pre-merge-commit and commit-msg). Needs git 2.38 or newer.
 
 --watch keeps going in the foreground: every --interval seconds (30, at \
 least 5) it asks the remote what its branch points at (git ls-remote, \
@@ -523,8 +524,10 @@ is committed under your git identity, the brain moves to it and the result \
 is pushed. A file with uncommitted changes in the way stops it until you \
 commit or stash it; the choices are kept. --abort drops the open conflict \
 and changes nothing else. The repository's pre-merge-commit, \
-prepare-commit-msg, commit-msg, post-merge and pre-push hooks run \
-(--no-verify skips pre-merge-commit and commit-msg).
+prepare-commit-msg, commit-msg, post-merge and pre-push hooks run as git \
+runs them, and git's reference-transaction and post-index-change hooks run \
+on every ref and index update (--no-verify skips pre-merge-commit and \
+commit-msg).
 
   kluris resolve --brain acme knowledge/auth.md --theirs
   kluris resolve --brain acme knowledge/auth.md --file merged.md
@@ -568,8 +571,9 @@ Kluris-Approved-By trailer (git user.name) and, when KLURIS_AGENT is set, a \
 Co-Authored-By trailer naming the agent. The maps are built from what is \
 committed, so an uncommitted file never shows up in them. The repository's \
 pre-commit, prepare-commit-msg, commit-msg and post-commit hooks run as git \
-commit runs them (--no-verify skips pre-commit and commit-msg). Needs git \
-2.38 or newer.
+commit runs them, and git's reference-transaction and post-index-change \
+hooks run on every ref and index update (--no-verify skips pre-commit and \
+commit-msg). Needs git 2.38 or newer.
 
   kluris commit --brain acme --paths knowledge/auth.md,knowledge/oauth.md
   kluris commit --brain acme --paths old.md -m \"Remove the old note\" --json";
