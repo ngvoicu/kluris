@@ -16,18 +16,20 @@
 //!    changes; any other failed fetch (a key or token turned away, no such
 //!    repository) refuses the brain with git's message and the fix
 //!    ([`refused_access`]), and so does a push git could not make for such
-//!    a reason. Before the fetch it refuses a brain whose upstream's
-//!    remote-tracking ref is outside `refs/remotes/` or a symbolic ref
-//!    ([`unmovable_tracking`]): moving it would move a branch and leave its
-//!    files behind. Then, outside the limit, it moves the remote-tracking
-//!    ref to what was fetched itself ([`fetch_tracking`]: `git update-ref
-//!    --no-deref` from the value the ref held before the fetch, a
-//!    compare-and-swap that replaces a ref made symbolic meanwhile instead
-//!    of following it), so it points where a plain `git fetch` leaves it;
-//!    a concurrent `git fetch` that moved it meanwhile is kept, and the
-//!    sync goes on from there. An update git stopped on a ref lock refuses
-//!    the brain, naming the lock file ([`ref_locked`]), which Kluris never
-//!    removes;
+//!    a reason. It refuses a brain whose upstream's remote-tracking ref is
+//!    outside `refs/remotes/` or a symbolic ref ([`unmovable_tracking`]),
+//!    checked before the fetch, after it and right before each push:
+//!    moving it would move a branch and leave its files behind. Then,
+//!    outside the limit, it moves the remote-tracking ref to what was
+//!    fetched itself ([`fetch_tracking`]: `git update-ref --no-deref` from
+//!    the value the ref held before the fetch, a compare-and-swap that
+//!    replaces a ref made symbolic meanwhile instead of following it), so
+//!    it points where a plain `git fetch` leaves it. A concurrent `git
+//!    fetch` that moved it meanwhile is kept, and Kluris fetches once more.
+//!    An update git stopped on a ref lock refuses the brain, naming the
+//!    lock file ([`ref_locked`]), which Kluris never removes. What sync
+//!    merges, fast-forwards to and records in a conflict is the commit its
+//!    own fetch brought, never a value read back from the ref;
 //! 3. behind only: fast-forwards; ahead only: pushes; diverged: merges in
 //!    memory ([`merge`]) and, without conflicts, commits the merge
 //!    (`commit-tree`, two parents, `kluris: sync` with `Kluris-Sync: auto`,
@@ -650,13 +652,17 @@ pub fn sync<G: SyncGit>(
     };
 
     for _ in 0..PUSH_ATTEMPTS {
-        if let Some(why) = fetch_tracking(git, &repo, &tracking, request, &mut report)? {
-            report.refused = Some(why);
-            return Ok(report);
-        }
-        if report.offline {
-            return Ok(report);
-        }
+        let theirs = match fetch_tracking(git, &repo, &tracking, request)? {
+            Fetched::Commit(theirs) => theirs,
+            Fetched::Offline => {
+                report.offline = true;
+                return Ok(report);
+            }
+            Fetched::Refused(why) => {
+                report.refused = Some(why);
+                return Ok(report);
+            }
+        };
         if let Ok(path) = git.git_dir_path(&repo, fresh::BACKOFF) {
             fresh::end_backoff(&path);
         }
@@ -664,7 +670,6 @@ pub fn sync<G: SyncGit>(
         let ours = git
             .head(&repo)?
             .ok_or_else(|| SyncError::Git(no_commit_yet()))?;
-        let theirs = git.rev_parse(&repo, &tracking.refname)?;
         let has = |a: &str, b: &str| git.is_ancestor(&repo.dir, a, b, far_future());
         let behind = !has(&theirs, &ours).map_err(fresh_error)?;
         let ahead = !has(&ours, &theirs).map_err(fresh_error)?;
@@ -727,6 +732,12 @@ pub fn sync<G: SyncGit>(
             return Ok(report);
         }
 
+        // Once the remote takes the push, git moves the tracking ref itself,
+        // following a symbolic ref: checked again right before.
+        if let Some(why) = unmovable_tracking(git, &repo, &tracking)? {
+            report.refused = Some(why);
+            return Ok(report);
+        }
         let deadline = Instant::now() + request.network_time_limit;
         match git.push(&repo, &tracking, deadline) {
             PushOutcome::Pushed => {
@@ -748,55 +759,91 @@ pub fn sync<G: SyncGit>(
     Err(SyncError::RemoteKeptMoving)
 }
 
+/// What sync goes on from after it fetched the upstream's branch.
+enum Fetched {
+    /// The commit Kluris's own fetch brought: what sync merges, fast-forwards
+    /// to and records in a conflict. When the remote has no such branch,
+    /// what the tracking ref held before the fetch.
+    Commit(String),
+    /// The fetch was stopped, or the network is in the way.
+    Offline,
+    /// Why the brain is left alone.
+    Refused(String),
+}
+
 /// Fetch the upstream's branch within the network time limit, then move
 /// its remote-tracking ref there outside it, only while the ref still holds
-/// what it held before the fetch: a concurrent `git fetch` that moved it
-/// meanwhile is kept, and the sync goes on from there. Offline (`offline`
-/// set) when the fetch is stopped or the network is in the way; why the
-/// brain is refused when the ref is not one to move
-/// ([`unmovable_tracking`], checked before the fetch), the remote turned
-/// the fetch away ([`fetch_refused`]) or a lock stops the move
-/// ([`ref_locked`]).
+/// what it held before the fetch. Sync goes on from the commit its own
+/// fetch brought, never from a value read back from the ref.
+///
+/// The ref is checked ([`unmovable_tracking`]) before the fetch, again
+/// after it whatever it brought, and again after a compare-and-swap that
+/// failed: one that turned into a symbolic ref or left `refs/remotes/`
+/// meanwhile refuses the brain before anything is merged. A compare-and-swap
+/// lost to a concurrent `git fetch` keeps that fetch's value; Kluris then
+/// fetches once more and goes on from that fetch's commit (from its own
+/// first one if it loses again). Offline when a fetch is stopped or the
+/// network is in the way; refused when the remote turned the fetch away
+/// ([`fetch_refused`]) or a lock stops the move ([`ref_locked`]).
 fn fetch_tracking<G: SyncGit>(
     git: &G,
     repo: &crate::git::Repo,
     tracking: &plumbing::Tracking,
     request: &SyncRequest,
-    report: &mut SyncReport,
-) -> Result<Option<String>, SyncError> {
-    if let Some(why) = unmovable_tracking(git, repo, tracking)? {
-        return Ok(Some(why));
-    }
-    let before = git.ref_value(repo, &tracking.refname)?;
-    let deadline = Instant::now() + request.network_time_limit;
-    let fetched = match git.fetch(repo, tracking, deadline) {
-        Ok(fetched) => fetched,
-        Err(e) => {
-            let refused = fetch_refused(git, repo, &tracking.remote, &e);
-            report.offline = refused.is_none();
-            return Ok(refused);
+) -> Result<Fetched, SyncError> {
+    let mut lost_once = false;
+    loop {
+        if let Some(why) = unmovable_tracking(git, repo, tracking)? {
+            return Ok(Fetched::Refused(why));
         }
-    };
-    let Some(fetched) = fetched.filter(|f| before.as_ref() != Some(f)) else {
-        return Ok(None);
-    };
-    let message = format!("kluris sync: fetch {}", tracking.remote);
-    let Err(e) = git.move_ref(
-        repo,
-        &tracking.refname,
-        &fetched,
-        before.as_deref(),
-        &message,
-    ) else {
-        return Ok(None);
-    };
-    if git.ref_value(repo, &tracking.refname)? != before {
-        // Another git moved it: its value is a tip of the remote's branch too.
-        return Ok(None);
-    }
-    match locked_ref(git, repo, &e.detail) {
-        Some(lock) => Ok(Some(ref_locked(&lock))),
-        None => Err(e.into()),
+        let before = git.ref_value(repo, &tracking.refname)?;
+        let deadline = Instant::now() + request.network_time_limit;
+        let fetched = match git.fetch(repo, tracking, deadline) {
+            Ok(fetched) => fetched,
+            Err(e) => {
+                return Ok(match fetch_refused(git, repo, &tracking.remote, &e) {
+                    Some(why) => Fetched::Refused(why),
+                    None => Fetched::Offline,
+                });
+            }
+        };
+        if let Some(why) = unmovable_tracking(git, repo, tracking)? {
+            return Ok(Fetched::Refused(why));
+        }
+        let Some(fetched) = fetched else {
+            return match before {
+                Some(held) => Ok(Fetched::Commit(held)),
+                None => Err(SyncError::Git(no_remote_branch(tracking))),
+            };
+        };
+        if before.as_ref() == Some(&fetched) {
+            return Ok(Fetched::Commit(fetched));
+        }
+        let message = format!("kluris sync: fetch {}", tracking.remote);
+        let Err(e) = git.move_ref(
+            repo,
+            &tracking.refname,
+            &fetched,
+            before.as_deref(),
+            &message,
+        ) else {
+            return Ok(Fetched::Commit(fetched));
+        };
+        if let Some(why) = unmovable_tracking(git, repo, tracking)? {
+            return Ok(Fetched::Refused(why));
+        }
+        if git.ref_value(repo, &tracking.refname)? == before {
+            return match locked_ref(git, repo, &e.detail) {
+                Some(lock) => Ok(Fetched::Refused(ref_locked(&lock))),
+                None => Err(e.into()),
+            };
+        }
+        // Another git moved the ref, a concurrent `git fetch`: its value is
+        // kept, never merged.
+        if lost_once {
+            return Ok(Fetched::Commit(fetched));
+        }
+        lost_once = true;
     }
 }
 
@@ -896,6 +943,23 @@ fn fresh_error(e: fresh::FreshError) -> SyncError {
             code: None,
             detail: "timed out".into(),
         }),
+    }
+}
+
+/// The remote has no such branch and there is no tracking ref to go on
+/// from.
+fn no_remote_branch(tracking: &plumbing::Tracking) -> GitError {
+    GitError {
+        args: vec![
+            "fetch".into(),
+            tracking.remote.clone(),
+            tracking.remote_ref.clone(),
+        ],
+        code: None,
+        detail: format!(
+            "the remote has no branch {} and there is no {} to sync from",
+            tracking.remote_ref, tracking.refname
+        ),
     }
 }
 

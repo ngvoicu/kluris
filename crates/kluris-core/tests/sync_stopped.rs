@@ -205,3 +205,50 @@ fn a_concurrent_fetch_that_moved_the_tracking_ref_is_kept() {
     assert!(w.read(&w.ours, "ideas/later.md").contains("# Later"));
     assert_eq!(ref_locks(&w.ours), Vec::<PathBuf>::new());
 }
+
+#[test]
+fn moving_the_tracking_ref_replaces_a_symbolic_ref_and_never_follows_it() {
+    use kluris_core::git::Git;
+    use kluris_core::sync::plumbing::SyncGit;
+    let w = World::new();
+    let git = w.git();
+    let repo = git.repo(&w.ours).unwrap();
+    let main = w.head(&w.ours);
+    let tree = w.run(&w.ours, &["rev-parse", "HEAD^{tree}"]);
+    let other = w
+        .run(
+            &w.ours,
+            &["commit-tree", tree.trim(), "-p", &main, "-m", "other"],
+        )
+        .trim()
+        .to_string();
+    w.run(
+        &w.ours,
+        &[
+            "symbolic-ref",
+            "refs/remotes/origin/main",
+            "refs/heads/main",
+        ],
+    );
+    git.move_ref(
+        &repo,
+        "refs/remotes/origin/main",
+        &other,
+        Some(&main),
+        "test",
+    )
+    .unwrap();
+    assert_eq!(
+        w.run(&w.ours, &["rev-parse", "refs/heads/main"]).trim(),
+        main
+    );
+    assert_eq!(tracking(&w), other);
+    let symbolic = w
+        .command(
+            &w.ours,
+            &["symbolic-ref", "--quiet", "refs/remotes/origin/main"],
+        )
+        .output()
+        .unwrap();
+    assert_eq!(symbolic.status.code(), Some(1), "still symbolic");
+}

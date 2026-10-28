@@ -25,7 +25,8 @@ struct Snapshot {
     files: Vec<(String, Vec<u8>)>,
 }
 
-fn snapshot(h: &Home, root: &Path) -> Snapshot {
+/// Every file of the work tree at `root` with its bytes, `.git` aside.
+fn files(root: &Path) -> Vec<(String, Vec<u8>)> {
     let mut files = Vec::new();
     let mut stack = vec![root.to_path_buf()];
     while let Some(dir) = stack.pop() {
@@ -43,6 +44,10 @@ fn snapshot(h: &Home, root: &Path) -> Snapshot {
         }
     }
     files.sort();
+    files
+}
+
+fn snapshot(h: &Home, root: &Path) -> Snapshot {
     Snapshot {
         head: h.git(root, &["symbolic-ref", "HEAD"]) + &h.git(root, &["rev-parse", "HEAD"]),
         refs: h.git(
@@ -55,7 +60,26 @@ fn snapshot(h: &Home, root: &Path) -> Snapshot {
         index: h.git(root, &["ls-files", "--stage"]),
         status: h.git(root, &["status", "--porcelain"]),
         fetch_head: fs::read(root.join(".git").join("FETCH_HEAD")).ok(),
-        files,
+        files: files(root),
+    }
+}
+
+/// What the work tree at `dir` holds: its HEAD (the branch and its
+/// commit), the index's entries, `git status` and every file's bytes.
+#[derive(Debug, PartialEq, Eq)]
+struct WorkTree {
+    head: String,
+    index: String,
+    status: String,
+    files: Vec<(String, Vec<u8>)>,
+}
+
+fn work_tree(h: &Home, dir: &Path) -> WorkTree {
+    WorkTree {
+        head: h.git(dir, &["symbolic-ref", "HEAD"]) + &h.git(dir, &["rev-parse", "HEAD"]),
+        index: h.git(dir, &["ls-files", "--stage"]),
+        status: h.git(dir, &["status", "--porcelain"]),
+        files: files(dir),
     }
 }
 
@@ -256,57 +280,238 @@ fn a_missing_tracking_ref_is_created() {
     assert!(root.join("notes").join("new.md").is_file());
 }
 
-/// The tracking ref turns symbolic, pointing at the checked-out branch,
-/// after sync checked it and while its fetch runs (the remote's upload-pack
-/// does it once it has sent the pack). The move replaces that symbolic ref
-/// and never follows it: the branch moves only by the fast-forward, which
-/// brings the files with it.
-#[test]
-fn a_tracking_ref_made_symbolic_during_the_fetch_is_not_followed() {
-    let mut h = Home::new();
-    let root = h.brain("alpha");
-    h.teammate_pushes("alpha", "notes/new.md", &neuron("New", ""));
-    let script = h.dir.path().join("symref-upload-pack.sh");
+/// Run `command` in the brain after the remote's upload-pack has sent the
+/// pack, while sync's fetch is still running.
+fn after_upload_pack(h: &Home, root: &Path, command: &str) {
+    let script = h.dir.path().join("racing-upload-pack.sh");
     fs::write(
         &script,
         format!(
-            "#!/bin/sh\ngit upload-pack \"$@\" || exit $?\ngit -C '{}' symbolic-ref refs/remotes/origin/main refs/heads/main >&2\n",
-            sh_path(&root)
+            "#!/bin/sh\ngit upload-pack \"$@\" || exit $?\ngit -C '{}' {command} >&2\n",
+            sh_path(root)
         ),
     )
     .unwrap();
     h.git(
-        &root,
+        root,
         &[
             "config",
             "remote.origin.uploadpack",
             &format!("sh '{}'", sh_path(&script)),
         ],
     );
+}
+
+/// What `refused` says of `refs/remotes/origin/main` made a symbolic ref to
+/// `target`.
+fn symbolic_refusal(target: &str) -> String {
+    format!(
+        "the upstream's remote-tracking ref refs/remotes/origin/main is a symbolic ref to {target}: moving it would move {target}, so Kluris leaves it alone; remove it with `git symbolic-ref --delete refs/remotes/origin/main` and run kluris sync again"
+    )
+}
+
+/// The tracking ref turns symbolic, pointing at the checked-out branch,
+/// after sync checked it and while its fetch runs: sync checks it again
+/// once the fetch is done and refuses the brain before it moves anything.
+#[test]
+fn a_tracking_ref_made_symbolic_during_the_fetch_is_refused() {
+    let mut h = Home::new();
+    let root = h.brain("alpha");
+    h.teammate_pushes("alpha", "notes/new.md", &neuron("New", ""));
+    after_upload_pack(
+        &h,
+        &root,
+        "symbolic-ref refs/remotes/origin/main refs/heads/main",
+    );
+    let before = work_tree(&h, &root);
     let (code, doc) = h.json(&["sync", "--brain", "alpha", "--json"]);
-    assert_eq!(code, 0, "{doc}");
+    assert_eq!(code, 1, "{doc}");
     let entry: &Value = &doc["brains"][0];
-    assert_eq!(entry["merged"], true, "{doc}");
-    let new = remote_head(&h);
+    assert_eq!(
+        entry["refused"],
+        symbolic_refusal("refs/heads/main"),
+        "{doc}"
+    );
+    assert_eq!(entry["merged"], false, "{doc}");
+    assert_eq!(work_tree(&h, &root), before);
     let branch_log = h.git(
         &root,
         &["reflog", "show", "--format=%gs", "refs/heads/main"],
     );
     assert!(!branch_log.contains("kluris sync"), "{branch_log}");
-    assert_eq!(h.git(&root, &["rev-parse", "HEAD"]).trim(), new);
-    assert_eq!(
-        h.git(&root, &["rev-parse", "refs/remotes/origin/main"])
-            .trim(),
-        new
+}
+
+/// A brain with an approved local commit (and, when `changed`, a
+/// teammate's commit on the remote), and a branch `private` checked out in
+/// a second worktree at `<home>/private`, holding an unapproved
+/// `notes/private.md`. Returns the brain's root and that worktree.
+fn private_worktree(h: &mut Home, changed: bool) -> (std::path::PathBuf, std::path::PathBuf) {
+    let root = h.brain("alpha");
+    h.commit(&root, "notes/local.md", &neuron("Local", "Approved.\n"));
+    if changed {
+        h.teammate_pushes("alpha", "notes/remote.md", &neuron("Remote", ""));
+    }
+    let remote = remote_head(h);
+    h.git(
+        &root,
+        &[
+            "fetch",
+            "-q",
+            "--no-tags",
+            "--refmap=",
+            "origin",
+            "refs/heads/main",
+        ],
     );
-    let mut symbolic = std::process::Command::new("git");
-    h.hermetic(&mut symbolic);
-    let symbolic = symbolic
-        .args(["symbolic-ref", "--quiet", "refs/remotes/origin/main"])
-        .current_dir(&root)
-        .output()
-        .unwrap();
-    assert_eq!(symbolic.status.code(), Some(1), "still symbolic");
+    h.git(&root, &["branch", "private", &remote]);
+    let linked = h.dir.path().join("private");
+    h.git(
+        &root,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            &linked.to_string_lossy(),
+            "private",
+        ],
+    );
+    h.commit(
+        &linked,
+        "notes/private.md",
+        &neuron("Private", "PRIVATE: NOT APPROVED FOR ORIGIN\n"),
+    );
+    (root, linked)
+}
+
+/// Sync refuses the brain, naming the tracking ref and `refs/heads/private`;
+/// the remote never gets `notes/private.md`, and `private`, its worktree
+/// and the brain's own work tree stay byte for byte as they were. Returns
+/// the brain's entry.
+fn assert_private_not_published(h: &Home, root: &Path, linked: &Path) -> Value {
+    let bare = h.dir.path().join("alpha.git");
+    let remote_before = remote_head(h);
+    let main_before = work_tree(h, root);
+    let private_before = work_tree(h, linked);
+    let (code, doc) = h.json(&["sync", "--brain", "alpha", "--json"]);
+    assert_eq!(code, 1, "{doc}");
+    let entry = doc["brains"][0].clone();
+    assert_eq!(
+        entry["refused"],
+        symbolic_refusal("refs/heads/private"),
+        "{doc}"
+    );
+    assert_eq!(entry["pushed"], false, "{doc}");
+    assert_eq!(remote_head(h), remote_before);
+    let published = h.git(&bare, &["ls-tree", "-r", "--name-only", "main"]);
+    assert!(!published.contains("notes/private.md"), "{published}");
+    assert_eq!(work_tree(h, linked), private_before);
+    assert_eq!(work_tree(h, root), main_before);
+    entry
+}
+
+/// The tracking ref turns into a symbolic ref to a branch checked out in
+/// another worktree while sync's fetch runs, and the fetch brings a new
+/// commit: the compare-and-swap fails, and sync refuses the brain rather
+/// than take the ref's new value for a concurrent fetch.
+#[test]
+fn a_tracking_ref_made_symbolic_to_another_branch_during_a_fetch_that_moved_is_refused() {
+    let mut h = Home::new();
+    let (root, linked) = private_worktree(&mut h, true);
+    after_upload_pack(
+        &h,
+        &root,
+        "symbolic-ref refs/remotes/origin/main refs/heads/private",
+    );
+    let entry = assert_private_not_published(&h, &root, &linked);
+    assert_eq!(entry["merged"], false);
+}
+
+/// The same while the fetch brings nothing new, so there is no ref to
+/// move: sync still checks the ref after the fetch and refuses the brain.
+#[test]
+fn a_tracking_ref_made_symbolic_to_another_branch_during_a_fetch_with_nothing_new_is_refused() {
+    let mut h = Home::new();
+    let (root, linked) = private_worktree(&mut h, false);
+    after_upload_pack(
+        &h,
+        &root,
+        "symbolic-ref refs/remotes/origin/main refs/heads/private",
+    );
+    let entry = assert_private_not_published(&h, &root, &linked);
+    assert_eq!(entry["merged"], false);
+}
+
+/// The tracking ref turns symbolic while sync merges (a `pre-merge-commit`
+/// hook does it): the merge lands, and sync checks the ref again right
+/// before the push and refuses the brain, so git's own update of the
+/// tracking ref after a push never follows it.
+#[test]
+fn a_tracking_ref_made_symbolic_during_the_merge_is_refused_before_the_push() {
+    let mut h = Home::new();
+    let (root, linked) = private_worktree(&mut h, true);
+    let hook = root.join(".git").join("hooks").join("pre-merge-commit");
+    fs::write(
+        &hook,
+        "#!/bin/sh\ngit symbolic-ref refs/remotes/origin/main refs/heads/private\n",
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&hook, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let bare = h.dir.path().join("alpha.git");
+    let remote_before = remote_head(&h);
+    let private_before = work_tree(&h, &linked);
+    let (code, doc) = h.json(&["sync", "--brain", "alpha", "--json"]);
+    assert_eq!(code, 1, "{doc}");
+    let entry = &doc["brains"][0];
+    assert_eq!(
+        entry["refused"],
+        symbolic_refusal("refs/heads/private"),
+        "{doc}"
+    );
+    assert_eq!(entry["merged"], true, "{doc}");
+    assert_eq!(entry["pushed"], false, "{doc}");
+    assert_eq!(remote_head(&h), remote_before);
+    let published = h.git(&bare, &["ls-tree", "-r", "--name-only", "main"]);
+    assert!(!published.contains("notes/private.md"), "{published}");
+    assert_eq!(work_tree(&h, &linked), private_before);
+    assert!(root.join("notes").join("remote.md").is_file());
+    assert!(!root.join("notes").join("private.md").exists());
     assert_eq!(h.git(&root, &["status", "--porcelain"]), "");
-    assert!(h.read(&root, "notes/new.md").contains("# New"));
+}
+
+/// A remote that has no such branch: sync goes on from what the tracking
+/// ref held before the fetch.
+#[test]
+fn a_remote_without_the_branch_goes_on_from_the_tracking_ref() {
+    let mut h = Home::new();
+    h.brain("alpha");
+    let bare = h.dir.path().join("alpha.git");
+    h.git(&bare, &["update-ref", "-d", "refs/heads/main"]);
+    let (code, doc) = h.json(&["sync", "--brain", "alpha", "--json"]);
+    assert_eq!(code, 0, "{doc}");
+    let entry = &doc["brains"][0];
+    assert_eq!(entry["fetched"], true, "{doc}");
+    assert_eq!(entry["merged"], false, "{doc}");
+    assert_eq!(entry["pushed"], false, "{doc}");
+    assert_eq!(entry["refused"], Value::Null, "{doc}");
+}
+
+/// A remote that has no such branch, and no tracking ref either: nothing
+/// to sync from, an error naming the ref.
+#[test]
+fn a_remote_without_the_branch_and_no_tracking_ref_is_an_error() {
+    let mut h = Home::new();
+    let root = h.brain("alpha");
+    let bare = h.dir.path().join("alpha.git");
+    h.git(&bare, &["update-ref", "-d", "refs/heads/main"]);
+    h.git(&root, &["update-ref", "-d", "refs/remotes/origin/main"]);
+    let head = h.git(&root, &["rev-parse", "HEAD"]);
+    let (code, doc) = h.json(&["sync", "--brain", "alpha", "--json"]);
+    assert_eq!(code, 1, "{doc}");
+    let error = doc["error"].as_str().unwrap_or_else(|| panic!("{doc}"));
+    assert!(error.contains("refs/remotes/origin/main"), "{error}");
+    assert_eq!(h.git(&root, &["rev-parse", "HEAD"]), head);
 }

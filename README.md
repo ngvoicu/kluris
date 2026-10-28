@@ -372,7 +372,9 @@ The fetch has a one-minute limit and brings the upstream branch alone (no
 tags, other branches or pruning). While it talks to the remote it writes no
 ref, so a fetch stopped at the limit leaves no lock behind; Kluris then moves
 the remote-tracking ref (`origin/main`) to what was fetched, unless another
-`git fetch` moved it meanwhile, in which case the sync goes on from there.
+`git fetch` moved it meanwhile, in which case Kluris keeps that and fetches
+once more. What sync merges and pushes is always the commit its own fetch
+brought, never what `origin/main` reads afterwards.
 A push has the same limit; once the remote took it, git moves `origin/main`
 itself, so a push stopped at that very moment can leave that ref's lock
 behind on Windows.
@@ -384,7 +386,8 @@ file. If no git is running in the brain, remove the file and run `kluris
 sync` again; Kluris never removes it.
 
 Kluris moves only a remote-tracking ref of its own: one under
-`refs/remotes/` that is not a symbolic ref. When the branch's upstream maps
+`refs/remotes/` that is not a symbolic ref, checked before the fetch, after
+it and right before each push. When the branch's upstream maps
 somewhere else (a `remote.origin.fetch` such as
 `+refs/heads/main:refs/heads/main`, which makes `refs/heads/main` its own
 tracking ref) or `origin/main` is a symbolic ref (to `refs/heads/main`, say),
