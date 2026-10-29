@@ -32,6 +32,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Instant;
 
+use crate::exec_files;
 use serde_json::{Value, json};
 
 /// The fixture gate (research-05 §5: v3.0 must not fall below these).
@@ -185,11 +186,12 @@ fn binary(o: &Options) -> Result<PathBuf, String> {
         return Ok(bin);
     }
     let root = workspace_root();
-    let status = Command::new(std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into()))
-        .args(["build", "--release", "-q", "-p", "kluris"])
-        .current_dir(&root)
-        .status()
-        .map_err(|e| format!("cargo build: {e}"))?;
+    let status = exec_files::status(
+        Command::new(std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into()))
+            .args(["build", "--release", "-q", "-p", "kluris"])
+            .current_dir(&root),
+    )
+    .map_err(|e| format!("cargo build: {e}"))?;
     if !status.success() {
         return Err("cargo build --release -p kluris failed".into());
     }
@@ -224,9 +226,7 @@ fn run_query(
             cmd.env(k, v);
         }
         let started = Instant::now();
-        let out = cmd
-            .output()
-            .map_err(|e| format!("{}: {e}", bin.display()))?;
+        let out = exec_files::output(&mut cmd).map_err(|e| format!("{}: {e}", bin.display()))?;
         millis.push(started.elapsed().as_secs_f64() * 1000.0);
         if !out.status.success() {
             return Err(format!(

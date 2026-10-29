@@ -10,6 +10,7 @@ use std::time::Duration;
 use super::options::{self, Options, Parsed};
 use super::run::{self, Ctx};
 use super::script::{self, Layout, Spec};
+use crate::exec_files;
 use crate::ssh_ci::fake::{Answer, Clock, Fake, NOW, said, tickets, timed_out};
 use crate::ssh_ci::queue::{Queues, Who};
 use crate::ssh_ci::runner::{Captured, Stream, Streamed};
@@ -689,10 +690,9 @@ mod scripts {
     #[test]
     fn bash_reads_every_script() {
         for (name, text) in every_script() {
-            let out = std::process::Command::new("bash")
-                .args(["-n", "-c", &text])
-                .output()
-                .unwrap();
+            let out =
+                exec_files::output(std::process::Command::new("bash").args(["-n", "-c", &text]))
+                    .unwrap();
             assert!(
                 out.status.success(),
                 "{name}: {}",
@@ -739,7 +739,7 @@ mod scripts_run {
 
     fn executable(path: &Path, text: &str) {
         fs::create_dir_all(path.parent().unwrap()).unwrap();
-        fs::write(path, text).unwrap();
+        exec_files::writing_exe(|| fs::write(path, text)).unwrap();
         fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
     }
 
@@ -786,14 +786,15 @@ mod scripts_run {
                 "{}:/usr/bin:/bin:/usr/sbin:/sbin",
                 self.path("bin").display()
             );
-            let out = Command::new("bash")
-                .args(["-c", text])
-                .env_clear()
-                .env("HOME", self.dir.path())
-                .env("PATH", path)
-                .current_dir(self.dir.path())
-                .output()
-                .unwrap();
+            let out = exec_files::output(
+                Command::new("bash")
+                    .args(["-c", text])
+                    .env_clear()
+                    .env("HOME", self.dir.path())
+                    .env("PATH", path)
+                    .current_dir(self.dir.path()),
+            )
+            .unwrap();
             let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
             let mut said = stdout.clone();
             said.push_str(&String::from_utf8_lossy(&out.stderr));
@@ -813,14 +814,15 @@ mod scripts_run {
             fs::write(tree.join("Cargo.toml"), "[workspace]\n").unwrap();
             let incoming = self.path(".kluris-ci/incoming");
             fs::create_dir_all(&incoming).unwrap();
-            let status = Command::new("tar")
-                .arg("-czf")
-                .arg(incoming.join(format!("{ID}.tgz")))
-                .arg("-C")
-                .arg(&tree)
-                .arg(".")
-                .status()
-                .unwrap();
+            let status = exec_files::status(
+                Command::new("tar")
+                    .arg("-czf")
+                    .arg(incoming.join(format!("{ID}.tgz")))
+                    .arg("-C")
+                    .arg(&tree)
+                    .arg("."),
+            )
+            .unwrap();
             assert!(status.success());
         }
     }
@@ -1007,10 +1009,7 @@ mod scripts_run {
     /// it, whatever the hard limit says), so the run's cap is one it can set.
     fn task_limit_here() -> u32 {
         // bash, as the scripts: dash (Ubuntu's sh) has no `ulimit -u`.
-        let out = Command::new("bash")
-            .args(["-c", "ulimit -u"])
-            .output()
-            .unwrap();
+        let out = exec_files::output(Command::new("bash").args(["-c", "ulimit -u"])).unwrap();
         String::from_utf8_lossy(&out.stdout)
             .trim()
             .parse()
@@ -1092,11 +1091,12 @@ mod scripts_run {
             ".kluris-ci/runs/kluris-old",
             ".kluris-ci/incoming/kluris-old.tgz",
         ] {
-            let status = Command::new("touch")
-                .args(["-t", "202001010000"])
-                .arg(home.path(old))
-                .status()
-                .unwrap();
+            let status = exec_files::status(
+                Command::new("touch")
+                    .args(["-t", "202001010000"])
+                    .arg(home.path(old)),
+            )
+            .unwrap();
             assert!(status.success());
         }
         let mut spec = spec(&[]);

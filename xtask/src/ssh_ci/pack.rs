@@ -1,7 +1,7 @@
 //! The worktree as it is now, as one tarball: `git archive` of HEAD, or of the
 //! commit `git stash create` makes of the uncommitted tracked changes (which
-//! touches neither the stash nor the worktree), with the run script and the
-//! commit beside the files. Untracked files do not go, nor the build folder.
+//! touches neither the stash nor the worktree; the index's stat information
+//! is refreshed first), with the run script and the commit beside the files. Untracked files do not go, nor the build folder.
 //! The same for every machine: only the run script's name differs.
 
 use std::ffi::OsStr;
@@ -10,6 +10,7 @@ use std::path::Path;
 use std::process::{Command, ExitStatus, Output};
 
 use super::plan::TREE_FILE;
+use crate::exec_files;
 
 /// Never sent, tracked or not.
 pub const EXCLUDED: [&str; 1] = ["target"];
@@ -54,11 +55,11 @@ pub fn pack_by(
     files: &[(String, String)],
 ) -> Result<String, String> {
     let git = |what: &str, args: &[&str]| run_git(git, root, what, args);
+    // The stat information made current first: `stash create` takes a file
+    // whose stat changed and whose bytes did not for a change, then finds
+    // none, and ends with 1 saying nothing.
+    git("update-index", &["update-index", "-q", "--refresh"])?;
     // An identity of its own, so the stash commit can be made in any repository.
-    // `stash create` ends with 1 and says nothing when the tracked files it
-    // first sees as changed differ from the index only in their stat (bytes
-    // rewritten as they were): it refreshes the index, finds no change, and
-    // the next pack goes.
     let stash = git(
         "stash create",
         &[
@@ -120,14 +121,15 @@ pub fn channel(root: &Path) -> Result<String, String> {
 }
 
 fn run_git(git: &OsStr, root: &Path, what: &str, args: &[&str]) -> Result<String, String> {
-    let out = Command::new(git)
-        .args(args)
-        .current_dir(root)
-        .env_remove("GIT_DIR")
-        .env_remove("GIT_WORK_TREE")
-        .env_remove("GIT_INDEX_FILE")
-        .output()
-        .map_err(|e| format!("could not start git: {e}"))?;
+    let out = exec_files::output(
+        Command::new(git)
+            .args(args)
+            .current_dir(root)
+            .env_remove("GIT_DIR")
+            .env_remove("GIT_WORK_TREE")
+            .env_remove("GIT_INDEX_FILE"),
+    )
+    .map_err(|e| format!("could not start git: {e}"))?;
     if !out.status.success() {
         return Err(format!("git {what} failed: {}", failure(&out)));
     }

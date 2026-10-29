@@ -2,6 +2,7 @@
 //! tests can answer for them. Every call carries its bound: a program still
 //! running when it passes is killed.
 
+use crate::exec_files;
 use std::io::{self, Read};
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc::{self, RecvTimeoutError};
@@ -106,13 +107,14 @@ impl Runner for System {
         stop: &dyn Fn() -> bool,
     ) -> Result<Streamed, String> {
         let started = |e: io::Error| format!("could not start {}: {e}", call.program);
-        let mut child = Command::new(&call.program)
-            .args(&call.args)
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .map_err(started)?;
+        let mut child = exec_files::spawn(
+            Command::new(&call.program)
+                .args(&call.args)
+                .stdin(Stdio::null())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped()),
+        )
+        .map_err(started)?;
         let deadline = Instant::now() + call.bound;
         let (Some(stdout), Some(stderr)) = (child.stdout.take(), child.stderr.take()) else {
             end(&mut child);

@@ -16,6 +16,7 @@ use super::options::{self, Options, Parsed};
 use super::remote::{Stream, Streamed};
 use super::run::{self, Ctx};
 use super::script::{self, Spec};
+use crate::exec_files;
 use crate::ssh_ci::fake::{Answer, Clock, Fake, NOW, said, tickets, timed_out};
 use crate::ssh_ci::queue::{Queues, Who};
 
@@ -430,10 +431,9 @@ mod machines {
         );
         #[cfg(unix)]
         {
-            let out = std::process::Command::new("bash")
-                .args(["-n", "-c", asked])
-                .output()
-                .unwrap();
+            let out =
+                exec_files::output(std::process::Command::new("bash").args(["-n", "-c", asked]))
+                    .unwrap();
             assert!(
                 out.status.success(),
                 "{}",
@@ -1842,7 +1842,8 @@ mod tarball {
     use super::*;
 
     fn git(dir: &Path, args: &[&str]) -> String {
-        let out = Command::new("git")
+        let mut command = Command::new("git");
+        command
             .args([
                 "-c",
                 "user.name=t",
@@ -1855,9 +1856,8 @@ mod tarball {
             .current_dir(dir)
             .env_remove("GIT_DIR")
             .env_remove("GIT_WORK_TREE")
-            .env_remove("GIT_INDEX_FILE")
-            .output()
-            .unwrap();
+            .env_remove("GIT_INDEX_FILE");
+        let out = exec_files::output(&mut command).unwrap();
         assert!(
             out.status.success(),
             "git {args:?}: {}",
@@ -1875,12 +1875,13 @@ mod tarball {
 
     /// `name` from the tarball, or none.
     fn member(tarball: &Path, name: &str) -> Option<String> {
-        let out = Command::new(tar_program())
-            .arg("-xOzf")
-            .arg(tarball)
-            .arg(name)
-            .output()
-            .unwrap();
+        let out = exec_files::output(
+            Command::new(tar_program())
+                .arg("-xOzf")
+                .arg(tarball)
+                .arg(name),
+        )
+        .unwrap();
         out.status
             .success()
             .then(|| String::from_utf8(out.stdout).unwrap())
@@ -1989,8 +1990,33 @@ mod tarball {
         assert_eq!(member(&tarball, "src/lib.rs").as_deref(), Some("changed\n"));
     }
 
-    /// A git in `dir` that answers every call with `stdout` and `stderr`, each
-    /// a line when given, and ends with `status`.
+    /// A tracked file rewritten with the bytes it had differs from the index
+    /// only in its stat: the tree is HEAD's, and it packs as HEAD.
+    #[test]
+    fn a_file_rewritten_as_it_was_packs_as_head() {
+        let dir = repo();
+        let root = dir.path();
+        let head = git(root, &["rev-parse", "HEAD"]);
+        let kept = root.join("kept.txt");
+        fs::write(&kept, "committed\n").unwrap();
+        fs::File::options()
+            .write(true)
+            .open(&kept)
+            .unwrap()
+            .set_modified(std::time::SystemTime::now() + Duration::from_secs(120))
+            .unwrap();
+        let tarball = root.join("out.tgz");
+        assert_eq!(
+            super::super::pack::pack(root, &tarball, "s").as_ref(),
+            Ok(&head)
+        );
+        assert_eq!(member(&tarball, "kept.txt").as_deref(), Some("committed\n"));
+        assert_eq!(git(root, &["stash", "list"]), "");
+    }
+
+    /// A git in `dir` that refreshes the index as git does, and answers every
+    /// other call with `stdout` and `stderr`, each a line when given, and ends
+    /// with `status`.
     fn fake_git(dir: &Path, status: u8, stdout: &str, stderr: &str) -> PathBuf {
         let said = |text: &str, to: &str| {
             if text.is_empty() {
@@ -2005,7 +2031,7 @@ mod tarball {
             (
                 dir.join("git.cmd"),
                 format!(
-                    "@echo off\r\n{}{}exit /b {status}\r\n",
+                    "@echo off\r\nif \"%1\"==\"update-index\" exit /b 0\r\n{}{}exit /b {status}\r\n",
                     said(stdout, ""),
                     said(stderr, " 1>&2")
                 ),
@@ -2014,13 +2040,13 @@ mod tarball {
             (
                 dir.join("git"),
                 format!(
-                    "#!/bin/sh\n{}{}exit {status}\n",
+                    "#!/bin/sh\n[ \"$1\" = update-index ] && exit 0\n{}{}exit {status}\n",
                     said(stdout, ""),
                     said(stderr, " >&2")
                 ),
             )
         };
-        fs::write(&path, text).unwrap();
+        exec_files::writing_exe(|| fs::write(&path, text)).unwrap();
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -2081,7 +2107,13 @@ mod tarball {
     fn a_stash_create_ended_by_a_signal_names_it() {
         let bin = tempfile::tempdir().unwrap();
         let git = bin.path().join("git");
-        fs::write(&git, "#!/bin/sh\necho partial\nkill -KILL $$\n").unwrap();
+        exec_files::writing_exe(|| {
+            fs::write(
+                &git,
+                "#!/bin/sh\n[ \"$1\" = update-index ] && exit 0\necho partial\nkill -KILL $$\n",
+            )
+        })
+        .unwrap();
         {
             use std::os::unix::fs::PermissionsExt;
             fs::set_permissions(&git, fs::Permissions::from_mode(0o755)).unwrap();

@@ -1,5 +1,6 @@
 //! Development tasks for the Kluris 3 workspace (`cargo xtask <task>`).
 
+mod exec_files;
 mod linux;
 mod search_eval;
 mod ssh_ci;
