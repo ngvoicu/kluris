@@ -1,9 +1,10 @@
 ---
 source: crates/kluris-cli/tests/golden_create.rs
-expression: run.dump()
+expression: text.as_ref()
 ---
-== stdout
+== stdout (1 byte)
 
-== stderr
+== stderr (125 bytes)
 Error: <ROOT>/work/brains/full already exists and is not empty. Choose a different name or use --path to specify a location.
 == exit 1
+<end of run>

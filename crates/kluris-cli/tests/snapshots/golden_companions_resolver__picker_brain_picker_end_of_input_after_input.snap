@@ -1,14 +1,15 @@
 ---
 source: crates/kluris-cli/tests/golden_companions_resolver.rs
-expression: run.render(&sb.root)
+expression: text
 ---
-== stdout
+== stdout (171 bytes)
 Multiple brains registered. Pick one:
   [1] a  (<ROOT>/work/brains/brain-0)
   [2] b  (<ROOT>/work/brains/brain-1)
 Choice: Error: 'x' is not a valid integer range.
 Choice: 
 <no newline at end>
-== stderr
+== stderr (9 bytes)
 Aborted!
 == exit 1
+<end of run>

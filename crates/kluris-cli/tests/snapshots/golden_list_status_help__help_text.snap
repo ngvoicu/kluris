@@ -2,7 +2,7 @@
 source: crates/kluris-cli/tests/golden_list_status_help.rs
 description: kluris help
 ---
-== stdout
+== stdout (1275 bytes)
 kluris — Turn AI agents into team subject matter experts
 
 Commands:
@@ -26,5 +26,6 @@ Commands:
 
 Config: <ROOT>/work/home/.kluris/config.yml
 Brains: 2 registered
-== stderr
+== stderr (0 bytes)
 == exit 0
+<end of run>

@@ -2,17 +2,20 @@
 source: crates/kluris-cli/tests/golden_list_status_help.rs
 ---
 $ kluris help status --json
-== stdout
+== stdout (116 bytes)
 {"ok": true, "commands": [{"name": "status", "description": "Show brain tree, recent changes, and neuron counts"}]}
-== stderr
+== stderr (0 bytes)
 == exit 0
+<end of run>
 $ kluris help bogus --json
-== stdout
+== stdout (49 bytes)
 {"ok": false, "error": "Unknown command: bogus"}
-== stderr
+== stderr (0 bytes)
 == exit 1
+<end of run>
 $ kluris help pack --json
-== stdout
+== stdout (48 bytes)
 {"ok": false, "error": "Unknown command: pack"}
-== stderr
+== stderr (0 bytes)
 == exit 1
+<end of run>

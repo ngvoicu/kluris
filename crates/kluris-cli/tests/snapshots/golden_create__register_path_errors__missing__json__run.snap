@@ -1,8 +1,9 @@
 ---
 source: crates/kluris-cli/tests/golden_create.rs
-expression: run.dump()
+expression: text.as_ref()
 ---
-== stdout
+== stdout (47 bytes)
 {"ok": false, "error": "Path not found: nope"}
-== stderr
+== stderr (0 bytes)
 == exit 1
+<end of run>

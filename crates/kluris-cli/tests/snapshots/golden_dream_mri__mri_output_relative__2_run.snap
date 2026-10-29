@@ -3,12 +3,13 @@ source: crates/kluris-cli/tests/golden_dream_mri.rs
 expression: text
 ---
 $ kluris mri --output out dir/./deep//é page.html
-== exit 0
-== stdout
+== stdout (121 bytes)
 MRI complete — out dir/deep/é page.html
   Open: <ROOT_URL>/work/out%20dir/deep/%C3%A9%20page.html
   7 nodes, 15 edges
-== stderr
+== stderr (0 bytes)
+== exit 0
+<end of run>
 == changed (pages left out)
 (none)
 == page out dir/deep/é page.html (calm): graph as after run 1

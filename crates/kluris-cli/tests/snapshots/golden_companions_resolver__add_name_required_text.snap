@@ -1,8 +1,9 @@
 ---
 source: crates/kluris-cli/tests/golden_companions_resolver.rs
-expression: run.render(&sb.root)
+expression: text
 ---
-== stdout
-== stderr
+== stdout (0 bytes)
+== stderr (139 bytes)
 Error: Companion name is required in non-interactive mode. Pass one of: specmint-core, specmint-tdd, specmint-core-html, specmint-tdd-html
 == exit 1
+<end of run>

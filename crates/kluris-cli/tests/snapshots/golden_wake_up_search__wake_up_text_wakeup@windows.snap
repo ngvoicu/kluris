@@ -2,7 +2,7 @@
 source: crates/kluris-cli/tests/golden_wake_up_search.rs
 expression: "wake_up_text(&sb, &brain)"
 ---
-== stdout
+== stdout (456 bytes)
 
 Brain: wakeup
   Path: <ROOT>
@@ -28,5 +28,6 @@ Recently updated (5)
   2026-04-01 alpha/spec.yml
   2026-03-01 root-note.md
   2026-02-01T10:00:00 alpha/a3.md
-== stderr
+== stderr (0 bytes)
 == exit 0
+<end of run>

@@ -2,7 +2,8 @@
 source: crates/kluris-cli/tests/golden_wake_up_search.rs
 expression: "render_error(&sb.kluris(args), &sb.root)"
 ---
-== stdout
+== stdout (109 bytes)
 {"ok": false, "error": "--brain all is only supported on dream, status, mri, sync, and companion commands."}
-== stderr, last line
+== stderr, last line (0 bytes)
 == exit 1
+<end of run>

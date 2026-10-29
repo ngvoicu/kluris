@@ -1,12 +1,13 @@
 ---
 source: crates/kluris-cli/tests/golden_create.rs
-expression: run.dump()
+expression: text.as_ref()
 ---
-== stdout
+== stdout (266 bytes)
 
 Create a new brain
 
   Brain name (lowercase, hyphens ok):   What does this brain cover? (one sentence):   Location [<ROOT>/work]:   Brain type (product-group, personal, product, research, blank) [product-group]:   Git setup (1=local, 2=with remote, 3=no git) [1]: 
-== stderr
+== stderr (86 bytes)
 Error: Brain name 'Bad' is invalid. Use lowercase letters, numbers, and hyphens only.
 == exit 1
+<end of run>

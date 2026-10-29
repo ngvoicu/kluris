@@ -1,8 +1,8 @@
 ---
 source: crates/kluris-cli/tests/golden_create.rs
-expression: run.dump()
+expression: text.as_ref()
 ---
-== stdout
+== stdout (421 bytes)
 Register an existing brain directory on disk.
 
 The brain stays where it is -- registration is in-place, no copy. For brains hosted on git, use ``git clone <url> <path>`` first, then ``kluris register <path>``.
@@ -21,5 +21,6 @@ Options:
 
       --help
           Show this message and exit.
-== stderr
+== stderr (0 bytes)
 == exit 0
+<end of run>

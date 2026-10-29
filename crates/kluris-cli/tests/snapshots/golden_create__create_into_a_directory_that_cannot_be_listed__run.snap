@@ -1,8 +1,9 @@
 ---
 source: crates/kluris-cli/tests/golden_create.rs
-expression: run.dump()
+expression: text.as_ref()
 ---
-== stdout
+== stdout (162 bytes)
 {"ok": false, "error": "<ROOT>/work/brains/demo cannot be listed: Permission denied (os error 13). Choose a different name or use --path to specify a location."}
-== stderr
+== stderr (0 bytes)
 == exit 1
+<end of run>

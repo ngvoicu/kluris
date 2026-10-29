@@ -3,8 +3,7 @@ source: crates/kluris-cli/tests/golden_dream_mri.rs
 expression: text
 ---
 $ kluris mri --json --brain calm
-== exit 0
-== stdout
+== stdout (358 bytes)
 {
   "ok": true,
   "brains": [
@@ -23,7 +22,9 @@ $ kluris mri --json --brain calm
     }
   ]
 }
-== stderr
+== stderr (0 bytes)
+== exit 0
+<end of run>
 == changed (pages left out)
 + brains/calm/brain.md
 + brains/calm/knowledge/map.md

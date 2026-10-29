@@ -295,11 +295,11 @@ impl<F: Fn(&str) -> String> Dump<F> {
     }
 
     fn header(&mut self, path: &str, entry: &Entry, len: usize) {
-        let unit = if len == 1 { "byte" } else { "bytes" };
         self.out.push_str(&format!(
-            "== {} ({}, {len} {unit})\n",
+            "== {} ({}, {})\n",
             escape_line(path.as_bytes()),
-            entry.kind()
+            entry.kind(),
+            byte_count(len)
         ));
     }
 
@@ -332,6 +332,15 @@ pub struct Body {
 pub struct Reference {
     pub marker: String,
     pub len: usize,
+}
+
+/// `N bytes` (`1 byte`).
+pub fn byte_count(len: usize) -> String {
+    if len == 1 {
+        "1 byte".to_string()
+    } else {
+        format!("{len} bytes")
+    }
 }
 
 /// A file's bytes as a [`Dump`] writes its body, through `show`.

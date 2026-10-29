@@ -1,8 +1,9 @@
 ---
 source: crates/kluris-cli/tests/golden_create.rs
-expression: run.dump()
+expression: text.as_ref()
 ---
-== stdout
-== stderr
+== stdout (0 bytes)
+== stderr (67 bytes)
 Error: <ROOT>/work/empty is not a Kluris brain (missing brain.md).
 == exit 1
+<end of run>

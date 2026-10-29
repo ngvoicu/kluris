@@ -1,7 +1,8 @@
 ---
 source: crates/kluris-cli/tests/golden_wake_up_search.rs
-expression: "format!(\"{}== exit {}\\n\",\nsection(\"stdout\", &normalize(&run.stdout, &sb.root)), run.code)"
+expression: "format!(\"{}{}\", section(\"stdout\", &normalize(&run.stdout, &sb.root)),\nrun_end(run.code))"
 ---
-== stdout
+== stdout (90 bytes)
 {"ok": false, "error": "No brains registered. Run 'kluris create <name>' to create one."}
 == exit 1
+<end of run>

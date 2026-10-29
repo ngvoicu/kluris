@@ -2,27 +2,32 @@
 source: crates/kluris-cli/tests/golden_list_status_help.rs
 ---
 $ kluris help commit --json
-== stdout
+== stdout (128 bytes)
 {"ok": true, "commands": [{"name": "commit", "description": "Commit approved brain files and the maps they change (--paths)"}]}
-== stderr
+== stderr (0 bytes)
 == exit 0
+<end of run>
 $ kluris help sync --json
-== stdout
+== stdout (132 bytes)
 {"ok": true, "commands": [{"name": "sync", "description": "Fetch, merge and push brains; conflicts go to a person (--brain all)"}]}
-== stderr
+== stderr (0 bytes)
 == exit 0
+<end of run>
 $ kluris help resolve --json
-== stdout
+== stdout (135 bytes)
 {"ok": true, "commands": [{"name": "resolve", "description": "Settle an open sync conflict path by path (--ours, --theirs, --file)"}]}
-== stderr
+== stderr (0 bytes)
 == exit 0
+<end of run>
 $ kluris help self-update --json
-== stdout
+== stdout (127 bytes)
 {"ok": true, "commands": [{"name": "self-update", "description": "Update kluris to the newest release (--check only looks)"}]}
-== stderr
+== stderr (0 bytes)
 == exit 0
+<end of run>
 $ kluris help self-uninstall --json
-== stdout
+== stdout (145 bytes)
 {"ok": true, "commands": [{"name": "self-uninstall", "description": "Remove the installed kluris (--purge: also ~/.kluris and Kluris skills)"}]}
-== stderr
+== stderr (0 bytes)
 == exit 0
+<end of run>

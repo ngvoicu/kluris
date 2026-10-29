@@ -23,8 +23,8 @@ use std::path::Path;
 
 use common::shared::{COMPANIONS, skill_reference, vendored, vendored_marker};
 use common::{
-    Entry, PINNED_GIT_DATE, Run, Sandbox, Tree, changes_dump, normalize, tree_files, unstored,
-    windows_variant, write,
+    Entry, PINNED_GIT_DATE, Run, Sandbox, Tree, changes_dump, normalize, run_end, section,
+    tree_files, unstored, windows_variant, write,
 };
 
 /// The fixture states: `base`, or `base` with the overlay of that name, and
@@ -766,7 +766,11 @@ fn resolver_table() {
                 let brain = doc["name"].as_str().unwrap_or("<no name>");
                 insta::assert_snapshot!(
                     name.as_str(),
-                    format!("== name\n{brain}\n== exit {}\n", run.code)
+                    format!(
+                        "{}{}",
+                        section("name", &format!("{brain}\n")),
+                        run_end(run.code)
+                    )
                 );
             }
         }

@@ -1,8 +1,9 @@
 ---
 source: crates/kluris-cli/tests/golden_companions_resolver.rs
-expression: run.render(&sb.root)
+expression: text
 ---
-== stdout
+== stdout (108 bytes)
 {"ok": false, "error": "No brain named '--json' is registered. Run 'kluris list' to see available brains."}
-== stderr
+== stderr (0 bytes)
 == exit 1
+<end of run>

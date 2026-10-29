@@ -1,11 +1,12 @@
 ---
 source: crates/kluris-cli/tests/golden_create.rs
-expression: run.dump()
+expression: text.as_ref()
 ---
-== stdout
-== stderr
+== stdout (0 bytes)
+== stderr (150 bytes)
 Usage: kluris create [OPTIONS] [NAME]
 Try 'kluris create --help' for help.
 
 Error: Invalid value for '--from-config': Path 'nope.yml' does not exist.
 == exit 2
+<end of run>

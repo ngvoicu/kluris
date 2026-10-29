@@ -714,3 +714,45 @@ fn a_marked_version_field_hides_nothing_else() {
         assert_ne!(a, b, "{what}: the marked documents are the same");
     }
 }
+
+// --- every byte of a run shows ---------------------------------------------
+
+/// A run that ended with `code`, its streams `stdout` and `stderr`, as its
+/// snapshot holds it.
+fn rendered(stdout: &str, stderr: &str, code: i32) -> String {
+    let (_tmp, root) = root();
+    common::Run {
+        code,
+        stdout: stdout.to_string(),
+        stderr: stderr.to_string(),
+    }
+    .render(&root)
+}
+
+#[test]
+fn a_stdout_holding_a_stderr_header_differs_from_a_stderr() {
+    let a = rendered("x\n== stderr\ny\n", "", 0);
+    let b = rendered("x\n", "y\n== stderr\n", 0);
+    assert!(snapshots_differ(&a, &b), "{a:?}");
+}
+
+#[test]
+fn a_stream_holding_an_exit_line_differs_from_the_exit() {
+    let a = rendered("a\n== stderr\n== exit 0\n", "b\n", 1);
+    let b = rendered("a\n", "== exit 0\n== stderr\nb\n", 1);
+    assert!(snapshots_differ(&a, &b), "{a:?}");
+}
+
+#[test]
+fn trailing_blank_lines_of_stderr_show() {
+    let a = rendered("out\n", "err\n", 2);
+    let b = rendered("out\n", "err\n\n\n", 2);
+    assert!(snapshots_differ(&a, &b), "{a:?}");
+}
+
+#[test]
+fn a_stream_without_its_final_newline_differs_from_a_marker_line() {
+    let a = rendered("", "err", 1);
+    let b = rendered("", "err\n<no newline at end>\n", 1);
+    assert!(snapshots_differ(&a, &b), "{a:?}");
+}

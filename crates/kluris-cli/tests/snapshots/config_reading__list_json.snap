@@ -2,7 +2,8 @@
 source: crates/kluris-cli/tests/config_reading.rs
 expression: run.render(&sb.root)
 ---
-== stdout
-{"ok": true, "brains": [{"name": "alpha", "path": "<ROOT>/work/brains/alpha", "description": "alpha knowledge base", "companions": []}, {"name": "beta", "path": "<ROOT>/work/brains/beta", "description": "\u00c9quipe donn\u00e9es \u2014 connaissances partag\u00e9es \u00fcber alles, na\u00efve caf\u00e9 fa\u00e7ade \u65e5\u672c\u8a9e and a long tail to fold", "companions": ["specmint-core", "specmint-tdd-html"]}, {"name": "custom", "path": "<ROOT>/work/brains/custom", "description": "custom knowledge base", "companions": ["specmint-tdd"]}, {"name": "legacy", "path": "<ROOT>/work/brains/legacy", "description": "legacy knowledge base", "companions": ["specmint-core"]}, {"name": "minimal", "path": "<ROOT>/work/brains/minimal", "description": "minimal knowledge base", "companions": []}, {"name": "broken", "path": "<ROOT>/work/brains/broken", "description": "broken knowledge base", "companions": null}]}
-== stderr
+== stdout (910 bytes)
+{"ok": true, "brains": [{"name": "alpha", "path": "<ROOT>/work/brains/alpha", "description": "alpha knowledge base", "companions": []}, {"name": "beta", "path": "<ROOT>/work/brains/beta", "description": "\\u00c9quipe donn\\u00e9es \\u2014 connaissances partag\\u00e9es \\u00fcber alles, na\\u00efve caf\\u00e9 fa\\u00e7ade \\u65e5\\u672c\\u8a9e and a long tail to fold", "companions": ["specmint-core", "specmint-tdd-html"]}, {"name": "custom", "path": "<ROOT>/work/brains/custom", "description": "custom knowledge base", "companions": ["specmint-tdd"]}, {"name": "legacy", "path": "<ROOT>/work/brains/legacy", "description": "legacy knowledge base", "companions": ["specmint-core"]}, {"name": "minimal", "path": "<ROOT>/work/brains/minimal", "description": "minimal knowledge base", "companions": []}, {"name": "broken", "path": "<ROOT>/work/brains/broken", "description": "broken knowledge base", "companions": null}]}
+== stderr (0 bytes)
 == exit 0
+<end of run>

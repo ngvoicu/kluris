@@ -1,13 +1,14 @@
 ---
 source: crates/kluris-cli/tests/golden_companions_resolver.rs
-expression: run.render(&sb.root)
+expression: text
 ---
-== stdout
+== stdout (155 bytes)
   Which companion(s) to remove?
     [1] specmint-core
     [2] specmint-tdd-html
     [3] all
     [4] cancel
   Choice: No companion selected. Nothing to do.
-== stderr
+== stderr (0 bytes)
 == exit 0
+<end of run>

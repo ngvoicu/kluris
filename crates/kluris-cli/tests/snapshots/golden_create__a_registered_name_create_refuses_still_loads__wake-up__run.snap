@@ -1,8 +1,9 @@
 ---
 source: crates/kluris-cli/tests/golden_create.rs
-expression: run.dump()
+expression: text.as_ref()
 ---
-== stdout
-{"ok": true, "name": "a--b", "path": "<ROOT>/work/a--b", "description": "a--b knowledge base", "brain_md": "# a--b\n\na--b knowledge base\n\n## Lobes\n\n- [infrastructure/](./infrastructure/map.md) \u2014 Hosting, CI/CD, Docker, deployment, environments, env vars\n- [knowledge/](./knowledge/map.md) \u2014 Decisions, learnings, troubleshooting tips, domain expertise\n- [projects/](./projects/map.md) \u2014 Per-project sub-folders with APIs, data models, setup, conventions\n\n## Reference\n\n- [glossary.md](./glossary.md) \u2014 Domain-specific terms, acronyms, and conventions", "lobes": [{"name": "infrastructure", "description": "Hosting, CI/CD, Docker, deployment, environments, env vars", "neurons": 0, "yaml_count": 0}, {"name": "knowledge", "description": "Decisions, learnings, troubleshooting tips, domain expertise", "neurons": 0, "yaml_count": 0}, {"name": "projects", "description": "Per-project sub-folders with APIs, data models, setup, conventions", "neurons": 0, "yaml_count": 0}], "total_neurons": 0, "total_yaml_neurons": 0, "recent": [], "glossary": [], "deprecation_count": 0, "deprecation": [], "parse_errors": 0}
-== stderr
+== stdout (1139 bytes)
+{"ok": true, "name": "a--b", "path": "<ROOT>/work/a--b", "description": "a--b knowledge base", "brain_md": "# a--b\\n\\na--b knowledge base\\n\\n## Lobes\\n\\n- [infrastructure/](./infrastructure/map.md) \\u2014 Hosting, CI/CD, Docker, deployment, environments, env vars\\n- [knowledge/](./knowledge/map.md) \\u2014 Decisions, learnings, troubleshooting tips, domain expertise\\n- [projects/](./projects/map.md) \\u2014 Per-project sub-folders with APIs, data models, setup, conventions\\n\\n## Reference\\n\\n- [glossary.md](./glossary.md) \\u2014 Domain-specific terms, acronyms, and conventions", "lobes": [{"name": "infrastructure", "description": "Hosting, CI/CD, Docker, deployment, environments, env vars", "neurons": 0, "yaml_count": 0}, {"name": "knowledge", "description": "Decisions, learnings, troubleshooting tips, domain expertise", "neurons": 0, "yaml_count": 0}, {"name": "projects", "description": "Per-project sub-folders with APIs, data models, setup, conventions", "neurons": 0, "yaml_count": 0}], "total_neurons": 0, "total_yaml_neurons": 0, "recent": [], "glossary": [], "deprecation_count": 0, "deprecation": [], "parse_errors": 0}
+== stderr (0 bytes)
 == exit 0
+<end of run>

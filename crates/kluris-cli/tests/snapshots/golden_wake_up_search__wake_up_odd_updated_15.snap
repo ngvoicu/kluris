@@ -2,7 +2,8 @@
 source: crates/kluris-cli/tests/golden_wake_up_search.rs
 expression: out
 ---
-== stdout
+== stdout (693 bytes)
 {"ok": true, "name": "odd", "path": "<ROOT>", "description": "Fixture brain", "brain_md": "", "lobes": [{"name": "lobe", "description": "", "neurons": 5, "yaml_count": 0}], "total_neurons": 5, "total_yaml_neurons": 0, "recent": [{"path": "lobe/n0.md", "updated": "2026-01-01T10:00:05.000123", "file_type": "markdown"}, {"path": "lobe/n1.md", "updated": "2026-01-01T10:00:00+05:45", "file_type": "markdown"}, {"path": "lobe/n3.md", "updated": "yesterday", "file_type": "markdown"}, {"path": "lobe/n4.md", "updated": "False", "file_type": "markdown"}, {"path": "lobe/n2.md", "updated": "", "file_type": "markdown"}], "glossary": [], "deprecation_count": 0, "deprecation": [], "parse_errors": 0}
-== stderr
+== stderr (0 bytes)
 == exit 0
+<end of run>

@@ -2,19 +2,19 @@
 source: crates/kluris-cli/tests/golden_wake_up_search.rs
 expression: out
 ---
-== search --lobe "operations"
+== search --lobe "operations" (9 bytes)
 total: 0
-== search --lobe "operations/"
+== search --lobe "operations/" (9 bytes)
 total: 0
-== search --lobe "knowledge" --tag "auth"
+== search --lobe "knowledge" --tag "auth" (9 bytes)
 total: 0
-== search --tag "postgres"
+== search --tag "postgres" (9 bytes)
 total: 0
-== search --tag "Postgres"
+== search --tag "Postgres" (9 bytes)
 total: 0
-== search --lobe "nope"
+== search --lobe "nope" (9 bytes)
 total: 0
-== search --lobe "architecture/overview.md"
+== search --lobe "architecture/overview.md" (9 bytes)
 total: 0
-== search --lobe ""
+== search --lobe "" (9 bytes)
 total: 0

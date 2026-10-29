@@ -22,7 +22,8 @@ use std::path::{Path, PathBuf};
 
 use common::brains::{Brains, eval_fixtures};
 use common::{
-    Run, Sandbox, assert_unchanged, normalize, tree_files, windows_variant, write, write_files,
+    Run, Sandbox, assert_unchanged, normalize, run_end, section, tree_files, windows_variant,
+    write, write_files,
 };
 use kluris_core::brain::store::LocalGitStore;
 use kluris_core::config::read_brain_config;
@@ -36,16 +37,6 @@ const EVERYTHING: i64 = 1_000_000;
 
 // --- output as the snapshots hold it ------------------------------------------
 
-/// `text` under a `== name` line, its missing final newline marked, as
-/// [`Run::render`] writes a stream.
-fn section(name: &str, text: &str) -> String {
-    let mut out = format!("== {name}\n{text}");
-    if !text.is_empty() && !text.ends_with('\n') {
-        out.push_str("\n<no newline at end>\n");
-    }
-    out
-}
-
 /// A run's stdout, the last line of its stderr (where an error message
 /// ends) and its exit code, normalized by `root`.
 fn render_error(run: &Run, root: &Path) -> String {
@@ -55,10 +46,10 @@ fn render_error(run: &Run, root: &Path) -> String {
         .last()
         .map_or(String::new(), |l| format!("{l}\n"));
     format!(
-        "{}{}== exit {}\n",
+        "{}{}{}",
         section("stdout", &normalize(&run.stdout, root)),
         section("stderr, last line", &normalize(&last, root)),
-        run.code,
+        run_end(run.code),
     )
 }
 
@@ -679,9 +670,9 @@ fn search_with_no_brains_registered() {
     insta::assert_snapshot!(
         "search_no_brains",
         format!(
-            "{}== exit {}\n",
+            "{}{}",
             section("stdout", &normalize(&run.stdout, &sb.root)),
-            run.code
+            run_end(run.code)
         )
     );
 }

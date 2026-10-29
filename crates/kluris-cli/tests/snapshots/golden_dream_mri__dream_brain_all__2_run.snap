@@ -3,8 +3,7 @@ source: crates/kluris-cli/tests/golden_dream_mri.rs
 expression: text
 ---
 $ kluris dream --brain all
-== exit 1
-== stdout
+== stdout (1110 bytes)
 
 rich health report:
   Lobes: knowledge, my-lobe, projects, uncommitted-lobe
@@ -38,7 +37,9 @@ calm health report:
   0 missing neuron references added to parent map.md files
 
 Remaining issues need manual attention.
-== stderr
+== stderr (0 bytes)
+== exit 1
+<end of run>
 == git status --porcelain brains/rich
  M knowledge/beta.md
  M knowledge/crlf.md

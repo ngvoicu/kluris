@@ -2,7 +2,8 @@
 source: crates/kluris-cli/tests/golden_list_status_help.rs
 description: kluris list
 ---
-== stdout
+== stdout (64 bytes)
 No brains registered. Run 'kluris create <name>' to create one.
-== stderr
+== stderr (0 bytes)
 == exit 0
+<end of run>

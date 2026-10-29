@@ -1,8 +1,8 @@
 ---
 source: crates/kluris-cli/tests/golden_create.rs
-expression: run.dump()
+expression: text.as_ref()
 ---
-== stdout
+== stdout (789 bytes)
   Git setup (1=local, 2=with remote, 3=no git) [1]:   Default branch [main]: 
   Install specmint companions for this brain?
     [1] specmint-core      (spec-driven-development companion)
@@ -20,5 +20,6 @@ Agent skill installed: kluris-demo
   Claude/Codex/Antigravity/etc: /kluris-demo
   Hermes: /skill kluris-demo  (or start with `hermes -s kluris-demo`)
   Created a new Hermes profile later? Run `kluris doctor` to refresh Kluris skills.
-== stderr
+== stderr (0 bytes)
 == exit 0
+<end of run>

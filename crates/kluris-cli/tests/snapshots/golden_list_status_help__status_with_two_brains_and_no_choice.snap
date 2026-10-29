@@ -2,12 +2,14 @@
 source: crates/kluris-cli/tests/golden_list_status_help.rs
 ---
 $ kluris status --json
-== stdout
+== stdout (98 bytes)
 {"ok": false, "error": "Multiple brains registered. Pass --brain NAME or 'all'. Available: a, b"}
-== stderr
+== stderr (0 bytes)
 == exit 1
+<end of run>
 $ kluris status
-== stdout
-== stderr
+== stdout (0 bytes)
+== stderr (79 bytes)
 Error: Multiple brains registered. Pass --brain NAME or 'all'. Available: a, b
 == exit 1
+<end of run>

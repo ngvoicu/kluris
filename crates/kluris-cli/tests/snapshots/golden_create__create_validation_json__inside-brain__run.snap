@@ -1,8 +1,9 @@
 ---
 source: crates/kluris-cli/tests/golden_create.rs
-expression: run.dump()
+expression: text.as_ref()
 ---
-== stdout
+== stdout (173 bytes)
 {"ok": false, "error": "Target path <ROOT>/work/brains/taken/projects/inner is inside existing brain '<ROOT>/work/brains/taken'. Create the brain outside of other brains."}
-== stderr
+== stderr (0 bytes)
 == exit 1
+<end of run>

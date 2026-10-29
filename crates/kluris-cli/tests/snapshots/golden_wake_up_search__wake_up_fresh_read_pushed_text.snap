@@ -2,7 +2,7 @@
 source: crates/kluris-cli/tests/golden_wake_up_search.rs
 expression: out
 ---
-== stdout
+== stdout (139 bytes)
 
 Brain: team
   Path: <ROOT>
@@ -16,5 +16,6 @@ Glossary (1 terms)
 
 Recently updated (1)
   2026-02-03 k/jwt.md
-== stderr
+== stderr (0 bytes)
 == exit 0
+<end of run>

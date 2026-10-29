@@ -1,8 +1,9 @@
 ---
 source: crates/kluris-cli/tests/golden_create.rs
-expression: run.dump()
+expression: text.as_ref()
 ---
-== stdout
+== stdout (251 bytes)
 {"ok": false, "error": "`git checkout -b bad..name` failed (exit 128): <GIT STDERR> (the brain files are left in <ROOT>/work/demo and the brain is not registered: delete that directory, or fix the problem and run 'kluris register <ROOT>/work/demo')"}
-== stderr
+== stderr (0 bytes)
 == exit 1
+<end of run>

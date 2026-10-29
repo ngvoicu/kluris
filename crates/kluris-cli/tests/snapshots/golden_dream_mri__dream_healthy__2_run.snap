@@ -3,8 +3,7 @@ source: crates/kluris-cli/tests/golden_dream_mri.rs
 expression: text
 ---
 $ kluris dream
-== exit 0
-== stdout
+== stdout (383 bytes)
 
 calm health report:
   Lobes: knowledge, projects
@@ -21,7 +20,9 @@ calm health report:
   0 missing neuron references added to parent map.md files
 
 Brain is healthy.
-== stderr
+== stderr (0 bytes)
+== exit 0
+<end of run>
 == git status --porcelain brains/calm
 ?? brain.md
 ?? knowledge/map.md

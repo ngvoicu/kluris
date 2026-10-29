@@ -2,7 +2,8 @@
 source: crates/kluris-cli/tests/golden_wake_up_search.rs
 expression: "render_error(&sb.kluris(args), &sb.root)"
 ---
-== stdout
+== stdout (85 bytes)
 {"ok": false, "error": "Invalid value for '--limit': 'abc' is not a valid integer."}
-== stderr, last line
+== stderr, last line (0 bytes)
 == exit 1
+<end of run>

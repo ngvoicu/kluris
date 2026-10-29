@@ -1,8 +1,9 @@
 ---
 source: crates/kluris-cli/tests/golden_create.rs
-expression: run.dump()
+expression: text.as_ref()
 ---
-== stdout
+== stdout (103 bytes)
 {"ok": false, "error": "'all' is a reserved brain name (used by --brain all). Pick a different name."}
-== stderr
+== stderr (0 bytes)
 == exit 1
+<end of run>

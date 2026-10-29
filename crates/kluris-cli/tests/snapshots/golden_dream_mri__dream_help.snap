@@ -3,8 +3,7 @@ source: crates/kluris-cli/tests/golden_dream_mri.rs
 expression: text
 ---
 $ kluris dream --help
-== exit 0
-== stdout
+== stdout (384 bytes)
 Brain maintenance — regenerate maps, update dates, auto-fix safe issues, validate remaining links.
 
 Usage: kluris dream [OPTIONS]
@@ -21,4 +20,6 @@ Options:
 
       --help
           Show this message and exit.
-== stderr
+== stderr (0 bytes)
+== exit 0
+<end of run>

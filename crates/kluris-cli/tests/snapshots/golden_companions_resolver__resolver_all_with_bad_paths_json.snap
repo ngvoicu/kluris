@@ -1,8 +1,9 @@
 ---
 source: crates/kluris-cli/tests/golden_companions_resolver.rs
-expression: run.render(&sb.root)
+expression: text
 ---
-== stdout
-{"ok": false, "error": "The following registered brain(s) have missing or invalid paths:\n  - gone: <ROOT>/work/brains/brain-1\n  - file: <ROOT>/work/brains/brain-2\nRun `kluris remove <name>` or fix the path in the global config."}
-== stderr
+== stdout (233 bytes)
+{"ok": false, "error": "The following registered brain(s) have missing or invalid paths:\\n  - gone: <ROOT>/work/brains/brain-1\\n  - file: <ROOT>/work/brains/brain-2\\nRun `kluris remove <name>` or fix the path in the global config."}
+== stderr (0 bytes)
 == exit 1
+<end of run>

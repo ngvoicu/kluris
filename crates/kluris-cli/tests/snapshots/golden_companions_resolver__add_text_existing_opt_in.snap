@@ -1,8 +1,9 @@
 ---
 source: crates/kluris-cli/tests/golden_companions_resolver.rs
-expression: run.render(&sb.root)
+expression: text
 ---
-== stdout
+== stdout (41 bytes)
 Added companion(s) specmint-tdd to: a, b
-== stderr
+== stderr (0 bytes)
 == exit 0
+<end of run>

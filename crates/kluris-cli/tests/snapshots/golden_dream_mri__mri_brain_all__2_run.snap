@@ -3,15 +3,16 @@ source: crates/kluris-cli/tests/golden_dream_mri.rs
 expression: text
 ---
 $ kluris mri --brain all
-== exit 0
-== stdout
+== stdout (256 bytes)
 MRI complete — <ROOT>/work/brains/rich/brain-mri.html
   Open: <ROOT_URL>/work/brains/rich/brain-mri.html
   43 nodes, 128 edges
 MRI complete — <ROOT>/work/brains/calm/brain-mri.html
   Open: <ROOT_URL>/work/brains/calm/brain-mri.html
   7 nodes, 15 edges
-== stderr
+== stderr (0 bytes)
+== exit 0
+<end of run>
 == changed (pages left out)
 (none)
 == page brains/rich/brain-mri.html (rich): graph as after run 1

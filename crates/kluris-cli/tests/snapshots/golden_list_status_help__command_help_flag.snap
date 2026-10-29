@@ -2,7 +2,7 @@
 source: crates/kluris-cli/tests/golden_list_status_help.rs
 ---
 $ kluris doctor --help
-== stdout
+== stdout (732 bytes)
 Check prerequisites and refresh installed agent skills.
 
 Checks that git runs, that the first kluris on PATH is this one, and that the config and every registered brain's kluris.yml read. Then refreshes the companion playbooks and re-installs every brain's agent skill (~/.agents/skills, plus the folders of the selected agents), removing the copies Kluris 2 left in folders it no longer uses. This is the step after an upgrade: run `kluris doctor` and everything is back in sync.
@@ -20,10 +20,11 @@ Options:
 
       --help
           Show this message and exit.
-== stderr
+== stderr (0 bytes)
 == exit 0
+<end of run>
 $ kluris help --help
-== stdout
+== stdout (203 bytes)
 Show help for kluris commands.
 
 Usage: kluris help [OPTIONS] [COMMAND]
@@ -38,10 +39,11 @@ Options:
 
       --help
           Show this message and exit.
-== stderr
+== stderr (0 bytes)
 == exit 0
+<end of run>
 $ kluris list --help
-== stdout
+== stdout (151 bytes)
 List registered brains.
 
 Usage: kluris list [OPTIONS]
@@ -52,10 +54,11 @@ Options:
 
       --help
           Show this message and exit.
-== stderr
+== stderr (0 bytes)
 == exit 0
+<end of run>
 $ kluris status --help
-== stdout
+== stdout (215 bytes)
 Show brain status and recent changes.
 
 Usage: kluris status [OPTIONS]
@@ -69,10 +72,11 @@ Options:
 
       --help
           Show this message and exit.
-== stderr
+== stderr (0 bytes)
 == exit 0
+<end of run>
 $ kluris wake-up --help
-== stdout
+== stdout (775 bytes)
 Compact brain snapshot for agent session bootstrap.
 
 Emits a tight view of the brain's live state: the brain.md body, lobes with neuron counts, the 5 most recently updated neurons, the glossary, and any deprecation warnings. Designed to be called when the generated per-brain skill is loaded or invoked so the agent has a fast index without walking brain.md, glossary.md, and every map.md.
@@ -92,5 +96,6 @@ Options:
 
       --help
           Show this message and exit.
-== stderr
+== stderr (0 bytes)
 == exit 0
+<end of run>

@@ -3,10 +3,11 @@ source: crates/kluris-cli/tests/golden_dream_mri.rs
 expression: text
 ---
 $ kluris dream
-== exit 1
-== stdout
-== stderr
+== stdout (0 bytes)
+== stderr (72 bytes)
 Error: Brain calm has no kluris.yml: <ROOT>/work/brains/calm/kluris.yml
+== exit 1
+<end of run>
 == git status --porcelain brains/calm
  D kluris.yml
 == changed

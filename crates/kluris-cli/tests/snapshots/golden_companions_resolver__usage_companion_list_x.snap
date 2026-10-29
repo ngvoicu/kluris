@@ -1,11 +1,12 @@
 ---
 source: crates/kluris-cli/tests/golden_companions_resolver.rs
-expression: run.render(&sb.root)
+expression: text
 ---
-== stdout
-== stderr
+== stdout (0 bytes)
+== stderr (126 bytes)
 Usage: kluris companion list [OPTIONS]
 Try 'kluris companion list --help' for help.
 
 Error: Got unexpected extra argument (x)
 == exit 2
+<end of run>

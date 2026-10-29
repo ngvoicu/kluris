@@ -1,8 +1,9 @@
 ---
 source: crates/kluris-cli/tests/golden_wake_up_search.rs
-expression: "wake_up_json(&sb, &brain)"
+expression: text
 ---
-== stdout
+== stdout (499 bytes)
 {"ok": true, "name": "malformed", "path": "<ROOT>", "description": "Fixture brain", "brain_md": "", "lobes": [{"name": "lobe", "description": "", "neurons": 5, "yaml_count": 1}], "total_neurons": 5, "total_yaml_neurons": 1, "recent": [], "glossary": [], "deprecation_count": 2, "deprecation": [{"kind": "replaced_by_not_active", "file": "lobe/to-bad.md", "target": "./bad-yaml.md"}, {"kind": "active_links_to_deprecated", "source": "lobe/active.md", "target": "lobe/to-bad.md"}], "parse_errors": 2}
-== stderr
+== stderr (0 bytes)
 == exit 0
+<end of run>

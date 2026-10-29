@@ -23,8 +23,8 @@ pub use golden::{
     normalize_json, slashed, tree_dump, tree_files, windows_variant,
 };
 pub use sandbox::{
-    Run, Sandbox, assert_unchanged, changes_dump, command_line, copy_tree, fixture, unstored,
-    write, write_files,
+    Run, Sandbox, assert_unchanged, changes_dump, command_line, copy_tree, fixture, run_end,
+    section, unstored, write, write_files,
 };
 
 use std::path::{Path, PathBuf};

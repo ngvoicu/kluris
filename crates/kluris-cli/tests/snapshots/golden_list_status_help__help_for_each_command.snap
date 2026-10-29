@@ -2,121 +2,138 @@
 source: crates/kluris-cli/tests/golden_list_status_help.rs
 ---
 $ kluris help create
-== stdout
+== stdout (110 bytes)
 kluris create — Create a new brain (--type, --remote, --no-git)
 
 Run 'kluris create --help' for full usage.
-== stderr
+== stderr (0 bytes)
 == exit 0
+<end of run>
 $ kluris help register
-== stdout
+== stdout (111 bytes)
 kluris register — Register an existing brain directory on disk
 
 Run 'kluris register --help' for full usage.
-== stderr
+== stderr (0 bytes)
 == exit 0
+<end of run>
 $ kluris help list
-== stdout
+== stdout (81 bytes)
 kluris list — List registered brains
 
 Run 'kluris list --help' for full usage.
-== stderr
+== stderr (0 bytes)
 == exit 0
+<end of run>
 $ kluris help status
-== stdout
+== stdout (113 bytes)
 kluris status — Show brain tree, recent changes, and neuron counts
 
 Run 'kluris status --help' for full usage.
-== stderr
+== stderr (0 bytes)
 == exit 0
+<end of run>
 $ kluris help search
-== stdout
+== stdout (126 bytes)
 kluris search — Search a brain for a query string (neurons, glossary, brain.md)
 
 Run 'kluris search --help' for full usage.
-== stderr
+== stderr (0 bytes)
 == exit 0
+<end of run>
 $ kluris help wake-up
-== stdout
+== stdout (115 bytes)
 kluris wake-up — Compact brain snapshot for agent session bootstrap
 
 Run 'kluris wake-up --help' for full usage.
-== stderr
+== stderr (0 bytes)
 == exit 0
+<end of run>
 $ kluris help companion
-== stdout
+== stdout (113 bytes)
 kluris companion — Opt brains into embedded companion playbooks
 
 Run 'kluris companion --help' for full usage.
-== stderr
+== stderr (0 bytes)
 == exit 0
+<end of run>
 $ kluris help dream
-== stdout
+== stdout (118 bytes)
 kluris dream — Regenerate maps, auto-fix safe issues, and validate links
 
 Run 'kluris dream --help' for full usage.
-== stderr
+== stderr (0 bytes)
 == exit 0
+<end of run>
 $ kluris help mri
-== stdout
+== stdout (120 bytes)
 kluris mri — Generate interactive brain visualization; prints a file:// link
 
 Run 'kluris mri --help' for full usage.
-== stderr
+== stderr (0 bytes)
 == exit 0
+<end of run>
 $ kluris help remove
-== stdout
+== stdout (103 bytes)
 kluris remove — Unregister a brain (keeps files on disk)
 
 Run 'kluris remove --help' for full usage.
-== stderr
+== stderr (0 bytes)
 == exit 0
+<end of run>
 $ kluris help doctor
-== stdout
+== stdout (140 bytes)
 kluris doctor — Check prerequisites and refresh installed agent skills (--no-refresh to skip)
 
 Run 'kluris doctor --help' for full usage.
-== stderr
+== stderr (0 bytes)
 == exit 0
+<end of run>
 $ kluris help help
-== stdout
+== stdout (73 bytes)
 kluris help — Show this help
 
 Run 'kluris help --help' for full usage.
-== stderr
+== stderr (0 bytes)
 == exit 0
+<end of run>
 $ kluris help commit
-== stdout
+== stdout (125 bytes)
 kluris commit — Commit approved brain files and the maps they change (--paths)
 
 Run 'kluris commit --help' for full usage.
-== stderr
+== stderr (0 bytes)
 == exit 0
+<end of run>
 $ kluris help sync
-== stdout
+== stdout (127 bytes)
 kluris sync — Fetch, merge and push brains; conflicts go to a person (--brain all)
 
 Run 'kluris sync --help' for full usage.
-== stderr
+== stderr (0 bytes)
 == exit 0
+<end of run>
 $ kluris help resolve
-== stdout
+== stdout (133 bytes)
 kluris resolve — Settle an open sync conflict path by path (--ours, --theirs, --file)
 
 Run 'kluris resolve --help' for full usage.
-== stderr
+== stderr (0 bytes)
 == exit 0
+<end of run>
 $ kluris help self-update
-== stdout
+== stdout (129 bytes)
 kluris self-update — Update kluris to the newest release (--check only looks)
 
 Run 'kluris self-update --help' for full usage.
-== stderr
+== stderr (0 bytes)
 == exit 0
+<end of run>
 $ kluris help self-uninstall
-== stdout
+== stdout (150 bytes)
 kluris self-uninstall — Remove the installed kluris (--purge: also ~/.kluris and Kluris skills)
 
 Run 'kluris self-uninstall --help' for full usage.
-== stderr
+== stderr (0 bytes)
 == exit 0
+<end of run>

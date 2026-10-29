@@ -2,32 +2,32 @@
 source: crates/kluris-cli/tests/golden_wake_up_search.rs
 expression: out
 ---
-== search --lobe "operations"
+== search --lobe "operations" (535 bytes)
 total: 5
 operations/backups.md | "Database backups and restore drills" | markdown | deprecated false | title tag path body
 operations/deploy-runbook.md | "Deploy runbook" | markdown | deprecated false | path body
 operations/memory-limits.md | "Container memory limits" | markdown | deprecated false | title tag path body
 operations/on-call.md | "On-call rota and paging" | markdown | deprecated false | title tag path body
 operations/operator-access.md | "Operator access to production" | markdown | deprecated false | title path body
-== search --lobe "operations/"
+== search --lobe "operations/" (535 bytes)
 total: 5
 operations/backups.md | "Database backups and restore drills" | markdown | deprecated false | title tag path body
 operations/deploy-runbook.md | "Deploy runbook" | markdown | deprecated false | path body
 operations/memory-limits.md | "Container memory limits" | markdown | deprecated false | title tag path body
 operations/on-call.md | "On-call rota and paging" | markdown | deprecated false | title tag path body
 operations/operator-access.md | "Operator access to production" | markdown | deprecated false | title path body
-== search --lobe "knowledge" --tag "auth"
+== search --lobe "knowledge" --tag "auth" (112 bytes)
 total: 1
 knowledge/deprecated-sessions.md | "Server-side sessions" | markdown | deprecated true | tag path body
-== search --tag "postgres"
+== search --tag "postgres" (235 bytes)
 total: 2
 operations/backups.md | "Database backups and restore drills" | markdown | deprecated false | title tag path body
 operations/operator-access.md | "Operator access to production" | markdown | deprecated false | title path body
-== search --tag "Postgres"
+== search --tag "Postgres" (9 bytes)
 total: 0
-== search --lobe "nope"
+== search --lobe "nope" (9 bytes)
 total: 0
-== search --lobe "architecture/overview.md"
+== search --lobe "architecture/overview.md" (9 bytes)
 total: 0
-== search --lobe ""
+== search --lobe "" (9 bytes)
 total: 0

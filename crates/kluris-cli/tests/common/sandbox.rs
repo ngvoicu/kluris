@@ -12,8 +12,8 @@ use std::process::{Command, Stdio};
 use kluris_core::json;
 
 use super::golden::{
-    Dump, Entry, PASSTHROUGH_ENV, PINNED_ENV, Reference, Tree, decode, native_paths, normalize,
-    python_json, slashed,
+    Dump, Entry, PASSTHROUGH_ENV, PINNED_ENV, Reference, Tree, byte_count, decode, file_body,
+    native_paths, normalize, python_json, slashed,
 };
 
 /// The length of every sandbox root, as Kluris prints it. A table whose
@@ -304,21 +304,15 @@ impl Run {
         }
     }
 
-    /// The run as a snapshot holds it: each stream [`normalize`]d under a
-    /// `== stdout` / `== stderr` line (a stream that does not end in a
-    /// newline is followed by `<no newline at end>`), then `== exit N`, so
-    /// every stream's last byte shows.
+    /// The run as a snapshot holds it: each stream [`normalize`]d as a
+    /// [`section`], `stdout` then `stderr`, then [`run_end`].
     pub fn render(&self, root: &Path) -> String {
-        let mut out = String::new();
-        for (name, text) in [("stdout", &self.stdout), ("stderr", &self.stderr)] {
-            let text = normalize(text, root);
-            out.push_str(&format!("== {name}\n{text}"));
-            if !text.is_empty() && !text.ends_with('\n') {
-                out.push_str("\n<no newline at end>\n");
-            }
-        }
-        out.push_str(&format!("== exit {}\n", self.code));
-        out
+        format!(
+            "{}{}{}",
+            section("stdout", &normalize(&self.stdout, root)),
+            section("stderr", &normalize(&self.stderr, root)),
+            run_end(self.code)
+        )
     }
 }
 
@@ -444,12 +438,20 @@ pub fn json_dump(stdout: &str, root: &Path) -> String {
     json::to_string_indented(&value, 2) + "\n"
 }
 
-/// A stream as the snapshot of a run shows it: as it is, with a
-/// `<no newline at end>` line when it does not end in one.
-pub fn stream(text: &str) -> String {
-    if text.is_empty() || text.ends_with('\n') {
-        text.to_string()
-    } else {
-        format!("{text}\n<no newline at end>\n")
-    }
+/// `text`, a stream of a run or what a test reads from it, as a run's
+/// snapshot holds it: a `== NAME (N bytes)` line, N the length of `text`,
+/// then `text` as a [`Dump`] writes a file's body: escaped, a line that
+/// starts with `<` or `=` written `\<` or `\=` (so no stream reads as a
+/// header, the exit line or a marker), and a `<no newline at end>` line
+/// after a text that does not end in a newline.
+pub fn section(name: &str, text: &str) -> String {
+    let body = file_body(text.as_bytes(), str::to_string);
+    format!("== {name} ({})\n{}", byte_count(body.len), body.text)
+}
+
+/// The end of a run's snapshot: `== exit N`, then an `<end of run>` line,
+/// so a stream's trailing blank lines are never the snapshot's last
+/// (which insta compares with its trailing whitespace trimmed).
+pub fn run_end(code: i32) -> String {
+    format!("== exit {code}\n<end of run>\n")
 }

@@ -1,9 +1,10 @@
 ---
 source: crates/kluris-cli/tests/golden_create.rs
-expression: run.dump()
+expression: text.as_ref()
 ---
-== stdout
+== stdout (1 byte)
 
-== stderr
+== stderr (86 bytes)
 Error: <ROOT>/work/brains/hasyml already contains a kluris.yml. Use a different name.
 == exit 1
+<end of run>

@@ -1,7 +1,8 @@
 ---
 source: crates/kluris-cli/tests/golden_companions_resolver.rs
-expression: "format!(\"== name\\n{brain}\\n== exit {}\\n\", run.code)"
+expression: "format!(\"{}{}\", section(\"name\", &format!(\"{brain}\\n\")), run_end(run.code))"
 ---
-== name
+== name (2 bytes)
 a
 == exit 0
+<end of run>

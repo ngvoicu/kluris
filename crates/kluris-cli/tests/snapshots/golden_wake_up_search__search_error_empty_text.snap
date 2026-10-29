@@ -2,7 +2,8 @@
 source: crates/kluris-cli/tests/golden_wake_up_search.rs
 expression: "render_error(&sb.kluris(args), &sb.root)"
 ---
-== stdout
-== stderr, last line
+== stdout (0 bytes)
+== stderr, last line (30 bytes)
 Error: Query cannot be empty.
 == exit 1
+<end of run>

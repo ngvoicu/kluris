@@ -1,8 +1,8 @@
 ---
 source: crates/kluris-cli/tests/golden_companions_resolver.rs
-expression: run.render(&sb.root)
+expression: text
 ---
-== stdout
+== stdout (226 bytes)
   Which companion(s) to remove?
     [1] specmint-core
     [2] specmint-tdd-html
@@ -10,5 +10,6 @@ expression: run.render(&sb.root)
     [4] cancel
   Choice: Removed companion(s) specmint-tdd-html from: b
 Runtime companion files were kept under ~/.kluris/companions.
-== stderr
+== stderr (0 bytes)
 == exit 0
+<end of run>

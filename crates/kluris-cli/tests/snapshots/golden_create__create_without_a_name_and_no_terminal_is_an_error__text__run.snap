@@ -1,8 +1,9 @@
 ---
 source: crates/kluris-cli/tests/golden_create.rs
-expression: run.dump()
+expression: text.as_ref()
 ---
-== stdout
-== stderr
+== stdout (0 bytes)
+== stderr (83 bytes)
 Error: Brain name is required in non-interactive mode. Run 'kluris create <name>'.
 == exit 1
+<end of run>

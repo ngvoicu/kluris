@@ -1,8 +1,9 @@
 ---
 source: crates/kluris-cli/tests/golden_create.rs
-expression: run.dump()
+expression: text.as_ref()
 ---
-== stdout
-{"ok": false, "error": "--from-config: lobe name 'a\\\\b' is not a plain directory name (no '..', path separators or absolute paths)."}
-== stderr
+== stdout (136 bytes)
+{"ok": false, "error": "--from-config: lobe name 'a\\\\\\\\b' is not a plain directory name (no '..', path separators or absolute paths)."}
+== stderr (0 bytes)
 == exit 1
+<end of run>

@@ -3,8 +3,7 @@ source: crates/kluris-cli/tests/golden_dream_mri.rs
 expression: text
 ---
 $ kluris dream --json --broken-only
-== exit 1
-== stdout
+== stdout (279 bytes)
 {
   "ok": true,
   "broken_synapses_count": 2,
@@ -21,7 +20,9 @@ $ kluris dream --json --broken-only
     }
   ]
 }
-== stderr
+== stderr (0 bytes)
+== exit 1
+<end of run>
 == git status --porcelain brains/rich
  M knowledge/beta.md
  M knowledge/crlf.md

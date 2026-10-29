@@ -2,25 +2,25 @@
 source: crates/kluris-cli/tests/golden_wake_up_search.rs
 expression: out
 ---
-== search --lobe "operations"
+== search --lobe "operations" (207 bytes)
 total: 2
 operations/backups.md | "Database backups and restore drills" | markdown | deprecated false | tag
 operations/operator-access.md | "Operator access to production" | markdown | deprecated false | tag
-== search --lobe "operations/"
+== search --lobe "operations/" (207 bytes)
 total: 2
 operations/backups.md | "Database backups and restore drills" | markdown | deprecated false | tag
 operations/operator-access.md | "Operator access to production" | markdown | deprecated false | tag
-== search --lobe "knowledge" --tag "auth"
+== search --lobe "knowledge" --tag "auth" (9 bytes)
 total: 0
-== search --tag "postgres"
+== search --tag "postgres" (207 bytes)
 total: 2
 operations/backups.md | "Database backups and restore drills" | markdown | deprecated false | tag
 operations/operator-access.md | "Operator access to production" | markdown | deprecated false | tag
-== search --tag "Postgres"
+== search --tag "Postgres" (9 bytes)
 total: 0
-== search --lobe "nope"
+== search --lobe "nope" (9 bytes)
 total: 0
-== search --lobe "architecture/overview.md"
+== search --lobe "architecture/overview.md" (9 bytes)
 total: 0
-== search --lobe ""
+== search --lobe "" (9 bytes)
 total: 0

@@ -1,9 +1,10 @@
 ---
 source: crates/kluris-cli/tests/golden_create.rs
-expression: run.dump()
+expression: text.as_ref()
 ---
-== stdout
+== stdout (1 byte)
 
-== stderr
+== stderr (105 bytes)
 Error: A brain named 'taken' is already registered at <ROOT>/work/brains/taken. Choose a different name.
 == exit 1
+<end of run>

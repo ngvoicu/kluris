@@ -3,14 +3,13 @@ source: crates/kluris-cli/tests/golden_dream_mri.rs
 expression: text
 ---
 $ kluris mri --json --output out dir/./deep//é page.html
-== exit 0
-== stdout
+== stdout (349 bytes)
 {
   "ok": true,
   "brains": [
     {
       "name": "calm",
-      "output_path": "out dir/deep/\u00e9 page.html",
+      "output_path": "out dir/deep/\\u00e9 page.html",
       "preflight_fixes": {
         "dates_updated": 0,
         "parents_inferred": 0,
@@ -23,7 +22,9 @@ $ kluris mri --json --output out dir/./deep//é page.html
     }
   ]
 }
-== stderr
+== stderr (0 bytes)
+== exit 0
+<end of run>
 == changed (pages left out)
 + brains/calm/brain.md
 + brains/calm/knowledge/map.md

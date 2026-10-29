@@ -1,8 +1,9 @@
 ---
 source: crates/kluris-cli/tests/golden_companions_resolver.rs
-expression: run.render(&sb.root)
+expression: text
 ---
-== stdout
+== stdout (124 bytes)
 {"ok": false, "error": "Cannot access config file <ROOT>/work/brains/b/kluris.yml: No such file or directory (os error 2)"}
-== stderr
+== stderr (0 bytes)
 == exit 1
+<end of run>

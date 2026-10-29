@@ -2,12 +2,13 @@
 source: crates/kluris-cli/tests/golden_list_status_help.rs
 description: kluris status
 ---
-== stdout
+== stdout (149 bytes)
 
 demo
   Lobes: 2, Neurons: 4
   2026-01-01 brain: initialize demo
   Sync: blocked by 1 conflict; settle it with kluris resolve
     content: lobe/a.md
-== stderr
+== stderr (0 bytes)
 == exit 0
+<end of run>

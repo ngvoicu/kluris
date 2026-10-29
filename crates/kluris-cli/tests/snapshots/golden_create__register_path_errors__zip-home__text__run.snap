@@ -1,8 +1,9 @@
 ---
 source: crates/kluris-cli/tests/golden_create.rs
-expression: run.dump()
+expression: text.as_ref()
 ---
-== stdout
-== stderr
+== stdout (0 bytes)
+== stderr (189 bytes)
 Error: kluris register no longer accepts .zip files. Unzip first, then run 'kluris register <directory>'. For git-hosted brains, use 'git clone <url> <path>' then 'kluris register <path>'.
 == exit 1
+<end of run>

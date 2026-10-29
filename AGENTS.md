@@ -444,15 +444,18 @@ replace only the temp root (`<ROOT>`), the binary's version and today's date
 with markers, and dump files so that every byte shows (a CR, a BOM, a byte
 that is not UTF-8): each entry is a `== PATH (KIND, N bytes)` header and its
 escaped body, no body line can read as a header or marker, and an `<end of
-dump>` line closes the dump, so two different trees never dump alike. A test
-that asserts nothing changed compares the byte maps (`tree_files`). A path
-Kluris prints or writes in the OS's own form (a brain's, the config's) is
-checked whole in that form on the raw output (a path or the root written
-partly with `/` fails) and shown `/`-joined (`native_paths`), so one
-snapshot holds on every OS and a separator change still fails on Windows. A snapshot has an `@windows` (or
-`@wsl`) variant only for a real difference of the OS: Windows lists a folder
-without regard to case, a test makes no symlinks there, the OS words its own
-errors.
+dump>` line closes the dump, so two different trees never dump alike. A
+run's snapshot is framed the same way: each stream a `== stdout (N bytes)` /
+`== stderr (N bytes)` section with its body escaped as a file's, then `==
+exit N` and an `<end of run>` line, so no stream reads as another stream,
+the exit or a marker. A test that asserts nothing changed compares the byte
+maps (`tree_files`). A path Kluris prints or writes in the OS's own form (a
+brain's, the config's) is checked whole in that form on the raw output (a
+path or the root written partly with `/` fails) and shown `/`-joined
+(`native_paths`), so one snapshot holds on every OS and a separator change
+still fails on Windows. A snapshot has an `@windows` (or `@wsl`) variant
+only for a real difference of the OS: Windows lists a folder without regard
+to case, a test makes no symlinks there, the OS words its own errors.
 
 - **Checking.** `INSTA_UPDATE=no cargo test --workspace` fails on a missing
   or changed snapshot and writes nothing; CI runs the tests the same way

@@ -2,12 +2,14 @@
 source: crates/kluris-cli/tests/golden_list_status_help.rs
 ---
 $ kluris help bogus
-== stdout
-== stderr
+== stdout (0 bytes)
+== stderr (30 bytes)
 Error: Unknown command: bogus
 == exit 1
+<end of run>
 $ kluris help pack
-== stdout
-== stderr
+== stdout (0 bytes)
+== stderr (29 bytes)
 Error: Unknown command: pack
 == exit 1
+<end of run>

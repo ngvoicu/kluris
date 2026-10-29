@@ -1,8 +1,9 @@
 ---
 source: crates/kluris-cli/tests/golden_companions_resolver.rs
-expression: run.render(&sb.root)
+expression: text
 ---
-== stdout
-== stderr
+== stdout (0 bytes)
+== stderr (71 bytes)
 Error: No brains registered. Run 'kluris create <name>' to create one.
 == exit 1
+<end of run>

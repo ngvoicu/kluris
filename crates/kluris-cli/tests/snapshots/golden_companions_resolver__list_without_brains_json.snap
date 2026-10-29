@@ -1,8 +1,9 @@
 ---
 source: crates/kluris-cli/tests/golden_companions_resolver.rs
-expression: run.render(&sb.root)
+expression: text
 ---
-== stdout
+== stdout (131 bytes)
 {"ok": true, "known": ["specmint-core", "specmint-tdd", "specmint-core-html", "specmint-tdd-html"], "installed": [], "brains": []}
-== stderr
+== stderr (0 bytes)
 == exit 0
+<end of run>

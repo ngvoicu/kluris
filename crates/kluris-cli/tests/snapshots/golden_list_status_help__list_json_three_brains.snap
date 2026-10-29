@@ -2,7 +2,8 @@
 source: crates/kluris-cli/tests/golden_list_status_help.rs
 description: kluris list --json
 ---
-== stdout
+== stdout (362 bytes)
 {"ok": true, "brains": [{"name": "alpha", "path": "<ROOT>/work/brains/alpha", "description": "demo brain", "companions": ["specmint-core", "specmint-tdd"]}, {"name": "beta", "path": "<ROOT>/work/brains/beta", "description": "demo brain", "companions": []}, {"name": "gamma", "path": "<ROOT>/work/brains/gamma", "description": "demo brain", "companions": null}]}
-== stderr
+== stderr (0 bytes)
 == exit 0
+<end of run>

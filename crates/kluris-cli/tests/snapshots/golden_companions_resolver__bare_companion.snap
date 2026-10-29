@@ -1,9 +1,9 @@
 ---
 source: crates/kluris-cli/tests/golden_companions_resolver.rs
-expression: run.render(&sb.root)
+expression: text
 ---
-== stdout
-== stderr
+== stdout (0 bytes)
+== stderr (372 bytes)
 Manage embedded companion playbooks per brain.
 
 Usage: kluris companion [OPTIONS] COMMAND [ARGS]...
@@ -16,3 +16,4 @@ Commands:
 Options:
       --help  Show this message and exit.
 == exit 2
+<end of run>

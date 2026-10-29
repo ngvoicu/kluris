@@ -3,8 +3,7 @@ source: crates/kluris-cli/tests/golden_dream_mri.rs
 expression: text
 ---
 $ kluris dream --json
-== exit 1
-== stdout
+== stdout (579 bytes)
 {
   "ok": true,
   "healthy": false,
@@ -31,7 +30,9 @@ $ kluris dream --json
     }
   ]
 }
-== stderr
+== stderr (0 bytes)
+== exit 1
+<end of run>
 == git status --porcelain brains/calm
 ?? brain.md
 ?? knowledge/map.md

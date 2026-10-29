@@ -3,15 +3,16 @@ source: crates/kluris-cli/tests/golden_dream_mri.rs
 expression: text
 ---
 $ kluris mri --brain all
-== exit 0
-== stdout
+== stdout (256 bytes)
 MRI complete — <ROOT>/work/brains/calm/brain-mri.html
   Open: <ROOT_URL>/work/brains/calm/brain-mri.html
   8 nodes, 16 edges
 MRI complete — <ROOT>/work/brains/rich/brain-mri.html
   Open: <ROOT_URL>/work/brains/rich/brain-mri.html
   43 nodes, 128 edges
-== stderr
+== stderr (122 bytes)
 Skipped calm: projects/bad.md: invalid frontmatter: ScannerError: mapping values are not allowed here (line 1, column 11)
+== exit 0
+<end of run>
 == changed (pages left out)
 (none)

@@ -2,7 +2,8 @@
 source: crates/kluris-cli/tests/golden_wake_up_search.rs
 expression: out
 ---
-== stdout
-{"ok": true, "name": "odd", "path": "<ROOT>", "description": "Fixture brain", "brain_md": "", "lobes": [{"name": "lobe", "description": "", "neurons": 5, "yaml_count": 0}], "total_neurons": 5, "total_yaml_neurons": 0, "recent": [{"path": "lobe/n4.md", "updated": "2026-01-01t10:00:00z", "file_type": "markdown"}, {"path": "lobe/n3.md", "updated": "2026-01-01", "file_type": "markdown"}, {"path": "lobe/n1.md", "updated": "\u00e9t\u00e9 2026", "file_type": "markdown"}, {"path": "lobe/n0.md", "updated": "[datetime.datetime(2026, 1, 1, 10, 0, 0, 1)]", "file_type": "markdown"}, {"path": "lobe/n2.md", "updated": "2026-01-0\u00e9", "file_type": "markdown"}], "glossary": [], "deprecation_count": 0, "deprecation": [], "parse_errors": 0}
-== stderr
+== stdout (735 bytes)
+{"ok": true, "name": "odd", "path": "<ROOT>", "description": "Fixture brain", "brain_md": "", "lobes": [{"name": "lobe", "description": "", "neurons": 5, "yaml_count": 0}], "total_neurons": 5, "total_yaml_neurons": 0, "recent": [{"path": "lobe/n4.md", "updated": "2026-01-01t10:00:00z", "file_type": "markdown"}, {"path": "lobe/n3.md", "updated": "2026-01-01", "file_type": "markdown"}, {"path": "lobe/n1.md", "updated": "\\u00e9t\\u00e9 2026", "file_type": "markdown"}, {"path": "lobe/n0.md", "updated": "[datetime.datetime(2026, 1, 1, 10, 0, 0, 1)]", "file_type": "markdown"}, {"path": "lobe/n2.md", "updated": "2026-01-0\\u00e9", "file_type": "markdown"}], "glossary": [], "deprecation_count": 0, "deprecation": [], "parse_errors": 0}
+== stderr (0 bytes)
 == exit 0
+<end of run>

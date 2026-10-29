@@ -2,7 +2,8 @@
 source: crates/kluris-cli/tests/golden_wake_up_search.rs
 expression: "render_error(&sb.kluris(args), &sb.root)"
 ---
-== stdout
+== stdout (106 bytes)
 {"ok": false, "error": "No brain named 'nope' is registered. Run 'kluris list' to see available brains."}
-== stderr, last line
+== stderr, last line (0 bytes)
 == exit 1
+<end of run>

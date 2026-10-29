@@ -3,9 +3,10 @@ source: crates/kluris-cli/tests/golden_dream_mri.rs
 expression: text
 ---
 $ kluris mri
-== exit 1
-== stdout
-== stderr
+== stdout (0 bytes)
+== stderr (71 bytes)
 Error: No brains registered. Run 'kluris create <name>' to create one.
+== exit 1
+<end of run>
 == changed (pages left out)
 (none)

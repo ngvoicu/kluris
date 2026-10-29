@@ -1,8 +1,8 @@
 ---
 source: crates/kluris-cli/tests/golden_companions_resolver.rs
-expression: run.render(&sb.root)
+expression: text
 ---
-== stdout
+== stdout (206 bytes)
 Multiple brains registered. Pick one:
   [1] a  (<ROOT>/work/brains/brain-0)
   [2] b  (<ROOT>/work/brains/brain-1)
@@ -14,5 +14,6 @@ Brain: b
 Lobes (0)
 
 Total neurons: 0
-== stderr
+== stderr (0 bytes)
 == exit 0
+<end of run>

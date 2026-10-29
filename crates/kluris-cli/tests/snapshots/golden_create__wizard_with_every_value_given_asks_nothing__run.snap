@@ -1,8 +1,8 @@
 ---
 source: crates/kluris-cli/tests/golden_create.rs
-expression: run.dump()
+expression: text.as_ref()
 ---
-== stdout
+== stdout (300 bytes)
 
 Brain created: demo (blank)
   Path: <ROOT>/work/demo
@@ -12,5 +12,6 @@ Agent skill installed: kluris-demo
   Claude/Codex/Antigravity/etc: /kluris-demo
   Hermes: /skill kluris-demo  (or start with `hermes -s kluris-demo`)
   Created a new Hermes profile later? Run `kluris doctor` to refresh Kluris skills.
-== stderr
+== stderr (0 bytes)
 == exit 0
+<end of run>

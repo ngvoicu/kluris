@@ -1,8 +1,8 @@
 ---
 source: crates/kluris-cli/tests/golden_create.rs
-expression: run.dump()
+expression: text.as_ref()
 ---
-== stdout
+== stdout (972 bytes)
 
 Create a new brain
 
@@ -23,5 +23,6 @@ Agent skill installed: kluris-wiz
   Claude/Codex/Antigravity/etc: /kluris-wiz
   Hermes: /skill kluris-wiz  (or start with `hermes -s kluris-wiz`)
   Created a new Hermes profile later? Run `kluris doctor` to refresh Kluris skills.
-== stderr
+== stderr (0 bytes)
 == exit 0
+<end of run>

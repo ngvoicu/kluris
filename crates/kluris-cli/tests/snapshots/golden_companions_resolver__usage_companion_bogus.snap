@@ -1,11 +1,12 @@
 ---
 source: crates/kluris-cli/tests/golden_companions_resolver.rs
-expression: run.render(&sb.root)
+expression: text
 ---
-== stdout
-== stderr
+== stdout (0 bytes)
+== stderr (125 bytes)
 Usage: kluris companion [OPTIONS] COMMAND [ARGS]...
 Try 'kluris companion --help' for help.
 
 Error: No such command 'bogus'.
 == exit 2
+<end of run>

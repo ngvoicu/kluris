@@ -3,10 +3,11 @@ source: crates/kluris-cli/tests/golden_dream_mri.rs
 expression: text
 ---
 $ kluris dream --broken-only
-== exit 1
-== stdout
-== stderr
+== stdout (0 bytes)
+== stderr (37 bytes)
 Error: --broken-only requires --json
+== exit 1
+<end of run>
 == git status --porcelain brains/rich
  M knowledge/beta.md
  M knowledge/crlf.md

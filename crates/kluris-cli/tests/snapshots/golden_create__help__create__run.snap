@@ -1,8 +1,8 @@
 ---
 source: crates/kluris-cli/tests/golden_create.rs
-expression: run.dump()
+expression: text.as_ref()
 ---
-== stdout
+== stdout (1073 bytes)
 Create a new brain.
 
 Prompts for anything not provided via flags. Use --json to skip all prompts.
@@ -45,5 +45,6 @@ Options:
 
       --help
           Show this message and exit.
-== stderr
+== stderr (0 bytes)
 == exit 0
+<end of run>

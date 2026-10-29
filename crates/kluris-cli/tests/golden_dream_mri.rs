@@ -27,7 +27,7 @@ use common::dream_brains::{
     rich_brain,
 };
 use common::golden::python_json;
-use common::sandbox::{Run, Sandbox, changed_files, json_dump, stream, write_tree};
+use common::sandbox::{Run, Sandbox, changed_files, json_dump, run_end, section, write_tree};
 use common::{
     Tree, files_dump, native_path, native_paths, normalize, tree_dump, tree_files, windows_variant,
 };
@@ -103,20 +103,22 @@ impl<'a> Scenario<'a> {
         }
     }
 
-    /// A run's snapshot text: the command, the exit code, stdout (a JSON
-    /// document through [`json_dump`]), stderr, then `extra`.
+    /// A run's snapshot text: the command, stdout (a JSON document through
+    /// [`json_dump`]) and stderr as [`section`]s, the [`run_end`], then
+    /// `extra`.
     fn run_text(&self, args: &[&str], out: &Run, extra: &str) -> String {
         let stdout = self.paths(&out.stdout);
         let stdout = if stdout.trim_start().starts_with('{') {
             json_dump(&stdout, &self.sb.root)
         } else {
-            stream(&self.shown(&self.brain_paths(&stdout)))
+            self.shown(&self.brain_paths(&stdout))
         };
         format!(
-            "$ kluris {}\n== exit {}\n== stdout\n{stdout}== stderr\n{}{extra}",
+            "$ kluris {}\n{}{}{}{extra}",
             args.join(" "),
-            out.code,
-            stream(&self.shown(&out.stderr)),
+            section("stdout", &stdout),
+            section("stderr", &self.shown(&out.stderr)),
+            run_end(out.code),
         )
     }
 

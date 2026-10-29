@@ -2,7 +2,7 @@
 source: crates/kluris-cli/tests/golden_wake_up_search.rs
 expression: "wake_up_text(&sb, &brain)"
 ---
-== stdout
+== stdout (54 bytes)
 
 Brain: p
   Path: <ROOT>
@@ -10,5 +10,6 @@ Brain: p
 Lobes (0)
 
 Total neurons: 0
-== stderr
+== stderr (0 bytes)
 == exit 0
+<end of run>

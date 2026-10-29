@@ -2,7 +2,8 @@
 source: crates/kluris-cli/tests/golden_list_status_help.rs
 description: kluris status --json
 ---
-== stdout
+== stdout (142 bytes)
 {"ok": true, "brains": [{"name": "demo", "lobes": 0, "neurons": 0, "uncommitted": "?? brain.md", "git_enabled": true, "recent_commits": []}]}
-== stderr
+== stderr (0 bytes)
 == exit 0
+<end of run>

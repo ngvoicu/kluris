@@ -2,12 +2,13 @@
 source: crates/kluris-cli/tests/golden_list_status_help.rs
 description: kluris list
 ---
-== stdout
+== stdout (560 bytes)
 Registered Brains
 Name   Path                                                                                                                                        Description  Companions
 -----  ------------------------------------------------------------------------------------------------------------------------------------------  -----------  ---------------------------
 alpha  <ROOT>/work/brains/alpha  demo brain   specmint-core, specmint-tdd
 beta   <ROOT>/work/brains/beta   demo brain   (none)
 gamma  <ROOT>/work/brains/gamma  demo brain   (unknown)
-== stderr
+== stderr (0 bytes)
 == exit 0
+<end of run>

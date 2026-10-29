@@ -1,8 +1,9 @@
 ---
 source: crates/kluris-cli/tests/golden_companions_resolver.rs
-expression: run.render(&sb.root)
+expression: text
 ---
-== stdout
+== stdout (64 bytes)
 {"ok": false, "error": "Got unexpected extra argument (extra)"}
-== stderr
+== stderr (0 bytes)
 == exit 1
+<end of run>

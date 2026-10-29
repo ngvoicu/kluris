@@ -1,8 +1,9 @@
 ---
 source: crates/kluris-cli/tests/golden_companions_resolver.rs
-expression: run.render(&sb.root)
+expression: text
 ---
-== stdout
-{"ok": true, "name": "caf\u00e9", "path": "<ROOT>/work/brains/caf\u00e9", "description": "d\u00e9j\u00e0", "brain_md": "", "lobes": [], "total_neurons": 0, "total_yaml_neurons": 0, "recent": [], "glossary": [], "deprecation_count": 0, "deprecation": [], "parse_errors": 0}
-== stderr
+== stdout (273 bytes)
+{"ok": true, "name": "caf\\u00e9", "path": "<ROOT>/work/brains/caf\\u00e9", "description": "d\\u00e9j\\u00e0", "brain_md": "", "lobes": [], "total_neurons": 0, "total_yaml_neurons": 0, "recent": [], "glossary": [], "deprecation_count": 0, "deprecation": [], "parse_errors": 0}
+== stderr (0 bytes)
 == exit 0
+<end of run>

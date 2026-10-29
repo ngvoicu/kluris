@@ -2,7 +2,8 @@
 source: crates/kluris-cli/tests/golden_upgrade.rs
 expression: lf
 ---
-== stdout
+== stdout (418 bytes)
 {"ok": true, "checks": [{"name": "git", "passed": true, "detail": "git version <GIT>"}, {"name": "path", "passed": true, "detail": "<KLURIS>"}, {"name": "config", "passed": true, "detail": "<ROOT>/work/home/.kluris/config.yml"}, {"name": "brain:acme", "passed": true, "detail": "<ROOT>/work/brains/acme"}, {"name": "brain:beta", "passed": true, "detail": "<ROOT>/work/brains/beta"}], "companions": [], "skills": null}
-== stderr
+== stderr (0 bytes)
 == exit 0
+<end of run>

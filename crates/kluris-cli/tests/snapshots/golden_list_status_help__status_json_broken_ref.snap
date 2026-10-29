@@ -2,7 +2,8 @@
 source: crates/kluris-cli/tests/golden_list_status_help.rs
 description: kluris status --json
 ---
-== stdout
+== stdout (136 bytes)
 {"ok": false, "error": "`git log -10 --format=%H%x00%s%x00%aI%x00` failed (exit 128): fatal: your current branch appears to be broken"}
-== stderr
+== stderr (0 bytes)
 == exit 1
+<end of run>

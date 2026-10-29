@@ -1,8 +1,8 @@
 ---
 source: crates/kluris-cli/tests/golden_companions_resolver.rs
-expression: run.render(&sb.root)
+expression: text
 ---
-== stdout
+== stdout (233 bytes)
 Known Companions
 Name                Installed
 ------------------  ---------
@@ -11,5 +11,6 @@ specmint-tdd        no
 specmint-core-html  no
 specmint-tdd-html   no
 No brains registered. Run 'kluris create <name>' to create one.
-== stderr
+== stderr (0 bytes)
 == exit 0
+<end of run>

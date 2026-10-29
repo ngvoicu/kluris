@@ -2,66 +2,74 @@
 source: crates/kluris-cli/tests/golden_list_status_help.rs
 ---
 $ kluris -h
-== stdout
-== stderr
+== stdout (0 bytes)
+== stderr (101 bytes)
 Usage: kluris [OPTIONS] COMMAND [ARGS]...
 Try 'kluris --help' for help.
 
 Error: No such option '-h'.
 == exit 2
+<end of run>
 $ kluris -V
-== stdout
-== stderr
+== stdout (0 bytes)
+== stderr (101 bytes)
 Usage: kluris [OPTIONS] COMMAND [ARGS]...
 Try 'kluris --help' for help.
 
 Error: No such option '-V'.
 == exit 2
+<end of run>
 $ kluris status -h
-== stdout
-== stderr
+== stdout (0 bytes)
+== stderr (97 bytes)
 Usage: kluris status [OPTIONS]
 Try 'kluris status --help' for help.
 
 Error: No such option '-h'.
 == exit 2
+<end of run>
 $ kluris help -h
-== stdout
-== stderr
+== stdout (0 bytes)
+== stderr (103 bytes)
 Usage: kluris help [OPTIONS] [COMMAND]
 Try 'kluris help --help' for help.
 
 Error: No such option '-h'.
 == exit 2
+<end of run>
 $ kluris help --bogus
-== stdout
-== stderr
+== stdout (0 bytes)
+== stderr (108 bytes)
 Usage: kluris help [OPTIONS] [COMMAND]
 Try 'kluris help --help' for help.
 
 Error: No such option '--bogus'.
 == exit 2
+<end of run>
 $ kluris help a b
-== stdout
-== stderr
+== stdout (0 bytes)
+== stderr (116 bytes)
 Usage: kluris help [OPTIONS] [COMMAND]
 Try 'kluris help --help' for help.
 
 Error: Got unexpected extra argument (b)
 == exit 2
+<end of run>
 $ kluris bogus
-== stdout
-== stderr
+== stdout (0 bytes)
+== stderr (105 bytes)
 Usage: kluris [OPTIONS] COMMAND [ARGS]...
 Try 'kluris --help' for help.
 
 Error: No such command 'bogus'.
 == exit 2
+<end of run>
 $ kluris list -h
-== stdout
-== stderr
+== stdout (0 bytes)
+== stderr (93 bytes)
 Usage: kluris list [OPTIONS]
 Try 'kluris list --help' for help.
 
 Error: No such option '-h'.
 == exit 2
+<end of run>

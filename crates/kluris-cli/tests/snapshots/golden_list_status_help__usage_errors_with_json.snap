@@ -2,17 +2,20 @@
 source: crates/kluris-cli/tests/golden_list_status_help.rs
 ---
 $ kluris help --json bogus extra
-== stdout
+== stdout (64 bytes)
 {"ok": false, "error": "Got unexpected extra argument (extra)"}
-== stderr
+== stderr (0 bytes)
 == exit 1
+<end of run>
 $ kluris bogus --json
-== stdout
+== stdout (51 bytes)
 {"ok": false, "error": "No such command 'bogus'."}
-== stderr
+== stderr (0 bytes)
 == exit 1
+<end of run>
 $ kluris pack --json
-== stdout
+== stdout (50 bytes)
 {"ok": false, "error": "No such command 'pack'."}
-== stderr
+== stderr (0 bytes)
 == exit 1
+<end of run>

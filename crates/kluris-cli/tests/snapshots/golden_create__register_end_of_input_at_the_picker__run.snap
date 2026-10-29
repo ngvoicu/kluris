@@ -1,8 +1,8 @@
 ---
 source: crates/kluris-cli/tests/golden_create.rs
-expression: run.dump()
+expression: text.as_ref()
 ---
-== stdout
+== stdout (452 bytes)
 
 Register a brain
 
@@ -17,6 +17,7 @@ Register a brain
     [7] all
   Choice [4]: 
 <no newline at end>
-== stderr
+== stderr (25 bytes)
 Error: Register failed: 
 == exit 1
+<end of run>

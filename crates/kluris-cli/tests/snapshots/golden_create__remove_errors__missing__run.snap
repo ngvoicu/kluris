@@ -1,11 +1,12 @@
 ---
 source: crates/kluris-cli/tests/golden_create.rs
-expression: run.dump()
+expression: text.as_ref()
 ---
-== stdout
-== stderr
+== stdout (0 bytes)
+== stderr (118 bytes)
 Usage: kluris remove [OPTIONS] BRAIN_NAME
 Try 'kluris remove --help' for help.
 
 Error: Missing argument 'BRAIN_NAME'.
 == exit 2
+<end of run>

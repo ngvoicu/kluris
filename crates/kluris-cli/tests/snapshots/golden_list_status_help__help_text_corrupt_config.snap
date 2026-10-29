@@ -2,7 +2,8 @@
 source: crates/kluris-cli/tests/golden_list_status_help.rs
 description: kluris help
 ---
-== stdout
-== stderr
+== stdout (0 bytes)
+== stderr (175 bytes)
 Error: Invalid config file <ROOT>/work/home/.kluris/config.yml: ParserError: while parsing a flow node: expected the node content, but found '<stream end>' (line 2, column 1)
 == exit 1
+<end of run>

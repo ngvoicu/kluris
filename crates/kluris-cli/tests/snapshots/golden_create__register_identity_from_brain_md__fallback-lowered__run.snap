@@ -1,8 +1,9 @@
 ---
 source: crates/kluris-cli/tests/golden_create.rs
-expression: run.dump()
+expression: text.as_ref()
 ---
-== stdout
+== stdout (90 bytes)
 {"ok": true, "name": "my-brain", "path": "<ROOT>/work/brains/My Brain", "companions": []}
-== stderr
+== stderr (0 bytes)
 == exit 0
+<end of run>

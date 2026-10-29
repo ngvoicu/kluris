@@ -1,8 +1,9 @@
 ---
 source: crates/kluris-cli/tests/golden_create.rs
-expression: run.dump()
+expression: text.as_ref()
 ---
-== stdout
+== stdout (34 bytes)
 Unregistered: a (files preserved)
-== stderr
+== stderr (0 bytes)
 == exit 0
+<end of run>

@@ -1,8 +1,8 @@
 ---
 source: crates/kluris-cli/tests/golden_companions_resolver.rs
-expression: run.render(&sb.root)
+expression: text
 ---
-== stdout
+== stdout (405 bytes)
   Install specmint companions for this brain?
     [1] specmint-core      (spec-driven-development companion)
     [2] specmint-tdd       (spec-driven-development with test-driven-development focus)
@@ -13,6 +13,7 @@ expression: run.render(&sb.root)
     [7] all
   Choice [4]: 
 <no newline at end>
-== stderr
+== stderr (9 bytes)
 Aborted!
 == exit 1
+<end of run>

@@ -2,7 +2,8 @@
 source: crates/kluris-cli/tests/golden_upgrade.rs
 expression: lf
 ---
-== stdout
-{"ok": true, "brain": "prod", "query": "sessions", "total": 2, "results": [{"file": "decisions/jwt-auth.md", "file_type": "markdown", "title": "Use JWT access tokens", "matched_fields": ["body"], "snippet": "# Use JWT access tokens\n\nWe chose stateless JWT access tokens over server sessions.", "score": 64, "deprecated": false, "heading": null, "line": 12, "matched_terms": ["sessions"], "coverage": 1.0, "related": ["features/login.md"], "updated": "2026-01-01"}, {"file": "decisions/server-sessions.md", "file_type": "markdown", "title": "Server-side sessions", "matched_fields": ["title", "path", "body"], "snippet": "# Server-side sessions\n\nSessions lived in Redis. Superseded by JWT access tokens.", "score": 46, "deprecated": true, "heading": null, "line": 11, "matched_terms": ["sessions"], "coverage": 1.0, "related": [], "updated": "2026-01-01", "replaced_by": "./jwt-auth.md"}], "engine": "bm25"}
-== stderr
+== stdout (911 bytes)
+{"ok": true, "brain": "prod", "query": "sessions", "total": 2, "results": [{"file": "decisions/jwt-auth.md", "file_type": "markdown", "title": "Use JWT access tokens", "matched_fields": ["body"], "snippet": "# Use JWT access tokens\\n\\nWe chose stateless JWT access tokens over server sessions.", "score": 64, "deprecated": false, "heading": null, "line": 12, "matched_terms": ["sessions"], "coverage": 1.0, "related": ["features/login.md"], "updated": "2026-01-01"}, {"file": "decisions/server-sessions.md", "file_type": "markdown", "title": "Server-side sessions", "matched_fields": ["title", "path", "body"], "snippet": "# Server-side sessions\\n\\nSessions lived in Redis. Superseded by JWT access tokens.", "score": 46, "deprecated": true, "heading": null, "line": 11, "matched_terms": ["sessions"], "coverage": 1.0, "related": [], "updated": "2026-01-01", "replaced_by": "./jwt-auth.md"}], "engine": "bm25"}
+== stderr (0 bytes)
 == exit 0
+<end of run>

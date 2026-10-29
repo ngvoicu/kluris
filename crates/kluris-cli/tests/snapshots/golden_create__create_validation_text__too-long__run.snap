@@ -1,9 +1,10 @@
 ---
 source: crates/kluris-cli/tests/golden_create.rs
-expression: run.dump()
+expression: text.as_ref()
 ---
-== stdout
+== stdout (1 byte)
 
-== stderr
+== stderr (109 bytes)
 Error: Brain name 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' is too long (49 chars). Maximum is 48.
 == exit 1
+<end of run>

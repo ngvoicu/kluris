@@ -1,10 +1,11 @@
 ---
 source: crates/kluris-cli/tests/golden_companions_resolver.rs
-expression: run.render(&sb.root)
+expression: text
 ---
-== stdout
+== stdout (185 bytes)
   Remove specmint-tdd? [Y/n]: Error: invalid input
   Remove specmint-tdd? [Y/n]: Removed companion(s) specmint-tdd from: a
 Runtime companion files were kept under ~/.kluris/companions.
-== stderr
+== stderr (0 bytes)
 == exit 0
+<end of run>

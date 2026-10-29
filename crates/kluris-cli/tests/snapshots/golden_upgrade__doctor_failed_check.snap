@@ -2,7 +2,8 @@
 source: crates/kluris-cli/tests/golden_upgrade.rs
 expression: world.render(&out)
 ---
-== stdout
+== stdout (302 bytes)
 {"ok": false, "checks": [{"name": "git", "passed": false, "detail": "git not found. Install: https://git-scm.com/downloads"}, {"name": "path", "passed": true, "detail": "<KLURIS>"}, {"name": "config", "passed": true, "detail": "<ROOT>/work/home/.kluris/config.yml"}], "companions": [], "skills": null}
-== stderr
+== stderr (0 bytes)
 == exit 1
+<end of run>

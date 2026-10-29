@@ -4,7 +4,7 @@ expression: "format!(\"{}{}\", found_list(&doc), section(\"skipped\", &(skipped 
 ---
 total: 1
 k/good.md | "Good" | markdown | deprecated false | body
-== skipped
+== skipped (183 bytes)
 [
   {
     "file": "k/bad.md",

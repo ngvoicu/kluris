@@ -1,8 +1,8 @@
 ---
 source: crates/kluris-cli/tests/golden_companions_resolver.rs
-expression: run.render(&sb.root)
+expression: text
 ---
-== stdout
+== stdout (258 bytes)
 List known companions, installed runtime copies, and brain opt-ins.
 
 Usage: kluris companion list [OPTIONS]
@@ -16,5 +16,6 @@ Options:
 
       --help
           Show this message and exit.
-== stderr
+== stderr (0 bytes)
 == exit 0
+<end of run>

@@ -2,7 +2,7 @@
 source: crates/kluris-cli/tests/golden_list_status_help.rs
 description: kluris status
 ---
-== stdout
+== stdout (108 bytes)
 
 demo
   Lobes: 2, Neurons: 5
@@ -10,5 +10,6 @@ demo
 M projects/alpha.md
 ?? n.md
   2026-01-01 brain: initialize demo
-== stderr
+== stderr (0 bytes)
 == exit 0
+<end of run>

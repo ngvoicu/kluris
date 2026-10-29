@@ -1,8 +1,9 @@
 ---
 source: crates/kluris-cli/tests/golden_companions_resolver.rs
-expression: run.render(&sb.root)
+expression: text
 ---
-== stdout
-{"ok": false, "error": "Multiple brains registered. Pass --brain NAME. Available: caf\u00e9, b"}
-== stderr
+== stdout (97 bytes)
+{"ok": false, "error": "Multiple brains registered. Pass --brain NAME. Available: caf\\u00e9, b"}
+== stderr (0 bytes)
 == exit 1
+<end of run>

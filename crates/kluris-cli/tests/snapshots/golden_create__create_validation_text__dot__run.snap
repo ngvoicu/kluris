@@ -1,9 +1,10 @@
 ---
 source: crates/kluris-cli/tests/golden_create.rs
-expression: run.dump()
+expression: text.as_ref()
 ---
-== stdout
+== stdout (1 byte)
 
-== stderr
+== stderr (85 bytes)
 Error: Brain name '.x' is invalid. Use lowercase letters, numbers, and hyphens only.
 == exit 1
+<end of run>
