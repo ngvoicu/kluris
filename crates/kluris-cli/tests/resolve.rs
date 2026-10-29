@@ -53,7 +53,13 @@ fn two_conflicts(h: &mut Home) -> std::path::PathBuf {
     h.git(&root, &["commit", "-q", "-m", "ours"]);
     let (code, doc) = h.json(&["sync", "--brain", "alpha", "--json"]);
     assert_eq!(code, 1, "{doc}");
-    assert_eq!(doc["brains"][0]["conflicts"].as_array().unwrap().len(), 2);
+    assert_eq!(
+        doc["brains"][0]["sync"]["conflicts"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
     root
 }
 
@@ -103,7 +109,7 @@ fn resolving_path_by_path_then_committing_and_pushing() {
     // The next sync is clean.
     let (code, doc) = h.json(&["sync", "--brain", "alpha", "--json"]);
     assert_eq!(code, 0, "{doc}");
-    assert_eq!(doc["brains"][0]["conflicts"], json!([]));
+    assert_eq!(doc["brains"][0]["sync"]["conflicts"], json!([]));
 }
 
 #[test]
@@ -280,9 +286,18 @@ fn status_shows_an_open_conflict_and_only_then() {
     let mut expected_keys = v2_keys.clone();
     expected_keys.push("sync".into());
     assert_eq!(keys(entry), expected_keys);
+    // The waiting merge's conflicts, each side its blob; the sync reported
+    // the same paths with their texts.
+    let pending = root.join(".git").join("kluris-sync").join("pending.json");
+    let recorded: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(pending).unwrap()).unwrap();
     assert_eq!(
         entry["sync"],
-        json!({"blocked": true, "conflicts": synced["brains"][0]["conflicts"].clone()})
+        json!({"blocked": true, "conflicts": recorded["conflicts"].clone()})
+    );
+    assert_eq!(
+        entry["sync"]["conflicts"][0]["path"],
+        synced["brains"][0]["sync"]["conflicts"][0]["path"]
     );
     let (_, out, _) = h.run(&["status", "--brain", "alpha"]);
     assert!(

@@ -15,12 +15,13 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use kluris_core::git::{Git, Repo, SystemGit};
+use kluris_core::sync::engine;
 use kluris_core::sync::fetch::{
     BACKOFF_FIRST, BACKOFF_MAX, Fetch, back_off, backed_off, end_backoff, fetch, fetched_recently,
     write_stamp,
 };
 use kluris_core::sync::git::{PushOutcome, SyncGit, Upstream, remote_env};
-use kluris_core::sync::{SyncReport, sync};
+use kluris_core::sync::{LeftReason, SyncReport};
 
 mod common;
 
@@ -45,7 +46,16 @@ fn sh_path(path: &Path) -> String {
 fn sync_within(w: &World, limit: Duration) -> SyncReport {
     let mut request = w.request();
     request.network_time_limit = limit;
-    sync(&w.ours, &w.git(), &request).unwrap()
+    engine::sync(&engine::open(&w.ours, &w.git(), &request).unwrap())
+}
+
+/// Why the brain was refused; empty when it was not.
+fn refused(r: &SyncReport) -> String {
+    if left(r, LeftReason::Refused) {
+        detail(r).to_string()
+    } else {
+        String::new()
+    }
 }
 
 /// The git Kluris runs in "ours", its repo and its upstream.
@@ -270,8 +280,8 @@ fn a_sync_whose_post_merge_hook_reads_stdin() {
             m = sh_path(&marker)
         ),
     );
-    let r = w.sync().unwrap();
-    assert!(r.merged, "{r:?}");
+    let r = w.sync();
+    assert!(r.pulled > 0, "{r:?}");
     assert_eq!(fs::read_to_string(&marker).unwrap(), "eof\n");
 }
 
@@ -413,8 +423,12 @@ fn no_git_the_engine_starts_prompts_through_ssh_or_an_askpass() {
     // Diverged: the fetch, the merge and the push all go through ssh.
     w.theirs_push(&[("ideas/new.md", &neuron("", "# New\n"))], &[]);
     w.ours_commit(&[("notes/second.md", &neuron("", "# Second\n"))], &[]);
-    let r = sync(&w.ours, &ssh.git(&w), &w.request()).unwrap();
-    assert!(r.fetched && r.merged && r.pushed, "{r:?}\n{}", ssh.calls());
+    let r = engine::sync(&engine::open(&w.ours, &ssh.git(&w), &w.request()).unwrap());
+    assert!(
+        clean(&r) && r.pulled > 0 && r.pushed,
+        "{r:?}\n{}",
+        ssh.calls()
+    );
     assert!(!ssh.asked.exists(), "asked: {}", ssh.calls());
 
     // A partial clone: the checkout fetches the missing blobs lazily,
@@ -446,8 +460,8 @@ fn no_git_the_engine_starts_prompts_through_ssh_or_an_askpass() {
     w.run(&w.theirs, &["pull", "-q", "--no-rebase"]);
     w.theirs_push(&[("ideas/later.md", &neuron("", "# Later\n"))], &[]);
     fs::remove_file(&ssh.calls).unwrap();
-    let r = sync(&partial, &ssh.git(&w), &w.request()).unwrap();
-    assert!(r.fetched && r.merged, "{r:?}\n{}", ssh.calls());
+    let r = engine::sync(&engine::open(&partial, &ssh.git(&w), &w.request()).unwrap());
+    assert!(clean(&r) && r.pulled > 0, "{r:?}\n{}", ssh.calls());
     assert!(w.read(&partial, "ideas/later.md").contains("# Later"));
     let calls = ssh.calls();
     assert!(calls.lines().count() >= 3, "{calls}");
@@ -477,9 +491,9 @@ fn a_host_asking_for_credentials_is_refused_without_asking_the_askpass() {
     assert!(ssh.asked.exists(), "git never asks: proves nothing");
     fs::remove_file(&ssh.asked).unwrap();
     let before = w.snapshot();
-    let r = sync(&w.ours, &ssh.git(&w), &w.request()).unwrap();
-    assert!(!r.offline && !r.fetched, "{r:?}");
-    let why = r.refused.unwrap_or_default();
+    let r = engine::sync(&engine::open(&w.ours, &ssh.git(&w), &w.request()).unwrap());
+    assert!(!left(&r, LeftReason::Offline), "{r:?}");
+    let why = refused(&r);
     assert!(why.contains("could not read Username"), "{why}");
     assert!(!ssh.asked.exists(), "the askpass was asked");
     assert_eq!(w.snapshot(), before);
@@ -549,7 +563,7 @@ fn a_listed_commit_missing_from_a_partial_clone_is_reported_absent_not_fetched()
     let mut request = w.request();
     request.network_time_limit = limit;
     let started = Instant::now();
-    let report = sync(&partial, &w.git(), &request).unwrap();
+    let report = engine::sync(&engine::open(&partial, &w.git(), &request).unwrap());
     let took = started.elapsed();
     let contacts = fs::read_to_string(&log).unwrap();
     // Both rounds within the one bound.
@@ -567,12 +581,12 @@ fn a_listed_commit_missing_from_a_partial_clone_is_reported_absent_not_fetched()
         // `GIT_NO_LAZY_FETCH`: the missing commit is reported absent.
         assert!(!contacts.contains("nolazy=1"), "a lazy fetch\n{contacts}");
         assert_eq!(contacts.lines().count(), 4, "{contacts}");
-        assert!(report.fetched && report.merged, "{report:?}");
+        assert!(clean(&report) && report.pulled > 0, "{report:?}");
         assert_eq!(w.head(&partial), w.remote_head());
     } else {
         // Older git fetches it lazily, never prompting, and the bound stops
         // it: offline.
-        assert!(report.offline, "{report:?}\n{contacts}");
+        assert!(left(&report, LeftReason::Offline), "{report:?}\n{contacts}");
     }
 }
 
@@ -678,8 +692,8 @@ fn the_listed_commit_is_used_when_fetch_head_or_the_tracking_ref_is_rewritten_me
         format!("{other}\t\tbranch 'main' of x\n"),
     )
     .unwrap();
-    let r = w.sync().unwrap();
-    assert!(r.merged, "{r:?}");
+    let r = w.sync();
+    assert!(r.pulled > 0, "{r:?}");
     assert_eq!(w.head(&w.ours), new);
 }
 
@@ -762,13 +776,13 @@ fn a_tracking_ref_made_symbolic_after_a_lost_compare_and_swap_is_refused() {
         ),
     );
     let head = w.head(&w.ours);
-    let r = w.sync().unwrap();
-    let why = r.refused.unwrap_or_default();
+    let r = w.sync();
+    let why = refused(&r);
     assert!(
         why.contains("is a symbolic ref to refs/heads/other"),
         "{why}"
     );
-    assert!(!r.merged, "merged");
+    assert!(r.pulled == 0, "merged");
     assert_eq!(w.head(&w.ours), head);
     assert_eq!(ref_at(&w, "refs/heads/other"), other);
     assert!(is_symbolic(&w, TRACKING));
@@ -818,8 +832,8 @@ fn a_concurrent_fetch_that_moved_the_tracking_ref_is_kept() {
     let r = sync_within(&w, Duration::from_secs(60));
     let latest = w.remote_head();
     assert_eq!(w.head(&w.theirs), latest, "the teammate's second push");
-    assert!(r.fetched && r.merged && !r.offline, "{r:?}");
-    assert!(r.refused.is_none(), "{r:?}");
+    assert!(clean(&r) && r.pulled > 0, "{r:?}");
+    assert!(!left(&r, LeftReason::Refused), "{r:?}");
     assert_eq!(
         tracking(&w),
         latest,
@@ -869,9 +883,12 @@ fn a_host_that_does_not_resolve_is_offline_with_nothing_changed() {
     w.run(&w.ours, &["remote", "set-url", "origin", url]);
     let before = w.snapshot();
     assert_eq!(fetch_ours(&w), Fetch::Offline);
-    let r = w.sync().unwrap();
-    assert!(r.offline && !r.fetched && !r.merged && !r.pushed, "{r:?}");
-    assert_eq!(r.refused, None);
+    let r = w.sync();
+    assert!(
+        left(&r, LeftReason::Offline) && r.pulled == 0 && !r.pushed,
+        "{r:?}"
+    );
+    assert!(!left(&r, LeftReason::Refused), "{r:?}");
     assert_eq!(w.snapshot(), before);
 }
 
@@ -887,7 +904,7 @@ fn a_remote_repository_that_does_not_exist_is_refused_with_nothing_changed() {
     let Fetch::Refused { detail } = fetch_ours(&w) else {
         panic!("not refused");
     };
-    for why in [detail, w.sync().unwrap().refused.unwrap_or_default()] {
+    for why in [detail, refused(&w.sync())] {
         assert!(why.starts_with("fatal: '"), "{why}");
         assert!(
             why.contains("gone.git' does not appear to be a git repository"),
@@ -913,9 +930,9 @@ fn a_missing_remote_path_holding_a_newline_then_ssh_words_is_a_refusal() {
     );
     w.run(&w.ours, &["config", "remote.origin.url", &path]);
     let before = w.snapshot();
-    let r = w.sync().unwrap();
-    assert!(!r.offline && !r.fetched, "{r:?}");
-    let why = r.refused.unwrap_or_default();
+    let r = w.sync();
+    assert!(!left(&r, LeftReason::Offline), "{r:?}");
+    let why = refused(&r);
     assert!(
         why.contains("does not appear to be a git repository"),
         "{why}"
@@ -933,8 +950,8 @@ fn a_transfer_slower_than_http_low_speed_limit_is_offline() {
     w.run(&w.ours, &["config", "http.lowSpeedTime", "1"]);
     let before = w.snapshot();
     let r = sync_within(&w, Duration::from_secs(30));
-    assert!(r.offline && !r.fetched, "{r:?}");
-    assert_eq!(r.refused, None);
+    assert!(left(&r, LeftReason::Offline), "{r:?}");
+    assert!(!left(&r, LeftReason::Refused), "{r:?}");
     assert_eq!(w.snapshot(), before);
 }
 
@@ -952,8 +969,11 @@ fn a_fetch_held_past_the_time_limit_is_offline() {
     );
     let before = w.snapshot();
     let r = sync_within(&w, Duration::from_secs(1));
-    assert!(r.offline && !r.fetched && !r.merged && !r.pushed, "{r:?}");
-    assert_eq!(r.refused, None);
+    assert!(
+        left(&r, LeftReason::Offline) && r.pulled == 0 && !r.pushed,
+        "{r:?}"
+    );
+    assert!(!left(&r, LeftReason::Refused), "{r:?}");
     assert_eq!(w.snapshot(), before);
 }
 
@@ -966,8 +986,8 @@ fn a_fetch_stopped_while_git_would_hold_the_tracking_ref_leaves_no_lock() {
     w.hook(&w.ours, "reference-transaction", SLOW_TRACKING_HOOK);
     let r = sync_within(&w, LIMIT);
     assert_eq!(ref_locks(&w.ours), Vec::<PathBuf>::new(), "{r:?}");
-    assert!(r.fetched && r.merged && !r.offline, "{r:?}");
-    assert!(r.refused.is_none(), "{r:?}");
+    assert!(clean(&r) && r.pulled > 0, "{r:?}");
+    assert!(!left(&r, LeftReason::Refused), "{r:?}");
     assert_eq!(tracking(&w), w.remote_head());
     assert_eq!(w.head(&w.ours), w.remote_head());
     assert!(w.read(&w.ours, "ideas/new.md").contains("# New"));
@@ -988,13 +1008,13 @@ fn a_fetch_held_past_the_bound_by_a_slow_upload_pack_leaves_no_lock() {
     let r = sync_within(&w, LIMIT);
     let took = started.elapsed();
     assert!(took < Duration::from_secs(8), "{took:?}");
-    assert!(r.offline && !r.fetched && !r.merged, "{r:?}");
+    assert!(left(&r, LeftReason::Offline) && r.pulled == 0, "{r:?}");
     assert_eq!(ref_locks(&w.ours), Vec::<PathBuf>::new());
     assert_eq!(tracking(&w), before);
     // The remote fast again: the next sync fetches and merges.
     w.run(&w.ours, &["config", "--unset", "remote.origin.uploadpack"]);
     let r = sync_within(&w, LIMIT);
-    assert!(r.fetched && r.merged && !r.offline, "{r:?}");
+    assert!(clean(&r) && r.pulled > 0, "{r:?}");
     assert_eq!(tracking(&w), w.remote_head());
     assert_eq!(w.head(&w.ours), w.remote_head());
 }
@@ -1011,8 +1031,8 @@ fn a_push_moves_the_tracking_ref_itself_outside_the_bound_and_leaves_no_lock() {
     let pushed = w.head(&w.ours);
     w.hook(&w.ours, "reference-transaction", SLOW_TRACKING_HOOK);
     let r = sync_within(&w, LIMIT);
-    assert!(r.fetched && r.pushed && !r.offline, "{r:?}");
-    assert!(r.refused.is_none(), "{r:?}");
+    assert!(clean(&r) && r.pushed, "{r:?}");
+    assert!(!left(&r, LeftReason::Refused), "{r:?}");
     assert_eq!(w.remote_head(), pushed);
     assert_eq!(tracking(&w), pushed);
     assert_eq!(ref_locks(&w.ours), Vec::<PathBuf>::new());
@@ -1032,7 +1052,7 @@ fn a_pre_push_hook_that_makes_the_tracking_ref_symbolic_moves_no_other_branch() 
         "pre-push",
         &format!("git symbolic-ref {TRACKING} refs/heads/other"),
     );
-    let r = w.sync().unwrap();
+    let r = w.sync();
     assert!(r.pushed, "{r:?}");
     assert_eq!(w.remote_head(), pushed);
     assert_eq!(
@@ -1043,7 +1063,7 @@ fn a_pre_push_hook_that_makes_the_tracking_ref_symbolic_moves_no_other_branch() 
     assert_eq!(w.head(&w.ours), pushed);
     // Left alone: the next sync refuses it with the fix.
     assert!(is_symbolic(&w, TRACKING));
-    let why = w.sync().unwrap().refused.unwrap_or_default();
+    let why = refused(&w.sync());
     assert!(
         why.contains("is a symbolic ref to refs/heads/other"),
         "{why}"
@@ -1063,7 +1083,7 @@ fn the_pre_push_hook_gets_the_push_alias_and_its_url_resolves_there() {
             sh_path(&log)
         ),
     );
-    let r = w.sync().unwrap();
+    let r = w.sync();
     assert!(r.pushed, "{r:?}");
     let url = w.run(&w.ours, &["config", "remote.origin.url"]);
     let url = url.trim();
@@ -1113,8 +1133,8 @@ fn push_instead_of_and_a_chained_instead_of_apply_once() {
     let get = |args: &[&str]| w.run(&w.ours, args).trim().to_string();
     assert_eq!(get(&["remote", "get-url", "origin"]), remote);
     assert_eq!(get(&["remote", "get-url", "--push", "origin"]), pushes);
-    let r = w.sync().unwrap();
-    assert!(r.fetched && r.pushed, "{r:?}");
+    let r = w.sync();
+    assert!(clean(&r) && r.pushed, "{r:?}");
     let at = |repo: &str| {
         w.run(Path::new(repo), &["rev-parse", "main"])
             .trim()
@@ -1158,7 +1178,7 @@ fn the_remotes_receivepack_proxy_and_other_settings_carry_over_but_not_fetch_or_
         ),
     );
     w.ours_commit(&[("notes/second.md", &neuron("", "# Second\n"))], &[]);
-    let r = w.sync().unwrap();
+    let r = w.sync();
     assert!(r.pushed, "{r:?}");
     assert!(received.exists(), "the remote's receivepack did not run");
     assert_eq!(

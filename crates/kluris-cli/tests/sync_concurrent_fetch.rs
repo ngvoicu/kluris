@@ -192,14 +192,14 @@ fn assert_not_published(h: &Home, bare: &Path, root: &Path, private: &str) {
 
 fn sync(h: &Home) -> (i32, Value) {
     let (code, doc) = h.json(&["sync", "--brain", "alpha", "--json"]);
-    (code, doc["brains"][0].clone())
+    (code, doc["brains"][0]["sync"].clone())
 }
 
 /// Sync merged origin's commit (`notes/remote.md`) and pushed the merge.
 fn assert_merged_and_pushed(code: i32, entry: &Value, root: &Path) {
     assert_eq!(code, 0, "{entry}");
     assert_eq!(entry["conflicts"], serde_json::json!([]), "{entry}");
-    assert_eq!(entry["merged"], true, "{entry}");
+    assert!(pulled(entry), "{entry}");
     assert_eq!(entry["pushed"], true, "{entry}");
     assert!(root.join("notes").join("remote.md").is_file());
 }
@@ -244,7 +244,7 @@ fn a_fast_forward_with_another_fetch_running_goes_to_origin() {
     let (code, entry) = sync(&h);
     assert!(h.dir.path().join("other-fetch-ran").exists());
     assert_eq!(code, 0, "{entry}");
-    assert_eq!(entry["merged"], true, "{entry}");
+    assert!(pulled(&entry), "{entry}");
     let head = h.git(&root, &["rev-parse", "HEAD"]);
     assert_eq!(head.trim(), head_of(&h, &origin(&h)));
     assert_not_published(&h, &origin(&h), &root, &private);
@@ -333,7 +333,7 @@ fn a_fast_forward_with_a_same_url_remote_fetched_meanwhile_goes_to_origin() {
     concurrent_fetch(&h, &root, Concurrent::Before);
     let (code, entry) = sync(&h);
     assert_eq!(code, 0, "{entry}");
-    assert_eq!(entry["merged"], true, "{entry}");
+    assert!(pulled(&entry), "{entry}");
     let head = h.git(&root, &["rev-parse", "HEAD"]);
     assert_eq!(head.trim(), head_of(&h, &origin(&h)));
     assert_not_published(&h, &origin(&h), &root, &private);
@@ -470,7 +470,7 @@ fn a_commit_the_remote_moved_away_from_once_is_fetched_again() {
     moves_away_after_ls_remote(&h, &root, false);
     let (code, entry) = sync(&h);
     assert_eq!(code, 0, "{entry}");
-    assert_eq!(entry["merged"], true, "{entry}");
+    assert!(pulled(&entry), "{entry}");
     let head = h.git(&root, &["rev-parse", "HEAD"]);
     assert_eq!(head.trim(), head_of(&h, &origin(&h)));
     assert_eq!(h.git(&root, &["status", "--porcelain"]), "");
@@ -486,11 +486,11 @@ fn a_commit_the_remote_moves_away_from_every_time_refuses_the_brain() {
     let (code, entry) = sync(&h);
     assert_eq!(code, 1, "{entry}");
     assert_eq!(
-        entry["refused"],
+        refused(&entry),
         "origin's main moved while Kluris fetched it, on each try; nothing was merged or pushed: run kluris sync again",
         "{entry}"
     );
-    assert_eq!(entry["merged"], false, "{entry}");
+    assert!(!pulled(&entry), "{entry}");
     assert_eq!(h.git(&root, &["rev-parse", "HEAD"]), head);
     assert_eq!(
         h.git(&root, &["rev-parse", "refs/remotes/origin/main"]),

@@ -6,8 +6,8 @@ use kluris_core::brain::store::LocalGitStore;
 use kluris_core::git::SystemGit;
 use kluris_core::pyrepr::py_path_str;
 use kluris_core::status::{BrainStatus, brain_status};
+use kluris_core::sync::Conflict;
 use kluris_core::sync::resolve::open_conflicts;
-use kluris_core::sync::{Conflict, conflict_json};
 
 use crate::error::CliError;
 use crate::output::human::{self, Painter};
@@ -74,7 +74,7 @@ fn to_json(name: &str, s: &BrainStatus, open: Option<&[Conflict]>) -> Json {
                 ("blocked".into(), Json::Bool(true)),
                 (
                     "conflicts".into(),
-                    Json::Array(conflicts.iter().map(conflict_json).collect()),
+                    Json::Array(conflicts.iter().map(Conflict::to_json).collect()),
                 ),
             ]),
         ));

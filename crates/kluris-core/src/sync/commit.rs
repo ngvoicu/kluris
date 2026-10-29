@@ -47,9 +47,12 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::SystemTime;
 
+use super::hooks::{HookError, Source, gate, message_hooks};
+use super::land::join;
+use super::merge::tree_nodes;
 use crate::atomic;
 use crate::brain::sandbox;
 use crate::brain::store::BrainStore;
@@ -57,8 +60,7 @@ use crate::brain::tree_store::{Node, TreeStore};
 use crate::dream::{DreamOptions, map_changes};
 use crate::frontmatter::{LineEnding, line_ending};
 use crate::git::{
-    GitError, Identity, InProgress, MIN_SYNC_VERSION, Plumbing, Repo, StagedBlob, StagingIndex,
-    parse_version,
+    GitError, Identity, InProgress, MIN_SYNC_VERSION, Plumbing, Repo, StagedBlob, parse_version,
 };
 
 /// The longest default subject, in characters.
@@ -137,9 +139,7 @@ pub fn normalize_path(raw: &str) -> Result<String, PathProblem> {
 /// symlinks are followed, a file (or a symlink) or a file the base revision
 /// has that is gone now.
 fn check_on_disk(root: &Path, rel: &str, in_base: bool) -> Result<(), PathProblem> {
-    let path = rel
-        .split('/')
-        .fold(root.to_path_buf(), |p, part| p.join(part));
+    let path = join(root, rel);
     let resolved_root = sandbox::resolve(root).map_err(|_| PathProblem::LinkOutside)?;
     let resolved = sandbox::resolve(&path).map_err(|_| PathProblem::LinkOutside)?;
     if !sandbox::is_within(&resolved, &resolved_root) {
@@ -477,10 +477,15 @@ impl From<GitError> for CommitError {
     }
 }
 
-/// Whether a map reads a file's contents: markdown and YAML files.
-fn is_text_suffix(rel: &str) -> bool {
-    let lower = rel.to_ascii_lowercase();
-    [".md", ".yml", ".yaml"].iter().any(|s| lower.ends_with(s))
+impl From<HookError> for CommitError {
+    fn from(e: HookError) -> Self {
+        match e {
+            HookError::Failed { name, code } => CommitError::Hook { name, code },
+            HookError::EmptyMessage => CommitError::EmptyMessage,
+            HookError::MessageFile(e) => CommitError::MessageFile(e),
+            HookError::Git(e) => CommitError::Git(e),
+        }
+    }
 }
 
 /// A tree's files as the view holds them, and each file's git mode.
@@ -490,30 +495,9 @@ type Files = (BTreeMap<String, Node>, BTreeMap<String, String>);
 /// modes.
 fn base_nodes<G: Plumbing>(git: &G, repo: &Repo, rev: &str) -> Result<Files, GitError> {
     let entries = git.tree_entries(repo, rev)?;
-    let wanted: Vec<String> = entries
-        .iter()
-        .filter(|e| e.is_symlink() || is_text_suffix(&e.rel))
-        .map(|e| e.oid.clone())
-        .collect();
-    let blobs = git.read_blobs(repo, &wanted)?;
-    let mut nodes = BTreeMap::new();
-    let mut modes = BTreeMap::new();
-    for entry in entries {
-        let bytes = blobs.get(&entry.oid).cloned();
-        let node = if entry.is_symlink() {
-            Node::Link(String::from_utf8_lossy(&bytes.unwrap_or_default()).into_owned())
-        } else {
-            Node::File(bytes)
-        };
-        modes.insert(entry.rel.clone(), entry.mode);
-        nodes.insert(entry.rel, node);
-    }
+    let nodes = tree_nodes(git, repo, &entries, &BTreeMap::new())?;
+    let modes = entries.into_iter().map(|e| (e.rel, e.mode)).collect();
     Ok((nodes, modes))
-}
-
-fn join(root: &Path, rel: &str) -> PathBuf {
-    rel.split('/')
-        .fold(root.to_path_buf(), |p, part| p.join(part))
 }
 
 /// A given path as the work tree has it, into the view: a file, a symlink,
@@ -830,29 +814,6 @@ fn unapproved_changes<G: Plumbing>(
     Ok(out)
 }
 
-/// Removes a file when dropped.
-struct TempFile(PathBuf);
-
-impl Drop for TempFile {
-    fn drop(&mut self) {
-        let _ = fs::remove_file(&self.0);
-    }
-}
-
-/// Run a hook that can stop the commit.
-fn gate<G: Plumbing>(
-    git: &G,
-    repo: &Repo,
-    index: &StagingIndex,
-    name: &'static str,
-    args: &[&str],
-) -> Result<(), CommitError> {
-    match git.run_hook(repo, Some(index), name, args)? {
-        0 => Ok(()),
-        code => Err(CommitError::Hook { name, code }),
-    }
-}
-
 /// Commit `request.paths` and the generated files they change, in the brain
 /// at `root` (see the module docs). Nothing to commit is not an error: the
 /// report's `commit` is `None`.
@@ -1050,31 +1011,19 @@ pub fn commit<G: Plumbing>(
     };
 
     // The message hooks work on a file, as with `git commit`.
-    let file =
-        TempFile(git.git_dir_path(&repo, &format!("KLURIS_EDITMSG-{}", std::process::id()))?);
-    // Hooks are shell scripts (Git for Windows' sh too): `/` separators.
-    let file_arg = file.0.to_string_lossy().replace('\\', "/");
-    fs::write(&file.0, set.full_message()).map_err(|e| CommitError::MessageFile(e.to_string()))?;
-    gate(
+    let message = message_hooks(
         git,
         &repo,
         &index,
-        "prepare-commit-msg",
-        &[&file_arg, "message"],
+        &set.full_message(),
+        Source::Message,
+        request.no_verify,
+        |_| Ok::<(), CommitError>(()),
     )?;
-    if !request.no_verify {
-        gate(git, &repo, &index, "commit-msg", &[&file_arg])?;
-    }
-    let final_message = fs::read(&file.0)
-        .map(|bytes| cleanup_message(&String::from_utf8_lossy(&bytes)))
-        .map_err(|e| CommitError::MessageFile(e.to_string()))?;
-    if final_message.is_empty() {
-        return Err(CommitError::EmptyMessage);
-    }
-    fs::write(&file.0, &final_message).map_err(|e| CommitError::MessageFile(e.to_string()))?;
+    let final_message = message.text.clone();
 
     let parents: Vec<&str> = set.base.iter().map(String::as_str).collect();
-    let new = git.commit_tree(&repo, &tree, &parents, &file.0)?;
+    let new = git.commit_tree(&repo, &tree, &parents, message.file())?;
     let subject = final_message.lines().next().unwrap_or_default();
     git.update_head(
         &repo,

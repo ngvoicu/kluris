@@ -1,17 +1,14 @@
-//! `kluris resolve` (TEST-K3-47): an open sync conflict settled path by path
-//! with real git (a bare remote, our clone, a teammate's), then committed,
-//! moved to and pushed as `sync` does.
+//! `kluris resolve`: an open sync conflict settled path by path, then the
+//! merge finished ([`engine::finish_merge`]), landed and pushed.
 
 use std::fs;
 
 use kluris_core::sync::resolve::{
     Choice, ResolveError, ResolveReport, ResolveRequest, abort, open_conflicts, resolve,
 };
-use kluris_core::sync::{ConflictKind, PENDING, SyncError, SyncRequest};
+use kluris_core::sync::{ConflictKind, LeftReason, PENDING, SyncRequest};
 
-mod common;
-
-use common::*;
+use crate::common::*;
 
 const RESOLVED_MESSAGE: &str =
     "kluris: sync (resolved)\n\nKluris-Sync: resolved\nKluris-Resolved-By: Ana Tester\n\n";
@@ -44,9 +41,21 @@ fn pending(w: &World) -> std::path::PathBuf {
     w.ours.join(".git").join(PENDING)
 }
 
+/// The merge was left for a hook: its detail names the hook and says why.
+fn hook_stopped(result: Result<ResolveReport, ResolveError>, hook: &str, why: &str) {
+    match result {
+        Err(ResolveError::Left(left)) => {
+            assert_eq!(left.reason, LeftReason::Hook, "{left:?}");
+            let detail = left.detail.unwrap_or_default();
+            assert!(detail.contains(hook) && detail.contains(why), "{detail}");
+        }
+        other => panic!("{hook}: {other:?}"),
+    }
+}
+
 /// Sync ends in conflicts at `paths`.
 fn open(w: &World, paths: &[&str]) {
-    let r = w.sync().unwrap();
+    let r = w.sync();
     let got: Vec<&str> = r.conflicts.iter().map(|c| c.path.as_str()).collect();
     assert_eq!(got, paths, "{r:?}");
 }
@@ -77,9 +86,9 @@ fn assert_completed(w: &World, r: &ResolveReport) {
     assert!(!pending(w).exists());
     assert!(open_conflicts(&w.ours, &w.git()).is_none());
     assert_eq!(w.status(&w.ours), "");
-    let next = w.sync().unwrap();
+    let next = w.sync();
     assert!(
-        next.fetched && !next.merged && !next.pushed && next.conflicts.is_empty(),
+        clean(&next) && next.pulled == 0 && next.to_push == 0 && !next.pushed,
         "{next:?}"
     );
     for (rel, bytes) in w.files(&w.ours) {
@@ -181,7 +190,7 @@ fn parent_conflict(w: &World) -> (String, String) {
     let ours = base.replace("parent: ./map.md", "parent: ../brain.md");
     w.theirs_push(&[("notes/keep.md", &theirs)], &[]);
     w.ours_commit(&[("notes/keep.md", &ours)], &[]);
-    let r = w.sync().unwrap();
+    let r = w.sync();
     assert_eq!(r.conflicts[0].kind, ConflictKind::Parent);
     (ours, theirs)
 }
@@ -438,12 +447,11 @@ fn a_failing_pre_merge_commit_hook_keeps_the_conflict_open() {
     content_conflict(&w);
     w.hook(&w.ours, "pre-merge-commit", "exit 1");
     let head = w.head(&w.ours);
-    match resolve_with(&w, "notes/first.md", Choice::Ours) {
-        Err(ResolveError::Sync(SyncError::Hook { name, .. })) => {
-            assert_eq!(name, "pre-merge-commit")
-        }
-        other => panic!("{other:?}"),
-    }
+    hook_stopped(
+        resolve_with(&w, "notes/first.md", Choice::Ours),
+        "the pre-merge-commit hook",
+        "failed (exit 1); nothing was merged",
+    );
     assert_eq!(w.head(&w.ours), head);
     assert!(pending(&w).exists());
     let r = resolve_req(&w, "notes/first.md", Choice::Ours, true).unwrap();
@@ -559,7 +567,7 @@ fn a_windows_style_path_names_the_conflict() {
     assert_completed(&w, &r);
 }
 
-// --- structural and ambiguous_base conflicts (T-146) ----------------------------------
+// --- structural and ambiguous_base conflicts ------------------------------------------
 
 /// Ours adds `notes/topic.md` and edits `notes/first.md`; theirs adds
 /// `notes/topic.md/child.md` and edits the same line of `notes/first.md`.
@@ -674,7 +682,7 @@ fn an_ambiguous_base_conflict_keeps_the_chosen_side() {
         &[("notes/first.md", &base.replace("Four.", "Four, theirs."))],
         &[],
     );
-    let s = w.sync().unwrap();
+    let s = w.sync();
     assert_eq!(s.conflicts[0].kind, ConflictKind::AmbiguousBase, "{s:?}");
     let r = resolve_with(&w, "notes/first.md", Choice::Ours).unwrap();
     assert_completed(&w, &r);
@@ -725,12 +733,11 @@ fn the_message_hooks_run_for_the_resolved_merge() {
     content_conflict(&w);
     w.hook(&w.ours, "commit-msg", "exit 9");
     let head = w.head(&w.ours);
-    match resolve_with(&w, "notes/first.md", Choice::Ours) {
-        Err(ResolveError::Sync(SyncError::Hook { name, code })) => {
-            assert_eq!((name, code), ("commit-msg", 9))
-        }
-        other => panic!("{other:?}"),
-    }
+    hook_stopped(
+        resolve_with(&w, "notes/first.md", Choice::Ours),
+        "the commit-msg hook",
+        "failed (exit 9)",
+    );
     assert_eq!(w.head(&w.ours), head);
     assert!(pending(&w).exists());
     w.hook(&w.ours, "commit-msg", "exit 0");
@@ -755,12 +762,11 @@ fn a_hook_that_changes_the_resolved_merge_is_refused() {
         w.hook(&w.ours, hook, "git add -A");
         let head = w.head(&w.ours);
         let remote = w.remote_head();
-        match resolve_with(&w, "notes/first.md", Choice::Theirs) {
-            Err(ResolveError::Sync(e @ SyncError::HookChangedMerge { .. })) => {
-                assert!(e.to_string().contains(hook), "{e}")
-            }
-            other => panic!("{hook}: {other:?}"),
-        }
+        hook_stopped(
+            resolve_with(&w, "notes/first.md", Choice::Theirs),
+            hook,
+            "changed the merge; nothing was merged",
+        );
         assert_eq!((w.head(&w.ours), w.remote_head()), (head, remote), "{hook}");
         assert!(pending(&w).exists());
         assert_eq!(w.status(&w.ours), "");

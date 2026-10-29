@@ -1,7 +1,7 @@
-//! The adversarial matrix of T-152: renames into and out of folders, folders
+//! The adversarial matrix: renames into and out of folders, folders
 //! renamed on both sides, nested folder renames with adds, case-only renames,
 //! a rename with a delete inside, binary files and symlinks in renamed
-//! folders. For every scenario `kluris sync` either merges with every blob
+//! folders. For every scenario the engine's sync either merges with every blob
 //! both sides introduced still in the tree, or opens person conflicts that
 //! change nothing; and each `kluris resolve` choice then keeps exactly that
 //! side's bytes at every conflicted path, and every other change of both
@@ -10,11 +10,9 @@
 use std::collections::BTreeMap;
 use std::fs;
 
-use kluris_core::sync::resolve::{Choice, ResolveRequest, resolve};
+use kluris_core::sync::resolve::{Choice, ResolveRequest, open_conflicts, resolve};
 
-mod common;
-
-use common::*;
+use crate::common::*;
 
 /// Every file of a tree: path -> (mode, blob id).
 fn tree(w: &World, rev: &str) -> BTreeMap<String, (String, String)> {
@@ -42,6 +40,11 @@ fn introduced(w: &World, base: &str, rev: &str) -> BTreeMap<String, String> {
         .filter(|(path, (_, oid))| !generated(path) && !before.contains(oid))
         .map(|(path, (_, oid))| (path, oid))
         .collect()
+}
+
+/// The conflicts the waiting merge records, each side as its blob.
+fn recorded(w: &World) -> Vec<kluris_core::sync::Conflict> {
+    open_conflicts(&w.ours, &w.git()).unwrap_or_default()
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -72,13 +75,10 @@ fn check(name: &str, setup: &dyn Fn(&World)) -> Outcome {
         let from_ours = introduced(&w, &base, &ours);
         let from_theirs = introduced(&w, &base, &theirs);
         let before = w.snapshot();
-        let r = w.sync().unwrap_or_else(|e| panic!("{name}: {e}"));
+        let r = w.sync();
         no_markers_anywhere(&w, &w.ours);
         if r.conflicts.is_empty() {
-            assert!(
-                r.merged && r.pushed && r.blocked.is_empty(),
-                "{name}: {r:?}"
-            );
+            assert!(r.pulled > 0 && r.pushed && clean(&r), "{name}: {r:?}");
             let final_oids: Vec<String> = tree(&w, "HEAD").into_values().map(|(_, o)| o).collect();
             for (path, oid) in from_ours.iter().chain(&from_theirs) {
                 assert!(final_oids.contains(oid), "{name}: lost {path} ({oid})");
@@ -86,9 +86,9 @@ fn check(name: &str, setup: &dyn Fn(&World)) -> Outcome {
             assert_eq!(w.status(&w.ours), "", "{name}");
             return Outcome::Merged;
         }
-        assert!(!r.merged && !r.pushed, "{name}: {r:?}");
+        assert!(r.pulled == 0 && !r.pushed, "{name}: {r:?}");
         assert_eq!(w.snapshot(), before, "{name}: a conflict changed something");
-        (from_ours, from_theirs, r.conflicts)
+        (from_ours, from_theirs, recorded(&w))
     };
     let kinds = conflicts
         .iter()
@@ -98,13 +98,11 @@ fn check(name: &str, setup: &dyn Fn(&World)) -> Outcome {
     for (label, choice) in [("ours", Choice::Ours), ("theirs", Choice::Theirs)] {
         let w = World::new();
         setup(&w);
-        let r = w.sync().unwrap();
-        assert_eq!(
-            r.conflicts, conflicts,
-            "{name} --{label}: the same conflicts"
-        );
+        w.sync();
+        let recorded = recorded(&w);
+        assert_eq!(recorded, conflicts, "{name} --{label}: the same conflicts");
         let mut last = None;
-        for c in &r.conflicts {
+        for c in &recorded {
             let done = resolve(
                 &w.ours,
                 &w.git(),
@@ -121,7 +119,7 @@ fn check(name: &str, setup: &dyn Fn(&World)) -> Outcome {
         assert!(done.committed && done.pushed, "{name} --{label}: {done:?}");
         let fin = tree(&w, "HEAD");
         let below = |p: &str, c: &str| p == c || p.starts_with(&format!("{c}/"));
-        for c in &r.conflicts {
+        for c in &recorded {
             let chosen = if label == "ours" { &c.ours } else { &c.theirs };
             match chosen {
                 Some(oid) => assert_eq!(
@@ -150,8 +148,8 @@ fn check(name: &str, setup: &dyn Fn(&World)) -> Outcome {
             );
         }
         for (path, oid) in other {
-            let in_conflict = r.conflicts.iter().any(|c| below(path, &c.path))
-                || r.conflicts
+            let in_conflict = recorded.iter().any(|c| below(path, &c.path))
+                || recorded
                     .iter()
                     .any(|c| c.ours.as_ref() == Some(oid) || c.theirs.as_ref() == Some(oid));
             if !in_conflict {

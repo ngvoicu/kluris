@@ -1,6 +1,6 @@
-//! `kluris sync [--brain NAME|all] [--no-verify] [--json]` (TEST-K3-45): the
-//! command surface over real git (a bare remote and a teammate's clone per
-//! brain). The merge rules themselves are in `kluris-core/tests/sync.rs`.
+//! `kluris sync [--brain NAME|all] [--no-verify] [--json]`: the command
+//! surface over real git (a bare remote and a teammate's clone per brain).
+//! The engine itself is in `kluris-core/tests/sync_engine/`.
 
 use std::fs;
 
@@ -10,18 +10,30 @@ mod sync_home;
 
 use sync_home::*;
 
-const BRAIN_KEYS: [&str; 10] = [
-    "name",
-    "fetched",
-    "merged",
-    "pushed",
+const SYNC_KEYS: [&str; 8] = [
+    "pulled",
     "auto_merged",
+    "left_as_is",
     "conflicts",
-    "skipped_dirty",
-    "offline",
-    "blocked",
-    "refused",
+    "behind_conflict",
+    "to_push",
+    "pushed",
+    "last_push",
 ];
+
+/// The brain entry's `sync` object, with its keys checked.
+fn sync_of(doc: &Value, at: usize) -> &Value {
+    let entry = &doc["brains"][at];
+    assert_eq!(keys(entry), ["name", "sync"], "{doc}");
+    let sync = &entry["sync"];
+    assert_eq!(keys(sync), SYNC_KEYS, "{doc}");
+    assert_eq!(
+        keys(&sync["left_as_is"]),
+        ["reason", "paths", "detail"],
+        "{doc}"
+    );
+    sync
+}
 
 #[test]
 fn json_and_text_for_one_brain() {
@@ -31,21 +43,27 @@ fn json_and_text_for_one_brain() {
     let (code, doc) = h.json(&["sync", "--brain", "alpha", "--json"]);
     assert_eq!(code, 0, "{doc}");
     assert_eq!(keys(&doc), ["ok", "brains"]);
-    let entry = &doc["brains"][0];
-    assert_eq!(keys(entry), BRAIN_KEYS);
+    assert_eq!(doc["brains"][0]["name"], "alpha");
     assert_eq!(
-        *entry,
+        *sync_of(&doc, 0),
         json!({
-            "name": "alpha", "fetched": true, "merged": true, "pushed": false,
-            "auto_merged": [], "conflicts": [], "skipped_dirty": [], "offline": false,
-            "blocked": [], "refused": null,
+            "pulled": 1, "auto_merged": [],
+            "left_as_is": {"reason": null, "paths": [], "detail": null},
+            "conflicts": [], "behind_conflict": 0, "to_push": 0, "pushed": false,
+            "last_push": null,
         })
     );
     assert!(h.read(&root, "notes/new.md").contains("# New"));
 
+    h.commit(&root, "notes/second.md", &neuron("Second", ""));
     let (code, out, err) = h.run(&["sync", "--brain", "alpha"]);
     assert_eq!(code, 0, "{err}");
-    assert!(out.starts_with("alpha: up to date"), "{out}");
+    assert_eq!(out, "alpha: pushed\n");
+    assert_eq!(err, "kluris: alpha: pushed\n");
+    let (code, out, err) = h.run(&["sync", "--brain", "alpha"]);
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(out, "alpha: up to date\n");
+    assert_eq!(err, "", "a brain with nothing to say has no line");
 }
 
 #[test]
@@ -59,21 +77,39 @@ fn brain_all_syncs_the_clean_brain_and_reports_the_conflicted_one() {
     assert_eq!(code, 1, "{doc}");
     let brains = doc["brains"].as_array().unwrap();
     assert_eq!(brains.len(), 2);
-    let a = &brains[0];
-    assert_eq!(a["name"], "alpha");
-    assert_eq!(a["merged"], false);
+    assert_eq!(brains[0]["name"], "alpha");
+    let a = sync_of(&doc, 0);
+    assert_eq!(a["pulled"], 0);
+    assert_eq!(a["left_as_is"]["reason"], Value::Null);
     let c = &a["conflicts"][0];
-    assert_eq!(keys(c), ["path", "kind", "base", "ours", "theirs"]);
+    assert_eq!(
+        keys(c),
+        ["path", "kind", "ours", "theirs", "base", "binary"]
+    );
     assert_eq!(c["path"], "notes/first.md");
     assert_eq!(c["kind"], "content");
-    let b = &brains[1];
-    assert_eq!(b["name"], "beta");
-    assert_eq!(b["merged"], true);
-    assert_eq!(b["refused"], Value::Null);
+    assert_eq!(
+        c["ours"],
+        neuron("First", &BODY.replace("Three.", "Three, ours."))
+    );
+    assert_eq!(
+        c["theirs"],
+        neuron("First", &BODY.replace("Three.", "Three, theirs."))
+    );
+    assert_eq!(c["binary"], false);
+    assert_eq!(brains[1]["name"], "beta");
+    let b = sync_of(&doc, 1);
+    assert_eq!(b["pulled"], 1);
+    assert_eq!(b["left_as_is"]["reason"], Value::Null);
 
-    let (code, out, _) = h.run(&["sync", "--brain", "all"]);
+    // The conflict stays open: reported again, and nothing changes.
+    let (code, out, err) = h.run(&["sync", "--brain", "all"]);
     assert_eq!(code, 1);
     assert!(out.contains("kluris resolve"), "{out}");
+    assert_eq!(
+        err,
+        "kluris: alpha: 1 conflict (notes/first.md); 1 commit to push\n"
+    );
 }
 
 #[test]
@@ -94,11 +130,12 @@ fn a_refused_brain_does_not_stop_the_others() {
     assert_eq!(code, 1, "{doc}");
     let brains = doc["brains"].as_array().unwrap();
     assert_eq!(brains[0]["name"], "alpha");
-    assert_eq!(brains[0]["merged"], true);
-    assert_eq!(keys(&brains[1]), BRAIN_KEYS);
-    let refused = brains[1]["refused"].as_str().unwrap();
-    assert!(refused.contains("larger git repository"), "{refused}");
-    assert_eq!(brains[1]["fetched"], false);
+    assert_eq!(sync_of(&doc, 0)["pulled"], 1);
+    let nested_sync = sync_of(&doc, 1);
+    assert_eq!(nested_sync["left_as_is"]["reason"], "refused");
+    let why = nested_sync["left_as_is"]["detail"].as_str().unwrap();
+    assert!(why.contains("larger git repository"), "{why}");
+    assert_eq!(nested_sync["pulled"], 0);
 
     let (code, doc) = h.json(&["sync", "--brain", "nested", "--json"]);
     assert_eq!(code, 1);
@@ -124,11 +161,17 @@ fn a_brain_blocked_by_dirty_files_exits_1() {
     h.write(&root, "notes/first.md", &mine);
     let (code, doc) = h.json(&["sync", "--brain", "alpha", "--json"]);
     assert_eq!(code, 1, "{doc}");
-    assert_eq!(doc["brains"][0]["blocked"], json!(["notes/first.md"]));
-    assert_eq!(doc["brains"][0]["skipped_dirty"], json!(["notes/first.md"]));
+    assert_eq!(
+        sync_of(&doc, 0)["left_as_is"],
+        json!({"reason": "uncommitted", "paths": ["notes/first.md"], "detail": null})
+    );
     assert_eq!(h.read(&root, "notes/first.md"), mine);
-    let (_, out, _) = h.run(&["sync", "--brain", "alpha"]);
+    let (_, out, err) = h.run(&["sync", "--brain", "alpha"]);
     assert!(out.contains("commit or stash"), "{out}");
+    assert_eq!(
+        err,
+        "kluris: alpha: left as is (uncommitted): notes/first.md\n"
+    );
 }
 
 #[test]
@@ -162,36 +205,10 @@ fn sync_is_in_help() {
     }
 }
 
-/// An already-open conflict is reported in the brain's entry, `--brain NAME`
-/// included: the conflicts from pending.json and `refused` saying how to
-/// settle it, exit 1 (decision of T-146).
-#[test]
-fn an_open_conflict_is_reported_in_the_entry() {
-    let mut h = Home::new();
-    let root = h.brain("alpha");
-    h.conflict("alpha", &root);
-    let (code, first) = h.json(&["sync", "--brain", "alpha", "--json"]);
-    assert_eq!(code, 1, "{first}");
-    let (code, doc) = h.json(&["sync", "--brain", "alpha", "--json"]);
-    assert_eq!(code, 1, "{doc}");
-    assert_eq!(keys(&doc), ["ok", "brains"]);
-    let entry = &doc["brains"][0];
-    assert_eq!(keys(entry), BRAIN_KEYS);
-    assert_eq!(entry["conflicts"], first["brains"][0]["conflicts"]);
-    assert_eq!(
-        entry["refused"],
-        "a conflict is open: settle it with kluris resolve (or kluris resolve --abort)"
-    );
-    assert_eq!(entry["fetched"], false);
-    let (code, out, _) = h.run(&["sync", "--brain", "alpha"]);
-    assert_eq!(code, 1);
-    assert!(out.contains("kluris resolve"), "{out}");
-}
-
 #[test]
 fn a_locked_ref_is_reported_with_its_path_not_as_offline() {
     // A fetch stopped while it held the ref (a Windows job terminated at
-    // the deadline) leaves its lock (review T-163, F163-3).
+    // the deadline) leaves its lock.
     let mut h = Home::new();
     let root = h.brain("alpha");
     h.teammate_pushes("alpha", "notes/new.md", &neuron("New", ""));
@@ -204,12 +221,11 @@ fn a_locked_ref_is_reported_with_its_path_not_as_offline() {
     fs::write(&lock, "0000000000000000000000000000000000000000\n").unwrap();
     let (code, doc) = h.json(&["sync", "--brain", "alpha", "--json"]);
     assert_eq!(code, 1, "{doc}");
-    let entry = &doc["brains"][0];
-    assert_eq!(keys(entry), BRAIN_KEYS);
-    assert_eq!(entry["fetched"], false, "{doc}");
-    assert_eq!(entry["offline"], false, "{doc}");
-    assert_eq!(entry["merged"], false, "{doc}");
-    let why = entry["refused"].as_str().unwrap();
+    let sync = sync_of(&doc, 0);
+    assert_eq!(sync["left_as_is"]["reason"], "refused", "{doc}");
+    assert_eq!(sync["pulled"], 0, "{doc}");
+    let why = refused(sync);
+    let why = why.as_str().unwrap();
     assert!(why.starts_with("a ref is locked: "), "{why}");
     assert!(why.contains("main.lock"), "{why}");
     assert!(
@@ -224,8 +240,7 @@ fn a_locked_ref_is_reported_with_its_path_not_as_offline() {
     fs::remove_file(&lock).unwrap();
     let (code, doc) = h.json(&["sync", "--brain", "alpha", "--json"]);
     assert_eq!(code, 0, "{doc}");
-    assert_eq!(doc["brains"][0]["fetched"], true);
-    assert_eq!(doc["brains"][0]["merged"], true);
+    assert_eq!(sync_of(&doc, 0)["pulled"], 1);
     assert!(h.read(&root, "notes/new.md").contains("# New"));
 }
 
@@ -236,11 +251,11 @@ fn assert_refused(h: &Home, root: &std::path::Path, message: &str, command: &str
     let head = h.git(root, &["rev-parse", "HEAD"]);
     let (code, doc) = h.json(&["sync", "--brain", "alpha", "--json"]);
     assert_eq!(code, 1, "{doc}");
-    let entry = &doc["brains"][0];
-    assert_eq!(keys(entry), BRAIN_KEYS);
-    assert_eq!(entry["offline"], false, "{doc}");
-    assert_eq!(entry["pushed"], false, "{doc}");
-    let why = entry["refused"].as_str().unwrap_or_else(|| panic!("{doc}"));
+    let sync = sync_of(&doc, 0).clone();
+    assert_eq!(sync["left_as_is"]["reason"], "refused", "{doc}");
+    assert_eq!(sync["pushed"], false, "{doc}");
+    let why = refused(&sync);
+    let why = why.as_str().unwrap_or_else(|| panic!("{doc}"));
     assert!(why.starts_with(message), "{why}");
     assert!(why.ends_with(&the_fix(command)), "{why}");
     assert!(!why.contains('\n'), "{why}");
@@ -250,7 +265,7 @@ fn assert_refused(h: &Home, root: &std::path::Path, message: &str, command: &str
     if command == "fetch" {
         assert_eq!(h.git(root, &["rev-parse", "HEAD"]), head);
     }
-    entry.clone()
+    sync
 }
 
 #[test]
@@ -270,11 +285,10 @@ fn a_key_the_server_rejects_is_refused_not_offline() {
     );
     let entry = assert_refused(&h, &root, DENIED, "fetch");
     assert_eq!(
-        entry["refused"].as_str().unwrap(),
+        refused(&entry).as_str().unwrap().to_string(),
         format!("{DENIED}{}", the_fix("fetch"))
     );
-    assert_eq!(entry["fetched"], false);
-    assert_eq!(entry["merged"], false);
+    assert_eq!(entry["pulled"], 0);
 }
 
 #[test]
@@ -284,12 +298,12 @@ fn a_remote_repository_that_does_not_exist_is_refused_not_offline() {
     let gone = h.dir.path().join("gone.git");
     h.git(&root, &["remote", "set-url", "origin", &file_url(&gone)]);
     let entry = assert_refused(&h, &root, "fatal: '", "fetch");
-    let why = entry["refused"].as_str().unwrap();
+    let why = refused(&entry).as_str().unwrap().to_string();
     assert!(
         why.contains("gone.git' does not appear to be a git repository"),
         "{why}"
     );
-    assert_eq!(entry["fetched"], false);
+    assert_eq!(entry["pulled"], 0);
 }
 
 #[test]
@@ -314,10 +328,10 @@ fn a_push_the_server_rejects_is_refused_not_offline() {
     let remote = h.git(&bare, &["rev-parse", "main"]);
     let entry = assert_refused(&h, &root, DENIED, "push");
     assert_eq!(
-        entry["refused"].as_str().unwrap(),
+        refused(&entry).as_str().unwrap().to_string(),
         format!("{DENIED}{}", the_fix("push"))
     );
-    assert_eq!(entry["fetched"], true);
+    assert_eq!(entry["to_push"], 1);
     assert_eq!(h.git(&bare, &["rev-parse", "main"]), remote);
 }
 
@@ -336,13 +350,80 @@ fn a_host_that_does_not_resolve_is_still_offline() {
     );
     let (code, doc) = h.json(&["sync", "--brain", "alpha", "--json"]);
     assert_eq!(code, 0, "{doc}");
-    let entry = &doc["brains"][0];
-    assert_eq!(entry["offline"], true, "{doc}");
-    assert_eq!(entry["fetched"], false, "{doc}");
-    assert_eq!(entry["refused"], Value::Null, "{doc}");
-    let (code, out, _) = h.run(&["sync", "--brain", "alpha"]);
+    assert_eq!(
+        sync_of(&doc, 0)["left_as_is"],
+        json!({"reason": "offline", "paths": [], "detail": null}),
+        "{doc}"
+    );
+    let (code, out, err) = h.run(&["sync", "--brain", "alpha"]);
     assert_eq!(code, 0);
     assert_eq!(out, "alpha: offline, nothing changed\n");
+    assert_eq!(err, "kluris: alpha: left as is (offline)\n");
+}
+
+#[test]
+fn no_upstream_is_left_as_is_with_the_fix_and_exits_0() {
+    let mut h = Home::new();
+    let root = h.brain("alpha");
+    h.git(&root, &["branch", "--unset-upstream"]);
+    let (code, doc) = h.json(&["sync", "--brain", "alpha", "--json"]);
+    assert_eq!(code, 0, "{doc}");
+    assert_eq!(
+        sync_of(&doc, 0)["left_as_is"],
+        json!({
+            "reason": "no_upstream", "paths": [],
+            "detail": "set one with git push -u origin main",
+        }),
+        "{doc}"
+    );
+    let (code, out, _) = h.run(&["sync", "--brain", "alpha"]);
+    assert_eq!(code, 0);
+    assert_eq!(
+        out,
+        "alpha: no upstream, nothing changed; set one with git push -u origin main\n"
+    );
+}
+
+/// What hooks print goes to stderr: `--json` stdout stays one document.
+#[test]
+fn hook_output_goes_to_stderr() {
+    let mut h = Home::new();
+    let root = h.brain("alpha");
+    h.teammate_pushes("alpha", "notes/new.md", &neuron("New", ""));
+    h.commit(&root, "notes/second.md", &neuron("Second", ""));
+    let hooks = root.join(".git").join("hooks");
+    for hook in [
+        "pre-merge-commit",
+        "prepare-commit-msg",
+        "commit-msg",
+        "post-merge",
+        "pre-push",
+        "reference-transaction",
+    ] {
+        let path = hooks.join(hook);
+        fs::write(&path, format!("#!/bin/sh\necho 'from {hook}'\nexit 0\n")).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+        }
+    }
+    let (code, out, err) = h.run(&["sync", "--brain", "alpha", "--json"]);
+    assert_eq!(code, 0, "{err}");
+    let doc: Value = serde_json::from_str(&out).unwrap_or_else(|e| panic!("{e}: {out}"));
+    let sync = sync_of(&doc, 0);
+    assert_eq!(
+        (&sync["pulled"], &sync["pushed"]),
+        (&json!(1), &json!(true))
+    );
+    for hook in [
+        "pre-merge-commit",
+        "prepare-commit-msg",
+        "commit-msg",
+        "post-merge",
+    ] {
+        assert!(err.contains(&format!("from {hook}")), "{hook}: {err}");
+    }
 }
 
 #[test]
@@ -354,13 +435,12 @@ fn a_missing_remote_named_with_network_words_is_refused_not_offline() {
         let gone = gone.to_string_lossy();
         h.git(&root, &["remote", "set-url", "origin", &gone]);
         let entry = assert_refused(&h, &root, "fatal: '", "fetch");
-        let why = entry["refused"].as_str().unwrap();
+        let why = refused(&entry).as_str().unwrap().to_string();
         assert!(
             why.contains(&format!("{name}' does not appear to be a git repository")),
             "{why}"
         );
-        assert_eq!(entry["fetched"], false);
-        assert_eq!(entry["merged"], false);
+        assert_eq!(entry["pulled"], 0);
     }
 }
 
@@ -383,11 +463,11 @@ fn a_push_to_a_missing_remote_named_with_network_words_is_refused_not_offline() 
     let bare = h.dir.path().join("alpha.git");
     let remote = h.git(&bare, &["rev-parse", "main"]);
     let entry = assert_refused(&h, &root, "fatal: '", "push");
-    let why = entry["refused"].as_str().unwrap();
+    let why = refused(&entry).as_str().unwrap().to_string();
     assert!(
         why.contains("Connection refused.git' does not appear to be a git repository"),
         "{why}"
     );
-    assert_eq!(entry["fetched"], true);
+    assert_eq!(entry["to_push"], 1);
     assert_eq!(h.git(&bare, &["rev-parse", "main"]), remote);
 }

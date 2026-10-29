@@ -1,12 +1,14 @@
-//! `kluris sync [--brain NAME|all] [--no-verify] [--json]` (new in v3.1,
-//! SPEC item 46): fetch, merge and push each brain.
+//! `kluris sync [--brain NAME|all] [--no-verify] [--json]`: pull and push
+//! each brain through the sync engine.
 //!
-//! git >= 2.38 is checked once, before any brain. A brain that is refused
-//! (nested in a larger repo, not a work tree, an operation or a sync
-//! conflict in progress) or whose sync fails is a clean error with `--brain
-//! NAME`; under `--brain all` its entry says why (`refused`) and the other
-//! brains still sync. Exit 1 when any brain has a conflict, is blocked by
-//! uncommitted changes, or was refused.
+//! git >= 2.38 is checked once, before any brain. A brain the engine does
+//! not open (nested in a larger repo, not a work tree, no kluris.yml) is a
+//! clean error with `--brain NAME`; under `--brain all` its `sync` object is
+//! left as it is, `refused`, and the other brains still sync. Each brain's
+//! entry is `{name, sync}`; in text, stdout says what sync did and stderr
+//! has one line per brain that has something to say. Exit 1 when any brain
+//! has a conflict or was left as it is for anything but having no network
+//! or no upstream.
 
 use std::path::Path;
 
@@ -14,7 +16,9 @@ use kluris_core::config::{ConfigErrorKind, read_brain_config};
 use kluris_core::dream::DreamOptions;
 use kluris_core::git::SystemGit;
 use kluris_core::pyrepr::py_path_str;
-use kluris_core::sync::{NETWORK_TIME_LIMIT, SyncReport, SyncRequest, check_git, sync};
+use kluris_core::sync::claim::COMMAND_BOUND;
+use kluris_core::sync::engine::{self, check_git};
+use kluris_core::sync::{LeftAsIs, LeftReason, NETWORK_TIME_LIMIT, SyncReport, SyncRequest};
 
 use crate::commands::dream::today;
 use crate::error::CliError;
@@ -22,85 +26,66 @@ use crate::output::human;
 use crate::output::json::{self, Json};
 use crate::resolve::resolve_brains;
 
-fn strings(items: &[String]) -> Json {
-    Json::Array(items.iter().map(|s| Json::Str(s.clone())).collect())
+fn plural(n: usize, one: &str, many: &str) -> String {
+    format!("{n} {}", if n == 1 { one } else { many })
 }
 
-fn opt(value: &Option<String>) -> Json {
-    value.clone().map_or(Json::Null, Json::Str)
-}
-
-/// One brain's entry: the report, or why it was refused.
-fn entry(name: &str, outcome: &Result<SyncReport, String>) -> Json {
-    let empty = SyncReport::default();
-    let (report, refused) = match outcome {
-        Ok(report) => (report, opt(&report.refused)),
-        Err(why) => (&empty, Json::Str(why.clone())),
-    };
-    let conflicts = report
-        .conflicts
-        .iter()
-        .map(|c| {
-            Json::Object(vec![
-                ("path".into(), Json::Str(c.path.clone())),
-                ("kind".into(), Json::Str(c.kind.as_str().into())),
-                ("base".into(), opt(&c.base)),
-                ("ours".into(), opt(&c.ours)),
-                ("theirs".into(), opt(&c.theirs)),
-            ])
-        })
-        .collect();
-    Json::Object(vec![
-        ("name".into(), Json::Str(name.into())),
-        ("fetched".into(), Json::Bool(report.fetched)),
-        ("merged".into(), Json::Bool(report.merged)),
-        ("pushed".into(), Json::Bool(report.pushed)),
-        ("auto_merged".into(), strings(&report.auto_merged)),
-        ("conflicts".into(), Json::Array(conflicts)),
-        ("skipped_dirty".into(), strings(&report.skipped_dirty)),
-        ("offline".into(), Json::Bool(report.offline)),
-        ("blocked".into(), strings(&report.blocked)),
-        ("refused".into(), refused),
-    ])
+/// One brain's line for stderr, `kluris: NAME: ...`; `None` when it has
+/// nothing to say.
+fn summary(name: &str, report: &SyncReport) -> Option<String> {
+    let mut parts = Vec::new();
+    if report.pulled > 0 {
+        parts.push(format!(
+            "pulled {}",
+            plural(report.pulled, "commit", "commits")
+        ));
+    }
+    if !report.auto_merged.is_empty() {
+        parts.push(format!("auto-merged {}", report.auto_merged.join(", ")));
+    }
+    if !report.conflicts.is_empty() {
+        let paths: Vec<&str> = report.conflicts.iter().map(|c| c.path.as_str()).collect();
+        parts.push(format!(
+            "{} ({})",
+            plural(report.conflicts.len(), "conflict", "conflicts"),
+            paths.join(", ")
+        ));
+    }
+    if report.behind_conflict > 0 {
+        parts.push(format!(
+            "{} behind the conflict",
+            plural(report.behind_conflict, "newer commit", "newer commits")
+        ));
+    }
+    if let Some(left) = &report.left_as_is {
+        parts.push(match (left.reason, &left.detail) {
+            (LeftReason::Uncommitted, _) => {
+                format!("left as is (uncommitted): {}", left.paths.join(", "))
+            }
+            (reason, Some(detail)) => format!("left as is ({}): {detail}", reason.as_str()),
+            (reason, None) => format!("left as is ({})", reason.as_str()),
+        });
+    }
+    if report.pushed {
+        parts.push("pushed".into());
+    } else if report.to_push > 0 {
+        parts.push(format!(
+            "{} to push",
+            plural(report.to_push, "commit", "commits")
+        ));
+    }
+    (!parts.is_empty()).then(|| format!("kluris: {name}: {}\n", parts.join("; ")))
 }
 
 /// One brain's short text block.
-fn text(name: &str, outcome: &Result<SyncReport, String>) -> String {
-    let report = match outcome {
-        Ok(report) => report,
-        Err(why) => return format!("{name}: refused: {why}\n"),
-    };
-    let mut out = if !report.conflicts.is_empty() {
-        let mut out = match &report.refused {
-            Some(why) => format!("{name}: refused: {why}\n"),
-            None => format!(
-                "{name}: {} conflict(s), nothing changed; settle them with `kluris resolve`:\n",
-                report.conflicts.len()
-            ),
-        };
-        for c in &report.conflicts {
-            out.push_str(&format!("  {}: {}\n", c.kind.as_str(), c.path));
-        }
-        out
-    } else if let Some(why) = &report.refused {
-        format!("{name}: refused: {why}\n")
-    } else if !report.blocked.is_empty() {
-        format!(
-            "{name}: not synced, uncommitted changes are in the way: {}; commit or stash them, then run kluris sync again\n",
-            report.blocked.join(", ")
-        )
-    } else if report.offline && !report.merged {
-        format!("{name}: offline, nothing changed\n")
-    } else {
+fn text(name: &str, report: &SyncReport) -> String {
+    let done = |report: &SyncReport| {
         let mut done = Vec::new();
-        if report.merged {
+        if report.pulled > 0 {
             done.push("pulled");
         }
         if report.pushed {
             done.push("pushed");
-        }
-        if report.offline {
-            done.push("offline, not pushed");
         }
         let mut out = if done.is_empty() {
             format!("{name}: up to date\n")
@@ -112,13 +97,38 @@ fn text(name: &str, outcome: &Result<SyncReport, String>) -> String {
         }
         out
     };
-    if report.blocked.is_empty() && !report.skipped_dirty.is_empty() {
-        out.push_str(&format!(
-            "  left as is (uncommitted): {}\n",
-            report.skipped_dirty.join(", ")
-        ));
+    if !report.conflicts.is_empty() {
+        let mut out = format!(
+            "{name}: {} conflict(s), nothing changed; settle them with `kluris resolve`:\n",
+            report.conflicts.len()
+        );
+        for c in &report.conflicts {
+            out.push_str(&format!("  {}: {}\n", c.kind.as_str(), c.path));
+        }
+        return out;
     }
-    out
+    let Some(left) = &report.left_as_is else {
+        return done(report);
+    };
+    match left.reason {
+        LeftReason::Uncommitted => format!(
+            "{name}: not synced, uncommitted changes are in the way: {}; commit or stash them, then run kluris sync again\n",
+            left.paths.join(", ")
+        ),
+        LeftReason::Offline if report.pulled == 0 => format!("{name}: offline, nothing changed\n"),
+        LeftReason::Offline => done(report).replacen('\n', ", offline, not pushed\n", 1),
+        LeftReason::NoUpstream => format!("{name}: no upstream, nothing changed; {left}\n"),
+        _ => format!("{name}: refused: {left}\n"),
+    }
+}
+
+/// Whether the brain makes `kluris sync` fail.
+fn failed(report: &SyncReport) -> bool {
+    !report.conflicts.is_empty()
+        || report
+            .left_as_is
+            .as_ref()
+            .is_some_and(|left| left.reason.fails())
 }
 
 pub fn run(brain: Option<&str>, no_verify: bool, as_json: bool) -> Result<(), CliError> {
@@ -128,7 +138,7 @@ pub fn run(brain: Option<&str>, no_verify: bool, as_json: bool) -> Result<(), Cl
     let today = today()?;
     // `--brain all`, or `all` picked from the interactive list.
     let all = brain == Some("all") || brains.len() > 1;
-    let mut outcomes = Vec::new();
+    let mut reports = Vec::new();
     for brain in &brains {
         let root = py_path_str(&brain.entry.path);
         let outcome = match read_brain_config(Path::new(&root)) {
@@ -136,10 +146,8 @@ pub fn run(brain: Option<&str>, no_verify: bool, as_json: bool) -> Result<(), Cl
                 Err(format!("it has no kluris.yml: {}", e.path.display()))
             }
             Err(e) => Err(e.to_string()),
-            Ok(config) => sync(
-                Path::new(&root),
-                &git,
-                &SyncRequest {
+            Ok(config) => {
+                let request = SyncRequest {
                     no_verify,
                     maps: DreamOptions {
                         name: &config.name,
@@ -147,32 +155,47 @@ pub fn run(brain: Option<&str>, no_verify: bool, as_json: bool) -> Result<(), Cl
                         today,
                     },
                     network_time_limit: NETWORK_TIME_LIMIT,
-                },
-            )
-            .map_err(|e| e.to_string()),
+                    tree_bound: COMMAND_BOUND,
+                };
+                engine::open(Path::new(&root), &git, &request)
+                    .map(|ctx| engine::sync(&ctx))
+                    .map_err(|e| e.to_string())
+            }
         };
-        if let (false, Err(why)) = (all, &outcome) {
-            return Err(CliError::new(format!("Brain {}: {why}", brain.name)));
-        }
-        outcomes.push((brain.name.clone(), outcome));
+        let report = match outcome {
+            Ok(report) => report,
+            Err(why) if all => SyncReport {
+                left_as_is: Some(LeftAsIs::because(LeftReason::Refused, why)),
+                ..SyncReport::default()
+            },
+            Err(why) => return Err(CliError::new(format!("Brain {}: {why}", brain.name))),
+        };
+        reports.push((brain.name.clone(), report));
     }
-    let failed = outcomes.iter().any(|(_, outcome)| match outcome {
-        Ok(report) => {
-            !report.conflicts.is_empty() || !report.blocked.is_empty() || report.refused.is_some()
-        }
-        Err(_) => true,
-    });
     if as_json {
-        let entries = outcomes.iter().map(|(name, o)| entry(name, o)).collect();
+        let entries = reports
+            .iter()
+            .map(|(name, report)| {
+                Json::Object(vec![
+                    ("name".into(), Json::Str(name.clone())),
+                    ("sync".into(), report.to_json()),
+                ])
+            })
+            .collect();
         human::print(&json::to_line(&Json::Object(vec![
             ("ok".into(), Json::Bool(true)),
             ("brains".into(), Json::Array(entries)),
         ])));
     } else {
-        let out: String = outcomes.iter().map(|(name, o)| text(name, o)).collect();
+        let out: String = reports.iter().map(|(name, r)| text(name, r)).collect();
         human::print(&out);
+        let lines: String = reports
+            .iter()
+            .filter_map(|(name, r)| summary(name, r))
+            .collect();
+        eprint!("{lines}");
     }
-    if failed {
+    if reports.iter().any(|(_, report)| failed(report)) {
         Err(CliError::exit_only())
     } else {
         Ok(())

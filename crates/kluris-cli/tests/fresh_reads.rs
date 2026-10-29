@@ -538,7 +538,7 @@ fn a_teammates_push_is_read_after_kluris_sync() {
         String::from_utf8_lossy(&out.stderr)
     );
     let doc: Value = serde_json::from_slice(&out.stdout).unwrap();
-    assert_eq!(doc["brains"][0]["merged"], true, "{doc}");
+    assert_eq!(doc["brains"][0]["sync"]["pulled"], 1, "{doc}");
     assert_eq!(w.head(), w.remote_head());
     assert_eq!(w.wake_up()["total_neurons"], 2);
     assert_eq!(w.search_files("zebras"), ["k/zebra.md"]);
@@ -752,10 +752,9 @@ fn a_fetch_stopped_at_3_seconds_leaves_no_lock() {
         .unwrap();
     assert_eq!(out.status.code(), Some(0));
     let doc: Value = serde_json::from_slice(&out.stdout).unwrap();
-    let brain = &doc["brains"][0];
-    assert_eq!(brain["fetched"], true, "{doc}");
-    assert_eq!(brain["offline"], false, "{doc}");
-    assert_eq!(brain["merged"], true, "{doc}");
+    let sync = &doc["brains"][0]["sync"];
+    assert_eq!(sync["left_as_is"]["reason"], Value::Null, "{doc}");
+    assert_eq!(sync["pulled"], 1, "{doc}");
     assert_eq!(w.head(), w.remote_head());
 }
 

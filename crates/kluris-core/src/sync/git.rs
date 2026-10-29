@@ -27,8 +27,8 @@
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
-use std::path::Path;
-use std::process::Stdio;
+use std::io::Write;
+use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use super::merge::TextMerger;
@@ -44,6 +44,17 @@ pub struct Upstream {
     pub refname: String,
     /// The branch on the remote (`branch.<name>.merge`, `refs/heads/main`).
     pub remote_ref: String,
+}
+
+/// A worktree's two git directories.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GitDirs {
+    /// The worktree's own (`git rev-parse --absolute-git-dir`): its index,
+    /// its HEAD, and what belongs to its files.
+    pub own: PathBuf,
+    /// The repository's, which every linked worktree shares (`git rev-parse
+    /// --git-common-dir`): its objects, refs and remotes.
+    pub common: PathBuf,
 }
 
 /// `git merge-tree --write-tree` of two commits.
@@ -149,6 +160,13 @@ pub trait SyncGit: Plumbing + TextMerger + Sized {
     /// without one, or with a local branch as upstream.
     fn upstream(&self, repo: &Repo) -> Result<Option<Upstream>, GitError>;
 
+    /// The worktree's own git directory and the repository's common one.
+    fn git_dirs(&self, repo: &Repo) -> Result<GitDirs, GitError>;
+
+    /// How many commits `to` has that `from` has not (`git rev-list
+    /// --count`); every commit of `to` when `from` is `None`.
+    fn count(&self, repo: &Repo, from: Option<&str>, to: &str) -> Result<usize, GitError>;
+
     /// The commit the upstream's branch is at, from this git's own `git
     /// ls-remote <remote> <branch>`, by `deadline`; `None` when the remote
     /// has no such branch. `ls-remote <remote>` takes the remote's own
@@ -218,7 +236,8 @@ pub trait SyncGit: Plumbing + TextMerger + Sized {
     /// descendant of `HEAD` (`git merge --ff-only --no-overwrite-ignore`,
     /// autostash off): git refuses if `HEAD` moved meanwhile or a local
     /// change, an untracked or an ignored file would be overwritten, and
-    /// runs the `post-merge` hook.
+    /// runs the `post-merge` hook. git's output and the hook's go to this
+    /// process's stderr; when git fails, its message is the error's detail.
     fn fast_forward_to(&self, repo: &Repo, to: &str) -> Result<(), GitError>;
 
     /// Push `commit` to the upstream's branch through the `kluris-<remote>`
@@ -559,6 +578,39 @@ impl SyncGit for SystemGit {
         Ok(git)
     }
 
+    fn git_dirs(&self, repo: &Repo) -> Result<GitDirs, GitError> {
+        let args = ["rev-parse", "--absolute-git-dir", "--git-common-dir"];
+        let out = self.run(&repo.dir, &args)?;
+        let text = String::from_utf8_lossy(&out);
+        let mut lines = text.lines();
+        let (Some(own), Some(common)) = (lines.next(), lines.next()) else {
+            return Err(GitError {
+                args: args.iter().map(|a| a.to_string()).collect(),
+                code: None,
+                detail: format!("unexpected output: {text}"),
+            });
+        };
+        // A relative common dir is relative to where git ran.
+        Ok(GitDirs {
+            own: PathBuf::from(own),
+            common: repo.dir.join(common),
+        })
+    }
+
+    fn count(&self, repo: &Repo, from: Option<&str>, to: &str) -> Result<usize, GitError> {
+        let range = match from {
+            Some(from) => format!("{from}..{to}"),
+            None => to.to_string(),
+        };
+        let args = ["rev-list", "--count", &range];
+        let out = self.run(&repo.dir, &args)?;
+        first_line(&out).parse().map_err(|_| GitError {
+            args: args.iter().map(|a| a.to_string()).collect(),
+            code: None,
+            detail: format!("not a count: {}", String::from_utf8_lossy(&out)),
+        })
+    }
+
     fn upstream(&self, repo: &Repo) -> Result<Option<Upstream>, GitError> {
         let Ok(branch) = self.run(&repo.dir, &["symbolic-ref", "--quiet", "HEAD"]) else {
             return Ok(None);
@@ -766,23 +818,26 @@ impl SyncGit for SystemGit {
             to,
         ];
         // The post-merge hook's output reaches the user, all of it on
-        // stderr so `--json` stays one document; so does git's own message
-        // when it refuses.
-        let mut cmd = self.command(Some(&repo.dir), &args);
-        cmd.stdout(Stdio::from(std::io::stderr()))
-            .stderr(Stdio::inherit());
-        let status = cmd.status().map_err(|e| GitError {
-            args: args.iter().map(|a| a.to_string()).collect(),
-            code: None,
-            detail: e.to_string(),
-        })?;
-        if status.success() {
+        // stderr so `--json` stays one document; git's own message too, and
+        // it is kept for the error.
+        let out = self
+            .command(Some(&repo.dir), &args)
+            .output()
+            .map_err(|e| GitError {
+                args: args.iter().map(|a| a.to_string()).collect(),
+                code: None,
+                detail: e.to_string(),
+            })?;
+        let mut stderr = std::io::stderr();
+        let _ = stderr.write_all(&out.stdout);
+        let _ = stderr.write_all(&out.stderr);
+        if out.status.success() {
             Ok(())
         } else {
             Err(GitError {
                 args: args.iter().map(|a| a.to_string()).collect(),
-                code: status.code(),
-                detail: "git refused the fast-forward (its message is above)".into(),
+                code: out.status.code(),
+                detail: one_line(&String::from_utf8_lossy(&out.stderr)),
             })
         }
     }

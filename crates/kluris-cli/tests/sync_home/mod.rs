@@ -247,6 +247,21 @@ pub fn the_fix(command: &str) -> String {
     )
 }
 
+/// A brain's `sync` object brought commits in.
+pub fn pulled(sync: &Value) -> bool {
+    sync["pulled"].as_u64().is_some_and(|n| n > 0)
+}
+
+/// Why a brain's `sync` object was refused; `null` when it was not.
+pub fn refused(sync: &Value) -> Value {
+    let left = &sync["left_as_is"];
+    if left["reason"] == "refused" {
+        left["detail"].clone()
+    } else {
+        Value::Null
+    }
+}
+
 pub fn keys(doc: &Value) -> Vec<String> {
     doc.as_object().unwrap().keys().cloned().collect()
 }

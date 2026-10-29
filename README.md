@@ -338,9 +338,11 @@ ahead, and merges when both sides have new commits:
   changed differently on both sides, a file on one side where the other has
   a directory (or a rename git cannot settle), and, when the history has
   several merge bases (both sides merged each other), any file changed on
-  both sides. Nothing changes then (no file, no commit, no push) until the
-  conflict is settled with `kluris resolve`, and a later sync reports the
-  same open conflict.
+  both sides. Nothing changes then (no file, no commit, no push) but the
+  conflict, kept until it is settled with `kluris resolve`. A later sync
+  reports it again, counting the teammates' newer commits that wait behind
+  it; drops it when the remote now merges cleanly; and finds it afresh after
+  a commit of yours.
 
 A file with uncommitted changes is never overwritten, nor is an untracked or
 ignored file where an incoming file lands: that brain is not synced until you
@@ -357,19 +359,29 @@ remote-tracking ref itself. The
 brain must be the root of its own git repository, and git must be 2.38 or
 newer.
 
-With `--json`, each brain's entry has `name`, `fetched`, `merged`, `pushed`,
-`auto_merged` (neurons merged on their own), `conflicts` (each with `path`,
-`kind` (`content`, `delete_edit`, `parent`, `frontmatter`, `structure` or
-`ambiguous_base`) and the `base`, `ours` and `theirs` blob ids, `null` where
-a side has no file there), `skipped_dirty` (uncommitted files left as they
-are), `offline` (no upstream, or no network: the host does not resolve,
-the connection is refused or times out, or the fetch or push runs past its
-minute), `blocked` (uncommitted files in the way) and `refused` (why the
-brain was left alone: an open conflict, listed in `conflicts`, a locked ref,
-a remote-tracking ref Kluris will not move, a remote that turned it away, or
-under `--brain all` any other reason; else
-`null`). The exit
-code is 1 when a brain has a conflict, is blocked or was refused.
+With `--json`, each brain's entry is `name` and `sync`, which has eight
+keys: `pulled` (the commits brought in), `auto_merged` (neurons merged on
+their own), `left_as_is` (why the brain was left as it is: `reason`, `paths`
+and `detail`, the `reason` `null` when nothing was), `conflicts` (each with
+`path`, `kind` (`content`, `delete_edit`, `parent`, `frontmatter`,
+`structure` or `ambiguous_base`), the `ours`, `theirs` and `base` texts,
+`null` where a side has no file there or is binary, and `binary`),
+`behind_conflict` (the newer commits waiting behind an open conflict),
+`to_push` (the commits the remote does not have yet), `pushed` and
+`last_push` (`null`). The `reason` is one of `uncommitted` (the files in
+the way are in `paths`), `offline` (the host does not resolve, the
+connection is refused or times out, or the fetch or push runs past its
+minute), `refused` (a locked ref, a remote-tracking ref Kluris will not
+move, a remote that turned the brain away or kept moving, histories with
+no commit in common, or under `--brain all` a brain that cannot be synced),
+`busy` (another Kluris command is changing the brain, or a git lock is
+held), `in_progress` (a git merge, rebase, cherry-pick or revert), `hook` (a
+hook stopped the merge), `failed` (git stopped partway) or `no_upstream`;
+`detail` gives git's message and the fix. Without `--json`, every brain
+that has something to say also gets one line on stderr, such as `kluris:
+acme: pulled 2 commits; 1 conflict (notes/c.md)`. The exit code is 1 when a
+brain has a conflict or was left as it is for any reason but `offline` and
+`no_upstream`.
 
 The fetch has a one-minute limit. Sync learns the upstream's commit from
 its own `git ls-remote origin main`, then fetches that branch alone (no
@@ -383,14 +395,13 @@ remote-tracking ref (`origin/main`) to that commit, unless another `git
 fetch` moved it meanwhile, in which case Kluris keeps that and fetches once
 more. When origin moves its branch away from the listed commit before the
 fetch brings it, Kluris fetches again; if that happens on the second try
-too, `kluris sync` changes nothing and its `refused` says so: run it again.
-A push has the same limit; once the remote took it, git moves `origin/main`
-itself, so a push stopped at that very moment can leave that ref's lock
-behind on Windows.
+too, `kluris sync` changes nothing and its `refused` detail says so: run it
+again. A push has the same limit; once the remote took it, Kluris moves
+`origin/main` itself, as after a fetch.
 
 When the fetch cannot update the remote-tracking ref because a lock file is
 in the way (such as `.git/refs/remotes/origin/main.lock`, left by a git that
-was stopped), `kluris sync` changes nothing and its `refused` names that
+was stopped), `kluris sync` changes nothing and its `refused` detail names that
 file. If no git is running in the brain, remove the file and run `kluris
 sync` again; Kluris never removes it.
 
@@ -401,7 +412,7 @@ somewhere else (a `remote.origin.fetch` such as
 `+refs/heads/main:refs/heads/main`, which makes `refs/heads/main` its own
 tracking ref) or `origin/main` is a symbolic ref (to `refs/heads/main`, say),
 moving it would move a branch while its files stayed behind, so `kluris
-sync` changes nothing and its `refused` names the ref and the fix: map the
+sync` changes nothing and its `refused` detail names the ref and the fix: map the
 branch into `refs/remotes/origin/` with `git config --replace-all
 remote.origin.fetch '+refs/heads/*:refs/remotes/origin/*'`, or remove the
 symbolic ref with `git symbolic-ref --delete refs/remotes/origin/main`; the
@@ -409,11 +420,11 @@ next sync makes it a plain ref.
 
 When the remote answers but turns the brain away (an ssh key or a token it
 rejects, a repository you cannot access or that does not exist), `kluris
-sync` stops and its `refused` gives git's message on one line, then the
+sync` stops and its `refused` detail gives git's message on one line, then the
 fix: check that this machine can run `git fetch origin` in this brain
 without a prompt (`git push origin` when only the push is turned away). A
 refused fetch changes nothing. A refused push keeps what the sync brought
-in or merged locally (`merged` is `true`, `pushed` is `false`), and the
+in or merged locally (`pulled` counts it, `pushed` is `false`), and the
 next sync that can push sends it. Kluris never asks for credentials, so
 whatever needs a prompt there fails here too. Anything git says that is not
 known network trouble is shown this way, never taken for offline: Kluris

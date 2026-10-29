@@ -33,7 +33,7 @@ use super::{Conflict, ConflictKind, ResolvedChoice};
 use crate::brain::tree_store::{Node, TreeStore};
 use crate::dream::{DreamOptions, map_changes};
 use crate::frontmatter::{self, LineEnding, line_ending, write_markdown};
-use crate::git::{GitError, Repo, StagedBlob, StagingIndex, TreeEntry};
+use crate::git::{GitError, Plumbing, Repo, StagedBlob, StagingIndex, TreeEntry};
 
 /// A three-way merge of text (`git merge-file`).
 pub trait TextMerger {
@@ -160,6 +160,39 @@ fn is_markdown(rel: &str) -> bool {
 fn is_text(entry: &TreeEntry) -> bool {
     let lower = entry.rel.to_ascii_lowercase();
     entry.is_symlink() || [".md", ".yml", ".yaml"].iter().any(|s| lower.ends_with(s))
+}
+
+/// The view the map step reads of a tree's `entries`: each file it reads
+/// with its bytes, from `given` when there, else from its blob; a symlink
+/// as its target; any other file without bytes.
+pub(crate) fn tree_nodes<'e, G: Plumbing>(
+    git: &G,
+    repo: &Repo,
+    entries: impl IntoIterator<Item = &'e TreeEntry>,
+    given: &BTreeMap<String, Vec<u8>>,
+) -> Result<BTreeMap<String, Node>, GitError> {
+    let entries: Vec<&TreeEntry> = entries.into_iter().collect();
+    let wanted: Vec<String> = entries
+        .iter()
+        .filter(|e| is_text(e) && !given.contains_key(&e.rel))
+        .map(|e| e.oid.clone())
+        .collect();
+    let blobs = git.read_blobs(repo, &wanted)?;
+    Ok(entries
+        .into_iter()
+        .map(|e| {
+            let content = given
+                .get(&e.rel)
+                .cloned()
+                .or_else(|| is_text(e).then(|| blobs.get(&e.oid).cloned()).flatten());
+            let node = if e.is_symlink() {
+                Node::Link(String::from_utf8_lossy(&content.unwrap_or_default()).into_owned())
+            } else {
+                Node::File(content)
+            };
+            (e.rel.clone(), node)
+        })
+        .collect())
 }
 
 type Entries = BTreeMap<String, TreeEntry>;
@@ -513,27 +546,7 @@ pub fn merge_commits<G: SyncGit>(
             }
         }
     }
-    let to_read: Vec<String> = files
-        .values()
-        .filter(|e| is_text(e) && !bytes.contains_key(&e.rel))
-        .map(|e| e.oid.clone())
-        .collect();
-    let read = git.read_blobs(repo, &to_read)?;
-    let nodes: BTreeMap<String, Node> = files
-        .values()
-        .map(|e| {
-            let content = bytes
-                .get(&e.rel)
-                .cloned()
-                .or_else(|| is_text(e).then(|| read.get(&e.oid).cloned()).flatten());
-            let node = if e.is_symlink() {
-                Node::Link(String::from_utf8_lossy(&content.unwrap_or_default()).into_owned())
-            } else {
-                Node::File(content)
-            };
-            (e.rel.clone(), node)
-        })
-        .collect();
+    let nodes = tree_nodes(git, repo, files.values(), &bytes)?;
     let view = TreeStore::new(&repo.dir, nodes);
     let (changes, _skipped) = map_changes(&view, maps);
     for write in changes.writes {

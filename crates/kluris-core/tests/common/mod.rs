@@ -16,8 +16,10 @@ use std::time::Duration;
 use kluris_core::brain::store::LocalGitStore;
 use kluris_core::dream::{DreamOptions, dream};
 use kluris_core::git::SystemGit;
+use kluris_core::sync::claim::COMMAND_BOUND;
 use kluris_core::sync::commit::{CommitRequest, commit};
-use kluris_core::sync::{SyncError, SyncReport, SyncRequest, sync};
+use kluris_core::sync::engine::{self, Context};
+use kluris_core::sync::{LeftReason, SyncReport, SyncRequest};
 use kluris_core::yaml::Date;
 use tempfile::TempDir;
 
@@ -231,11 +233,23 @@ impl World {
             no_verify: false,
             maps: options(),
             network_time_limit: Duration::from_secs(60),
+            tree_bound: COMMAND_BOUND,
         }
     }
 
-    pub fn sync(&self) -> Result<SyncReport, SyncError> {
-        sync(&self.ours, &self.git(), &self.request())
+    /// The engine's context for "ours".
+    pub fn open(&self) -> Context<'static, SystemGit> {
+        engine::open(&self.ours, &self.git(), &self.request()).unwrap()
+    }
+
+    /// Pull "ours".
+    pub fn pull(&self) -> SyncReport {
+        engine::pull(&self.open())
+    }
+
+    /// Pull and push "ours".
+    pub fn sync(&self) -> SyncReport {
+        engine::sync(&self.open())
     }
 
     pub fn head(&self, at: &Path) -> String {
@@ -310,6 +324,30 @@ impl World {
             fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
         }
     }
+}
+
+/// Why the brain was left as it is, as JSON spells it; `None` when nothing
+/// was left.
+pub fn reason(r: &SyncReport) -> Option<&'static str> {
+    r.left_as_is.as_ref().map(|left| left.reason.as_str())
+}
+
+/// The detail of why the brain was left as it is.
+pub fn detail(r: &SyncReport) -> &str {
+    r.left_as_is
+        .as_ref()
+        .and_then(|left| left.detail.as_deref())
+        .unwrap_or_default()
+}
+
+/// Nothing was left: pulled, merged or up to date.
+pub fn clean(r: &SyncReport) -> bool {
+    r.left_as_is.is_none() && r.conflicts.is_empty()
+}
+
+/// Left as it is for `reason`.
+pub fn left(r: &SyncReport, reason: LeftReason) -> bool {
+    r.left_as_is.as_ref().is_some_and(|l| l.reason == reason)
 }
 
 pub fn no_markers(text: &str) {

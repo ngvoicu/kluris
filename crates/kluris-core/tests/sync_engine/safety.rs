@@ -1,0 +1,375 @@
+//! Never half-done: uncommitted files in the way, an edit made before the
+//! land, a git operation in progress, locks, a git that stops partway,
+//! unrelated histories, a busy work tree, linked worktrees, and the brains
+//! the engine does not open.
+
+use std::fs;
+use std::time::Duration;
+
+use kluris_core::git::Git;
+use kluris_core::sync::claim::{RemoteClaim, TreeClaim};
+use kluris_core::sync::engine::check_git;
+use kluris_core::sync::engine::{self, open};
+use kluris_core::sync::git::SyncGit;
+use kluris_core::sync::{LeftReason, PENDING, SyncError, SyncRequest};
+
+use crate::common::*;
+
+// --- uncommitted files ---------------------------------------------------------------
+
+#[test]
+fn incoming_changes_to_an_uncommitted_file_leave_the_brain_as_is() {
+    let w = World::new();
+    let base = w.read(&w.ours, "notes/first.md");
+    w.theirs_push(
+        &[("notes/first.md", &base.replace("One.", "One, theirs."))],
+        &[],
+    );
+    w.write(
+        &w.ours,
+        "notes/first.md",
+        &base.replace("Five.", "Five, mine (uncommitted)."),
+    );
+    w.write(
+        &w.ours,
+        "glossary.md",
+        "---\nupdated: '2026-01-01'\n---\n\n# Glossary\n\n- mine\n",
+    );
+    let before = w.snapshot();
+    let r = w.sync();
+    assert!(left(&r, LeftReason::Uncommitted), "{r:?}");
+    let left = r.left_as_is.as_ref().unwrap();
+    assert_eq!(left.paths, ["notes/first.md"]);
+    assert_eq!(left.detail, None);
+    assert_eq!((r.pulled, r.pushed), (0, false));
+    assert_eq!(w.snapshot(), before);
+}
+
+#[test]
+fn an_untracked_file_in_the_way_leaves_the_brain_as_is() {
+    let w = World::new();
+    w.theirs_push(&[("ideas/new.md", &neuron("", "# New\n"))], &[]);
+    w.write(&w.ours, "ideas/new.md", "# my own draft\n");
+    let before = w.snapshot();
+    let r = w.sync();
+    assert!(left(&r, LeftReason::Uncommitted), "{r:?}");
+    assert_eq!(r.left_as_is.unwrap().paths, ["ideas/new.md"]);
+    assert_eq!(w.snapshot(), before);
+}
+
+#[test]
+fn an_ignored_file_in_the_way_leaves_the_brain_as_is() {
+    let w = World::new();
+    w.theirs_push(&[(".gitignore", "kluris.yml\nnotes/local.md\n")], &[]);
+    w.run(&w.ours, &["pull", "-q"]);
+    // The teammate stops ignoring it and commits theirs; ours is ignored here.
+    w.write(&w.ours, "notes/local.md", "# my local note\n");
+    w.write(&w.theirs, ".gitignore", "kluris.yml\n");
+    w.write(&w.theirs, "notes/local.md", &neuron("", "# Local\n"));
+    w.run(&w.theirs, &["add", "-A"]);
+    w.run(&w.theirs, &["commit", "-q", "-m", "unignore"]);
+    w.run(&w.theirs, &["push", "-q"]);
+    let before = w.snapshot();
+    let r = w.sync();
+    assert!(left(&r, LeftReason::Uncommitted), "{r:?}");
+    assert_eq!(r.left_as_is.unwrap().paths, ["notes/local.md"]);
+    assert_eq!(w.snapshot(), before);
+}
+
+#[test]
+fn uncommitted_files_the_changes_do_not_touch_stay() {
+    let w = World::new();
+    w.theirs_push(&[("ideas/new.md", &neuron("", "# New\n"))], &[]);
+    let mine = "---\nupdated: '2026-01-01'\n---\n\n# Glossary\n\n- mine\n";
+    w.write(&w.ours, "glossary.md", mine);
+    w.write(&w.ours, "notes/draft.md", "# draft\n");
+    let r = w.sync();
+    assert!(clean(&r), "{r:?}");
+    assert_eq!(r.pulled, 1);
+    assert_eq!(w.read(&w.ours, "glossary.md"), mine);
+    assert_eq!(w.read(&w.ours, "notes/draft.md"), "# draft\n");
+    assert!(w.read(&w.ours, "ideas/new.md").contains("# New"));
+}
+
+/// Ours ignores `private/` locally; the teammate starts tracking a file there.
+fn ignored_in_the_way(w: &World) {
+    fs::write(
+        w.ours.join(".git").join("info").join("exclude"),
+        "private/\n",
+    )
+    .unwrap();
+    w.theirs_push(&[("private/draft.md", "TEAM VERSION\n")], &[]);
+}
+
+/// A file written after the first check (here by a hook) is caught by the
+/// land's own check: reported, nothing lost.
+#[test]
+fn an_ignored_file_written_before_the_land_is_reported_and_kept() {
+    let w = World::new();
+    ignored_in_the_way(&w);
+    w.ours_commit(&[("notes/second.md", &neuron("", "# Second\n"))], &[]);
+    w.hook(
+        &w.ours,
+        "pre-merge-commit",
+        "mkdir -p private; printf 'MINE\\n' > private/draft.md",
+    );
+    let (head, remote) = (w.head(&w.ours), w.remote_head());
+    let r = w.sync();
+    assert!(left(&r, LeftReason::Uncommitted), "{r:?}");
+    assert_eq!(r.left_as_is.as_ref().unwrap().paths, ["private/draft.md"]);
+    assert_eq!((r.pulled, r.pushed), (0, false));
+    assert_eq!(w.read(&w.ours, "private/draft.md"), "MINE\n");
+    assert_eq!((w.head(&w.ours), w.remote_head()), (head, remote));
+}
+
+#[test]
+fn a_tracked_edit_made_before_the_land_is_reported_even_with_autostash() {
+    let w = World::new();
+    w.theirs_push(&[("ideas/idea.md", &neuron("", "# Idea, theirs\n"))], &[]);
+    w.ours_commit(&[("notes/second.md", &neuron("", "# Second\n"))], &[]);
+    w.run(&w.ours, &["config", "merge.autostash", "true"]);
+    w.hook(
+        &w.ours,
+        "pre-merge-commit",
+        "printf '# MINE, UNCOMMITTED\\n' > ideas/idea.md",
+    );
+    let (head, remote) = (w.head(&w.ours), w.remote_head());
+    let r = w.sync();
+    assert!(left(&r, LeftReason::Uncommitted), "{r:?}");
+    assert_eq!(r.left_as_is.as_ref().unwrap().paths, ["ideas/idea.md"]);
+    assert_eq!(w.read(&w.ours, "ideas/idea.md"), "# MINE, UNCOMMITTED\n");
+    assert_eq!(w.run(&w.ours, &["stash", "list"]), "");
+    assert_eq!((w.head(&w.ours), w.remote_head()), (head, remote));
+    no_markers_anywhere(&w, &w.ours);
+}
+
+/// The fast-forward itself: an ignored file in the way and a local edit
+/// both stop it, whatever merge.autostash says; nothing is stashed.
+#[test]
+fn the_fast_forward_never_overwrites_an_ignored_file_or_stashes() {
+    let w = World::new();
+    ignored_in_the_way(&w);
+    w.run(&w.ours, &["fetch", "-q"]);
+    w.write(&w.ours, "private/draft.md", "MINE\n");
+    let git = w.git();
+    let repo = git.repo(&w.ours).unwrap();
+    let head = w.head(&w.ours);
+    assert!(git.fast_forward_to(&repo, "origin/main").is_err());
+    assert_eq!(w.read(&w.ours, "private/draft.md"), "MINE\n");
+    assert_eq!(w.head(&w.ours), head);
+
+    fs::remove_dir_all(w.ours.join("private")).unwrap();
+    w.theirs_push(&[("ideas/idea.md", &neuron("", "# Idea, theirs\n"))], &[]);
+    w.run(&w.ours, &["fetch", "-q"]);
+    w.run(&w.ours, &["config", "merge.autostash", "true"]);
+    w.write(&w.ours, "ideas/idea.md", "# mine\n");
+    assert!(git.fast_forward_to(&repo, "origin/main").is_err());
+    assert_eq!(w.read(&w.ours, "ideas/idea.md"), "# mine\n");
+    assert_eq!(w.run(&w.ours, &["stash", "list"]), "");
+    assert_eq!(w.head(&w.ours), head);
+}
+
+// --- a git operation, locks, a git that stops ---------------------------------------
+
+#[test]
+fn a_merge_in_progress_leaves_the_brain_as_is() {
+    let w = World::new();
+    w.theirs_push(&[("ideas/new.md", &neuron("", "# New\n"))], &[]);
+    w.run(&w.ours, &["checkout", "-q", "-b", "side"]);
+    w.ours_commit(&[("notes/side.md", &neuron("", "# Side\n"))], &[]);
+    w.run(&w.ours, &["checkout", "-q", "main"]);
+    w.run(
+        &w.ours,
+        &[
+            "merge",
+            "-q",
+            "--no-ff",
+            "--no-commit",
+            "-s",
+            "ours",
+            "side",
+        ],
+    );
+    let before = w.snapshot();
+    let tracking = w.run(&w.ours, &["rev-parse", "refs/remotes/origin/main"]);
+    let r = w.sync();
+    assert!(left(&r, LeftReason::InProgress), "{r:?}");
+    assert_eq!(
+        detail(&r),
+        "a merge is in progress; finish or abort it first"
+    );
+    assert_eq!((r.pulled, r.pushed), (0, false));
+    assert_eq!(w.snapshot(), before);
+    assert_eq!(
+        w.run(&w.ours, &["rev-parse", "refs/remotes/origin/main"]),
+        tracking,
+        "fetched during a merge"
+    );
+}
+
+/// A lock git holds while it writes, found before the land: nothing is
+/// written, so no incoming file is ever staged under the old HEAD.
+#[test]
+fn the_branch_ref_lock_or_index_lock_leaves_the_brain_busy() {
+    for lock in [["refs", "heads", "main.lock"].as_slice(), &["index.lock"]] {
+        let w = World::new();
+        w.theirs_push(&[("ideas/new.md", &neuron("", "# New\n"))], &[]);
+        let path = lock
+            .iter()
+            .fold(w.ours.join(".git"), |path, part| path.join(part));
+        fs::write(&path, "").unwrap();
+        let before = w.snapshot();
+        let r = w.pull();
+        assert!(left(&r, LeftReason::Busy), "{lock:?}: {r:?}");
+        let name = lock.join("/");
+        assert!(detail(&r).contains(&name), "{lock:?}: {}", detail(&r));
+        assert_eq!(r.pulled, 0, "{lock:?}");
+        assert_eq!(w.snapshot(), before, "{lock:?}");
+        assert!(path.is_file(), "{lock:?}: the lock was removed");
+        fs::remove_file(&path).unwrap();
+        let r = w.pull();
+        assert!(clean(&r) && r.pulled == 1, "{lock:?}: {r:?}");
+    }
+}
+
+/// git stops partway through the land (a folder it cannot write to): the
+/// brain is left as git left it, with git's message, and nothing is rolled
+/// back.
+#[cfg(unix)]
+#[test]
+fn a_git_that_stops_partway_is_failed_with_its_message() {
+    use std::os::unix::fs::PermissionsExt;
+    let w = World::new();
+    w.theirs_push(&[("ideas/new.md", &neuron("", "# New\n"))], &[]);
+    let ideas = w.ours.join("ideas");
+    let head = w.head(&w.ours);
+    fs::set_permissions(&ideas, fs::Permissions::from_mode(0o555)).unwrap();
+    let r = w.pull();
+    fs::set_permissions(&ideas, fs::Permissions::from_mode(0o755)).unwrap();
+    assert!(left(&r, LeftReason::Failed), "{r:?}");
+    assert!(detail(&r).contains("Permission denied"), "{}", detail(&r));
+    assert_eq!(r.pulled, 0);
+    assert_eq!(w.head(&w.ours), head);
+}
+
+#[test]
+fn unrelated_histories_are_refused_before_any_merge() {
+    let w = World::new();
+    w.run(&w.theirs, &["checkout", "-q", "--orphan", "fresh"]);
+    w.write(&w.theirs, "notes/fresh.md", &neuron("", "# Fresh\n"));
+    w.run(&w.theirs, &["add", "-A"]);
+    w.run(&w.theirs, &["commit", "-q", "-m", "a new history"]);
+    w.run(&w.theirs, &["push", "-q", "-f", "origin", "fresh:main"]);
+    w.ours_commit(&[("notes/second.md", &neuron("", "# Second\n"))], &[]);
+    let before = w.snapshot();
+    let r = w.sync();
+    assert!(left(&r, LeftReason::Refused), "{r:?}");
+    assert!(detail(&r).contains("no commit in common"), "{}", detail(&r));
+    assert_eq!((r.pulled, r.pushed), (0, false));
+    assert!(!w.ours.join(".git").join(PENDING).exists());
+    assert_eq!(w.snapshot(), before);
+}
+
+// --- claims and worktrees -------------------------------------------------------------
+
+#[test]
+fn a_work_tree_another_command_holds_is_busy_after_the_bound() {
+    let w = World::new();
+    w.theirs_push(&[("ideas/new.md", &neuron("", "# New\n"))], &[]);
+    let held = TreeClaim::exclusive(&w.ours.join(".git"), Duration::ZERO).unwrap();
+    let request = SyncRequest {
+        tree_bound: Duration::from_millis(100),
+        ..w.request()
+    };
+    let before = w.snapshot();
+    let r = engine::pull(&open(&w.ours, &w.git(), &request).unwrap());
+    assert!(left(&r, LeftReason::Busy), "{r:?}");
+    assert_eq!(r.pulled, 0);
+    assert_eq!(w.snapshot(), before);
+    drop(held);
+    let r = engine::pull(&open(&w.ours, &w.git(), &request).unwrap());
+    assert!(clean(&r) && r.pulled == 1, "{r:?}");
+}
+
+/// Linked worktrees share the remote and its claim (the common git dir);
+/// each keeps its own waiting merge (its own git dir).
+#[test]
+fn a_linked_worktree_shares_the_remote_claim_and_keeps_its_own_waiting_merge() {
+    let w = World::new();
+    let linked = w.dir.path().join("linked");
+    let to = linked.to_string_lossy().into_owned();
+    w.run(
+        &w.ours,
+        &["worktree", "add", "-q", "-b", "side", &to, "main"],
+    );
+    w.run(
+        &linked,
+        &["branch", "-q", "--set-upstream-to", "origin/main"],
+    );
+    let base = w.read(&linked, "notes/first.md");
+    w.theirs_push(
+        &[("notes/first.md", &base.replace("Three.", "Three, theirs."))],
+        &[],
+    );
+    w.write(
+        &linked,
+        "notes/first.md",
+        &base.replace("Three.", "Three, side."),
+    );
+    w.commit(&linked, &["notes/first.md"]);
+    let open_linked = || open(&linked, &w.git(), &w.request()).unwrap();
+
+    let claim = RemoteClaim::try_take(&w.ours.join(".git")).unwrap();
+    let r = engine::pull(&open_linked());
+    assert!(
+        clean(&r) && r.pulled == 0,
+        "fetched under a held claim: {r:?}"
+    );
+    drop(claim);
+
+    let r = engine::pull(&open_linked());
+    assert_eq!(r.conflicts.len(), 1, "{r:?}");
+    let own = w.run(&linked, &["rev-parse", "--absolute-git-dir"]);
+    assert!(std::path::Path::new(own.trim()).join(PENDING).is_file());
+    assert!(!w.ours.join(".git").join(PENDING).exists());
+    // The main worktree pulls on its own, untouched by the linked one's
+    // waiting merge.
+    let r = w.pull();
+    assert!(clean(&r) && r.pulled == 1, "{r:?}");
+}
+
+#[test]
+fn a_brain_nested_in_a_larger_repo_is_not_opened() {
+    let w = World::new();
+    fs::create_dir_all(w.ours.join("sub")).unwrap();
+    match open(&w.ours.join("sub"), &w.git(), &w.request()) {
+        Err(SyncError::Nested { .. }) => {}
+        other => panic!("{:?}", other.err()),
+    }
+}
+
+#[test]
+fn a_brain_without_git_is_not_opened() {
+    let w = World::new();
+    let plain = w.dir.path().join("plain");
+    fs::create_dir_all(&plain).unwrap();
+    assert!(matches!(
+        open(&plain, &w.git(), &w.request()),
+        Err(SyncError::NotARepo)
+    ));
+}
+
+#[cfg(unix)]
+#[test]
+fn an_older_git_is_a_clean_error() {
+    use kluris_core::git::SystemGit;
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::TempDir::new().unwrap();
+    let fake = dir.path().join("git");
+    fs::write(&fake, "#!/bin/sh\necho 'git version 2.37.9'\n").unwrap();
+    fs::set_permissions(&fake, fs::Permissions::from_mode(0o755)).unwrap();
+    match check_git(&SystemGit::new().program(&fake)) {
+        Err(e @ SyncError::GitTooOld { .. }) => assert!(e.to_string().contains("2.38"), "{e}"),
+        other => panic!("{other:?}"),
+    }
+}

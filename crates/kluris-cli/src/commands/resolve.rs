@@ -1,6 +1,6 @@
 //! `kluris resolve [--brain NAME] PATH --ours|--theirs|--file FILE
-//! [--no-verify] [--json]` and `kluris resolve --abort` (new in v3.1, SPEC
-//! item 48): settle an open sync conflict path by path.
+//! [--no-verify] [--json]` and `kluris resolve --abort`: settle an open sync
+//! conflict path by path.
 
 use std::path::Path;
 
@@ -8,6 +8,7 @@ use kluris_core::config::{ConfigErrorKind, read_brain_config};
 use kluris_core::dream::DreamOptions;
 use kluris_core::git::SystemGit;
 use kluris_core::pyrepr::py_path_str;
+use kluris_core::sync::claim::COMMAND_BOUND;
 use kluris_core::sync::resolve::{Choice, ResolveReport, ResolveRequest, abort, resolve};
 use kluris_core::sync::{NETWORK_TIME_LIMIT, SyncRequest};
 
@@ -110,6 +111,7 @@ pub fn run(options: &Options) -> Result<(), CliError> {
                     today: today()?,
                 },
                 network_time_limit: NETWORK_TIME_LIMIT,
+                tree_bound: COMMAND_BOUND,
             },
         },
     )

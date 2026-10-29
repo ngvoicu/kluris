@@ -97,12 +97,11 @@ fn assert_left_alone(h: &Home, root: &Path, refname: &str, fix: &str) -> String 
     let before = snapshot(h, root);
     let (code, doc) = h.json(&["sync", "--brain", "alpha", "--json"]);
     assert_eq!(code, 1, "{doc}");
-    let entry = &doc["brains"][0];
-    assert_eq!(entry["fetched"], false, "{doc}");
-    assert_eq!(entry["merged"], false, "{doc}");
+    let entry = &doc["brains"][0]["sync"];
+    assert_eq!(entry["left_as_is"]["reason"], "refused", "{doc}");
+    assert!(!pulled(entry), "{doc}");
     assert_eq!(entry["pushed"], false, "{doc}");
-    assert_eq!(entry["offline"], false, "{doc}");
-    let why = entry["refused"]
+    let why = refused(entry)
         .as_str()
         .unwrap_or_else(|| panic!("{doc}"))
         .to_string();
@@ -149,8 +148,8 @@ fn a_symbolic_tracking_ref_is_refused_and_nothing_moves() {
     );
     let (code, doc) = h.json(&["sync", "--brain", "alpha", "--json"]);
     assert_eq!(code, 0, "{doc}");
-    assert_eq!(doc["brains"][0]["merged"], true, "{doc}");
-    assert_eq!(doc["brains"][0]["pushed"], true, "{doc}");
+    assert!(pulled(&doc["brains"][0]["sync"]), "{doc}");
+    assert_eq!(doc["brains"][0]["sync"]["pushed"], true, "{doc}");
     assert!(root.join("notes").join("mine.md").is_file());
     assert!(root.join("notes").join("new.md").is_file());
 }
@@ -189,7 +188,7 @@ fn a_tracking_ref_mapped_onto_a_local_branch_is_refused_and_nothing_moves() {
     );
     let (code, doc) = h.json(&["sync", "--brain", "alpha", "--json"]);
     assert_eq!(code, 0, "{doc}");
-    assert_eq!(doc["brains"][0]["merged"], true, "{doc}");
+    assert!(pulled(&doc["brains"][0]["sync"]), "{doc}");
     assert!(root.join("notes").join("new.md").is_file());
 }
 
@@ -236,7 +235,7 @@ fn a_plain_tracking_ref_moves_by_compare_and_swap() {
     record_tracking_updates(&root, &log);
     let (code, doc) = h.json(&["sync", "--brain", "alpha", "--json"]);
     assert_eq!(code, 0, "{doc}");
-    assert_eq!(doc["brains"][0]["merged"], true, "{doc}");
+    assert!(pulled(&doc["brains"][0]["sync"]), "{doc}");
     let new = remote_head(&h);
     assert_eq!(
         fs::read_to_string(&log).unwrap(),
@@ -266,7 +265,7 @@ fn a_missing_tracking_ref_is_created() {
     record_tracking_updates(&root, &log);
     let (code, doc) = h.json(&["sync", "--brain", "alpha", "--json"]);
     assert_eq!(code, 0, "{doc}");
-    assert_eq!(doc["brains"][0]["merged"], true, "{doc}");
+    assert!(pulled(&doc["brains"][0]["sync"]), "{doc}");
     let new = remote_head(&h);
     assert_eq!(
         fs::read_to_string(&log).unwrap(),
@@ -326,13 +325,9 @@ fn a_tracking_ref_made_symbolic_during_the_fetch_is_refused() {
     let before = work_tree(&h, &root);
     let (code, doc) = h.json(&["sync", "--brain", "alpha", "--json"]);
     assert_eq!(code, 1, "{doc}");
-    let entry: &Value = &doc["brains"][0];
-    assert_eq!(
-        entry["refused"],
-        symbolic_refusal("refs/heads/main"),
-        "{doc}"
-    );
-    assert_eq!(entry["merged"], false, "{doc}");
+    let entry: &Value = &doc["brains"][0]["sync"];
+    assert_eq!(refused(entry), symbolic_refusal("refs/heads/main"), "{doc}");
+    assert!(!pulled(entry), "{doc}");
     assert_eq!(work_tree(&h, &root), before);
     let branch_log = h.git(
         &root,
@@ -394,9 +389,9 @@ fn assert_private_not_published(h: &Home, root: &Path, linked: &Path) -> Value {
     let private_before = work_tree(h, linked);
     let (code, doc) = h.json(&["sync", "--brain", "alpha", "--json"]);
     assert_eq!(code, 1, "{doc}");
-    let entry = doc["brains"][0].clone();
+    let entry = doc["brains"][0]["sync"].clone();
     assert_eq!(
-        entry["refused"],
+        refused(&entry),
         symbolic_refusal("refs/heads/private"),
         "{doc}"
     );
@@ -423,7 +418,7 @@ fn a_tracking_ref_made_symbolic_to_another_branch_during_a_fetch_that_moved_is_r
         "symbolic-ref refs/remotes/origin/main refs/heads/private",
     );
     let entry = assert_private_not_published(&h, &root, &linked);
-    assert_eq!(entry["merged"], false);
+    assert!(!pulled(&entry));
 }
 
 /// The same while the fetch brings nothing new, so there is no ref to
@@ -438,7 +433,7 @@ fn a_tracking_ref_made_symbolic_to_another_branch_during_a_fetch_with_nothing_ne
         "symbolic-ref refs/remotes/origin/main refs/heads/private",
     );
     let entry = assert_private_not_published(&h, &root, &linked);
-    assert_eq!(entry["merged"], false);
+    assert!(!pulled(&entry));
 }
 
 /// The tracking ref turns symbolic while sync merges (a `pre-merge-commit`
@@ -465,13 +460,13 @@ fn a_tracking_ref_made_symbolic_during_the_merge_is_refused_before_the_push() {
     let private_before = work_tree(&h, &linked);
     let (code, doc) = h.json(&["sync", "--brain", "alpha", "--json"]);
     assert_eq!(code, 1, "{doc}");
-    let entry = &doc["brains"][0];
+    let entry = &doc["brains"][0]["sync"];
     assert_eq!(
-        entry["refused"],
+        refused(entry),
         symbolic_refusal("refs/heads/private"),
         "{doc}"
     );
-    assert_eq!(entry["merged"], true, "{doc}");
+    assert!(pulled(entry), "{doc}");
     assert_eq!(entry["pushed"], false, "{doc}");
     assert_eq!(remote_head(&h), remote_before);
     let published = h.git(&bare, &["ls-tree", "-r", "--name-only", "main"]);
@@ -492,26 +487,8 @@ fn a_remote_without_the_branch_goes_on_from_the_tracking_ref() {
     h.git(&bare, &["update-ref", "-d", "refs/heads/main"]);
     let (code, doc) = h.json(&["sync", "--brain", "alpha", "--json"]);
     assert_eq!(code, 0, "{doc}");
-    let entry = &doc["brains"][0];
-    assert_eq!(entry["fetched"], true, "{doc}");
-    assert_eq!(entry["merged"], false, "{doc}");
+    let entry = &doc["brains"][0]["sync"];
+    assert_eq!(entry["left_as_is"]["reason"], Value::Null, "{doc}");
+    assert!(!pulled(entry), "{doc}");
     assert_eq!(entry["pushed"], false, "{doc}");
-    assert_eq!(entry["refused"], Value::Null, "{doc}");
-}
-
-/// A remote that has no such branch, and no tracking ref either: nothing
-/// to sync from, an error naming the ref.
-#[test]
-fn a_remote_without_the_branch_and_no_tracking_ref_is_an_error() {
-    let mut h = Home::new();
-    let root = h.brain("alpha");
-    let bare = h.dir.path().join("alpha.git");
-    h.git(&bare, &["update-ref", "-d", "refs/heads/main"]);
-    h.git(&root, &["update-ref", "-d", "refs/remotes/origin/main"]);
-    let head = h.git(&root, &["rev-parse", "HEAD"]);
-    let (code, doc) = h.json(&["sync", "--brain", "alpha", "--json"]);
-    assert_eq!(code, 1, "{doc}");
-    let error = doc["error"].as_str().unwrap_or_else(|| panic!("{doc}"));
-    assert!(error.contains("refs/remotes/origin/main"), "{error}");
-    assert_eq!(h.git(&root, &["rev-parse", "HEAD"]), head);
 }

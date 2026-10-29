@@ -1,69 +1,47 @@
-//! Git auto-sync (SPEC Phase 7). `commit` commits approved paths with the
-//! maps they change; `fresh` fetches a brain's upstream before `wake-up` and
-//! `search` read it; [`sync`] fetches, merges and pushes a brain.
+//! Git sync: the engine that brings teammates' commits into a brain and
+//! shares what is committed ([`engine`]), and what it is built on.
 //!
-//! [`sync`], for one brain at the root of its own git repo:
-//! 1. refuses a brain nested in a larger repo, one that is not a work tree,
-//!    one with a merge, rebase, cherry-pick or revert in progress, and one
-//!    with an open sync conflict ([`PENDING`], for `kluris resolve`);
-//! 2. fetches the current branch's upstream and moves its remote-tracking
-//!    ref ([`fetch::fetch`], within the network time limit, never
-//!    prompting). Offline or without an upstream nothing changes; a remote
-//!    that turned the fetch away, a locked ref, a remote-tracking ref outside
-//!    `refs/remotes/` or a symbolic one refuse the brain with the reason and
-//!    the fix. What sync merges, fast-forwards to and records in a conflict
-//!    is the commit the fetch's own `ls-remote` gave, never a value read
-//!    back from the ref or from `FETCH_HEAD`;
-//! 3. behind only: fast-forwards; ahead only: pushes; diverged: merges in
-//!    memory ([`merge`]) and, without conflicts, commits the merge
-//!    (`commit-tree`, two parents, `kluris: sync` with `Kluris-Sync: auto`,
-//!    after the `pre-merge-commit` hook), fast-forwards to it and pushes;
-//!    with conflicts nothing changes and they are recorded in [`PENDING`];
-//! 4. never overwrites a file with uncommitted changes: when the incoming
-//!    changes touch one (or a new file would land on an untracked or
-//!    ignored file), nothing changes and those paths are `blocked`;
-//! 5. a push rejected because the remote moved fetches, merges and pushes
-//!    again, [`PUSH_ATTEMPTS`] times at most; one stopped at the network
-//!    time limit is offline. The push moves no remote-tracking ref itself
-//!    ([`git::SyncGit::push`]); once the remote took it, sync moves the ref,
-//!    checked and by compare-and-swap as after a fetch, so neither a late
-//!    symbolic ref nor a `pre-push` hook can make the push move a branch.
+//! - [`git`]: the git steps beyond plumbing, never prompting;
+//! - [`fetch`]: the upstream's commit, fetched and its tracking ref moved;
+//! - [`claim`]: the remote claim and the tree claim commands share a
+//!   checkout by;
+//! - [`merge`] and [`frontmatter_merge`]: the in-memory merge and its rules;
+//! - [`hooks`]: the gate and message hooks of commits and merge commits;
+//! - [`land`]: moving the work tree, never over an uncommitted file;
+//! - [`pending`]: the waiting merge a person settles;
+//! - [`commit`]: `kluris commit`; [`resolve`]: `kluris resolve`;
+//!   [`fresh`]: the fetch before a read.
+//!
+//! This module holds the types they share.
 
 pub mod claim;
 pub mod commit;
+pub mod engine;
 pub mod fetch;
 pub mod fresh;
 pub mod frontmatter_merge;
 pub mod git;
+pub mod hooks;
+pub mod land;
 pub mod merge;
+pub mod pending;
 pub mod resolve;
 
-use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
-use std::fs;
-use std::path::Path;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
-use crate::atomic;
 use crate::dream::DreamOptions;
-use crate::git::{Git, GitError, InProgress, MIN_SYNC_VERSION, parse_version};
-use crate::json::{Json, to_string};
-use fetch::Fetch;
-use git::{PushOutcome, SyncGit, Upstream};
-use merge::{MergeOutcome, merge_commits};
+use crate::git::{GitError, MIN_SYNC_VERSION};
 
-/// An open sync conflict, relative to the git directory: what `kluris
-/// resolve` finishes.
+/// The waiting merge, relative to the worktree's own git directory.
 pub const PENDING: &str = "kluris-sync/pending.json";
 
-/// How many times a push rejected because the remote moved is merged and
-/// tried again.
+/// How many times a push the remote turned back because it moved is pulled
+/// again and tried again.
 pub const PUSH_ATTEMPTS: usize = 5;
 
 /// The time a fetch or a push may take.
 pub const NETWORK_TIME_LIMIT: Duration = Duration::from_secs(60);
-
-const MESSAGE: &str = "kluris: sync\n\nKluris-Sync: auto\n";
 
 /// What a person must decide.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -87,6 +65,15 @@ pub enum ConflictKind {
 }
 
 impl ConflictKind {
+    const ALL: [ConflictKind; 6] = [
+        ConflictKind::Content,
+        ConflictKind::DeleteEdit,
+        ConflictKind::Parent,
+        ConflictKind::Frontmatter,
+        ConflictKind::Structure,
+        ConflictKind::AmbiguousBase,
+    ];
+
     pub fn as_str(self) -> &'static str {
         match self {
             ConflictKind::Content => "content",
@@ -97,10 +84,15 @@ impl ConflictKind {
             ConflictKind::AmbiguousBase => "ambiguous_base",
         }
     }
+
+    /// The kind [`ConflictKind::as_str`] spells `name`.
+    pub fn from_name(name: &str) -> Option<ConflictKind> {
+        ConflictKind::ALL.into_iter().find(|k| k.as_str() == name)
+    }
 }
 
 /// One path a person must decide, with its blob on each side (`None`: not
-/// there).
+/// there), as the waiting merge records it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Conflict {
     pub path: String,
@@ -110,192 +102,17 @@ pub struct Conflict {
     pub theirs: Option<String>,
 }
 
-/// How to sync.
-#[derive(Debug, Clone, Copy)]
-pub struct SyncRequest<'a> {
-    /// Skip the `pre-merge-commit` and `commit-msg` hooks (`pre-push`
-    /// always runs).
-    pub no_verify: bool,
-    /// For the maps rebuilt after a merge.
-    pub maps: DreamOptions<'a>,
-    /// The time each fetch and push may take.
-    pub network_time_limit: Duration,
-}
-
-/// What a sync did to one brain.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct SyncReport {
-    pub fetched: bool,
-    /// The branch took the remote's commits (a fast-forward or a merge).
-    pub merged: bool,
-    pub pushed: bool,
-    /// Markdown files both sides changed, merged by the rules.
-    pub auto_merged: Vec<String>,
-    /// Open; nothing changed.
-    pub conflicts: Vec<Conflict>,
-    /// Every file with uncommitted changes (untracked included), left as
-    /// it is.
-    pub skipped_dirty: Vec<String>,
-    /// No upstream, or the remote could not be reached (network trouble,
-    /// or the time limit).
-    pub offline: bool,
-    /// The uncommitted files the incoming changes would overwrite; when
-    /// any, nothing changed.
-    pub blocked: Vec<String>,
-    /// Why the brain was left alone (an open conflict, a locked ref, a
-    /// remote-tracking ref it will not move, a remote that turned it away),
-    /// else `None`.
-    pub refused: Option<String>,
-}
-
+/// One path a person must decide, as a pull reports it: each side's text,
+/// `None` when that side has no file or is binary.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum SyncError {
-    /// git is older than [`MIN_SYNC_VERSION`].
-    GitTooOld {
-        found: String,
-    },
-    NotARepo,
-    /// The brain is below the root of a larger repo (`prefix` from it).
-    Nested {
-        prefix: String,
-    },
-    InProgress(InProgress),
-    /// A hook stopped the merge.
-    Hook {
-        name: &'static str,
-        code: i32,
-    },
-    /// A hook changed the merged index (staged files over the merge).
-    HookChangedMerge {
-        name: &'static str,
-    },
-    /// The merge landed locally but the push was refused.
-    Push(String),
-    /// Every push was rejected because the remote kept moving.
-    RemoteKeptMoving,
-    /// The open conflict could not be recorded, or the merge message file
-    /// could not be written or read.
-    Pending(String),
-    /// The message hooks left the merge message empty.
-    EmptyMessage,
-    Git(GitError),
-}
-
-impl fmt::Display for SyncError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            SyncError::GitTooOld { found } => {
-                let (major, minor, _) = MIN_SYNC_VERSION;
-                write!(
-                    f,
-                    "kluris sync needs git {major}.{minor} or newer; this is {found}"
-                )
-            }
-            SyncError::NotARepo => f.write_str("it is not a git repository"),
-            SyncError::Nested { prefix } => write!(
-                f,
-                "it is inside a larger git repository (at {}); kluris sync only moves a repository that is the brain itself",
-                prefix.trim_end_matches('/')
-            ),
-            SyncError::InProgress(op) => {
-                write!(f, "a {op} is in progress; finish or abort it first")
-            }
-            SyncError::Hook { name, code } => write!(
-                f,
-                "the {name} hook failed (exit {code}); nothing was merged"
-            ),
-            SyncError::HookChangedMerge { name } => write!(
-                f,
-                "the {name} hook changed the merge; nothing was merged (a merge hook may change the message, not the files)"
-            ),
-            SyncError::Push(detail) => {
-                write!(f, "merged locally, but the push was refused: {detail}")
-            }
-            SyncError::RemoteKeptMoving => write!(
-                f,
-                "the remote kept moving: {PUSH_ATTEMPTS} pushes were rejected; run kluris sync again"
-            ),
-            SyncError::Pending(e) => write!(f, "cannot record the open conflict: {e}"),
-            SyncError::EmptyMessage => {
-                f.write_str("the message hooks left the merge message empty; nothing was merged")
-            }
-            SyncError::Git(e) => e.fmt(f),
-        }
-    }
-}
-
-impl std::error::Error for SyncError {}
-
-impl From<GitError> for SyncError {
-    fn from(e: GitError) -> Self {
-        SyncError::Git(e)
-    }
-}
-
-impl SyncError {
-    /// Whether it is a refusal (the brain was left alone), as opposed to a
-    /// step that failed.
-    pub fn is_refusal(&self) -> bool {
-        matches!(
-            self,
-            SyncError::NotARepo | SyncError::Nested { .. } | SyncError::InProgress(_)
-        )
-    }
-}
-
-/// The precondition for every brain: git >= 2.38 (`merge-tree
-/// --write-tree`).
-pub fn check_git(git: &impl Git) -> Result<(), SyncError> {
-    let found = git.version()?;
-    if parse_version(&found).is_some_and(|v| v >= MIN_SYNC_VERSION) {
-        Ok(())
-    } else {
-        Err(SyncError::GitTooOld { found })
-    }
-}
-
-fn exists_on_disk(root: &Path, rel: &str) -> bool {
-    let path = rel
-        .split('/')
-        .fold(root.to_path_buf(), |p, part| p.join(part));
-    fs::symlink_metadata(path).is_ok()
-}
-
-/// Whether every part of `rel` is on disk under exactly that name (Unicode
-/// normalization aside): on a case-insensitive file system (macOS,
-/// Windows) `notes/Keep.md` also "exists" when only `notes/keep.md` does.
-fn exactly_on_disk(root: &Path, rel: &str) -> bool {
-    use unicode_normalization::UnicodeNormalization;
-    let mut dir = root.to_path_buf();
-    for part in rel.split('/') {
-        let want: String = part.nfc().collect();
-        let Ok(entries) = fs::read_dir(&dir) else {
-            return false;
-        };
-        let found = entries
-            .flatten()
-            .any(|e| e.file_name().to_string_lossy().nfc().collect::<String>() == want);
-        if !found {
-            return false;
-        }
-        dir = dir.join(part);
-    }
-    true
-}
-
-fn opt(value: &Option<String>) -> Json {
-    value.clone().map_or(Json::Null, Json::Str)
-}
-
-/// One conflict as JSON (`pending.json`, `sync --json`, `status --json`).
-pub fn conflict_json(c: &Conflict) -> Json {
-    Json::Object(vec![
-        ("path".into(), Json::Str(c.path.clone())),
-        ("kind".into(), Json::Str(c.kind.as_str().into())),
-        ("base".into(), opt(&c.base)),
-        ("ours".into(), opt(&c.ours)),
-        ("theirs".into(), opt(&c.theirs)),
-    ])
+pub struct ConflictText {
+    pub path: String,
+    pub kind: ConflictKind,
+    pub base: Option<String>,
+    pub ours: Option<String>,
+    pub theirs: Option<String>,
+    /// A side is binary (holds a NUL byte) or not UTF-8.
+    pub binary: bool,
 }
 
 /// What a person chose for one conflicted path ([`resolve`]).
@@ -319,479 +136,157 @@ impl ResolvedChoice {
     }
 }
 
-/// An open sync conflict, as [`PENDING`] records it: the two commits, their
-/// merge base, the conflicts, when it was opened, and the choices made so
-/// far.
+/// How to sync.
+#[derive(Debug, Clone, Copy)]
+pub struct SyncRequest<'a> {
+    /// Skip the `pre-merge-commit` and `commit-msg` hooks (`pre-push`
+    /// always runs).
+    pub no_verify: bool,
+    /// For the maps rebuilt inside a merge.
+    pub maps: DreamOptions<'a>,
+    /// The time each fetch and push may take.
+    pub network_time_limit: Duration,
+    /// How long to wait for the work tree another command holds
+    /// ([`claim::TreeClaim`]).
+    pub tree_bound: Duration,
+}
+
+/// Why a pull or a push left the brain as it is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LeftReason {
+    /// Uncommitted files are where the incoming changes would write.
+    Uncommitted,
+    /// The remote could not be reached, or not in time.
+    Offline,
+    /// The remote turned the brain away, or a ref is in a state Kluris
+    /// will not move.
+    Refused,
+    /// Another command or git holds the work tree, a lock or the remote.
+    Busy,
+    /// A git merge, rebase, cherry-pick or revert is in progress.
+    InProgress,
+    /// A hook stopped the merge.
+    Hook,
+    /// git stopped partway, or a step failed.
+    Failed,
+    /// The branch has no upstream on a remote.
+    NoUpstream,
+}
+
+impl LeftReason {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            LeftReason::Uncommitted => "uncommitted",
+            LeftReason::Offline => "offline",
+            LeftReason::Refused => "refused",
+            LeftReason::Busy => "busy",
+            LeftReason::InProgress => "in_progress",
+            LeftReason::Hook => "hook",
+            LeftReason::Failed => "failed",
+            LeftReason::NoUpstream => "no_upstream",
+        }
+    }
+
+    /// Whether `kluris sync` fails for it: everything but having no network
+    /// or no upstream.
+    pub fn fails(self) -> bool {
+        !matches!(self, LeftReason::Offline | LeftReason::NoUpstream)
+    }
+}
+
+/// Why the brain was left as it is: the reason, the paths in the way
+/// (`uncommitted`), and the detail (git's line and the fix).
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Pending {
-    pub base: Option<String>,
-    pub ours: String,
-    pub theirs: String,
-    pub conflicts: Vec<Conflict>,
-    /// RFC 3339.
-    pub created: String,
-    /// In the order they were made; one per path.
-    pub resolved: Vec<(String, ResolvedChoice)>,
+pub struct LeftAsIs {
+    pub reason: LeftReason,
+    pub paths: Vec<String>,
+    pub detail: Option<String>,
 }
 
-fn str_field(value: &serde_json::Value, key: &str) -> Option<String> {
-    value.get(key)?.as_str().map(str::to_string)
-}
-
-fn opt_field(value: &serde_json::Value, key: &str) -> Option<Option<String>> {
-    match value.get(key)? {
-        serde_json::Value::Null => Some(None),
-        serde_json::Value::String(s) => Some(Some(s.clone())),
-        _ => None,
-    }
-}
-
-impl Pending {
-    /// A new conflict between `ours` and `theirs`, opened now.
-    pub fn new(base: Option<String>, ours: &str, theirs: &str, conflicts: Vec<Conflict>) -> Self {
-        Pending {
-            base,
-            ours: ours.to_string(),
-            theirs: theirs.to_string(),
-            conflicts,
-            created: jiff::Timestamp::now().to_string(),
-            resolved: Vec::new(),
+impl LeftAsIs {
+    /// Left for `reason`, with `detail`.
+    pub fn because(reason: LeftReason, detail: impl Into<String>) -> LeftAsIs {
+        LeftAsIs {
+            reason,
+            paths: Vec::new(),
+            detail: Some(detail.into()),
         }
     }
+}
 
-    /// `{base, ours, theirs, conflicts, created}`, then `resolved` once a
-    /// choice was made (`[{path, choice, blob}]`).
-    pub fn to_json(&self) -> Json {
-        let mut doc = vec![
-            ("base".into(), opt(&self.base)),
-            ("ours".into(), Json::Str(self.ours.clone())),
-            ("theirs".into(), Json::Str(self.theirs.clone())),
-            (
-                "conflicts".into(),
-                Json::Array(self.conflicts.iter().map(conflict_json).collect()),
+impl fmt::Display for LeftAsIs {
+    /// The paths in the way, the detail, or the reason itself.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match (self.reason, &self.detail) {
+            (LeftReason::Uncommitted, _) => write!(
+                f,
+                "uncommitted changes are in the way: {}",
+                self.paths.join(", ")
             ),
-            ("created".into(), Json::Str(self.created.clone())),
-        ];
-        if !self.resolved.is_empty() {
-            let items = self
-                .resolved
-                .iter()
-                .map(|(path, choice)| {
-                    let blob = match choice {
-                        ResolvedChoice::Blob(oid) => Json::Str(oid.clone()),
-                        _ => Json::Null,
-                    };
-                    Json::Object(vec![
-                        ("path".into(), Json::Str(path.clone())),
-                        ("choice".into(), Json::Str(choice.as_str().into())),
-                        ("blob".into(), blob),
-                    ])
-                })
-                .collect();
-            doc.push(("resolved".into(), Json::Array(items)));
+            (_, Some(detail)) => f.write_str(detail),
+            (reason, None) => f.write_str(reason.as_str()),
         }
-        Json::Object(doc)
-    }
-
-    /// The pending state from its JSON; `None` when it is not one.
-    pub fn parse(text: &str) -> Option<Pending> {
-        let doc: serde_json::Value = serde_json::from_str(text).ok()?;
-        let kind = |k: &str| match k {
-            "content" => Some(ConflictKind::Content),
-            "delete_edit" => Some(ConflictKind::DeleteEdit),
-            "parent" => Some(ConflictKind::Parent),
-            "frontmatter" => Some(ConflictKind::Frontmatter),
-            "structure" => Some(ConflictKind::Structure),
-            "ambiguous_base" => Some(ConflictKind::AmbiguousBase),
-            _ => None,
-        };
-        let mut conflicts = Vec::new();
-        for c in doc.get("conflicts")?.as_array()? {
-            conflicts.push(Conflict {
-                path: str_field(c, "path")?,
-                kind: kind(c.get("kind")?.as_str()?)?,
-                base: opt_field(c, "base")?,
-                ours: opt_field(c, "ours")?,
-                theirs: opt_field(c, "theirs")?,
-            });
-        }
-        let mut resolved = Vec::new();
-        if let Some(items) = doc.get("resolved").and_then(|r| r.as_array()) {
-            for item in items {
-                let choice = match item.get("choice")?.as_str()? {
-                    "ours" => ResolvedChoice::Ours,
-                    "theirs" => ResolvedChoice::Theirs,
-                    "file" => ResolvedChoice::Blob(str_field(item, "blob")?),
-                    _ => return None,
-                };
-                resolved.push((str_field(item, "path")?, choice));
-            }
-        }
-        Some(Pending {
-            base: opt_field(&doc, "base")?,
-            ours: str_field(&doc, "ours")?,
-            theirs: str_field(&doc, "theirs")?,
-            conflicts,
-            created: str_field(&doc, "created").unwrap_or_default(),
-            resolved,
-        })
-    }
-
-    /// Write it to `path` atomically.
-    pub fn write(&self, path: &Path) -> Result<(), SyncError> {
-        if let Some(dir) = path.parent() {
-            fs::create_dir_all(dir).map_err(|e| SyncError::Pending(e.to_string()))?;
-        }
-        let mut text = to_string(&self.to_json());
-        text.push('\n');
-        atomic::write_atomic(path, text.as_bytes()).map_err(|e| SyncError::Pending(e.to_string()))
     }
 }
 
-/// The uncommitted files (in `dirty`) that moving from `ours` to `target`
-/// would overwrite, and the untracked or ignored files a new file would
-/// land on.
-pub(crate) fn blocked_paths<G: SyncGit>(
-    git: &G,
-    repo: &crate::git::Repo,
-    root: &Path,
-    dirty: &[String],
-    ours: &str,
-    target: &str,
-) -> Result<Vec<String>, GitError> {
-    let dirty: BTreeSet<&String> = dirty.iter().collect();
-    let incoming = git.diff_names(repo, ours, target)?;
-    let tracked = git.tracked(repo, ours, &incoming)?;
-    // A new path whose only match on disk is a case variant of a tracked
-    // file the same change moves or removes (a case-only rename, of a file
-    // or a folder) is that file, not something in the way.
-    let mut ours_files: Option<Vec<String>> = None;
-    let mut blocked = Vec::new();
-    for path in &incoming {
-        let in_the_way = if dirty.contains(path) {
-            true
-        } else if tracked.contains(path) || !exists_on_disk(root, path) {
-            false
-        } else if exactly_on_disk(root, path) {
-            true
-        } else {
-            if ours_files.is_none() {
-                ours_files = Some(
-                    git.tree_entries(repo, ours)?
-                        .into_iter()
-                        .map(|e| e.rel)
-                        .collect(),
-                );
-            }
-            let lower = path.to_lowercase();
-            !ours_files
-                .iter()
-                .flatten()
-                .any(|f| f != path && f.to_lowercase() == lower && incoming.contains(f))
-        };
-        if in_the_way {
-            blocked.push(path.clone());
-        }
-    }
-    Ok(blocked)
+/// What a pull (and a push) did to one brain.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SyncReport {
+    /// The commits brought in.
+    pub pulled: usize,
+    /// Markdown files both sides changed, merged by the rules.
+    pub auto_merged: Vec<String>,
+    /// Why the brain was left as it is; `None` when nothing was left.
+    pub left_as_is: Option<LeftAsIs>,
+    /// The waiting merge's conflicts.
+    pub conflicts: Vec<ConflictText>,
+    /// The upstream's commits newer than the one the conflicts were found
+    /// against.
+    pub behind_conflict: usize,
+    /// The commits the remote does not have yet.
+    pub to_push: usize,
+    pub pushed: bool,
 }
 
-/// Why sync leaves a brain with an open conflict alone (its entry also
-/// lists the conflicts).
-pub const OPEN_CONFLICT: &str =
-    "a conflict is open: settle it with kluris resolve (or kluris resolve --abort)";
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SyncError {
+    /// git is older than [`MIN_SYNC_VERSION`].
+    GitTooOld {
+        found: String,
+    },
+    NotARepo,
+    /// The brain is below the root of a larger repo (`prefix` from it).
+    Nested {
+        prefix: String,
+    },
+    Git(GitError),
+}
 
-/// Run a hook that can stop the merge, against `index`.
-fn gate<G: SyncGit>(
-    git: &G,
-    repo: &crate::git::Repo,
-    index: &crate::git::StagingIndex,
-    name: &'static str,
-    args: &[&str],
-) -> Result<(), SyncError> {
-    match git.run_hook(repo, Some(index), name, args)? {
-        0 => Ok(()),
-        code => Err(SyncError::Hook { name, code }),
+impl fmt::Display for SyncError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            SyncError::GitTooOld { found } => {
+                let (major, minor, _) = MIN_SYNC_VERSION;
+                write!(
+                    f,
+                    "kluris sync needs git {major}.{minor} or newer; this is {found}"
+                )
+            }
+            SyncError::NotARepo => f.write_str("it is not a git repository"),
+            SyncError::Nested { prefix } => write!(
+                f,
+                "it is inside a larger git repository (at {}); kluris sync only moves a repository that is the brain itself",
+                prefix.trim_end_matches('/')
+            ),
+            SyncError::Git(e) => e.fmt(f),
+        }
     }
 }
 
-/// The merge commit of the tree in `index` on `ours` and `theirs`, with
-/// the hooks git merge runs: `pre-merge-commit` (unless `no_verify`), then
-/// `prepare-commit-msg` (with `merge`) and `commit-msg` (unless
-/// `no_verify`) on a message file, against the merged index; the message is
-/// what they leave there, cleaned up as `git commit` does. A failing hook
-/// stops it with nothing committed, and so does a hook that changes the
-/// merged index (`merged_tree`): the hooks see the old work tree, so an
-/// ordinary `git add -A` would stage it over the incoming files (decision
-/// of T-152). A message hook may change the message, never the files.
-pub(crate) fn commit_merge<G: SyncGit>(
-    git: &G,
-    repo: &crate::git::Repo,
-    index: &crate::git::StagingIndex,
-    merged_tree: &str,
-    parents: [&str; 2],
-    message: &str,
-    no_verify: bool,
-) -> Result<String, SyncError> {
-    let unchanged = |name: &'static str| -> Result<(), SyncError> {
-        if git.write_tree(repo, index)? == merged_tree {
-            Ok(())
-        } else {
-            Err(SyncError::HookChangedMerge { name })
-        }
-    };
-    if !no_verify {
-        gate(git, repo, index, "pre-merge-commit", &[])?;
-        unchanged("pre-merge-commit")?;
-    }
-    let file = git.git_dir_path(repo, &format!("KLURIS_MERGE_MSG-{}", std::process::id()))?;
-    fs::write(&file, message).map_err(|e| SyncError::Pending(e.to_string()))?;
-    let made = (|| {
-        // Hooks are shell scripts (Git for Windows' sh too): `/` separators.
-        let arg = file.to_string_lossy().replace('\\', "/");
-        gate(git, repo, index, "prepare-commit-msg", &[&arg, "merge"])?;
-        unchanged("prepare-commit-msg")?;
-        if !no_verify {
-            gate(git, repo, index, "commit-msg", &[&arg])?;
-            unchanged("commit-msg")?;
-        }
-        let text = fs::read(&file).map_err(|e| SyncError::Pending(e.to_string()))?;
-        let message = commit::cleanup_message(&String::from_utf8_lossy(&text));
-        if message.is_empty() {
-            return Err(SyncError::EmptyMessage);
-        }
-        fs::write(&file, &message).map_err(|e| SyncError::Pending(e.to_string()))?;
-        Ok(git.commit_tree(repo, merged_tree, &parents, &file)?)
-    })();
-    let _ = fs::remove_file(&file);
-    made
-}
+impl std::error::Error for SyncError {}
 
-/// Move the branch to `to`, a descendant of `ours`, unless an uncommitted,
-/// untracked or ignored file sits where it writes: checked right before the
-/// fast-forward (a hook or an editor may have written one since the first
-/// check) and again when git refuses (one written in between); the
-/// fast-forward itself never overwrites an ignored file nor stashes. The
-/// files in the way; none when the branch moved.
-pub(crate) fn land<G: SyncGit>(
-    git: &G,
-    repo: &crate::git::Repo,
-    root: &Path,
-    ours: &str,
-    to: &str,
-) -> Result<Vec<String>, SyncError> {
-    let in_the_way = || -> Result<Vec<String>, SyncError> {
-        let dirty = git.dirty(repo)?;
-        Ok(blocked_paths(git, repo, root, &dirty, ours, to)?)
-    };
-    let blocked = in_the_way()?;
-    if !blocked.is_empty() {
-        return Ok(blocked);
-    }
-    match git.fast_forward_to(repo, to) {
-        Ok(()) => Ok(Vec::new()),
-        Err(e) => match in_the_way()? {
-            blocked if blocked.is_empty() => Err(e.into()),
-            blocked => Ok(blocked),
-        },
-    }
-}
-
-/// Sync the brain at `root` (see the module docs).
-pub fn sync<G: SyncGit>(
-    root: &Path,
-    git: &G,
-    request: &SyncRequest,
-) -> Result<SyncReport, SyncError> {
-    check_git(git)?;
-    let repo = git.repo(root).ok_or(SyncError::NotARepo)?;
-    if repo.nested() {
-        return Err(SyncError::Nested {
-            prefix: repo.prefix.clone(),
-        });
-    }
-    let pending = git.git_dir_path(&repo, PENDING)?;
-    if fs::symlink_metadata(&pending).is_ok() {
-        // Reported in the brain's entry, so an agent sees the conflicts and
-        // settles them (decision of T-146).
-        let conflicts = fs::read_to_string(&pending)
-            .ok()
-            .and_then(|text| Pending::parse(&text))
-            .map(|p| p.conflicts)
-            .unwrap_or_default();
-        return Ok(SyncReport {
-            conflicts,
-            refused: Some(OPEN_CONFLICT.to_string()),
-            ..SyncReport::default()
-        });
-    }
-    if let Some(op) = git.in_progress(&repo)? {
-        return Err(SyncError::InProgress(op));
-    }
-    // Every git from here has the remote environment: none prompts.
-    let git = &git.for_remote(&repo)?;
-    let mut report = SyncReport {
-        skipped_dirty: git.dirty(&repo)?,
-        ..SyncReport::default()
-    };
-    let Some(upstream) = git.upstream(&repo)? else {
-        report.offline = true;
-        return Ok(report);
-    };
-
-    for _ in 0..PUSH_ATTEMPTS {
-        let deadline = Instant::now() + request.network_time_limit;
-        let theirs = match fetch::fetch(git, &repo, &upstream, deadline)? {
-            Fetch::Moved { new, .. } => new,
-            Fetch::Same { at: Some(at) } => at,
-            Fetch::Same { at: None } => return Err(SyncError::Git(no_remote_branch(&upstream))),
-            Fetch::Offline => {
-                report.offline = true;
-                return Ok(report);
-            }
-            Fetch::Refused { detail } => {
-                report.refused = Some(detail);
-                return Ok(report);
-            }
-        };
-        report.fetched = true;
-        let ours = git
-            .head(&repo)?
-            .ok_or_else(|| SyncError::Git(no_commit_yet()))?;
-        let has = |a: &str, b: &str| git.is_ancestor(&repo, a, b);
-        let behind = !has(&theirs, &ours)?;
-        let ahead = !has(&ours, &theirs)?;
-
-        if behind {
-            // The tree the branch will hold: theirs, or the merge.
-            let (target, merge) = if ahead {
-                let none = BTreeMap::new();
-                match merge_commits(git, &repo, &ours, &theirs, &request.maps, &none)? {
-                    MergeOutcome::Conflicts { base, conflicts } => {
-                        Pending::new(base, &ours, &theirs, conflicts.clone()).write(&pending)?;
-                        report.conflicts = conflicts;
-                        return Ok(report);
-                    }
-                    MergeOutcome::Clean {
-                        tree,
-                        index,
-                        auto_merged,
-                    } => (tree, Some((index, auto_merged))),
-                }
-            } else {
-                (theirs.clone(), None)
-            };
-            let blocked = blocked_paths(git, &repo, root, &report.skipped_dirty, &ours, &target)?;
-            if !blocked.is_empty() {
-                report.blocked = blocked;
-                return Ok(report);
-            }
-            let to = match merge {
-                None => theirs.clone(),
-                Some((index, auto_merged)) => {
-                    let commit = commit_merge(
-                        git,
-                        &repo,
-                        &index,
-                        &target,
-                        [&ours, &theirs],
-                        MESSAGE,
-                        request.no_verify,
-                    );
-                    for path in auto_merged {
-                        if !report.auto_merged.contains(&path) {
-                            report.auto_merged.push(path);
-                        }
-                    }
-                    commit?
-                }
-            };
-            let blocked = land(git, &repo, root, &ours, &to)?;
-            if !blocked.is_empty() {
-                report.skipped_dirty = git.dirty(&repo)?;
-                report.blocked = blocked;
-                return Ok(report);
-            }
-            report.merged = true;
-            if !ahead {
-                return Ok(report);
-            }
-        } else if !ahead {
-            return Ok(report);
-        }
-
-        // Checked again right before: the ref sync moves once the remote
-        // took the push.
-        if let Some(why) = fetch::unmovable(git, &repo, &upstream)? {
-            report.refused = Some(why);
-            return Ok(report);
-        }
-        let before = git.ref_value(&repo, &upstream.refname)?;
-        let head = git
-            .head(&repo)?
-            .ok_or_else(|| SyncError::Git(no_commit_yet()))?;
-        let deadline = Instant::now() + request.network_time_limit;
-        match git.push(&repo, &upstream, &head, deadline) {
-            PushOutcome::Pushed => {
-                report.pushed = true;
-                moved_after_push(git, &repo, &upstream, before.as_deref(), &head);
-                return Ok(report);
-            }
-            PushOutcome::RemoteMoved => continue,
-            PushOutcome::Unreachable => {
-                report.offline = true;
-                return Ok(report);
-            }
-            PushOutcome::Refused(stderr) => {
-                report.refused = Some(fetch::refused_access("push", &upstream.remote, &stderr));
-                return Ok(report);
-            }
-            PushOutcome::Failed(detail) => return Err(SyncError::Push(detail)),
-        }
-    }
-    Err(SyncError::RemoteKeptMoving)
-}
-
-/// Move the upstream's tracking ref to `pushed` once the remote took the
-/// push, as after a fetch ([`fetch::advance`]): never when it is no longer
-/// movable ([`fetch::unmovable`], a `pre-push` hook may have made it
-/// symbolic) nor over another git's value. Anything in the way leaves it
-/// where it is: the next fetch moves it, and reports what stops it.
-fn moved_after_push<G: SyncGit>(
-    git: &G,
-    repo: &crate::git::Repo,
-    upstream: &Upstream,
-    before: Option<&str>,
-    pushed: &str,
-) {
-    if !matches!(fetch::unmovable(git, repo, upstream), Ok(None)) {
-        return;
-    }
-    let message = format!("kluris sync: push {}", upstream.remote);
-    let _ = fetch::advance(git, repo, upstream, before, pushed, &message);
-}
-
-/// The remote has no such branch and there is no tracking ref to go on
-/// from.
-fn no_remote_branch(upstream: &Upstream) -> GitError {
-    GitError {
-        args: vec![
-            "fetch".into(),
-            upstream.remote.clone(),
-            upstream.remote_ref.clone(),
-        ],
-        code: None,
-        detail: format!(
-            "the remote has no branch {} and there is no {} to sync from",
-            upstream.remote_ref, upstream.refname
-        ),
-    }
-}
-
-fn no_commit_yet() -> GitError {
-    GitError {
-        args: vec!["rev-parse".into(), "HEAD".into()],
-        code: None,
-        detail: "the branch has no commit yet: commit first".into(),
+impl From<GitError> for SyncError {
+    fn from(e: GitError) -> Self {
+        SyncError::Git(e)
     }
 }
