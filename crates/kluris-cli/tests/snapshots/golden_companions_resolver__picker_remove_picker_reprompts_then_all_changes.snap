@@ -1,0 +1,82 @@
+---
+source: crates/kluris-cli/tests/golden_companions_resolver.rs
+expression: "normalize(&out, &sb.root)"
+---
+== brains/a/kluris.yml
+name: a
+description: Brain A
+agents:
+  commands_for:
+  - claude
+  - cursor
+  - devin
+  - copilot
+  - codex
+  - hermes
+  - kilocode
+  - junie
+  - antigravity
+companions: []
+== brains/b/kluris.yml
+name: b
+description: b knowledge base
+agents:
+  commands_for:
+  - claude
+  - cursor
+  - devin
+  - copilot
+  - codex
+  - hermes
+  - kilocode
+  - junie
+  - antigravity
+companions: []
+== home/.agents/skills/kluris-a/SKILL.md
+<snapshot skill_a_none>
+== home/.agents/skills/kluris-b/SKILL.md
+<snapshot skill_b_none>
+== home/.claude/skills/kluris-a/SKILL.md
+<snapshot skill_a_none>
+== home/.claude/skills/kluris-b/SKILL.md
+<snapshot skill_b_none>
+== home/.codeium/windsurf/global_workflows/kluris-a.md
+<removed>
+== home/.codeium/windsurf/global_workflows/kluris-b.md
+<removed>
+== home/.codeium/windsurf/skills/kluris-a/SKILL.md
+<removed>
+== home/.codeium/windsurf/skills/kluris-b/SKILL.md
+<removed>
+== home/.codex/skills/kluris-a/SKILL.md
+<removed>
+== home/.codex/skills/kluris-b/SKILL.md
+<removed>
+== home/.copilot/skills/kluris-a/SKILL.md
+<removed>
+== home/.copilot/skills/kluris-b/SKILL.md
+<removed>
+== home/.cursor/skills/kluris-a/SKILL.md
+<removed>
+== home/.cursor/skills/kluris-b/SKILL.md
+<removed>
+== home/.gemini/config/skills/kluris-a/SKILL.md
+<snapshot skill_a_none>
+== home/.gemini/config/skills/kluris-b/SKILL.md
+<snapshot skill_b_none>
+== home/.gemini/skills/kluris-a/SKILL.md
+<removed>
+== home/.gemini/skills/kluris-b/SKILL.md
+<removed>
+== home/.hermes/skills/kluris-a/SKILL.md
+<snapshot skill_a_none>
+== home/.hermes/skills/kluris-b/SKILL.md
+<snapshot skill_b_none>
+== home/.junie/skills/kluris-a/SKILL.md
+<removed>
+== home/.junie/skills/kluris-b/SKILL.md
+<removed>
+== home/.kilo/skills/kluris-a/SKILL.md
+<removed>
+== home/.kilo/skills/kluris-b/SKILL.md
+<removed>

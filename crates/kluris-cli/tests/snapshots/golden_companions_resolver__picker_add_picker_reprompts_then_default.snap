@@ -1,0 +1,17 @@
+---
+source: crates/kluris-cli/tests/golden_companions_resolver.rs
+expression: run.render(&sb.root)
+---
+== stdout
+  Install specmint companions for this brain?
+    [1] specmint-core      (spec-driven-development companion)
+    [2] specmint-tdd       (spec-driven-development with test-driven-development focus)
+    [3] core + tdd
+    [4] skip
+    [5] specmint-core-html (spec-driven-development with canonical SPEC.html)
+    [6] specmint-tdd-html  (TDD-focused specs with canonical SPEC.html)
+    [7] all
+  Choice [4]: Error: '9' is not one of '1', '2', '3', '4', '5', '6', '7'.
+  Choice [4]: No companion selected. Nothing to do.
+== stderr
+== exit 0

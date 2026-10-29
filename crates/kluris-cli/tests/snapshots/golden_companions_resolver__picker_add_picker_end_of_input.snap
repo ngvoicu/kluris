@@ -1,0 +1,18 @@
+---
+source: crates/kluris-cli/tests/golden_companions_resolver.rs
+expression: run.render(&sb.root)
+---
+== stdout
+  Install specmint companions for this brain?
+    [1] specmint-core      (spec-driven-development companion)
+    [2] specmint-tdd       (spec-driven-development with test-driven-development focus)
+    [3] core + tdd
+    [4] skip
+    [5] specmint-core-html (spec-driven-development with canonical SPEC.html)
+    [6] specmint-tdd-html  (TDD-focused specs with canonical SPEC.html)
+    [7] all
+  Choice [4]: 
+<no newline at end>
+== stderr
+Aborted!
+== exit 1

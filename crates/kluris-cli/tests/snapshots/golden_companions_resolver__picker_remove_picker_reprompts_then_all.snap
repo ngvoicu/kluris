@@ -1,0 +1,16 @@
+---
+source: crates/kluris-cli/tests/golden_companions_resolver.rs
+expression: run.render(&sb.root)
+---
+== stdout
+  Which companion(s) to remove?
+    [1] specmint-core
+    [2] specmint-tdd-html
+    [3] all
+    [4] cancel
+  Choice: Error: 0 is not in the range 1<=x<=4.
+  Choice: Error: 'x' is not a valid integer range.
+  Choice:   Choice: Removed companion(s) specmint-core, specmint-tdd-html from: a, b
+Runtime companion files were kept under ~/.kluris/companions.
+== stderr
+== exit 0

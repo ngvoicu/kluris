@@ -1,0 +1,23 @@
+---
+source: crates/kluris-cli/tests/golden_companions_resolver.rs
+expression: run.render(&sb.root)
+---
+== stdout
+Multiple brains registered. Pick one:
+  [1] a  (<ROOT>/work/brains/brain-0)
+  [2] b  (<ROOT>/work/brains/brain-1)  (missing)
+  [3] c  (<ROOT>/work/brains/brain-2)
+  [4] all
+Choice: Error: 'abc' is not a valid integer range.
+Choice: Choice: Error: " 'x" is not a valid integer range.
+Choice: Error: 0 is not in the range 1<=x<=4.
+Choice: Error: 9 is not in the range 1<=x<=4.
+Choice: Error: 10 is not in the range 1<=x<=4.
+Choice: Error: '1__0' is not a valid integer range.
+Choice: Error: ' ' is not a valid integer range.
+Choice: 
+a
+  Lobes: 0, Neurons: 0
+  Git: disabled
+== stderr
+== exit 0

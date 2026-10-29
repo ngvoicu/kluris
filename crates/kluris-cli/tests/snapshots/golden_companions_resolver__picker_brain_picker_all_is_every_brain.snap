@@ -1,0 +1,19 @@
+---
+source: crates/kluris-cli/tests/golden_companions_resolver.rs
+expression: run.render(&sb.root)
+---
+== stdout
+Multiple brains registered. Pick one:
+  [1] a  (<ROOT>/work/brains/brain-0)
+  [2] b  (<ROOT>/work/brains/brain-1)
+  [3] all
+Choice: 
+a
+  Lobes: 0, Neurons: 0
+  Git: disabled
+
+b
+  Lobes: 0, Neurons: 0
+  Git: disabled
+== stderr
+== exit 0

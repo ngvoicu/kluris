@@ -13,9 +13,8 @@
 //! opted-in companions from `vendored/` and makes `a` a git repository
 //! with one commit.
 //!
-//! The brain and companion pickers need a terminal: their menus and input
-//! rules are tested in `kluris-core/tests/resolve.rs` and the unit tests of
-//! `kluris-core/src/companions/prompt.rs`.
+//! The brain and companion pickers prompt only when stdin is a terminal:
+//! [`pickers`] runs them with stdin on a pseudo-terminal (Unix only).
 
 mod common;
 
@@ -43,6 +42,7 @@ const STATES: &[(&str, &[&str])] = &[
     ("a-core-tdd", &["specmint-core", "specmint-tdd"]),
     ("a-tdd-html-core", &["specmint-tdd-html", "specmint-core"]),
     ("b-core-html", &["specmint-core-html"]),
+    ("a-core-b-tdd-html", &["specmint-core", "specmint-tdd-html"]),
 ];
 
 /// The per-agent folders that hold the same SKILL.md as `.claude/skills`
@@ -834,5 +834,114 @@ fn resolver_null_stdin() {
         cmd.env_remove("KLURIS_NO_PROMPT")
             .stdin(std::process::Stdio::null());
         check(&sb, &format!("resolver_null_stdin_{kind}"), &Run::of(cmd));
+    }
+}
+
+// --- the pickers (stdin on a terminal) ------------------------------------------
+
+#[cfg(unix)]
+mod pickers {
+    use super::*;
+    use common::pty::{End, run_on_terminal};
+
+    /// Where a picker case starts.
+    enum Start {
+        Brains(Brains),
+        State(&'static str),
+    }
+
+    /// What a picker case checks of the sandbox after the run.
+    enum Tree {
+        /// Nothing: the command only reads.
+        Unchecked,
+        /// The run changed nothing.
+        Unchanged,
+        /// The run's changes, as a snapshot `<name>_changes`.
+        Changes,
+    }
+
+    struct Picker {
+        name: &'static str,
+        start: Start,
+        args: &'static [&'static str],
+        lines: &'static [&'static str],
+        end: End,
+        env: Env,
+        tree: Tree,
+    }
+
+    const AB_MISSING: Brains = Brains::Registered(&[("a", Dir), ("b", Missing)]);
+    const ADD_A: &[&str] = &["companion", "add", "--brain", "a"];
+    const REMOVE_A: &[&str] = &["companion", "remove", "--brain", "a"];
+    const REMOVE_ALL: &[&str] = &["companion", "remove", "--brain", "all"];
+
+    /// Each picker case: prompting allowed (`KLURIS_NO_PROMPT` unset) unless
+    /// `env` sets it.
+    #[rustfmt::skip]
+    const PICKERS: &[Picker] = &[
+        // The brain picker.
+        Picker { name: "brain_picker_wake_up_picks_b", start: Start::Brains(AB), args: &[SINGLE], lines: &["2"], end: End::Open, env: &[], tree: Tree::Unchecked },
+        Picker {
+            name: "brain_picker_reprompts_on_invalid_input",
+            start: Start::Brains(Brains::Registered(&[("a", Dir), ("b", Missing), ("c", File)])),
+            args: &[FAN],
+            lines: &["abc", "", " 'x", "0", "9", "1_0", "1__0", " ", "１"],
+            end: End::Open, env: &[], tree: Tree::Unchecked,
+        },
+        Picker { name: "brain_picker_all_is_every_brain", start: Start::Brains(AB), args: &[FAN, "--brain", ""], lines: &["+3"], end: End::Open, env: &[], tree: Tree::Unchecked },
+        Picker { name: "brain_picker_choice_is_path_checked_missing", start: Start::Brains(AB_MISSING), args: &[FAN], lines: &["2"], end: End::Open, env: &[], tree: Tree::Unchecked },
+        Picker { name: "brain_picker_choice_is_path_checked_all", start: Start::Brains(AB_MISSING), args: &[FAN], lines: &["3"], end: End::Open, env: &[], tree: Tree::Unchecked },
+        Picker { name: "brain_picker_wake_up_picks_a_missing_brain", start: Start::Brains(AB_MISSING), args: &[SINGLE], lines: &["2"], end: End::Open, env: &[], tree: Tree::Unchecked },
+        Picker { name: "brain_picker_end_of_input", start: Start::Brains(AB), args: &[SINGLE], lines: &[], end: End::Eof, env: &[], tree: Tree::Unchecked },
+        Picker { name: "brain_picker_end_of_input_after_input", start: Start::Brains(AB), args: &[SINGLE], lines: &["x"], end: End::Eof, env: &[], tree: Tree::Unchecked },
+        Picker { name: "brain_picker_interrupt", start: Start::Brains(AB), args: &[SINGLE], lines: &[], end: End::Interrupt, env: &[], tree: Tree::Unchecked },
+        Picker { name: "brain_picker_no_prompt_yes_prompts", start: Start::Brains(AB), args: &[FAN], lines: &["1"], end: End::Open, env: &[("KLURIS_NO_PROMPT", Some("yes"))], tree: Tree::Unchecked },
+        Picker { name: "terminal_with_json_lists_the_brains", start: Start::Brains(AB), args: &[FAN, "--json"], lines: &[], end: End::Open, env: &[], tree: Tree::Unchecked },
+        Picker { name: "terminal_with_no_prompt_lists_the_brains", start: Start::Brains(AB), args: &[FAN], lines: &[], end: End::Open, env: &[("KLURIS_NO_PROMPT", Some("1"))], tree: Tree::Unchecked },
+        // The companion pickers.
+        Picker { name: "add_picker_core_and_tdd", start: Start::State("base"), args: ADD_A, lines: &["3"], end: End::Open, env: &[], tree: Tree::Changes },
+        Picker { name: "add_picker_reprompts_then_default", start: Start::State("base"), args: ADD_A, lines: &["9", "", "x"], end: End::Open, env: &[], tree: Tree::Unchanged },
+        Picker { name: "add_picker_default", start: Start::State("base"), args: ADD_A, lines: &["", "7"], end: End::Open, env: &[], tree: Tree::Unchanged },
+        Picker { name: "add_picker_all", start: Start::State("base"), args: ADD_A, lines: &["7"], end: End::Open, env: &[], tree: Tree::Changes },
+        Picker { name: "add_picker_tdd_html", start: Start::State("base"), args: ADD_A, lines: &["6"], end: End::Open, env: &[], tree: Tree::Changes },
+        Picker { name: "add_picker_space_then_core_html", start: Start::State("base"), args: ADD_A, lines: &[" 3", "5"], end: End::Open, env: &[], tree: Tree::Changes },
+        Picker { name: "add_picker_after_the_brain_picker", start: Start::State("base"), args: &["companion", "add"], lines: &["3", "2"], end: End::Open, env: &[], tree: Tree::Changes },
+        Picker { name: "add_picker_end_of_input", start: Start::State("base"), args: ADD_A, lines: &[], end: End::Eof, env: &[], tree: Tree::Unchanged },
+        Picker { name: "remove_confirm_default_yes", start: Start::State("a-tdd"), args: REMOVE_A, lines: &[""], end: End::Open, env: &[], tree: Tree::Changes },
+        Picker { name: "remove_confirm_y", start: Start::State("a-tdd"), args: REMOVE_A, lines: &["y"], end: End::Open, env: &[], tree: Tree::Changes },
+        Picker { name: "remove_confirm_junk_then_yes", start: Start::State("a-tdd"), args: REMOVE_A, lines: &["junk", " YES "], end: End::Open, env: &[], tree: Tree::Changes },
+        Picker { name: "remove_confirm_n", start: Start::State("a-tdd"), args: REMOVE_A, lines: &["n"], end: End::Open, env: &[], tree: Tree::Unchanged },
+        Picker { name: "remove_confirm_no", start: Start::State("a-tdd"), args: REMOVE_A, lines: &["No"], end: End::Open, env: &[], tree: Tree::Unchanged },
+        Picker { name: "remove_picker_tdd_html", start: Start::State("a-core-b-tdd-html"), args: REMOVE_ALL, lines: &["2"], end: End::Open, env: &[], tree: Tree::Changes },
+        Picker { name: "remove_picker_reprompts_then_all", start: Start::State("a-core-b-tdd-html"), args: REMOVE_ALL, lines: &["0", "x", "", "3"], end: End::Open, env: &[], tree: Tree::Changes },
+        Picker { name: "remove_picker_cancel", start: Start::State("a-core-b-tdd-html"), args: REMOVE_ALL, lines: &["4"], end: End::Open, env: &[], tree: Tree::Unchanged },
+        Picker { name: "remove_picker_nothing_enabled", start: Start::State("base"), args: REMOVE_ALL, lines: &[], end: End::Open, env: &[], tree: Tree::Unchanged },
+    ];
+
+    #[test]
+    fn pickers_on_a_terminal() {
+        for case in PICKERS {
+            let sb = match case.start {
+                Start::Brains(brains) => resolver_sandbox(brains),
+                Start::State(name) => state(name),
+            };
+            let before = tree_files(&sb.work);
+            let mut cmd = sb.command(case.args);
+            cmd.env_remove("KLURIS_NO_PROMPT");
+            for (key, value) in case.env {
+                match value {
+                    Some(value) => cmd.env(key, value),
+                    None => cmd.env_remove(key),
+                };
+            }
+            let run = run_on_terminal(cmd, case.lines, case.end);
+            let name = format!("picker_{}", case.name);
+            check(&sb, &name, &run);
+            match case.tree {
+                Tree::Unchecked => {}
+                Tree::Unchanged => assert_unchanged(&sb, &before),
+                Tree::Changes => check_changes(&sb, &format!("{name}_changes"), &before),
+            }
+        }
     }
 }

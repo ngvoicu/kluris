@@ -1,0 +1,20 @@
+---
+source: crates/kluris-cli/tests/golden_companions_resolver.rs
+expression: run.render(&sb.root)
+---
+== stdout
+Multiple brains registered. Pick one:
+  [1] a  (<ROOT>/work/brains/a)
+  [2] b  (<ROOT>/work/brains/b)
+  [3] all
+Choice:   Install specmint companions for this brain?
+    [1] specmint-core      (spec-driven-development companion)
+    [2] specmint-tdd       (spec-driven-development with test-driven-development focus)
+    [3] core + tdd
+    [4] skip
+    [5] specmint-core-html (spec-driven-development with canonical SPEC.html)
+    [6] specmint-tdd-html  (TDD-focused specs with canonical SPEC.html)
+    [7] all
+  Choice [4]: Added companion(s) specmint-tdd to: a, b
+== stderr
+== exit 0

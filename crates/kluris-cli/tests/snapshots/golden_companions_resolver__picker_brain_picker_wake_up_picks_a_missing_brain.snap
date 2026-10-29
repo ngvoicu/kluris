@@ -1,0 +1,15 @@
+---
+source: crates/kluris-cli/tests/golden_companions_resolver.rs
+expression: run.render(&sb.root)
+---
+== stdout
+Multiple brains registered. Pick one:
+  [1] a  (<ROOT>/work/brains/brain-0)
+  [2] b  (<ROOT>/work/brains/brain-1)  (missing)
+Choice: 
+<no newline at end>
+== stderr
+Error: The following registered brain(s) have missing or invalid paths:
+  - b: <ROOT>/work/brains/brain-1
+Run `kluris remove <name>` or fix the path in the global config.
+== exit 1
