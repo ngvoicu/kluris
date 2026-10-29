@@ -246,6 +246,76 @@ impl World {
     pub fn files(&self) -> Tree {
         tree_files(&self.work)
     }
+
+    /// The refs and history of every brain with git, which [`World::files`]
+    /// leaves out: for each, the branch HEAD names, every ref and the
+    /// object it names, and every commit reachable from a ref with its
+    /// tree, parents, author, committer, dates and subject.
+    pub fn histories(&self) -> String {
+        let mut out = String::new();
+        for name in &self.brains {
+            let repo = self.brain(name);
+            if !repo.join(".git").exists() {
+                continue;
+            }
+            let git = |args: &[&str]| self.git(&repo, args, PINNED_GIT_DATE);
+            out.push_str(&format!(
+                "== {name}\n{}{}{}",
+                git(&["symbolic-ref", "HEAD"]),
+                git(&["for-each-ref", "--format=%(refname) %(objectname)"]),
+                git(&[
+                    "log",
+                    "--all",
+                    "--format=%H %T %P%n%an <%ae> %aI%n%cn <%ce> %cI%n%s",
+                ]),
+            ));
+        }
+        out
+    }
+}
+
+/// Makes `at` a link to the folder `target` (relative to `at`'s folder) as
+/// this OS lets a user make one: a symlink, or on Windows, where a symlink
+/// needs Developer Mode or an administrator, a junction (`mklink /J`, to
+/// the absolute folder). Returns the kind made, or why neither could be.
+pub fn link_folder(target: &Path, at: &Path) -> Result<&'static str, String> {
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(target, at)
+            .map(|()| "symlink")
+            .map_err(|e| format!("symlink: {e}"))
+    }
+    #[cfg(windows)]
+    {
+        let symlink = match std::os::windows::fs::symlink_dir(target, at) {
+            Ok(()) => return Ok("symlink"),
+            Err(e) => e,
+        };
+        let parent = at.parent().expect("parent");
+        let absolute = fs::canonicalize(parent.join(target))
+            .map_err(|e| format!("symlink: {symlink}; {}: {e}", target.display()))?;
+        let plain = |p: &Path| {
+            p.display()
+                .to_string()
+                .trim_start_matches(r"\\?\")
+                .to_string()
+        };
+        let out = Command::new("cmd")
+            .args(["/c", "mklink", "/J"])
+            .arg(plain(at))
+            .arg(plain(&absolute))
+            .output()
+            .map_err(|e| format!("symlink: {symlink}; mklink /J: {e}"))?;
+        if out.status.success() {
+            Ok("junction")
+        } else {
+            Err(format!(
+                "symlink: {symlink}; mklink /J: {}{}",
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr)
+            ))
+        }
+    }
 }
 
 /// The frozen world `src` has CRLF in exactly the files its

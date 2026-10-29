@@ -2,8 +2,10 @@
 source: crates/kluris-cli/tests/golden_upgrade.rs
 expression: lf
 ---
-== stdout (429 bytes)
-{"ok": true, "brain": "team", "query": "blockers", "total": 1, "results": [{"file": "process/standup.md", "file_type": "markdown", "title": "Daily standup", "matched_fields": ["body"], "snippet": "# Daily standup\\n\\nFifteen minutes at 9:30, blockers first.", "score": 51, "deprecated": false, "heading": null, "line": 8, "matched_terms": ["blockers"], "coverage": 1.0, "related": [], "updated": "2026-01-01"}], "engine": "bm25"}
-== stderr (0 bytes)
-== exit 0
-<end of run>
+ok: true
+brain: "team"
+query: "blockers"
+engine: "bm25"
+exit: 0
+total: 1
+process/standup.md | "Daily standup" | markdown | deprecated false | body

@@ -25,15 +25,20 @@ mod common;
 use std::fs;
 use std::path::Path;
 
+use common::golden::python_json;
 use common::shared::{skill_reference, vendored_marker};
-use common::upgrade::{Brain, World};
-use common::{PINNED_GIT_DATE, Tree, assert_unchanged, changes_dump, git_dump, normalize};
+use common::upgrade::{Brain, World, link_folder};
+use common::{
+    PINNED_GIT_DATE, Run, Tree, assert_unchanged, changes_dump, command_line, git_dump, normalize,
+    slashed,
+};
 use kluris_core::agents::install::{
     DestinationRole, InstallReport, InstallRequest, install_skills, read_brain_configs,
 };
 use kluris_core::agents::render::posix_path;
 use kluris_core::config::read_global_config;
-use serde_json::json;
+use kluris_core::json;
+use serde_json::{Value, json};
 
 /// A frozen world in its two forms: as the earlier Kluris made it on macOS
 /// and Linux, then on Windows (each with its brains, whose last commit ids
@@ -351,16 +356,42 @@ fn doctor_keeps_entries_that_only_look_like_kluris() {
     });
 }
 
-/// `~/.codex/skills` is a link to `../.agents/skills`: doctor writes the
-/// universal folder once and reports the link as its alias.
-#[cfg(unix)]
+/// `~/.codex/skills` is a link to `../.agents/skills` (a symlink, or on
+/// Windows a junction where the machine makes no symlink): doctor writes
+/// the universal folder once, reports the link as its alias and leaves the
+/// link as it was. Skipped only on a machine that can make neither.
 #[test]
 fn doctor_a_skill_folder_linked_to_the_universal_one() {
+    let target = Path::new("..").join(".agents").join("skills");
+    let probe = World::empty();
+    fs::create_dir_all(probe.home.join(".agents/skills")).expect("mkdir");
+    fs::create_dir_all(probe.home.join(".codex")).expect("mkdir");
+    let kind = match link_folder(&target, &probe.home.join(".codex/skills")) {
+        Ok(kind) => kind,
+        Err(why) => {
+            eprintln!("skipped: this machine makes no folder link ({why})");
+            return;
+        }
+    };
+    eprintln!("~/.codex/skills is a {kind}");
     on_both_forms(&SKILL_INSTALL, &[], |world| {
         let codex = world.home.join(".codex/skills");
         fs::remove_dir_all(&codex).expect("rm codex");
-        std::os::unix::fs::symlink("../.agents/skills", &codex).expect("symlink");
-        doctor(world, &["doctor", "--json"], "doctor_linked_folder")
+        assert_eq!(link_folder(&target, &codex), Ok(kind));
+        let outputs = doctor(world, &["doctor", "--json"], "doctor_linked_folder");
+        assert!(
+            fs::symlink_metadata(&codex).expect("codex").is_symlink(),
+            "the link is gone"
+        );
+        for brain in ["acme", "beta"] {
+            let skill = format!("kluris-{brain}/SKILL.md");
+            assert_eq!(
+                fs::read(codex.join(&skill)).expect("through the link"),
+                fs::read(world.home.join(".agents/skills").join(&skill)).expect("universal"),
+                "{skill} through the link"
+            );
+        }
+        outputs
     });
 }
 
@@ -371,9 +402,103 @@ const QUERIES: &[(&str, &[&str])] = &[
     ("team", &["standup", "blockers"]),
 ];
 
+/// A `search --json` run as the migration snapshots hold it. The raw run is
+/// checked first: exit 0, nothing on stderr, and stdout one line of
+/// `json.dumps` of its parse with exactly the envelope's keys and `total`
+/// the number of results. The snapshot then holds the envelope, the exit
+/// code, `total` and the results sorted by file and title, each with its
+/// file type, `deprecated` flag and matched fields: the order, scores,
+/// snippets and other fields are the search engine's own.
+fn search_slice(run: &Run, world: &World, brain: &str, query: &str) -> String {
+    assert_eq!(run.code, 0, "{}", world.render(run));
+    assert_eq!(run.stderr, "", "search wrote to stderr");
+    let doc: Value = serde_json::from_str(&run.stdout)
+        .unwrap_or_else(|e| panic!("stdout is not JSON ({e}): {:?}", run.stdout));
+    assert_eq!(
+        run.stdout,
+        json::to_line(&python_json(&doc)),
+        "stdout is not one line of json.dumps of its parse"
+    );
+    let keys: Vec<&String> = doc.as_object().expect("an object").keys().collect();
+    assert_eq!(keys, ["ok", "brain", "query", "total", "results", "engine"]);
+    assert_eq!(doc["brain"], brain);
+    assert_eq!(doc["query"], query);
+    let results = doc["results"].as_array().expect("results");
+    assert_eq!(doc["total"].as_u64(), Some(results.len() as u64));
+    let mut found: Vec<String> = results
+        .iter()
+        .map(|r| {
+            let fields: Vec<&str> = r["matched_fields"]
+                .as_array()
+                .expect("matched_fields")
+                .iter()
+                .map(|f| f.as_str().expect("a field"))
+                .collect();
+            format!(
+                "{} | {} | {} | deprecated {} | {}\n",
+                r["file"].as_str().expect("file"),
+                r["title"],
+                r["file_type"].as_str().expect("file_type"),
+                r["deprecated"].as_bool().expect("deprecated"),
+                fields.join(" ")
+            )
+        })
+        .collect();
+    found.sort();
+    format!(
+        "ok: {}\nbrain: {}\nquery: {}\nengine: {}\nexit: {}\ntotal: {}\n{}",
+        doc["ok"],
+        doc["brain"],
+        doc["query"],
+        doc["engine"],
+        run.code,
+        doc["total"],
+        found.concat()
+    )
+}
+
+/// The user's own files in the migration world (relative to HOME): no
+/// command may change a byte of them.
+const USER_FILES: &[&str] = &[
+    ".agents/skills/README.txt",
+    ".agents/skills/my-tool/SKILL.md",
+    ".agents/skills/my-tool/run.sh",
+    ".cursor/skills/kluris-notes/SKILL.md",
+];
+
+/// `tree`'s entries whose path starts with `prefix`.
+fn under(tree: &Tree, prefix: &str) -> Tree {
+    tree.iter()
+        .filter(|(path, _)| path.starts_with(prefix))
+        .map(|(path, entry)| (path.clone(), entry.clone()))
+        .collect()
+}
+
+/// Fails the test, naming `what`, unless `now` holds the config and every
+/// [`USER_FILES`] entry with the bytes the world was frozen with.
+fn assert_user_files_kept(world: &World, frozen: &Tree, now: &Tree, what: &str) {
+    let config = world
+        .config
+        .strip_prefix(&world.home)
+        .expect("config under HOME");
+    let config = format!("home/{}", slashed(config));
+    let paths = std::iter::once(config).chain(USER_FILES.iter().map(|rel| format!("home/{rel}")));
+    for path in paths {
+        assert!(frozen.contains_key(&path), "the frozen world has no {path}");
+        assert_eq!(now.get(&path), frozen.get(&path), "{what} changed {path}");
+    }
+}
+
 /// `doctor`, then `wake-up` and `search` on each brain, `dream` on each,
 /// and `doctor` again. The brain commands' snapshots are shared by both
 /// runs: `COPILOT_HOME` changes only where the skills go.
+///
+/// One expected state is carried through the whole sequence: the world as
+/// the first doctor leaves it (its brains, config and user files as
+/// frozen), each dream's changes to its own brain added. A read changes
+/// nothing in it, a dream changes nothing outside its brain, and after the
+/// second doctor the world is that state, its config and user files as
+/// frozen, and every brain's refs and history as frozen.
 fn first_commands(world: &World, copilot_home: bool) -> Outputs {
     let copilot = world.home.join("copilot-home");
     let extra: Vec<(&str, &Path)> = if copilot_home {
@@ -385,6 +510,7 @@ fn first_commands(world: &World, copilot_home: bool) -> Outputs {
     let mut outputs = Vec::new();
 
     let frozen = world.files();
+    let histories = world.histories();
     let doctor = world.kluris(&["doctor", "--json"], &extra);
     outputs.push(output(
         format!("migration_doctor{variant}"),
@@ -394,9 +520,27 @@ fn first_commands(world: &World, copilot_home: bool) -> Outputs {
         format!("migration_doctor{variant}_changes"),
         changes(world, &frozen),
     ));
+    let mut expected = world.files();
+    assert_user_files_kept(world, &frozen, &expected, "the first doctor");
+    assert_unchanged(
+        &under(&frozen, "brains/"),
+        &under(&expected, "brains/"),
+        "the first doctor",
+    );
 
+    let read = |args: &[&str], expected: &Tree| {
+        let out = world.kluris(args, &extra);
+        let what = command_line(args);
+        assert_unchanged(expected, &world.files(), &what);
+        assert_eq!(
+            world.histories(),
+            histories,
+            "{what} changed a brain's history"
+        );
+        out
+    };
     for (brain, _) in QUERIES {
-        let out = world.kluris(&["wake-up", "--brain", brain, "--json"], &extra);
+        let out = read(&["wake-up", "--brain", brain, "--json"], &expected);
         outputs.push(output(
             format!("migration_wake_up_{brain}"),
             world.render(&out),
@@ -407,13 +551,19 @@ fn first_commands(world: &World, copilot_home: bool) -> Outputs {
             let args = [
                 "search", "--brain", brain, "--json", "--limit", "1000", "--", query,
             ];
-            let out = world.kluris(&args, &extra);
+            let out = read(&args, &expected);
             let name = format!("migration_search_{brain}_{}", query.replace(' ', "_"));
-            outputs.push(output(name, world.render(&out)));
+            outputs.push(output(name, search_slice(&out, world, brain, query)));
         }
     }
+
+    let mut statuses = Vec::new();
     for (brain, _) in QUERIES {
+        let prefix = format!("brains/{brain}/");
         let before = world.files();
+        let what = format!("the commands before `dream --brain {brain}`");
+        assert_unchanged(&expected, &before, &what);
+        assert_unchanged(&under(&frozen, &prefix), &under(&before, &prefix), &what);
         let out = world.kluris(&["dream", "--brain", brain, "--json"], &extra);
         outputs.push(output(
             format!("migration_dream_{brain}"),
@@ -421,8 +571,12 @@ fn first_commands(world: &World, copilot_home: bool) -> Outputs {
         ));
         outputs.push(output(
             format!("migration_dream_{brain}_changes"),
-            changes(world, &before),
+            changes(world, &expected),
         ));
+        let after = world.files();
+        expected.retain(|path, _| !path.starts_with(&prefix));
+        expected.extend(under(&after, &prefix));
+        assert_unchanged(&expected, &after, &format!("dream --brain {brain}"));
         let repo = world.brain(brain);
         let status = world.git(
             &repo,
@@ -433,15 +587,30 @@ fn first_commands(world: &World, copilot_home: bool) -> Outputs {
             format!("migration_dream_{brain}_git"),
             format!("== git status --porcelain\n{status}{}", git_dump(&repo)),
         ));
+        statuses.push((repo, status));
     }
 
-    let before = world.files();
     let doctor = world.kluris(&["doctor", "--json"], &extra);
     outputs.push(output(
         format!("migration_second_doctor{variant}"),
         world.render(&doctor),
     ));
-    assert_unchanged(&before, &world.files(), "the second doctor");
+    let last = world.files();
+    assert_unchanged(&expected, &last, "the commands after the upgrade");
+    assert_user_files_kept(world, &frozen, &last, "the commands after the upgrade");
+    assert_eq!(
+        world.histories(),
+        histories,
+        "the commands after the upgrade changed a brain's history"
+    );
+    for (repo, status) in statuses {
+        let now = world.git(
+            &repo,
+            &["-c", "core.quotePath=false", "status", "--porcelain"],
+            PINNED_GIT_DATE,
+        );
+        assert_eq!(now, status, "{}: the work tree's state", repo.display());
+    }
     assert_emptied_folders_stay(world);
     outputs
 }
