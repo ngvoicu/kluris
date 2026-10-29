@@ -35,7 +35,7 @@ use std::sync::LazyLock;
 use regex::Regex;
 
 use super::golden::{PINNED_GIT_DATE, decode, native_path, tree_files};
-use super::sandbox::{Run, Sandbox, fixture, write};
+use super::sandbox::{Run, Sandbox, fixture, unstored, write};
 
 /// A brain of a frozen world: its commit messages, oldest first (none: a
 /// brain without git), and the commit id its last commit must get.
@@ -235,18 +235,6 @@ impl World {
     pub fn files(&self) -> BTreeMap<String, Vec<u8>> {
         tree_files(&self.work)
     }
-}
-
-/// `rel` as a stored fixture path names it: each `dot-<name>` part as
-/// `.<name>`.
-fn unstored(rel: &str) -> String {
-    rel.split('/')
-        .map(|part| match part.strip_prefix("dot-") {
-            Some(name) => format!(".{name}"),
-            None => part.to_string(),
-        })
-        .collect::<Vec<_>>()
-        .join("/")
 }
 
 /// The frozen world `src` has CRLF in exactly the files its

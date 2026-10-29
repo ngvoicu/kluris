@@ -22,7 +22,8 @@ pub use golden::{
     native_path, normalize, normalize_json, tree_dump, tree_files,
 };
 pub use sandbox::{
-    Run, Sandbox, changes_dump, command_line, copy_tree, fixture, printed_paths, write, write_files,
+    Run, Sandbox, changes_dump, command_line, copy_tree, fixture, printed_paths, unstored, write,
+    write_files,
 };
 
 use std::path::{Path, PathBuf};

@@ -193,6 +193,21 @@ pub fn fixture(name: &str) -> PathBuf {
         .join(name)
 }
 
+/// `rel`, a `/`-joined path under a fixture folder, as the test makes it:
+/// each `dot-<name>` part as `.<name>`. A fixture stores every name that
+/// starts with `.` as `dot-<name>` (`dot-claude`, `dot-gitignore`), so that
+/// no agent working in this repository finds a fixture's skills and no
+/// fixture's `.gitignore` applies to the repository.
+pub fn unstored(rel: &str) -> String {
+    rel.split('/')
+        .map(|part| match part.strip_prefix("dot-") {
+            Some(name) => format!(".{name}"),
+            None => part.to_string(),
+        })
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
 /// Copies the folder `from` to `to`, byte for byte, creating folders.
 pub fn copy_tree(from: &Path, to: &Path) {
     fs::create_dir_all(to).unwrap_or_else(|e| panic!("{}: {e}", to.display()));

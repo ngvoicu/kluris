@@ -8,7 +8,8 @@
 //! holds brains `a` and `b` (their `kluris.yml` lists the `windsurf` and
 //! `gemini` agents), the config, one SKILL.md per brain and the Windsurf
 //! workflows; each other folder holds the files that differ once brains
-//! opted into companions. [`state`] fills the paths in, copies each
+//! opted into companions. Names that start with `.` are stored as
+//! `dot-<name>` (see [`unstored`]). [`state`] fills the paths in, copies each
 //! SKILL.md into every per-agent folder of that home, installs the
 //! opted-in companions from `vendored/` and makes `a` a git repository
 //! with one commit.
@@ -25,7 +26,7 @@ use std::path::Path;
 use common::shared::{COMPANIONS, skill_reference, vendored, vendored_marker};
 use common::{
     PINNED_GIT_DATE, Run, Sandbox, changes_dump, file_body, normalize, printed_paths, tree_files,
-    write,
+    unstored, write,
 };
 
 /// The fixture states: `base`, or `base` with the overlay of that name, and
@@ -80,9 +81,7 @@ fn state(name: &str) -> Sandbox {
     }
     for layer in layers {
         for (rel, bytes) in tree_files(&fixtures.join(layer)) {
-            // A `.gitignore` among the fixtures would apply to this repository.
-            let rel = rel.replace("/gitignore", "/.gitignore");
-            write(&sb.work.join(rel), fill(bytes).as_bytes());
+            write(&sb.work.join(unstored(&rel)), fill(bytes).as_bytes());
         }
     }
     for b in ["a", "b"] {
