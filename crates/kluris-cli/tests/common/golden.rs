@@ -11,7 +11,7 @@
 //! `normalize(&tree_dump(dir), root)` replaces the root and today's date
 //! while a file's CRLF stays in the snapshot.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::Path;
 use std::process::Command;
@@ -148,23 +148,38 @@ pub fn normalize_json(text: &str, root: &Path, version_fields: &[&str]) -> Strin
 }
 
 /// Every file under `dir`, sorted by its `/`-joined relative path: a
-/// `== <path>` line, then its bytes as [`escape`] writes them (a CR, a BOM
-/// and a byte that is not UTF-8 visible; a backslash doubled), then a
-/// `<no newline at end>` line when the file does not end in a newline. A
-/// symlink is `<symlink> <target>` and is not followed. Folders show only
-/// through their files. `.git` is left out: its objects and index change
-/// with every run, and [`git_dump`] shows what they record.
+/// `== <path>` line, then its bytes as [`file_body`] writes them. A symlink
+/// is `<symlink> <target>` and is not followed. Folders show only through
+/// their files. `.git` is left out: its objects and index change with every
+/// run, and [`git_dump`] shows what they record.
 pub fn tree_dump(dir: &Path) -> String {
-    let mut entries = Vec::new();
-    walk(dir, "", &mut entries);
-    entries.sort();
-    entries
+    tree_files(dir)
         .into_iter()
-        .map(|(path, body)| format!("== {path}\n{body}"))
+        .map(|(path, bytes)| format!("== {path}\n{}", file_body(&bytes)))
         .collect()
 }
 
-fn walk(dir: &Path, prefix: &str, out: &mut Vec<(String, String)>) {
+/// Every file under `dir` as [`tree_dump`] lists it, by its `/`-joined
+/// relative path: its bytes, or `<symlink> <target>` and a newline for a
+/// symlink.
+pub fn tree_files(dir: &Path) -> BTreeMap<String, Vec<u8>> {
+    let mut files = BTreeMap::new();
+    walk(dir, "", &mut files);
+    files
+}
+
+/// A file's bytes as [`tree_dump`] writes them: as [`escape`] writes them (a
+/// CR, a BOM and a byte that is not UTF-8 visible; a backslash doubled),
+/// then a `<no newline at end>` line when they do not end in a newline.
+pub fn file_body(bytes: &[u8]) -> String {
+    let mut body = escape(bytes);
+    if !bytes.is_empty() && !bytes.ends_with(b"\n") {
+        body.push_str("\n<no newline at end>\n");
+    }
+    body
+}
+
+fn walk(dir: &Path, prefix: &str, out: &mut BTreeMap<String, Vec<u8>>) {
     let read = fs::read_dir(dir).unwrap_or_else(|e| panic!("{}: {e}", dir.display()));
     for entry in read {
         let entry = entry.unwrap_or_else(|e| panic!("{}: {e}", dir.display()));
@@ -178,17 +193,15 @@ fn walk(dir: &Path, prefix: &str, out: &mut Vec<(String, String)>) {
             fs::symlink_metadata(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
         if meta.is_symlink() {
             let target = fs::read_link(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
-            let target = escape(target.as_os_str().as_encoded_bytes());
-            out.push((rel, format!("<symlink> {target}\n")));
+            let mut link = b"<symlink> ".to_vec();
+            link.extend_from_slice(target.as_os_str().as_encoded_bytes());
+            link.push(b'\n');
+            out.insert(rel, link);
         } else if meta.is_dir() {
             walk(&path, &format!("{rel}/"), out);
         } else if meta.is_file() {
             let bytes = fs::read(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
-            let mut body = escape(&bytes);
-            if !bytes.is_empty() && !bytes.ends_with(b"\n") {
-                body.push_str("\n<no newline at end>\n");
-            }
-            out.push((rel, body));
+            out.insert(rel, bytes);
         }
     }
 }

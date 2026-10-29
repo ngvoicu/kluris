@@ -1,0 +1,9 @@
+---
+source: crates/kluris-cli/tests/golden_companions_resolver.rs
+expression: run.render(&sb.root)
+---
+== stdout
+Removed companion(s) specmint-tdd from: (none)
+Runtime companion files were kept under ~/.kluris/companions.
+== stderr
+== exit 0

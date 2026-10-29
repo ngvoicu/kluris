@@ -1,0 +1,8 @@
+---
+source: crates/kluris-cli/tests/golden_companions_resolver.rs
+expression: run.render(&sb.root)
+---
+== stdout
+{"ok": true, "brains": [{"name": "only", "lobes": 0, "neurons": 0, "uncommitted": "", "git_enabled": false, "recent_commits": []}]}
+== stderr
+== exit 0

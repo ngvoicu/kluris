@@ -1,0 +1,26 @@
+---
+source: crates/kluris-cli/tests/golden_companions_resolver.rs
+expression: run.render(&sb.root)
+---
+== stdout
+Remove a companion opt-in from one or more brains.
+
+Runs an interactive picker listing currently-enabled companions when no NAME is given. The global companion copy under ~/.kluris/companions is kept for cheap reuse.
+
+Usage: kluris companion remove [OPTIONS] [specmint-core|specmint-tdd|specmint-core-html|specmint-tdd-html]
+
+Arguments:
+  [specmint-core|specmint-tdd|specmint-core-html|specmint-tdd-html]
+          
+
+Options:
+      --brain <BRAIN>
+          Brain name or 'all'
+
+      --json
+          JSON output
+
+      --help
+          Show this message and exit.
+== stderr
+== exit 0

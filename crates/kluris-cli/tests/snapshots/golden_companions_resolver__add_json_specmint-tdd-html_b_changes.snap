@@ -1,0 +1,92 @@
+---
+source: crates/kluris-cli/tests/golden_companions_resolver.rs
+expression: "normalize(&out, &sb.root)"
+---
+== brains/b/kluris.yml
+name: b
+description: b knowledge base
+agents:
+  commands_for:
+  - claude
+  - cursor
+  - devin
+  - copilot
+  - codex
+  - hermes
+  - kilocode
+  - junie
+  - antigravity
+companions:
+- specmint-tdd-html
+== home/.agents/skills/kluris-a/SKILL.md
+<snapshot skill_a_none>
+== home/.agents/skills/kluris-b/SKILL.md
+<snapshot skill_b_specmint-tdd-html>
+== home/.claude/skills/kluris-a/SKILL.md
+<snapshot skill_a_none>
+== home/.claude/skills/kluris-b/SKILL.md
+<snapshot skill_b_specmint-tdd-html>
+== home/.codeium/windsurf/global_workflows/kluris-a.md
+<removed>
+== home/.codeium/windsurf/global_workflows/kluris-b.md
+<removed>
+== home/.codeium/windsurf/skills/kluris-a/SKILL.md
+<removed>
+== home/.codeium/windsurf/skills/kluris-b/SKILL.md
+<removed>
+== home/.codex/skills/kluris-a/SKILL.md
+<removed>
+== home/.codex/skills/kluris-b/SKILL.md
+<removed>
+== home/.copilot/skills/kluris-a/SKILL.md
+<removed>
+== home/.copilot/skills/kluris-b/SKILL.md
+<removed>
+== home/.cursor/skills/kluris-a/SKILL.md
+<removed>
+== home/.cursor/skills/kluris-b/SKILL.md
+<removed>
+== home/.gemini/config/skills/kluris-a/SKILL.md
+<snapshot skill_a_none>
+== home/.gemini/config/skills/kluris-b/SKILL.md
+<snapshot skill_b_specmint-tdd-html>
+== home/.gemini/skills/kluris-a/SKILL.md
+<removed>
+== home/.gemini/skills/kluris-b/SKILL.md
+<removed>
+== home/.hermes/skills/kluris-a/SKILL.md
+<snapshot skill_a_none>
+== home/.hermes/skills/kluris-b/SKILL.md
+<snapshot skill_b_specmint-tdd-html>
+== home/.junie/skills/kluris-a/SKILL.md
+<removed>
+== home/.junie/skills/kluris-b/SKILL.md
+<removed>
+== home/.kilo/skills/kluris-a/SKILL.md
+<removed>
+== home/.kilo/skills/kluris-b/SKILL.md
+<removed>
+== home/.kluris/companions/specmint-tdd-html/SKILL.md
+<vendored/specmint-tdd-html/SKILL.md>
+== home/.kluris/companions/specmint-tdd-html/assets/spec-runtime.js
+<vendored/specmint-tdd-html/assets/spec-runtime.js>
+== home/.kluris/companions/specmint-tdd-html/assets/spec-styles.css
+<vendored/specmint-tdd-html/assets/spec-styles.css>
+== home/.kluris/companions/specmint-tdd-html/references/command-contracts.md
+<vendored/specmint-tdd-html/references/command-contracts.md>
+== home/.kluris/companions/specmint-tdd-html/references/edit-recipes.md
+<vendored/specmint-tdd-html/references/edit-recipes.md>
+== home/.kluris/companions/specmint-tdd-html/references/html-template.html
+<vendored/specmint-tdd-html/references/html-template.html>
+== home/.kluris/companions/specmint-tdd-html/references/mockup-library.md
+<vendored/specmint-tdd-html/references/mockup-library.md>
+== home/.kluris/companions/specmint-tdd-html/references/researcher.md
+<vendored/specmint-tdd-html/references/researcher.md>
+== home/.kluris/companions/specmint-tdd-html/references/spec-format.md
+<vendored/specmint-tdd-html/references/spec-format.md>
+== home/.kluris/companions/specmint-tdd-html/references/testing-knowledge.md
+<vendored/specmint-tdd-html/references/testing-knowledge.md>
+== home/.kluris/companions/specmint-tdd-html/references/validate.md
+<vendored/specmint-tdd-html/references/validate.md>
+== home/.kluris/companions/specmint-tdd-html/references/wireframe-library.md
+<vendored/specmint-tdd-html/references/wireframe-library.md>

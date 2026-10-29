@@ -1,0 +1,20 @@
+---
+source: crates/kluris-cli/tests/golden_companions_resolver.rs
+expression: run.render(&sb.root)
+---
+== stdout
+List known companions, installed runtime copies, and brain opt-ins.
+
+Usage: kluris companion list [OPTIONS]
+
+Options:
+      --brain <BRAIN>
+          Brain name or 'all'
+
+      --json
+          JSON output
+
+      --help
+          Show this message and exit.
+== stderr
+== exit 0

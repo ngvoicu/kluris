@@ -1,0 +1,7 @@
+brains:
+  a:
+    path: <BRAIN a>
+    description: Brain A
+  b:
+    path: <BRAIN b>
+    description: b knowledge base

@@ -1,0 +1,8 @@
+---
+source: crates/kluris-cli/tests/golden_companions_resolver.rs
+expression: run.render(&sb.root)
+---
+== stdout
+{"ok": false, "error": "Invalid value for '[specmint-core|specmint-tdd|specmint-core-html|specmint-tdd-html]': 'bogus' is not one of 'specmint-core', 'specmint-tdd', 'specmint-core-html', 'specmint-tdd-html'."}
+== stderr
+== exit 1

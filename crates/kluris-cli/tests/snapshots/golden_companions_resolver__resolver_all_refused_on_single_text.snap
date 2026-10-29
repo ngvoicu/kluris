@@ -1,0 +1,8 @@
+---
+source: crates/kluris-cli/tests/golden_companions_resolver.rs
+expression: run.render(&sb.root)
+---
+== stdout
+== stderr
+Error: --brain all is only supported on dream, status, mri, sync, and companion commands.
+== exit 1

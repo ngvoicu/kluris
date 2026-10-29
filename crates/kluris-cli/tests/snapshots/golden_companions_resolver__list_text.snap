@@ -1,0 +1,21 @@
+---
+source: crates/kluris-cli/tests/golden_companions_resolver.rs
+expression: run.render(&sb.root)
+---
+== stdout
+Known Companions
+Name                Installed
+------------------  ---------
+specmint-core       yes
+specmint-tdd        yes
+specmint-core-html  no
+specmint-tdd-html   yes
+Brain Companion Opt-ins
+Brain  Companions
+-----  --------------------------------
+a      specmint-core, specmint-tdd-html
+b      (none)
+c      (unknown)
+d      (unknown)
+== stderr
+== exit 0

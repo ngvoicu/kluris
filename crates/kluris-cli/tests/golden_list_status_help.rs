@@ -11,7 +11,9 @@ mod common;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use common::{PINNED_GIT_DATE, Run, Sandbox, command_line, normalize, tree_dump, write_files};
+use common::{
+    PINNED_GIT_DATE, Run, Sandbox, command_line, normalize, printed_paths, tree_dump, write_files,
+};
 
 // --- snapshots -----------------------------------------------------------------
 
@@ -45,18 +47,6 @@ fn golden_table(
     insta::with_settings!({ omit_expression => true }, {
         insta::assert_snapshot!(name, out);
     });
-}
-
-/// Runs `check` with its snapshots named for the paths this OS prints: a
-/// configured path is printed as written, with native separators, so on
-/// Windows (`\`) such a snapshot is the `windows` variant of the one macOS
-/// and Linux share.
-fn printed_paths(check: impl FnOnce()) {
-    #[allow(unused_mut)]
-    let mut settings = insta::Settings::clone_current();
-    #[cfg(windows)]
-    settings.set_snapshot_suffix("windows");
-    settings.bind(check);
 }
 
 /// The whole run: its streams and exit code.

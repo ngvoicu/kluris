@@ -75,22 +75,19 @@ impl Sandbox {
 
     /// `kluris args` in `work/`, its stdin an empty pipe.
     pub fn kluris(&self, args: &[&str]) -> Run {
+        Run::of(self.command(args))
+    }
+
+    /// `kluris args` in `work/` with the sandbox's environment and its stdin
+    /// an empty pipe, for a test that changes either before it runs it with
+    /// [`Run::of`].
+    pub fn command(&self, args: &[&str]) -> Command {
         let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("kluris"));
         self.env(&mut cmd)
             .args(args)
             .current_dir(&self.work)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-        let mut child = cmd.spawn().unwrap();
-        child.stdin.take().unwrap().flush().unwrap();
-        let out = child.wait_with_output().unwrap();
-        let what = format!("kluris {}", args.join(" "));
-        Run {
-            code: out.status.code().unwrap_or(-1),
-            stdout: decode(&out.stdout, &format!("stdout of `{what}`")),
-            stderr: decode(&out.stderr, &format!("stderr of `{what}`")),
-        }
+            .stdin(Stdio::piped());
+        cmd
     }
 
     /// `git args` in `cwd` with the sandbox's identity, its commits dated
@@ -140,7 +137,26 @@ pub fn write_files(root: &Path, files: &[(&str, &str)]) {
     }
 }
 
+/// Writes `bytes` to `path`, creating its folders.
+pub fn write(path: &Path, bytes: &[u8]) {
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(path, bytes).unwrap();
+}
+
+/// Runs `check` with its snapshots named for the paths this OS prints: a
+/// configured path is printed as written, with native separators, so on
+/// Windows (`\`) such a snapshot is the `windows` variant of the one macOS
+/// and Linux share.
+pub fn printed_paths(check: impl FnOnce()) {
+    #[allow(unused_mut)]
+    let mut settings = insta::Settings::clone_current();
+    #[cfg(windows)]
+    settings.set_snapshot_suffix("windows");
+    settings.bind(check);
+}
+
 /// How a run ended: its exit code and its decoded streams.
+#[derive(Debug)]
 pub struct Run {
     pub code: i32,
     pub stdout: String,
@@ -148,6 +164,24 @@ pub struct Run {
 }
 
 impl Run {
+    /// Runs `cmd` (a piped stdin is closed at once, an empty pipe) and
+    /// collects how it ended.
+    pub fn of(mut cmd: Command) -> Self {
+        let args: Vec<_> = cmd.get_args().map(|a| a.to_string_lossy()).collect();
+        let what = format!("kluris {}", args.join(" "));
+        cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+        let mut child = cmd.spawn().unwrap();
+        if let Some(mut stdin) = child.stdin.take() {
+            stdin.flush().unwrap();
+        }
+        let out = child.wait_with_output().unwrap();
+        Run {
+            code: out.status.code().unwrap_or(-1),
+            stdout: decode(&out.stdout, &format!("stdout of `{what}`")),
+            stderr: decode(&out.stderr, &format!("stderr of `{what}`")),
+        }
+    }
+
     /// The run as a snapshot holds it: each stream [`normalize`]d under a
     /// `== stdout` / `== stderr` line (a stream that does not end in a
     /// newline is followed by `<no newline at end>`), then `== exit N`, so

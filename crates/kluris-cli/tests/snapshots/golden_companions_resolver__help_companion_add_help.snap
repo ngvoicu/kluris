@@ -1,0 +1,26 @@
+---
+source: crates/kluris-cli/tests/golden_companions_resolver.rs
+expression: run.render(&sb.root)
+---
+== stdout
+Opt one or more brains into an embedded companion playbook.
+
+Runs an interactive picker when no NAME is given. Pass NAME (or use --json) to skip the wizard.
+
+Usage: kluris companion add [OPTIONS] [specmint-core|specmint-tdd|specmint-core-html|specmint-tdd-html]
+
+Arguments:
+  [specmint-core|specmint-tdd|specmint-core-html|specmint-tdd-html]
+          
+
+Options:
+      --brain <BRAIN>
+          Brain name or 'all'
+
+      --json
+          JSON output
+
+      --help
+          Show this message and exit.
+== stderr
+== exit 0

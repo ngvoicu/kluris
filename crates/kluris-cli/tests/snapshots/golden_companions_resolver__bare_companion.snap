@@ -1,0 +1,18 @@
+---
+source: crates/kluris-cli/tests/golden_companions_resolver.rs
+expression: run.render(&sb.root)
+---
+== stdout
+== stderr
+Manage embedded companion playbooks per brain.
+
+Usage: kluris companion [OPTIONS] COMMAND [ARGS]...
+
+Commands:
+  list    List known companions, installed runtime copies, and brain opt-ins.
+  add     Opt one or more brains into an embedded companion playbook.
+  remove  Remove a companion opt-in from one or more brains.
+
+Options:
+      --help  Show this message and exit.
+== exit 2

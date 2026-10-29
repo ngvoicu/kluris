@@ -1,0 +1,11 @@
+---
+source: crates/kluris-cli/tests/golden_companions_resolver.rs
+expression: run.render(&sb.root)
+---
+== stdout
+== stderr
+Usage: kluris companion remove [OPTIONS] [specmint-core|specmint-tdd|specmint-core-html|specmint-tdd-html]
+Try 'kluris companion remove --help' for help.
+
+Error: Invalid value for '[specmint-core|specmint-tdd|specmint-core-html|specmint-tdd-html]': 'bogus' is not one of 'specmint-core', 'specmint-tdd', 'specmint-core-html', 'specmint-tdd-html'.
+== exit 2

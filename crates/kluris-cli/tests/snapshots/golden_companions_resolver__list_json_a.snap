@@ -1,0 +1,8 @@
+---
+source: crates/kluris-cli/tests/golden_companions_resolver.rs
+expression: run.render(&sb.root)
+---
+== stdout
+{"ok": true, "known": ["specmint-core", "specmint-tdd", "specmint-core-html", "specmint-tdd-html"], "installed": ["specmint-core", "specmint-tdd", "specmint-tdd-html"], "brains": [{"name": "a", "path": "<ROOT>/work/brains/a", "companions": ["specmint-core", "specmint-tdd-html"]}]}
+== stderr
+== exit 0

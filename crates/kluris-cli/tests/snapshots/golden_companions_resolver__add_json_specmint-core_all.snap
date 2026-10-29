@@ -1,0 +1,8 @@
+---
+source: crates/kluris-cli/tests/golden_companions_resolver.rs
+expression: run.render(&sb.root)
+---
+== stdout
+{"ok": true, "names": ["specmint-core"], "brains": ["a", "b"], "opted_in": true, "files_copied": true, "name": "specmint-core"}
+== stderr
+== exit 0

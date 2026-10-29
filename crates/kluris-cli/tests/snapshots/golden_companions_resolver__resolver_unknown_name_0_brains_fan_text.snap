@@ -1,0 +1,8 @@
+---
+source: crates/kluris-cli/tests/golden_companions_resolver.rs
+expression: run.render(&sb.root)
+---
+== stdout
+== stderr
+Error: No brain named 'nope' is registered. Run 'kluris list' to see available brains.
+== exit 1

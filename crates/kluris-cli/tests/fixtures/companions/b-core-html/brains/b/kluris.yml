@@ -1,0 +1,15 @@
+name: b
+description: b knowledge base
+agents:
+  commands_for:
+  - claude
+  - cursor
+  - windsurf
+  - copilot
+  - codex
+  - gemini
+  - hermes
+  - kilocode
+  - junie
+companions:
+- specmint-core-html

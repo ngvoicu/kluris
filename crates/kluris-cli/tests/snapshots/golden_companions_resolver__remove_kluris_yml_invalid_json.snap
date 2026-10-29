@@ -1,0 +1,8 @@
+---
+source: crates/kluris-cli/tests/golden_companions_resolver.rs
+expression: run.render(&sb.root)
+---
+== stdout
+{"ok": false, "error": "Invalid config file <ROOT>/work/brains/b/kluris.yml: ParserError: while parsing a flow sequence (line 1, column 7): expected ',' or ']', but got '<stream end>' (line 2, column 1)"}
+== stderr
+== exit 1

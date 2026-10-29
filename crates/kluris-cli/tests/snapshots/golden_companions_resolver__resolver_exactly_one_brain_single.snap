@@ -1,0 +1,7 @@
+---
+source: crates/kluris-cli/tests/golden_companions_resolver.rs
+expression: "format!(\"== name\\n{brain}\\n== exit {}\\n\", run.code)"
+---
+== name
+solo
+== exit 0
