@@ -23,7 +23,7 @@ use std::path::Path;
 
 use common::shared::{COMPANIONS, skill_reference, vendored, vendored_marker};
 use common::{
-    Entry, PINNED_GIT_DATE, Run, Sandbox, Tree, changes_dump, normalize, run_end, section,
+    Entry, Form, PINNED_GIT_DATE, Run, Sandbox, Tree, changes_dump, normalize, run_end, section,
     tree_files, unstored, windows_variant, write,
 };
 
@@ -145,7 +145,7 @@ fn check_changes(sb: &Sandbox, name: &str, before: &Tree) {
     let out = changes_dump(
         before,
         &tree_files(&sb.work),
-        |text| normalize(text, &sb.root),
+        |text| normalize(text, &sb.root, Form::Dumped),
         |path, entry| reference(sb, path, entry),
     );
     insta::assert_snapshot!(name, out);

@@ -16,8 +16,8 @@ use std::path::{Path, PathBuf};
 use common::golden::python_json;
 use common::search::search_slice;
 use common::{
-    PINNED_GIT_DATE, Run, Sandbox, assert_unchanged, command_line, normalize, parse_json_line,
-    run_end, section, tree_files, write_files,
+    Form, PINNED_GIT_DATE, Run, Sandbox, assert_unchanged, command_line, normalize,
+    parse_json_line, run_end, section, tree_files, write_files,
 };
 use kluris_core::json;
 
@@ -96,7 +96,7 @@ fn outcome(run: &Run, root: &Path) -> String {
         "version".to_string()
     } else if run.code != 0 && run.stdout.is_empty() && !run.stderr.is_empty() {
         let last = run.stderr.trim().lines().last().unwrap_or_default();
-        format!("error {} {}", run.code, normalize(last, root))
+        format!("error {} {}", run.code, normalize(last, root, Form::Text))
     } else {
         format!("ran {}", run.code)
     };

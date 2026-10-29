@@ -148,7 +148,7 @@ fn on_terminal(sb: &Sandbox, args: &[&str], lines: &[&str]) -> Run {
 
 /// Every file under `work/` (HOME included), normalized.
 fn files(sb: &Sandbox) -> String {
-    tree_dump(&sb.work, |text| normalize(text, &sb.root))
+    tree_dump(&sb.work, |text| normalize(text, &sb.root, Form::Dumped))
 }
 
 /// [`files`] as a snapshot holds it: an installed companion file that holds
@@ -165,7 +165,8 @@ fn tree(sb: &Sandbox) -> String {
         }
     }
     let native = native(sb, &[]);
-    let mut dump = Dump::new(|text: &str| normalize(&native.show(text, Form::Dumped), &sb.root));
+    let mut dump =
+        Dump::new(|text: &str| normalize(&native.show(text, Form::Dumped), &sb.root, Form::Dumped));
     for (path, entry) in &files {
         match vendored_marker(path, entry)
             .or_else(|| skill_reference(path, entry, &sb.root, skill_variant))
@@ -216,7 +217,9 @@ fn skill_variant(text: &str) -> String {
 
 /// The repository at `rel` (relative to `work/`), normalized.
 fn repo_state(sb: &Sandbox, rel: &str) -> String {
-    git_state(&sb.work.join(rel), |text| normalize(text, &sb.root))
+    git_state(&sb.work.join(rel), |text| {
+        normalize(text, &sb.root, Form::Dumped)
+    })
 }
 
 /// `rel`, a `/`-joined path, under `base` as the OS writes it.

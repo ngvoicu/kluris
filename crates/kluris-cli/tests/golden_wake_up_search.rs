@@ -27,7 +27,7 @@ use std::sync::LazyLock;
 use common::brains::Brains;
 use common::search::{Found, found_list};
 use common::{
-    Run, Sandbox, assert_unchanged, normalize, parse_json_line, run_end, section, tree_files,
+    Form, Run, Sandbox, assert_unchanged, normalize, parse_json_line, run_end, section, tree_files,
     windows_variant, write, write_files,
 };
 use serde_json::Value;
@@ -47,8 +47,11 @@ fn render_error(run: &Run, root: &Path) -> String {
         .map_or(String::new(), |l| format!("{l}\n"));
     format!(
         "{}{}{}",
-        section("stdout", &normalize(&run.stdout, root)),
-        section("stderr, last line", &normalize(&last, root)),
+        section(
+            "stdout",
+            &normalize(&run.stdout, root, Form::of_stream(&run.stdout))
+        ),
+        section("stderr, last line", &normalize(&last, root, Form::Text)),
         run_end(run.code),
     )
 }
@@ -629,7 +632,10 @@ fn search_with_no_brains_registered() {
         "search_no_brains",
         format!(
             "{}{}",
-            section("stdout", &normalize(&run.stdout, &sb.root)),
+            section(
+                "stdout",
+                &normalize(&run.stdout, &sb.root, Form::of_stream(&run.stdout))
+            ),
             run_end(run.code)
         )
     );
@@ -802,7 +808,7 @@ fn search_skips_and_reports_a_malformed_neuron() {
     );
     insta::assert_snapshot!(
         "search_malformed_text_stderr",
-        normalize(&run.stderr, &sb.root)
+        normalize(&run.stderr, &sb.root, Form::Text)
     );
 }
 

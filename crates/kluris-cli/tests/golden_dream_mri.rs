@@ -185,7 +185,7 @@ impl<'a> Scenario<'a> {
 
     /// [`Self::paths`], then the root and today normalized.
     fn shown(&self, text: &str, form: Form) -> String {
-        normalize(&self.paths(text, form), &self.sb.root)
+        normalize(&self.paths(text, form), &self.sb.root, form)
     }
 
     fn porcelain_text(&self) -> String {
@@ -1282,7 +1282,7 @@ impl Scenario<'_> {
             );
             for (name, rel) in step.pages {
                 let graph = sorted_graph(&page_graph(&self.sb.work.join(rel), name));
-                let graph = normalize(&graph, &self.sb.root);
+                let graph = normalize(&graph, &self.sb.root, Form::Json);
                 match graphs.get(*rel) {
                     Some((before, run)) if *before == graph => {
                         extra.push_str(&format!(
@@ -1447,7 +1447,7 @@ fn mri_output_relative_to_the_working_directory() {
     let graph = sorted_graph(&page_graph(&sb.work.join(page[0].1), "calm"));
     snapshot(
         "mri_output_relative__1_graph_calm",
-        &normalize(&graph, &sb.root),
+        &normalize(&graph, &sb.root, Form::Json),
     );
     let after = without_pages(tree_files(&sb.work));
     let extra = format!(

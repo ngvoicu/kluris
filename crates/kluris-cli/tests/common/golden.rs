@@ -9,7 +9,8 @@
 //! or [`normalize_json`]. File bytes go through a [`Dump`] ([`tree_dump`],
 //! [`files_dump`]), never raw into `normalize`: the dump escapes them (a CR
 //! as the two characters `\r`) before it puts each body through the
-//! normalization it is given, so `tree_dump(dir, |t| normalize(t, root))`
+//! normalization it is given, so
+//! `tree_dump(dir, |t| normalize(t, root, Form::Dumped))`
 //! replaces the root and today's date while a file's CRLF stays in the
 //! snapshot. Where a test asserts that nothing changed it compares the
 //! [`Tree`]s themselves.
@@ -99,26 +100,16 @@ pub fn decode(stream: &[u8], what: &str) -> String {
 
 /// Program output as a snapshot holds it:
 /// - CRLF reads as LF (Windows' streams), a lone CR stays;
-/// - every form of the temp `root` (see [`root_forms`]) becomes `<ROOT>`;
-///   a form written with `\` that goes on with `/` (a path below the root
-///   written half in the OS's form) fails the test;
+/// - the temp `root`, read in `form` ([`NativePaths::root`]), becomes
+///   `<ROOT>`: as the OS writes it or `/`-joined, in that form's own
+///   spelling only. The root spelled any other way (doubled backslashes,
+///   half with `/`, or `\` and then `/` below it) fails the test;
 /// - a whole `--version` stdout, `kluris <version>` and its newline, becomes
 ///   `kluris <VERSION>`; a version anywhere else may be user data and stays;
 /// - an `updated` value equal to today's UTC date (the date Kluris writes
 ///   under `TZ=UTC`, see [`PINNED_ENV`]) becomes `<TODAY>`.
-pub fn normalize(text: &str, root: &Path) -> String {
-    let mut text = text.replace("\r\n", "\n");
-    for path in root_paths(root).iter().filter(|path| path.contains('\\')) {
-        for form in path_forms(path) {
-            assert!(
-                !text.contains(&format!("{form}/")),
-                "{form} goes on with `/`, not as the OS writes a path ({path}), in {text:?}"
-            );
-        }
-    }
-    for form in root_forms(root) {
-        text = text.replace(&form, "<ROOT>");
-    }
+pub fn normalize(text: &str, root: &Path, form: Form) -> String {
+    let mut text = NativePaths::root(root).show(&text.replace("\r\n", "\n"), form);
     if VERSION_OUTPUT_RE.is_match(&text) {
         text = "kluris <VERSION>\n".to_string();
     }
@@ -137,7 +128,7 @@ pub fn normalize(text: &str, root: &Path) -> String {
 /// newline if any), so writing the marked document back the same way
 /// changes nothing but the marked values.
 pub fn normalize_json(text: &str, root: &Path, version_fields: &[&str]) -> String {
-    let text = normalize(text, root);
+    let text = normalize(text, root, Form::Json);
     if version_fields.is_empty() {
         return text;
     }
@@ -612,32 +603,6 @@ fn root_paths(root: &Path) -> Vec<String> {
     paths
 }
 
-/// The text forms of `root` a program can print or a file can hold, longest
-/// first so a resolved form is not half-replaced by a shorter alias: as
-/// given and resolved (macOS `/var` is `/private/var`), each with its native
-/// and, on Windows, `/` separators; each of those also JSON-escaped; and
-/// each of all these as a [`Dump`] writes it, backslashes doubled.
-fn root_forms(root: &Path) -> Vec<String> {
-    let mut forms = BTreeSet::new();
-    for path in root_paths(root) {
-        let posix = if cfg!(windows) {
-            path.replace('\\', "/")
-        } else {
-            path.clone()
-        };
-        for form in [path, posix] {
-            let escaped = json_escaped(&form);
-            for f in [form, escaped] {
-                forms.insert(f.replace('\\', "\\\\"));
-                forms.insert(f);
-            }
-        }
-    }
-    let mut forms: Vec<String> = forms.into_iter().filter(|f| !f.is_empty()).collect();
-    forms.sort_by_key(|f| std::cmp::Reverse(f.len()));
-    forms
-}
-
 /// `updated` set to today's UTC date, in the forms Kluris writes it: a YAML
 /// line (plain or quoted, its CR as a [`Dump`] writes it) and a JSON key.
 fn mark_today(text: &str) -> String {
@@ -798,7 +763,10 @@ pub struct NativePaths {
 
 struct NativePath {
     raw: String,
-    shown: String,
+    /// Each spelling the path may have in a form's strings (the path as
+    /// the OS writes it, and for the root also `/`-joined), with what it is
+    /// shown as.
+    spellings: Vec<(String, String)>,
     /// The path's parts joined by any run of `\` or a `/`; none where the
     /// OS writes `/`.
     spelling: Option<Regex>,
@@ -813,23 +781,24 @@ impl NativePaths {
             .iter()
             .map(|(native, shown)| {
                 let raw = native.display().to_string();
-                let parts: Vec<&str> = raw.split(['\\', '/']).collect();
-                let joined = |part: &dyn Fn(&str) -> String| {
-                    let parts: Vec<String> = parts.iter().map(|p| part(p)).collect();
-                    re(&parts.join(r"(?:\\+|/)"))
-                };
-                let native = raw.contains('\\');
-                NativePath {
-                    spelling: native.then(|| joined(&|p| regex::escape(p))),
-                    file_spelling: native.then(|| {
-                        joined(&|p| {
-                            let escaped = json_escaped(p);
-                            format!("(?:{}|{})", regex::escape(p), regex::escape(&escaped))
-                        })
-                    }),
-                    raw,
-                    shown: shown.to_string(),
+                NativePath::new(raw.clone(), vec![(raw, shown.to_string())])
+            })
+            .collect();
+        NativePaths { paths }
+    }
+
+    /// The temp `root`, as given and resolved (see [`root_paths`]), each
+    /// shown as `<ROOT>`: as the OS writes it, or, where the OS writes `\`,
+    /// `/`-joined as well (a path Kluris writes in POSIX form, a skill's).
+    pub fn root(root: &Path) -> Self {
+        let paths = root_paths(root)
+            .into_iter()
+            .map(|raw| {
+                let mut spellings = vec![(raw.clone(), "<ROOT>".to_string())];
+                if raw.contains('\\') {
+                    spellings.push((raw.replace('\\', "/"), "<ROOT>".to_string()));
                 }
+                NativePath::new(raw, spellings)
             })
             .collect();
         NativePaths { paths }
@@ -870,7 +839,8 @@ impl NativePaths {
         let mut replacements: Vec<(String, String)> = self
             .paths
             .iter()
-            .flat_map(|p| spellings.iter().map(|f| (f(&p.raw), f(&p.shown))))
+            .flat_map(|p| &p.spellings)
+            .flat_map(|(spelling, shown)| spellings.iter().map(|f| (f(spelling), f(shown))))
             .collect();
         replacements.sort_by_key(|(from, _)| std::cmp::Reverse(from.len()));
         replacements
@@ -887,7 +857,7 @@ impl NativePaths {
             };
             for found in spelling.find_iter(s) {
                 assert!(
-                    found.as_str() == path.raw,
+                    path.spellings.iter().any(|(own, _)| own == found.as_str()),
                     "{} is {} written another way than the OS writes it, in {text:?}",
                     found.as_str(),
                     path.raw
@@ -917,6 +887,28 @@ impl NativePaths {
                 "{} is spelled {written} times in the file but {parsed} times in its values, in {text:?}",
                 path.raw
             );
+        }
+    }
+}
+
+impl NativePath {
+    fn new(raw: String, spellings: Vec<(String, String)>) -> Self {
+        let parts: Vec<&str> = raw.split(['\\', '/']).collect();
+        let joined = |part: &dyn Fn(&str) -> String| {
+            let parts: Vec<String> = parts.iter().map(|p| part(p)).collect();
+            re(&parts.join(r"(?:\\+|/)"))
+        };
+        let native = raw.contains('\\');
+        NativePath {
+            spelling: native.then(|| joined(&|p| regex::escape(p))),
+            file_spelling: native.then(|| {
+                joined(&|p| {
+                    let escaped = json_escaped(p);
+                    format!("(?:{}|{})", regex::escape(p), regex::escape(&escaped))
+                })
+            }),
+            raw,
+            spellings,
         }
     }
 }
@@ -990,17 +982,6 @@ pub fn assert_shown_from_native(printed: &str, rendered: &str, native: &Path, sh
         shown_count, natives,
         "{shown} shows {shown_count} times, but {raw} is printed {natives} times in its own form, in {printed:?}"
     );
-}
-
-/// The forms text can hold the path `raw` in: JSON-escaped and as a dump
-/// writes it (backslashes doubled), each of the two, and raw; longest first.
-fn path_forms(raw: &str) -> Vec<String> {
-    vec![
-        dumped(&json_escaped(raw)),
-        json_escaped(raw),
-        dumped(raw),
-        raw.to_string(),
-    ]
 }
 
 /// `s` as a JSON string holds it, without its quotes.

@@ -61,38 +61,73 @@ fn resolved(root: &Path) -> String {
     r.strip_prefix(r"\\?\").map(str::to_string).unwrap_or(r)
 }
 
-#[test]
-fn every_form_of_the_root_becomes_root() {
-    let (_tmp, root) = root();
+/// The root as given and resolved, each as the OS writes it and with `/`
+/// separators: the spellings a path can have before a form escapes it.
+fn root_spellings(root: &Path) -> [(&'static str, String); 4] {
     let raw = root.display().to_string();
-    let resolved = resolved(&root);
-    let forms = [
+    let resolved = resolved(root);
+    [
         ("raw", raw.clone()),
         ("resolved", resolved.clone()),
         ("raw, / separators", posix(&raw)),
         ("resolved, / separators", posix(&resolved)),
-        ("raw, JSON-escaped", json_escaped(&raw)),
-        ("resolved, JSON-escaped", json_escaped(&resolved)),
-        (
-            "raw, / separators, JSON-escaped",
-            json_escaped(&posix(&raw)),
-        ),
-        (
-            "resolved, / separators, JSON-escaped",
-            json_escaped(&posix(&resolved)),
-        ),
-    ];
-    for (name, form) in forms {
-        let text = format!("at {form}: ok\n");
-        assert_eq!(normalize(&text, &root), "at <ROOT>: ok\n", "{name}: {form}");
+    ]
+}
+
+#[test]
+fn every_spelling_of_the_root_becomes_root_in_each_form() {
+    let (_tmp, root) = root();
+    for (name, spelling) in root_spellings(&root) {
+        let text = format!("at {spelling}: ok\n");
+        assert_eq!(
+            normalize(&text, &root, Form::Text),
+            "at <ROOT>: ok\n",
+            "text, {name}"
+        );
+        let doc = format!("{{\"at\": {}}}\n", json_line(&spelling).trim_end());
+        assert_eq!(
+            normalize(&doc, &root, Form::Json),
+            "{\"at\": \"<ROOT>\"}\n",
+            "JSON, {name}"
+        );
+        let tmp = tempfile::TempDir::new().unwrap();
+        common::write(
+            &tmp.path().join("plain.yml"),
+            format!("at: {spelling}\n").as_bytes(),
+        );
+        common::write(
+            &tmp.path().join("quoted.yml"),
+            format!("at: {doc}").as_bytes(),
+        );
+        common::write(&tmp.path().join("notes.md"), text.as_bytes());
+        assert_eq!(
+            tree_dump(tmp.path(), |t| normalize(t, &root, Form::Dumped)),
+            "== notes.md (file, 14 bytes)\nat <ROOT>: ok\n\
+             == plain.yml (file, 11 bytes)\nat: <ROOT>\n\
+             == quoted.yml (file, 21 bytes)\nat: {\"at\": \"<ROOT>\"}\n\
+             <end of dump>\n",
+            "dump, {name}"
+        );
     }
+}
+
+/// The root spelled in another form's escaping is not the root in this
+/// form: JSON's `\uXXXX` in text stays as it is (a root with a `\`, which
+/// the OS writes on Windows, is refused instead).
+#[test]
+fn a_root_in_another_forms_escaping_stays() {
+    let (_tmp, root) = root();
+    let escaped = json_escaped(&root.display().to_string());
+    assert_ne!(escaped, root.display().to_string());
+    let text = format!("at {escaped}: ok\n");
+    assert_eq!(normalize(&text, &root, Form::Text), text);
 }
 
 #[test]
 fn text_without_the_root_is_unchanged() {
     let (_tmp, root) = root();
     let text = "kluris 3.1.1 is installed\nupdated: '2020-01-02'\n";
-    assert_eq!(normalize(text, &root), text);
+    assert_eq!(normalize(text, &root, Form::Text), text);
 }
 
 #[test]
@@ -109,7 +144,7 @@ fn a_whole_version_stdout_becomes_version() {
         ("kluris 3.1\n", "kluris 3.1\n"),
     ];
     for (text, expected) in cases {
-        assert_eq!(normalize(text, &root), expected, "{text:?}");
+        assert_eq!(normalize(text, &root, Form::Text), expected, "{text:?}");
     }
 }
 
@@ -136,7 +171,8 @@ fn an_updated_value_of_today_becomes_today() {
         ),
     ];
     for (text, expected) in cases {
-        assert_eq!(normalize(&text, &root), expected, "{text:?}");
+        let form = Form::of_stream(&text);
+        assert_eq!(normalize(&text, &root, form), expected, "{text:?}");
     }
 }
 
@@ -151,14 +187,14 @@ fn only_an_updated_value_of_today_is_today() {
         format!("last_updated: '{d}'\n"),
         format!("updated: '{d}T10:00:00'\n"),
     ] {
-        assert_eq!(normalize(&text, &root), text);
+        assert_eq!(normalize(&text, &root, Form::of_stream(&text)), text);
     }
 }
 
 #[test]
 fn crlf_reads_as_lf_and_a_lone_cr_stays() {
     let (_tmp, root) = root();
-    assert_eq!(normalize("a\r\nb\rc\r\n", &root), "a\nb\rc\n");
+    assert_eq!(normalize("a\r\nb\rc\r\n", &root, Form::Text), "a\nb\rc\n");
     assert_eq!(decode(b"a\r\nb\rc\r\n", "stdout"), "a\nb\rc\n");
 }
 
@@ -455,7 +491,7 @@ fn a_windows_root_inside_a_file_dumps_as_root() {
         fs::write(dir.join(name), text).unwrap();
     }
     assert_eq!(
-        tree_dump(dir, |text| normalize(text, root)),
+        tree_dump(dir, |text| normalize(text, root, Form::Dumped)),
         "== config.yml (file, 22 bytes)\npath: <ROOT>\\\\brains\\\\b\n\
          == map.json (file, 27 bytes)\n{\"path\": \"<ROOT>\\\\\\\\brains\"}\n\
          <end of dump>\n"
@@ -469,7 +505,7 @@ fn a_windows_root_with_a_non_ascii_name_inside_a_file_dumps_as_root() {
     let root = format!(r"{WINDOWS_ROOT}\golden ü root");
     fs::write(dir.join("config.yml"), format!("path: {root}\\b\n")).unwrap();
     assert_eq!(
-        tree_dump(dir, |text| normalize(text, Path::new(&root))),
+        tree_dump(dir, |text| normalize(text, Path::new(&root), Form::Dumped)),
         "== config.yml (file, 15 bytes)\npath: <ROOT>\\\\b\n<end of dump>\n"
     );
 }
@@ -739,7 +775,9 @@ fn a_root_continued_with_slashes_is_refused() {
         r"at C:\Temp\run/work/home/.kluris/config.yml",
         r#"{"path": "C:\\Temp\\run/work/home"}"#,
     ] {
-        let refused = std::panic::catch_unwind(|| normalize(text, Path::new(MIXED_ROOT))).is_err();
+        let form = Form::of_stream(text);
+        let refused =
+            std::panic::catch_unwind(|| normalize(text, Path::new(MIXED_ROOT), form)).is_err();
         assert!(refused, "{text} was not refused");
     }
 }
@@ -838,6 +876,56 @@ fn a_dumped_path_outside_the_parsed_values_is_refused() {
     assert!(
         dumped_shown("config.yml", yaml.as_bytes()).is_none(),
         "{yaml} was not refused"
+    );
+}
+
+/// A run with `stdout` and `stderr` rendered under the root [`MIXED_ROOT`];
+/// `None` when it is refused.
+fn rendered_under_mixed_root(stdout: &str, stderr: &str) -> Option<String> {
+    let run = common::Run {
+        code: 0,
+        stdout: stdout.to_string(),
+        stderr: stderr.to_string(),
+    };
+    std::panic::catch_unwind(|| run.render(Path::new(MIXED_ROOT))).ok()
+}
+
+/// A path under the root that no test lists, printed as text with every
+/// backslash doubled, is not under the root as the OS writes it.
+#[test]
+fn a_text_root_with_doubled_backslashes_is_refused() {
+    let good = format!("wrote {MIXED_ROOT}\\work\\notes\\a.md\n");
+    let wrong = good.replace('\\', r"\\");
+    let shown = rendered_under_mixed_root("", &good).expect("the root is refused");
+    // A run's section writes each backslash doubled.
+    assert!(
+        shown.contains(r"wrote <ROOT>\\work\\notes\\a.md"),
+        "{shown}"
+    );
+    let wrong_shown = rendered_under_mixed_root("", &wrong);
+    assert!(
+        wrong_shown.is_none(),
+        "{wrong} was not refused: {wrong_shown:?}"
+    );
+}
+
+/// The same path in a JSON value whose parsed text doubles every
+/// backslash.
+#[test]
+fn a_json_root_with_doubled_backslashes_is_refused() {
+    let path = format!("{MIXED_ROOT}\\work\\notes\\a.md");
+    let good = format!("{{\"path\": {}}}\n", json_line(&path).trim_end());
+    let doubled = path.replace('\\', r"\\");
+    let wrong = format!("{{\"path\": {}}}\n", json_line(&doubled).trim_end());
+    let shown = rendered_under_mixed_root(&good, "").expect("the root is refused");
+    assert!(
+        shown.contains(r#"{"path": "<ROOT>\\\\work\\\\notes\\\\a.md"}"#),
+        "{shown}"
+    );
+    let wrong_shown = rendered_under_mixed_root(&wrong, "");
+    assert!(
+        wrong_shown.is_none(),
+        "{wrong} was not refused: {wrong_shown:?}"
     );
 }
 

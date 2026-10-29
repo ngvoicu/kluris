@@ -311,8 +311,11 @@ impl Run {
     pub fn render(&self, root: &Path) -> String {
         format!(
             "{}{}{}",
-            section("stdout", &normalize(&self.stdout, root)),
-            section("stderr", &normalize(&self.stderr, root)),
+            section(
+                "stdout",
+                &normalize(&self.stdout, root, Form::of_stream(&self.stdout))
+            ),
+            section("stderr", &normalize(&self.stderr, root, Form::Text)),
             run_end(self.code)
         )
     }
@@ -427,7 +430,7 @@ pub fn assert_unchanged(before: &Tree, after: &Tree, what: &str) {
 /// then written with an indent of 2 so that each value has its own line.
 /// The root and today are normalized first.
 pub fn json_dump(stdout: &str, root: &Path) -> String {
-    let doc = parse_json_line(&normalize(stdout, root));
+    let doc = parse_json_line(&normalize(stdout, root, Form::Json));
     json::to_string_indented(&python_json(&doc), 2) + "\n"
 }
 

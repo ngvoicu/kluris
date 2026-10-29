@@ -451,11 +451,14 @@ brain's, the config's) is checked whole in that form on the raw output, read
 in the one form the text has (printed text as is, a JSON document's parsed
 strings, a dumped YAML or JSON file's parsed values), and shown `/`-joined
 (`native_paths`): such a path written partly with `/` or with doubled
-backslashes fails, and so does the root written with `\` and continued with
-`/`. One snapshot then holds on every OS and a separator change still fails
-on Windows. A snapshot has an `@windows` (or `@wsl`) variant only for a real
-difference of the OS: Windows lists a folder without regard to case, a test
-makes no symlinks there, the OS words its own errors.
+backslashes fails. The temp root is read the same way (`normalize` takes the
+text's form): it becomes `<ROOT>` as the OS writes it or `/`-joined, in that
+form's own spelling only; any other spelling fails where the OS writes the
+root with `\`, and elsewhere stays as it is in the snapshot. One snapshot
+then holds on every OS and a separator change still fails on Windows. A
+snapshot has an `@windows` (or `@wsl`) variant only for a real difference of
+the OS: Windows lists a folder without regard to case, a test makes no
+symlinks there, the OS words its own errors.
 
 - **Checking.** `INSTA_UPDATE=no cargo test --workspace` fails on a missing
   or changed snapshot and writes nothing; CI runs the tests the same way

@@ -28,8 +28,8 @@ use std::path::Path;
 use common::shared::{skill_reference, vendored_marker};
 use common::upgrade::{Brain, World, link_folder};
 use common::{
-    PINNED_GIT_DATE, Run, Tree, assert_unchanged, changes_dump, command_line, git_dump, normalize,
-    slashed,
+    Form, PINNED_GIT_DATE, Run, Tree, assert_unchanged, changes_dump, command_line, git_dump,
+    normalize, slashed,
 };
 use kluris_core::agents::install::{
     DestinationRole, InstallReport, InstallRequest, install_skills, read_brain_configs,
@@ -156,7 +156,7 @@ fn changes(world: &World, before: &Tree) -> String {
     changes_dump(
         before,
         &world.files(),
-        |text| normalize(text, &world.root),
+        |text| normalize(text, &world.root, Form::Dumped),
         |path, entry| {
             vendored_marker(path, entry)
                 .or_else(|| skill_reference(path, entry, &world.root, |_| String::new()))
@@ -235,7 +235,7 @@ fn report_text(report: &InstallReport, world: &World) -> String {
         "brain_errors": report.brain_errors,
     });
     let text = serde_json::to_string_pretty(&doc).expect("json") + "\n";
-    normalize(&text, &world.root)
+    normalize(&text, &world.root, Form::Json)
 }
 
 /// Install every registered brain's skill into the world's HOME, as

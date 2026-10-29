@@ -18,7 +18,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use super::golden::{Entry, Reference, file_body, normalize};
+use super::golden::{Entry, Form, Reference, file_body, normalize};
 
 /// The companions Kluris ships, in its own order.
 pub const COMPANIONS: [&str; 4] = [
@@ -73,7 +73,7 @@ pub fn skill_reference(
     if !bytes.windows(generated.len()).any(|w| w == generated) {
         return None;
     }
-    let body = file_body(bytes, |t| normalize(t, root));
+    let body = file_body(bytes, |t| normalize(t, root, Form::Dumped));
     let text = body.text;
     let companions: Vec<&str> = COMPANIONS
         .into_iter()
