@@ -1,0 +1,14 @@
+---
+source: crates/kluris-cli/tests/golden_dream_mri.rs
+expression: text
+---
+$ kluris mri --brain all --output x.html --json
+== exit 1
+== stdout
+{
+  "ok": false,
+  "error": "--output cannot be combined with multi-brain fan-out (each brain would overwrite the others' output). Pass --output without --brain all, or pick brains one at a time."
+}
+== stderr
+== changed (pages left out)
+(none)

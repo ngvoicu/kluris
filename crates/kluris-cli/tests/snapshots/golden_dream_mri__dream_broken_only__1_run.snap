@@ -1,0 +1,62 @@
+---
+source: crates/kluris-cli/tests/golden_dream_mri.rs
+expression: text
+---
+$ kluris dream --json --broken-only
+== exit 1
+== stdout
+{
+  "ok": true,
+  "broken_synapses_count": 2,
+  "broken_synapses": [
+    {
+      "brain": "rich",
+      "file": "knowledge/broken.md",
+      "target": "./missing.md"
+    },
+    {
+      "brain": "rich",
+      "file": "knowledge/broken.md",
+      "target": "./gone.md"
+    }
+  ]
+}
+== stderr
+== git status --porcelain brains/rich
+ M knowledge/beta.md
+ M knowledge/crlf.md
+ M knowledge/old.md
+ M knowledge/target.md
+ M projects/agent.md
+ M projects/alpha.md
+ M projects/api/spec.yml
+ M projects/no-frontmatter.md
+ M projects/no-parent.md
+?? brain.md
+?? knowledge/deep/deeper/map.md
+?? knowledge/deep/map.md
+?? knowledge/map.md
+?? knowledge/src/map.md
+?? my-lobe/map.md
+?? projects/api/map.md
+?? projects/map.md
+?? uncommitted-lobe/
+== changed
++ brains/rich/brain.md
+~ brains/rich/knowledge/beta.md
+~ brains/rich/knowledge/crlf.md
++ brains/rich/knowledge/deep/deeper/map.md
++ brains/rich/knowledge/deep/map.md
++ brains/rich/knowledge/map.md
+~ brains/rich/knowledge/old.md
++ brains/rich/knowledge/src/map.md
+~ brains/rich/knowledge/target.md
++ brains/rich/my-lobe/map.md
+~ brains/rich/projects/agent.md
+~ brains/rich/projects/alpha.md
++ brains/rich/projects/api/map.md
+~ brains/rich/projects/api/spec.yml
++ brains/rich/projects/map.md
+~ brains/rich/projects/no-frontmatter.md
+~ brains/rich/projects/no-parent.md
++ brains/rich/uncommitted-lobe/map.md

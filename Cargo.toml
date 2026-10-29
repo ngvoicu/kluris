@@ -38,6 +38,7 @@ tar = "0.4.46"
 flate2 = "1.1"
 zip = { version = "9", default-features = false, features = ["deflate"] }
 sha2 = "0.11"
+libc = "0.2"
 
 # The profile that 'dist' will build with
 [profile.dist]

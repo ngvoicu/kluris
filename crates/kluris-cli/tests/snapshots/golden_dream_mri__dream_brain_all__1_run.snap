@@ -1,0 +1,107 @@
+---
+source: crates/kluris-cli/tests/golden_dream_mri.rs
+expression: text
+---
+$ kluris dream --json --brain all
+== exit 1
+== stdout
+{
+  "ok": true,
+  "healthy": false,
+  "broken_synapses": 2,
+  "one_way_synapses": 0,
+  "orphans": 1,
+  "frontmatter_issues": 0,
+  "dates_updated": 5,
+  "deprecation_issues": 4,
+  "deprecation": [
+    {
+      "brain": "rich",
+      "kind": "replaced_by_not_active",
+      "file": "knowledge/newer.md",
+      "target": "./old.md"
+    },
+    {
+      "brain": "rich",
+      "kind": "deprecated_without_replacement",
+      "file": "knowledge/old.md"
+    },
+    {
+      "brain": "rich",
+      "kind": "replaced_by_missing",
+      "file": "knowledge/older.md",
+      "target": "./gone.md"
+    },
+    {
+      "brain": "rich",
+      "kind": "active_links_to_deprecated",
+      "source": "knowledge/user.md",
+      "target": "knowledge/old.md"
+    }
+  ],
+  "broken_synapses_detail": [
+    {
+      "brain": "rich",
+      "file": "knowledge/broken.md",
+      "target": "./missing.md"
+    },
+    {
+      "brain": "rich",
+      "file": "knowledge/broken.md",
+      "target": "./gone.md"
+    }
+  ],
+  "fixes": {
+    "dates_updated": 5,
+    "parents_inferred": 3,
+    "reverse_synapses_added": 13,
+    "orphan_references_added": 27,
+    "total": 48
+  }
+}
+== stderr
+== git status --porcelain brains/rich
+ M knowledge/beta.md
+ M knowledge/crlf.md
+ M knowledge/old.md
+ M knowledge/target.md
+ M projects/agent.md
+ M projects/alpha.md
+ M projects/api/spec.yml
+ M projects/no-frontmatter.md
+ M projects/no-parent.md
+?? brain.md
+?? knowledge/deep/deeper/map.md
+?? knowledge/deep/map.md
+?? knowledge/map.md
+?? knowledge/src/map.md
+?? my-lobe/map.md
+?? projects/api/map.md
+?? projects/map.md
+?? uncommitted-lobe/
+== git status --porcelain brains/calm
+?? brain.md
+?? knowledge/map.md
+?? projects/map.md
+== changed
++ brains/calm/brain.md
++ brains/calm/knowledge/map.md
++ brains/calm/projects/map.md
++ brains/rich/brain.md
+~ brains/rich/knowledge/beta.md
+~ brains/rich/knowledge/crlf.md
++ brains/rich/knowledge/deep/deeper/map.md
++ brains/rich/knowledge/deep/map.md
++ brains/rich/knowledge/map.md
+~ brains/rich/knowledge/old.md
++ brains/rich/knowledge/src/map.md
+~ brains/rich/knowledge/target.md
++ brains/rich/my-lobe/map.md
+~ brains/rich/projects/agent.md
+~ brains/rich/projects/alpha.md
++ brains/rich/projects/api/map.md
+~ brains/rich/projects/api/spec.yml
++ brains/rich/projects/map.md
+~ brains/rich/projects/no-frontmatter.md
+~ brains/rich/projects/no-parent.md
++ brains/rich/uncommitted-lobe/map.md

@@ -1,0 +1,17 @@
+---
+source: crates/kluris-cli/tests/golden_dream_mri.rs
+expression: text
+---
+$ kluris mri
+== exit 0
+== stdout
+MRI complete — <ROOT>/work/brains/calm/brain-mri.html
+  Open: file://wsl.localhost/Ubuntu/home/me/brain-mri.html
+  7 nodes, 15 edges
+  MRI preflight applied 3 automatic fixes
+== stderr
+== changed (pages left out)
++ brains/calm/brain.md
++ brains/calm/knowledge/map.md
++ brains/calm/projects/map.md
+== page brains/calm/brain-mri.html (calm): graph mri_wsl_wslpath__1_graph_calm

@@ -1,0 +1,14 @@
+---
+source: crates/kluris-cli/tests/golden_dream_mri.rs
+expression: text
+---
+$ kluris mri --json
+== exit 1
+== stdout
+{
+  "ok": false,
+  "error": "No brains registered. Run 'kluris create <name>' to create one."
+}
+== stderr
+== changed (pages left out)
+(none)

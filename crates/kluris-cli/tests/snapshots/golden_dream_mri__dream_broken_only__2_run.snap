@@ -1,0 +1,30 @@
+---
+source: crates/kluris-cli/tests/golden_dream_mri.rs
+expression: text
+---
+$ kluris dream --broken-only
+== exit 1
+== stdout
+== stderr
+Error: --broken-only requires --json
+== git status --porcelain brains/rich
+ M knowledge/beta.md
+ M knowledge/crlf.md
+ M knowledge/old.md
+ M knowledge/target.md
+ M projects/agent.md
+ M projects/alpha.md
+ M projects/api/spec.yml
+ M projects/no-frontmatter.md
+ M projects/no-parent.md
+?? brain.md
+?? knowledge/deep/deeper/map.md
+?? knowledge/deep/map.md
+?? knowledge/map.md
+?? knowledge/src/map.md
+?? my-lobe/map.md
+?? projects/api/map.md
+?? projects/map.md
+?? uncommitted-lobe/
+== changed
+(none)

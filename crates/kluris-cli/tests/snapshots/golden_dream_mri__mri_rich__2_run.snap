@@ -1,0 +1,29 @@
+---
+source: crates/kluris-cli/tests/golden_dream_mri.rs
+expression: text
+---
+$ kluris mri --json
+== exit 0
+== stdout
+{
+  "ok": true,
+  "brains": [
+    {
+      "name": "rich",
+      "output_path": "<ROOT>/work/brains/rich/brain-mri.html",
+      "preflight_fixes": {
+        "dates_updated": 0,
+        "parents_inferred": 0,
+        "reverse_synapses_added": 0,
+        "orphan_references_added": 0,
+        "total": 0
+      },
+      "nodes": 43,
+      "edges": 128
+    }
+  ]
+}
+== stderr
+== changed (pages left out)
+(none)
+== page brains/rich/brain-mri.html (rich): graph as after run 1

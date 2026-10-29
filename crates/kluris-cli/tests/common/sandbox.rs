@@ -3,12 +3,15 @@
 //! but [`PINNED_ENV`] and [`PASSTHROUGH_ENV`], and each run's exit code and
 //! streams rendered as one snapshot text.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-use super::golden::{PASSTHROUGH_ENV, PINNED_ENV, decode, normalize};
+use kluris_core::json;
+
+use super::golden::{PASSTHROUGH_ENV, PINNED_ENV, decode, normalize, python_json};
 
 /// The length of every sandbox root, as Kluris prints it. A table whose
 /// column widths follow a path's length (`list`) is then laid out the same
@@ -108,6 +111,34 @@ impl Sandbox {
             String::from_utf8_lossy(&out.stderr)
         );
         String::from_utf8(out.stdout).unwrap()
+    }
+
+    /// A new repository in `repo` on the branch `main`, line endings as
+    /// written.
+    pub fn init(&self, repo: &Path) {
+        let date = super::PINNED_GIT_DATE;
+        self.git(repo, &["init", "-q"], date);
+        self.git(repo, &["config", "core.autocrlf", "false"], date);
+        self.git(repo, &["checkout", "-q", "-b", "main"], date);
+    }
+
+    /// Commit everything in `repo` at `date`.
+    pub fn commit(&self, repo: &Path, message: &str, date: &str) {
+        self.git(repo, &["add", "-A"], date);
+        self.git(
+            repo,
+            &["commit", "-q", "--allow-empty", "-m", message],
+            date,
+        );
+    }
+
+    /// `git status --porcelain` of `repo`, paths unquoted.
+    pub fn porcelain(&self, repo: &Path) -> String {
+        self.git(
+            repo,
+            &["-c", "core.quotePath=false", "status", "--porcelain"],
+            super::PINNED_GIT_DATE,
+        )
     }
 
     /// `config.yml` with `(name, path, description)` brains in order, each
@@ -257,5 +288,67 @@ fn resolved(path: &Path) -> PathBuf {
     match text.strip_prefix(r"\\?\") {
         Some(rest) if !rest.starts_with(r"UNC\") => PathBuf::from(rest),
         _ => path,
+    }
+}
+
+/// Write each `(relative path, bytes)` under `dir`, making its folders.
+pub fn write_tree<P: AsRef<str>, B: AsRef<[u8]>>(
+    dir: &Path,
+    files: impl IntoIterator<Item = (P, B)>,
+) {
+    for (rel, bytes) in files {
+        let path = dir.join(rel.as_ref());
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, bytes).unwrap();
+    }
+}
+
+/// The paths whose bytes differ between two [`super::tree_files`], each marked
+/// `+` (new), `-` (gone) or `~` (changed); `(none)` when none do.
+pub fn changed_files(
+    before: &BTreeMap<String, Vec<u8>>,
+    after: &BTreeMap<String, Vec<u8>>,
+) -> String {
+    let mut lines = String::new();
+    let paths: BTreeSet<&String> = before.keys().chain(after.keys()).collect();
+    for path in paths {
+        let mark = match (before.get(path), after.get(path)) {
+            (None, Some(_)) => '+',
+            (Some(_), None) => '-',
+            (Some(a), Some(b)) if a != b => '~',
+            _ => continue,
+        };
+        lines.push_str(&format!("{mark} {path}\n"));
+    }
+    if lines.is_empty() {
+        lines.push_str("(none)\n");
+    }
+    lines
+}
+
+/// A `--json` stdout as a snapshot shows it: checked to be exactly one line
+/// of `json.dumps` layout (`kluris_core::json::to_line` of its parse), then
+/// written with an indent of 2 so that each value has its own line. The
+/// root and today are normalized first.
+pub fn json_dump(stdout: &str, root: &Path) -> String {
+    let text = normalize(stdout, root);
+    let doc: serde_json::Value = serde_json::from_str(&text)
+        .unwrap_or_else(|e| panic!("stdout is not JSON ({e}): {text:?}"));
+    let value = python_json(&doc);
+    assert_eq!(
+        text,
+        json::to_line(&value),
+        "stdout is not one line of json.dumps of its parse"
+    );
+    json::to_string_indented(&value, 2) + "\n"
+}
+
+/// A stream as the snapshot of a run shows it: as it is, with a
+/// `<no newline at end>` line when it does not end in one.
+pub fn stream(text: &str) -> String {
+    if text.is_empty() || text.ends_with('\n') {
+        text.to_string()
+    } else {
+        format!("{text}\n<no newline at end>\n")
     }
 }

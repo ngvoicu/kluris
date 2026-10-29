@@ -1,0 +1,30 @@
+---
+source: crates/kluris-cli/tests/golden_dream_mri.rs
+expression: text
+---
+$ kluris dream
+== exit 0
+== stdout
+
+calm health report:
+  Lobes: knowledge, projects
+  Maps regenerated: 2 (knowledge, projects)
+  OK synapses
+  OK bidirectional
+  OK
+  OK frontmatter
+  OK
+  0 automatic fixes applied
+  0 neuron dates refreshed from git
+  0 missing parent frontmatter values inferred
+  0 missing reverse related links added
+  0 missing neuron references added to parent map.md files
+
+Brain is healthy.
+== stderr
+== git status --porcelain brains/calm
+?? brain.md
+?? knowledge/map.md
+?? projects/map.md
+== changed
+(none)

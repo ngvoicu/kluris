@@ -299,7 +299,7 @@ fn mark_today(text: &str) -> String {
 
 /// A parsed JSON document as `kluris_core::json` holds it, to be written in
 /// Kluris's `--json` layout.
-fn python_json(value: &serde_json::Value) -> Json {
+pub fn python_json(value: &serde_json::Value) -> Json {
     use serde_json::Value;
     match value {
         Value::Null => Json::Null,

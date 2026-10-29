@@ -1,0 +1,13 @@
+---
+source: crates/kluris-cli/tests/golden_dream_mri.rs
+expression: text
+---
+$ kluris dream
+== exit 1
+== stdout
+== stderr
+Error: Brain calm has no kluris.yml: <ROOT>/work/brains/calm/kluris.yml
+== git status --porcelain brains/calm
+ D kluris.yml
+== changed
+(none)

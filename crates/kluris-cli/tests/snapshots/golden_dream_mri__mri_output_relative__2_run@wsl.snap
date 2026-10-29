@@ -1,0 +1,14 @@
+---
+source: crates/kluris-cli/tests/golden_dream_mri.rs
+expression: text
+---
+$ kluris mri --output out dir/./deep//é page.html
+== exit 0
+== stdout
+MRI complete — out dir/deep/é page.html
+  Open: file://wsl.localhost/<DISTRO><ROOT>/work/out dir/deep/é page.html
+  7 nodes, 15 edges
+== stderr
+== changed (pages left out)
+(none)
+== page out dir/deep/é page.html (calm): graph as after run 1

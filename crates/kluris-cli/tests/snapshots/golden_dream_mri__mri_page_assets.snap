@@ -1,0 +1,7 @@
+---
+source: crates/kluris-cli/tests/golden_dream_mri.rs
+expression: text
+---
+shell.html fa75788dbb1062a243ed3a4747c79912a537c8ad8ea6cca4887686507aa63e0a 4958 bytes
+mri.css 758ca13a397f1bdc2e25fdef322a4fe95f52f5d4278353ee366ade0818cfde69 17106 bytes
+mri.js 3b884c6c3d78faeff155a0e00155d811dcfdb20b860b203e2d9fea5f86c8c124 49973 bytes

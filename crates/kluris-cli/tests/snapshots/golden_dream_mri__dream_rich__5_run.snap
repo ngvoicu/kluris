@@ -1,0 +1,40 @@
+---
+source: crates/kluris-cli/tests/golden_dream_mri.rs
+expression: text
+---
+$ kluris dream
+== exit 1
+== stdout
+
+rich health report:
+  Lobes: knowledge, my-lobe, projects, uncommitted-lobe
+  Maps regenerated: 8 (knowledge/deep/deeper, knowledge/deep, knowledge/src, projects/api, knowledge, my-lobe, projects, uncommitted-lobe)
+  2 broken synapses
+  OK bidirectional
+  1 orphans
+  OK frontmatter
+  4 deprecation warnings
+    - knowledge/old.md is deprecated but has no replaced_by
+    - knowledge/older.md replaced_by points to missing ./gone.md
+    - knowledge/user.md links to deprecated knowledge/old.md
+  0 automatic fixes applied
+  0 neuron dates refreshed from git
+  0 missing parent frontmatter values inferred
+  0 missing reverse related links added
+  0 missing neuron references added to parent map.md files
+
+Remaining issues need manual attention.
+== stderr
+== git status --porcelain brains/rich
+ M knowledge/beta.md
+ M knowledge/crlf.md
+ M knowledge/old.md
+ M knowledge/target.md
+ M projects/agent.md
+ M projects/alpha.md
+ M projects/api/spec.yml
+ M projects/no-frontmatter.md
+ M projects/no-parent.md
+ M uncommitted-lobe/later.md
+== changed
+(none)

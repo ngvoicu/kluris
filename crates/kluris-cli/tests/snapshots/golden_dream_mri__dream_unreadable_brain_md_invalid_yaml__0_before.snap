@@ -1,0 +1,69 @@
+---
+source: crates/kluris-cli/tests/golden_dream_mri.rs
+expression: text
+---
+== brains/calm/brain.md
+---
+updated: [
+---
+
+# calm
+
+My own words.
+== brains/calm/glossary.md
+---
+updated: '2026-01-01'
+---
+
+# Glossary
+
+**JWT** -- JSON Web Token.
+== brains/calm/kluris.yml
+name: calm
+description: A healthy brain
+== brains/calm/knowledge/gamma.md
+---
+created: '2026-01-01'
+parent: ./map.md
+updated: '2026-01-01'
+---
+
+# Gamma
+
+Body of Gamma.
+== brains/calm/projects/alpha.md
+---
+created: '2026-01-01'
+related:
+- ./beta.md
+parent: ./map.md
+updated: '2026-01-01'
+---
+
+# Alpha
+
+Body of Alpha.
+== brains/calm/projects/beta.md
+---
+created: '2026-01-01'
+related:
+- ./alpha.md
+parent: ./map.md
+updated: '2026-01-01'
+---
+
+# Beta
+
+Body of Beta.
+== brains/calm/projects/fix-me.md
+---
+created: '2026-01-01'
+updated: '2026-01-01'
+---
+
+# Needs a parent
+== home/.kluris/config.yml
+brains:
+  "calm":
+    path: "<ROOT>/work/brains/calm"
+    description: "fixture"

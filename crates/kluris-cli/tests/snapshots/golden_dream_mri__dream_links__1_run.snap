@@ -1,0 +1,50 @@
+---
+source: crates/kluris-cli/tests/golden_dream_mri.rs
+expression: text
+---
+$ kluris dream --json
+== exit 1
+== stdout
+{
+  "ok": true,
+  "healthy": false,
+  "broken_synapses": 2,
+  "one_way_synapses": 0,
+  "orphans": 0,
+  "frontmatter_issues": 0,
+  "dates_updated": 2,
+  "deprecation_issues": 0,
+  "deprecation": [],
+  "broken_synapses_detail": [
+    {
+      "brain": "calm",
+      "file": "projects/links.md",
+      "target": "./nopic.png"
+    },
+    {
+      "brain": "calm",
+      "file": "projects/links.md",
+      "target": "./missing.md"
+    }
+  ],
+  "fixes": {
+    "dates_updated": 2,
+    "parents_inferred": 0,
+    "reverse_synapses_added": 0,
+    "orphan_references_added": 5,
+    "total": 7
+  }
+}
+== stderr
+== git status --porcelain brains/calm
+ M projects/links.md
+ M "projects/my note.md"
+?? brain.md
+?? knowledge/map.md
+?? projects/map.md
+== changed
++ brains/calm/brain.md
++ brains/calm/knowledge/map.md
+~ brains/calm/projects/links.md
++ brains/calm/projects/map.md
+~ brains/calm/projects/my note.md

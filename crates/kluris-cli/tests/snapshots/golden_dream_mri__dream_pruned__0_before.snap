@@ -1,0 +1,91 @@
+---
+source: crates/kluris-cli/tests/golden_dream_mri.rs
+expression: text
+---
+== brains/calm/.archive/map.md
+---
+auto_generated: true
+parent: ../brain.md
+siblings: []
+updated: '2026-01-01'
+---
+
+# .Archive
+
+up [brain.md](../brain.md)
+
+## Contents
+
+(empty)
+== brains/calm/.archive/old.md
+---
+created: '2026-01-01'
+parent: ./map.md
+updated: '2026-01-01'
+---
+
+# Old archived
+
+Body of Old archived.
+== brains/calm/.github/workflows/ci.yml
+on: push
+== brains/calm/glossary.md
+---
+updated: '2026-01-01'
+---
+
+# Glossary
+
+**JWT** -- JSON Web Token.
+== brains/calm/kluris.yml
+name: calm
+description: A healthy brain
+== brains/calm/knowledge/gamma.md
+---
+created: '2026-01-01'
+parent: ./map.md
+updated: '2026-01-01'
+---
+
+# Gamma
+
+Body of Gamma.
+== brains/calm/node_modules/pkg/index.md
+# pkg
+== brains/calm/projects/.hidden/map.md
+---
+auto_generated: true
+---
+
+# Hidden
+== brains/calm/projects/__pycache__/x.md
+# cache
+== brains/calm/projects/alpha.md
+---
+created: '2026-01-01'
+related:
+- ./beta.md
+parent: ./map.md
+updated: '2026-01-01'
+---
+
+# Alpha
+
+Body of Alpha.
+== brains/calm/projects/beta.md
+---
+created: '2026-01-01'
+related:
+- ./alpha.md
+parent: ./map.md
+updated: '2026-01-01'
+---
+
+# Beta
+
+Body of Beta.
+== home/.kluris/config.yml
+brains:
+  "calm":
+    path: "<ROOT>/work/brains/calm"
+    description: "fixture"

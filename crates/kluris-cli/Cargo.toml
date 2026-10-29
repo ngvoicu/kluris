@@ -46,5 +46,8 @@ zip.workspace = true
 sha2.workspace = true
 regex.workspace = true
 
+[target.'cfg(unix)'.dev-dependencies]
+libc.workspace = true
+
 [target.'cfg(windows)'.dev-dependencies]
 windows-sys.workspace = true

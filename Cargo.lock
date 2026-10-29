@@ -1353,6 +1353,7 @@ dependencies = [
  "insta",
  "jiff",
  "kluris-core",
+ "libc",
  "predicates",
  "regex",
  "self-replace",

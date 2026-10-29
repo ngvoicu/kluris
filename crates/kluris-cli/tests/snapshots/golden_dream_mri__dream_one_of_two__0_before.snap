@@ -1,0 +1,361 @@
+---
+source: crates/kluris-cli/tests/golden_dream_mri.rs
+expression: text
+---
+== brains/calm/glossary.md
+---
+updated: '2026-01-01'
+---
+
+# Glossary
+
+**JWT** -- JSON Web Token.
+== brains/calm/kluris.yml
+name: calm
+description: A healthy brain
+== brains/calm/knowledge/gamma.md
+---
+created: '2026-01-01'
+parent: ./map.md
+updated: '2026-01-01'
+---
+
+# Gamma
+
+Body of Gamma.
+== brains/calm/projects/alpha.md
+---
+created: '2026-01-01'
+related:
+- ./beta.md
+parent: ./map.md
+updated: '2026-01-01'
+---
+
+# Alpha
+
+Body of Alpha.
+== brains/calm/projects/beta.md
+---
+created: '2026-01-01'
+related:
+- ./alpha.md
+parent: ./map.md
+updated: '2026-01-01'
+---
+
+# Beta
+
+Body of Beta.
+== brains/rich/README.md
+# Rich
+
+A [link that is not checked](./nowhere.md).
+== brains/rich/glossary.md
+---
+updated: '2026-01-01'
+---
+
+# Glossary
+
+**JWT** -- JSON Web Token.
+== brains/rich/kluris.yml
+name: rich
+description: The rich fixture brain
+== brains/rich/knowledge/beta.md
+---
+created: '2026-01-01'
+parent: ./map.md
+updated: '2026-01-01'
+---
+
+# Beta
+
+Body of Beta.
+== brains/rich/knowledge/broken.md
+---
+created: '2026-01-01'
+related:
+- ./gone.md
+- ./beta.md
+parent: ./map.md
+updated: '2026-01-01'
+---
+
+# Broken
+
+See [x](./missing.md#top) and [web](https://x.io).
+== brains/rich/knowledge/crlf.md
+---\r
+created: '2026-01-01'\r
+parent: ./map.md\r
+updated: '2025-01-01'\r
+---\r
+\r
+# Crlf\r
+\r
+Body of Crlf.\r
+== brains/rich/knowledge/deep/deeper/leaf.md
+---
+created: '2026-01-01'
+parent: ./map.md
+updated: '2026-01-01'
+---
+
+# Leaf
+
+Body of Leaf.
+== brains/rich/knowledge/newer.md
+---
+created: '2026-01-01'
+replaced_by: ./old.md
+status: deprecated
+parent: ./map.md
+updated: '2026-01-01'
+---
+
+# Newer
+
+Body of Newer.
+== brains/rich/knowledge/old.md
+---
+created: '2026-01-01'
+status: deprecated
+parent: ./map.md
+updated: '2026-01-01'
+---
+
+# Old
+
+Body of Old.
+== brains/rich/knowledge/older.md
+---
+created: '2026-01-01'
+replaced_by: ./gone.md
+status: deprecated
+parent: ./map.md
+updated: '2026-01-01'
+---
+
+# Older
+
+Body of Older.
+== brains/rich/knowledge/src/Beta.md
+---
+created: '2026-01-01'
+related:
+- ../target.md
+parent: ./map.md
+updated: '2026-01-01'
+---
+
+# Beta
+
+Body of Beta.
+== brains/rich/knowledge/src/_u.md
+---
+created: '2026-01-01'
+related:
+- ../target.md
+parent: ./map.md
+updated: '2026-01-01'
+---
+
+# _u
+
+Body of _u.
+== brains/rich/knowledge/src/a-b.md
+---
+created: '2026-01-01'
+related:
+- ../target.md
+parent: ./map.md
+updated: '2026-01-01'
+---
+
+# a-b
+
+Body of a-b.
+== brains/rich/knowledge/src/a.b.md
+---
+created: '2026-01-01'
+related:
+- ../target.md
+parent: ./map.md
+updated: '2026-01-01'
+---
+
+# a.b
+
+Body of a.b.
+== brains/rich/knowledge/src/alpha-2.md
+---
+created: '2026-01-01'
+related:
+- ../target.md
+parent: ./map.md
+updated: '2026-01-01'
+---
+
+# alpha-2
+
+Body of alpha-2.
+== brains/rich/knowledge/src/mid.md
+---
+created: '2026-01-01'
+related:
+- ../target.md
+parent: ./map.md
+updated: '2026-01-01'
+---
+
+# mid
+
+Body of mid.
+== brains/rich/knowledge/src/zeta.md
+---
+created: '2026-01-01'
+related:
+- ../target.md
+parent: ./map.md
+updated: '2026-01-01'
+---
+
+# zeta
+
+Body of zeta.
+== brains/rich/knowledge/target.md
+---
+created: '2026-01-01'
+related: []
+parent: ./map.md
+updated: '2026-01-01'
+---
+
+# Target
+
+Body of Target.
+== brains/rich/knowledge/user.md
+---
+created: '2026-01-01'
+related:
+- ./old.md
+- ./target.md
+parent: ./map.md
+updated: '2026-01-01'
+---
+
+# User
+
+Body of User.
+== brains/rich/my-lobe/thing.md
+---
+created: '2026-01-01'
+parent: ./map.md
+updated: '2026-01-01'
+---
+
+# Thing
+
+Body of Thing.
+== brains/rich/projects/agent.md
+---
+parent: ./map.md
+title: Agent written
+created: 2026-01-01
+updated: 2025-12-31
+# a comment the writer drops
+tags: [auth, "jwt", on, off, 2026, 1.10]
+related:
+  - ./alpha.md
+base: &shared [x, y]
+copy: *shared
+when: 2026-01-02T10:00:00Z
+nested: [2026-01-03]
+emoji: "🚀 launch"
+long: "a long line that goes past the eighty column limit so that the writer folds it onto two lines"
+---
+
+# Agent written
+
+Text with [alpha](./alpha.md).
+== brains/rich/projects/alpha.md
+---
+created: '2026-01-01'
+related:
+- ../knowledge/beta.md
+parent: ./map.md
+updated: '2026-01-01'
+---
+
+# Alpha
+
+Changed.
+== brains/rich/projects/api/Shout.MD
+# Shouted
+== brains/rich/projects/api/endpoints.md
+---
+created: '2026-01-01'
+tags:
+- api
+parent: ./map.md
+updated: '2026-01-01'
+---
+
+# Endpoints
+
+Body of Endpoints.
+== brains/rich/projects/api/raw.yaml
+not: a neuron
+== brains/rich/projects/api/spec.yml
+#---
+# title: API spec
+# updated: '2025-06-01'
+# related:
+# - ../alpha.md
+#---
+openapi: 3.0.0
+info:
+  title: demo
+== brains/rich/projects/no-frontmatter.md
+# No frontmatter
+
+Just text.
+== brains/rich/projects/no-parent.md
+---
+created: 2026-01-01
+updated: 2026-01-01
+tags:
+  - linker
+when: 2026-01-02T10:00:00Z
+---
+
+# Linker written
+== brains/rich/root-note.md
+---
+created: '2026-01-01'
+parent: ./map.md
+updated: '2026-01-01'
+---
+
+# Root note
+
+Body of Root note.
+== brains/rich/uncommitted-lobe/later.md
+---
+created: '2026-01-01'
+parent: ./map.md
+updated: '2025-05-05'
+---
+
+# Later
+
+Body of Later.
+== home/.kluris/config.yml
+brains:
+  "rich":
+    path: "<ROOT>/work/brains/rich"
+    description: "fixture"
+  "calm":
+    path: "<ROOT>/work/brains/calm"
+    description: "fixture"

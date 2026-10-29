@@ -1,0 +1,113 @@
+---
+source: crates/kluris-cli/tests/golden_dream_mri.rs
+expression: text
+---
+== brains/calm/brain.md
+---
+auto_generated: true
+updated: '<TODAY>'
+---
+
+# calm
+
+A healthy brain
+
+## Lobes
+
+- [knowledge/](./knowledge/map.md) — 
+- [projects/](./projects/map.md) — 
+
+## Reference
+
+- [glossary.md](./glossary.md) — Domain-specific terms, acronyms, and conventions
+== brains/calm/glossary.md
+---
+updated: '2026-01-01'
+---
+
+# Glossary
+
+**JWT** -- JSON Web Token.
+== brains/calm/kluris.yml
+name: calm
+description: A healthy brain
+== brains/calm/knowledge/gamma.md
+---
+created: '2026-01-01'
+parent: ./map.md
+updated: '2026-01-01'
+---
+
+# Gamma
+
+Body of Gamma.
+== brains/calm/knowledge/map.md
+---
+auto_generated: true
+parent: ../brain.md
+siblings:
+- ../projects/map.md
+updated: '<TODAY>'
+---
+
+# Knowledge
+
+up [brain.md](../brain.md)
+sideways [projects](../projects/map.md)
+
+## Contents
+
+- [gamma.md](./gamma.md) — Gamma
+== brains/calm/projects/alpha.md
+---
+created: '2026-01-01'
+related:
+- ./beta.md
+parent: ./map.md
+updated: '2026-01-01'
+---
+
+# Alpha
+
+Body of Alpha.
+== brains/calm/projects/bad.yml
+#---
+# title: Foo: bar
+#---
+k: 1
+== brains/calm/projects/beta.md
+---
+created: '2026-01-01'
+related:
+- ./alpha.md
+parent: ./map.md
+updated: '2026-01-01'
+---
+
+# Beta
+
+Body of Beta.
+== brains/calm/projects/map.md
+---
+auto_generated: true
+parent: ../brain.md
+siblings:
+- ../knowledge/map.md
+updated: '<TODAY>'
+---
+
+# Projects
+
+up [brain.md](../brain.md)
+sideways [knowledge](../knowledge/map.md)
+
+## Contents
+
+- [alpha.md](./alpha.md) — Alpha
+- [bad.yml](./bad.yml) — Bad
+- [beta.md](./beta.md) — Beta
+== home/.kluris/config.yml
+brains:
+  "calm":
+    path: "<ROOT>/work/brains/calm"
+    description: "fixture"

@@ -1,10 +1,13 @@
 //! Helpers shared by the CLI tests: the golden-snapshot normalizations
-//! ([`golden`]), the sandboxed runs golden tests snapshot ([`sandbox`]) and a
-//! fake release binary for the self-update tests.
+//! ([`golden`]), the sandboxed runs golden tests snapshot ([`sandbox`]), the
+//! brains a sandbox reads ([`brains`]), the fixture brains of the dream and
+//! MRI goldens ([`dream_brains`]) and a fake release binary for the
+//! self-update tests.
 
 #![allow(dead_code, unused_imports)]
 
 pub mod brains;
+pub mod dream_brains;
 pub mod golden;
 pub mod sandbox;
 

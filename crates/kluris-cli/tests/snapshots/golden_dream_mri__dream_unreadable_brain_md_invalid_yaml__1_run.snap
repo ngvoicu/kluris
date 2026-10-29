@@ -1,0 +1,42 @@
+---
+source: crates/kluris-cli/tests/golden_dream_mri.rs
+expression: text
+---
+$ kluris dream --json
+== exit 1
+== stdout
+{
+  "ok": true,
+  "healthy": false,
+  "broken_synapses": 0,
+  "one_way_synapses": 0,
+  "orphans": 0,
+  "frontmatter_issues": 0,
+  "dates_updated": 1,
+  "deprecation_issues": 0,
+  "deprecation": [],
+  "broken_synapses_detail": [],
+  "fixes": {
+    "dates_updated": 1,
+    "parents_inferred": 1,
+    "reverse_synapses_added": 0,
+    "orphan_references_added": 4,
+    "total": 6
+  },
+  "skipped": [
+    {
+      "brain": "calm",
+      "file": "brain.md",
+      "error": "invalid frontmatter: ParserError: while parsing a flow node: expected the node content, but found '<stream end>' (line 2, column 1)"
+    }
+  ]
+}
+== stderr
+== git status --porcelain brains/calm
+ M projects/fix-me.md
+?? knowledge/map.md
+?? projects/map.md
+== changed
++ brains/calm/knowledge/map.md
+~ brains/calm/projects/fix-me.md
++ brains/calm/projects/map.md

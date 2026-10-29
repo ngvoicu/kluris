@@ -1,0 +1,42 @@
+---
+source: crates/kluris-cli/tests/golden_dream_mri.rs
+expression: text
+---
+$ kluris dream --json
+== exit 1
+== stdout
+{
+  "ok": true,
+  "healthy": false,
+  "broken_synapses": 0,
+  "one_way_synapses": 0,
+  "orphans": 0,
+  "frontmatter_issues": 1,
+  "dates_updated": 0,
+  "deprecation_issues": 0,
+  "deprecation": [],
+  "broken_synapses_detail": [],
+  "fixes": {
+    "dates_updated": 0,
+    "parents_inferred": 0,
+    "reverse_synapses_added": 0,
+    "orphan_references_added": 4,
+    "total": 4
+  },
+  "skipped": [
+    {
+      "brain": "calm",
+      "file": "projects/large.md",
+      "error": "cannot write the file: File too large (os error 27)"
+    }
+  ]
+}
+== stderr
+== git status --porcelain brains/calm
+?? brain.md
+?? knowledge/map.md
+?? projects/map.md
+== changed
++ brains/calm/brain.md
++ brains/calm/knowledge/map.md
++ brains/calm/projects/map.md

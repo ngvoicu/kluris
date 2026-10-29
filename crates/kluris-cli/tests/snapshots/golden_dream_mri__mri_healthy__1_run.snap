@@ -1,0 +1,31 @@
+---
+source: crates/kluris-cli/tests/golden_dream_mri.rs
+expression: text
+---
+$ kluris mri --json
+== exit 0
+== stdout
+{
+  "ok": true,
+  "brains": [
+    {
+      "name": "calm",
+      "output_path": "<ROOT>/work/brains/calm/brain-mri.html",
+      "preflight_fixes": {
+        "dates_updated": 0,
+        "parents_inferred": 0,
+        "reverse_synapses_added": 0,
+        "orphan_references_added": 3,
+        "total": 3
+      },
+      "nodes": 7,
+      "edges": 15
+    }
+  ]
+}
+== stderr
+== changed (pages left out)
++ brains/calm/brain.md
++ brains/calm/knowledge/map.md
++ brains/calm/projects/map.md
+== page brains/calm/brain-mri.html (calm): graph mri_healthy__1_graph_calm

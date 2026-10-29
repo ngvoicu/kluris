@@ -1,0 +1,31 @@
+---
+source: crates/kluris-cli/tests/golden_dream_mri.rs
+expression: text
+---
+$ kluris dream --json
+== exit 0
+== stdout
+{
+  "ok": true,
+  "healthy": true,
+  "broken_synapses": 0,
+  "one_way_synapses": 0,
+  "orphans": 0,
+  "frontmatter_issues": 0,
+  "dates_updated": 0,
+  "deprecation_issues": 0,
+  "deprecation": [],
+  "broken_synapses_detail": [],
+  "fixes": {
+    "dates_updated": 0,
+    "parents_inferred": 0,
+    "reverse_synapses_added": 0,
+    "orphan_references_added": 0,
+    "total": 0
+  }
+}
+== stderr
+== git status --porcelain brains/calm
+ M brain.md
+== changed
+~ brains/calm/brain.md

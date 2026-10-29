@@ -1,0 +1,24 @@
+---
+source: crates/kluris-cli/tests/golden_dream_mri.rs
+expression: text
+---
+$ kluris dream --help
+== exit 0
+== stdout
+Brain maintenance — regenerate maps, update dates, auto-fix safe issues, validate remaining links.
+
+Usage: kluris dream [OPTIONS]
+
+Options:
+      --brain <BRAIN>
+          Specific brain
+
+      --json
+          JSON output
+
+      --broken-only
+          In --json mode, return only broken-synapse entries for the agent to repair.
+
+      --help
+          Show this message and exit.
+== stderr

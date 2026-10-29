@@ -1,0 +1,5 @@
+---
+source: crates/kluris-cli/tests/golden_dream_mri.rs
+expression: text
+---
+  mri             Generate interactive brain visualization.

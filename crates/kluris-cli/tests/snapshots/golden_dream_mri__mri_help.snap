@@ -1,0 +1,24 @@
+---
+source: crates/kluris-cli/tests/golden_dream_mri.rs
+expression: text
+---
+$ kluris mri --help
+== exit 0
+== stdout
+Generate interactive brain visualization.
+
+Usage: kluris mri [OPTIONS]
+
+Options:
+      --brain <BRAIN>
+          Specific brain
+
+      --output <OUTPUT>
+          Output HTML file path
+
+      --json
+          JSON output
+
+      --help
+          Show this message and exit.
+== stderr
