@@ -54,6 +54,7 @@
 //!    at that moment on Windows can leave the ref's lock, and the next sync
 //!    refuses the brain, naming it, as in step 2.
 
+pub mod claim;
 pub mod commit;
 pub mod fresh;
 pub mod frontmatter_merge;
