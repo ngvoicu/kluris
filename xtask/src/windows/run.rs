@@ -1,4 +1,4 @@
-//! One run: the machine chosen, the run's turn in its queue waited for
+//! One run: the run's turn in zeewin2's queue waited for
 //! ([`crate::ssh_ci::queue`]) and the machine asked at the head, the tarball
 //! made, then sent and the bootstrap streamed back ([`crate::ssh_ci::session`]);
 //! a bootstrap that refuses the run with 75 sends it back to its place in the
@@ -7,7 +7,7 @@
 //! (the stop script), since Windows' SSH server does not end what a lost
 //! session started.
 
-use super::machine::{self, Machine};
+use super::machine::{self, ZEEWIN2};
 use super::options::Options;
 use super::script::{self, Spec};
 #[cfg(test)]
@@ -29,15 +29,7 @@ pub fn windows(options: &Options, ctx: &mut Ctx) -> i32 {
 }
 
 fn go(options: &Options, ctx: &mut Ctx) -> Result<i32, String> {
-    let machine = match options.machine {
-        Some(name) => Machine::named(name),
-        None => {
-            let now = ctx.pace.now_ms();
-            let (machine, why) = machine::choose(ctx.runner, ctx.queues.as_ref(), now);
-            say(ctx.err, &why)?;
-            machine
-        }
-    };
+    let machine = &ZEEWIN2;
     // The run's place in the machine's queue, kept until the run is over: the
     // ticket goes with `turn` however the run ends.
     let who = Who::of(ctx.root, &ctx.command);
@@ -76,7 +68,7 @@ fn go(options: &Options, ctx: &mut Ctx) -> Result<i32, String> {
     let mut commit = None;
     loop {
         let waited = turn.wait(
-            &mut || machine::look_ready(&machine, &mut *ctx.runner),
+            &mut || machine::look_ready(machine, &mut *ctx.runner),
             &mut *ctx.pace,
             &mut |line| say(&mut *ctx.err, &format!("windows: {line}")),
         )?;

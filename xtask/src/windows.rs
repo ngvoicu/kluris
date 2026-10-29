@@ -1,10 +1,10 @@
 //! `cargo xtask windows`: the workspace's tests on the household Windows
-//! machines `zeewin` and `zeewin2`, over ssh, the way ConsensFlow's `cargo
-//! xtask windows` runs its own.
+//! machine `zeewin2`, over ssh, the way ConsensFlow's `cargo xtask windows`
+//! runs its own.
 //!
 //! ```text
-//! cargo xtask windows [--machine zeewin|zeewin2] [--wait MINUTES] [-- <extra cargo test args>]
-//! cargo xtask windows [--machine zeewin|zeewin2] [--wait MINUTES] --installer-smoke [--wrapper <site install.ps1>]
+//! cargo xtask windows [--machine zeewin2] [--wait MINUTES] [-- <extra cargo test args>]
+//! cargo xtask windows [--machine zeewin2] [--wait MINUTES] --installer-smoke [--wrapper <site install.ps1>]
 //! ```
 //!
 //! `--installer-smoke` runs no tests: after the toolchain, uv's Python, the
@@ -16,28 +16,28 @@
 //! again when the step was ended before it could, and so does the stop),
 //! then compares them byte for byte.
 //!
+//! zeewin2 is the one machine ([`machine`]): `--machine zeewin2` is accepted
+//! and changes nothing, and any other `--machine` is a usage error.
+//!
 //! A run, in order:
 //!
-//! 1. The machine: the one `--machine` names, or, as ConsensFlow's runner
-//!    chooses, zeewin2 while no live run is queued for it and it is free and
-//!    allowed, else zeewin ([`machine`]).
-//! 2. The turn ([`crate::ssh_ci::queue`]): the run takes a ticket in the
-//!    machine's folder of the queue every runner on this Mac shares with
-//!    ConsensFlow's (`~/.cf-windows-queues/<machine>`, or `CF_WINDOWS_QUEUES`)
-//!    and waits, first come first served, up to `--wait MINUTES` (60, at most
-//!    a day), saying where it stands each minute, then ends with 75. At the
-//!    head of the queue the machine is asked: zeewin2 (bounded probes) is busy
-//!    while poker-lab holds the laptop, a Kluris Linux run holds zeelin or C:
-//!    is short of disk; zeewin is asked nothing. `--wait 0` asks once and takes
-//!    no ticket: 75 at once if the machine is busy or a run is queued for it.
-//!    The run holds its ticket until it ends, however it ends.
-//! 3. The tarball ([`pack`]): `git archive` of HEAD, or of a `git stash create`
+//! 1. The turn ([`crate::ssh_ci::queue`]): the run takes a ticket in zeewin2's
+//!    folder of the queue every runner on this Mac shares with ConsensFlow's
+//!    (`~/.cf-windows-queues/zeewin2`, or `CF_WINDOWS_QUEUES`) and waits, first
+//!    come first served, up to `--wait MINUTES` (60, at most a day), saying
+//!    where it stands each minute, then ends with 75. At the head of the queue
+//!    zeewin2 is asked, by bounded probes: it is busy while poker-lab holds the
+//!    laptop, a Kluris Linux run holds zeelin or C: is short of disk. `--wait
+//!    0` asks once and takes no ticket: 75 at once if zeewin2 is busy or a run
+//!    is queued for it. The run holds its ticket until it ends, however it
+//!    ends.
+//! 2. The tarball ([`pack`]): `git archive` of HEAD, or of a `git stash create`
 //!    commit when tracked files have uncommitted changes, without `target/`,
 //!    with the run script beside the files. It is sent by scp to `%USERPROFILE%\<run id>.tgz`; when the upload
 //!    fails, that one file is removed there at once (a bounded ssh that takes
 //!    no lock, the name being the run's own), and the command says whether it
 //!    was removed, was not there, or the machine could not be reached.
-//! 4. The bootstrap ([`script`]), on ssh's command line: it takes the
+//! 3. The bootstrap ([`script`]), on ssh's command line: it takes the
 //!    per-machine one-run lock it shares with ConsensFlow
 //!    (`%USERPROFILE%\consensflow-build\.windows-run.lock`, opened for the run
 //!    alone, with ConsensFlow's records beside it) before anything else, and
@@ -48,14 +48,14 @@
 //!    the run's folder `%USERPROFILE%\.kluris-ci\runs\<run id>`, the unpack, and
 //!    the run script. Its `finally` removes the tarball and its lock records and
 //!    closes the lock, however the run ends.
-//! 5. The run script: the run in a job (at most 64 processes, all ended with the
+//! 4. The run script: the run in a job (at most 64 processes, all ended with the
 //!    run), run folders older than a day and every folder in `cache\` that no
 //!    run uses swept, then each step with its own bound: the tree's Rust
 //!    toolchain into Kluris's own `RUSTUP_HOME`, then `cargo test --workspace
 //!    --no-fail-fast`. Tools and caches live under `%USERPROFILE%\.kluris-ci\`
 //!    (`tools\`, `cache\target` as `CARGO_TARGET_DIR`, `cache\uv`); PATH
 //!    changes for the run's own process only.
-//! 6. The output streams back as it comes. The status is the machine's last
+//! 5. The output streams back as it comes. The status is the machine's last
 //!    line (`== exit N`, [`run::answer`]), a summary line says each step's, and a
 //!    run stopped here (Ctrl-C: 130), past its bound (124) or whose connection
 //!    was lost is ended there by the stop script.

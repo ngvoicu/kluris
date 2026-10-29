@@ -52,23 +52,24 @@ writes nothing (see "Golden tests").
 
 ## Windows machines (`cargo xtask windows`)
 
-Kluris 3's tests run on the two household Windows machines over ssh, the way ConsensFlow's runner does (`xtask/src/windows.rs`
+Kluris 3's tests run on the household Windows machine zeewin2 over ssh, the way ConsensFlow's runner does (`xtask/src/windows.rs`
 has the whole design):
 
 ```bash
-cargo xtask windows --machine zeewin2             # cargo test --workspace --no-fail-fast
-cargo xtask windows --machine zeewin2 -- -p kluris-core   # extra cargo test args after --
-cargo xtask windows --machine zeewin2 --wait 0 --clippy   # ask once: 75 at once if busy or a run is queued
-cargo xtask windows --machine zeewin2 --installer-smoke --wrapper ../sites/kluris-site/install.ps1
-cargo xtask windows --machine zeewin2 --installer-smoke --published 3.0.0-rc.1   # a GitHub release, live wrapper
-cargo xtask windows --machine zeewin2 --installer-smoke --published 3.0.0 --unpinned   # GitHub's latest, which must be 3.0.0
-cargo xtask windows --machine zeewin2 --clippy    # cargo clippy --workspace --all-targets -- -D warnings, no tests
+cargo xtask windows                               # cargo test --workspace --no-fail-fast
+cargo xtask windows -- -p kluris-core             # extra cargo test args after --
+cargo xtask windows --wait 0 --clippy             # ask once: 75 at once if busy or a run is queued
+cargo xtask windows --installer-smoke --wrapper ../sites/kluris-site/install.ps1
+cargo xtask windows --installer-smoke --published 3.0.0-rc.1   # a GitHub release, live wrapper
+cargo xtask windows --installer-smoke --published 3.0.0 --unpinned   # GitHub's latest, which must be 3.0.0
+cargo xtask windows --clippy                      # cargo clippy --workspace --all-targets -- -D warnings, no tests
 ```
 
-- **Machines.** `zeewin` (AGV-COMPUTE1, `ssh zeewin`, short of memory: builds
-  run with 2 jobs) and `zeewin2` (the owner's ASUS laptop, `ssh zeewin2`, 8
-  jobs). Facts: zeespirevpn-sme (`devices/agv-compute1.md`,
-  `devices/agvlaptop.md`) and consensflow-sme (`operations/test-machines.md`).
+- **The machine.** `zeewin2` (the owner's ASUS laptop, `ssh zeewin2`, 8
+  jobs), the one Windows machine: every run goes there, waiting in its
+  queue. `--machine zeewin2` is accepted and changes nothing; any other
+  `--machine` is a usage error (2). Facts: zeespirevpn-sme
+  (`devices/agvlaptop.md`) and consensflow-sme (`operations/test-machines.md`).
 - **What goes.** `git archive` of HEAD, or of a `git stash create` commit when
   tracked files have uncommitted changes (untracked files do not go), without
   `target/`.
@@ -107,11 +108,7 @@ cargo xtask windows --machine zeewin2 --clippy    # cargo clippy --workspace --a
   same laptop; asked with `flock -n` as `cargo xtask linux` asks it, the
   holder named from `.linux-run.id`), and while C: has under 50 GiB free.
   Those locks are only looked at: never held or broken, and never waited on
-  but through the queue. zeewin is asked nothing: its lock decides.
-- **No `--machine`** does what ConsensFlow's default choice does: zeewin2 while
-  no live run is queued in its folder (looked at first, and alone), it is
-  allowed and no run holds its lock; else zeewin, whose queue the run then
-  joins whatever it holds.
+  but through the queue.
 - **Nothing on the machine changes.** No Windows settings, Defender, firewall,
   registry or PATH (user or machine) changes, no logins, no system-wide
   installs. Everything Kluris adds lives in `%USERPROFILE%\.kluris-ci\`:
@@ -298,7 +295,7 @@ package, hence the package `kluris`.
   version line went unseen by `build-versions.ps1`, and the Windows release
   would embed CRLF Specmint companions (`vendored/`, `include_dir!`) where
   every other target and v2 ship LF. The rule gives every checkout the
-  committed bytes, the same tree the zeewin/zeelin runs' `git archive` sends.
+  committed bytes, the same tree the zeewin2/zeelin runs' `git archive` sends.
 - **A release job that never got a runner is re-run, never re-tagged.**
   GitHub's capacity for some labels (macOS arm64 above all) can leave a
   build queued until it is cancelled ("The job was not acquired by Runner

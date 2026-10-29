@@ -66,7 +66,7 @@ pub enum Parsed {
 }
 
 pub fn parse(args: &[String]) -> Result<Parsed, String> {
-    let Some(words) = words::parse(args, &[])? else {
+    let Some(words) = words::parse(args, None)? else {
         return Ok(Parsed::Help);
     };
     Ok(Parsed::Run(Options {

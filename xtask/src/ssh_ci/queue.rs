@@ -433,8 +433,8 @@ pub enum Waited {
 /// The queue a run waits in, and what it is called in the run's lines.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Place<'a> {
-    /// The machine's folder in the queues: `zeewin`, `zeewin2` (a Linux run's
-    /// too: zeelin is the same laptop).
+    /// The machine's folder in the queues: `zeewin2`, a Linux run's too
+    /// (zeelin is the same laptop).
     pub queue: &'a str,
     /// What the run waits for, as its lines say it: `zeewin2`, `zeelin`.
     pub machine: &'a str,

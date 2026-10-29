@@ -1,6 +1,6 @@
 //! `cargo xtask linux`: the workspace's tests on the household laptop's Ubuntu
 //! `zeelin` (WSL2), over ssh, the way `cargo xtask windows` runs them on
-//! zeewin and zeewin2.
+//! zeewin2.
 //!
 //! ```text
 //! cargo xtask linux [--wait MINUTES] [-- <extra cargo test args>]

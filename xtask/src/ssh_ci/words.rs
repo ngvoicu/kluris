@@ -2,8 +2,8 @@
 //! `--installer-smoke` and its `--wrapper FILE` or `--published VERSION`
 //! (with `--unpinned`), `--clippy`, `--wait MINUTES` (the turn in the shared
 //! queue, [`super::queue`]), `--help`, after `--` the
-//! extra arguments of `cargo test` taken as they are, and for a task with more
-//! than one machine `--machine NAME` (or `--machine=NAME`).
+//! extra arguments of `cargo test` taken as they are, and for a task with a
+//! machine to name `--machine NAME` (or `--machine=NAME`).
 
 use std::ffi::OsStr;
 use std::fs;
@@ -14,8 +14,6 @@ use super::queue::{DEFAULT_WAIT_MINUTES, MAX_WAIT_MINUTES};
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Words {
-    /// The `--machine` value, one of the task's machines; none when not given.
-    pub machine: Option<String>,
     /// Appended to `cargo test --workspace`.
     pub cargo_args: Vec<String>,
     /// The release installer smoke instead of the tests.
@@ -35,14 +33,16 @@ pub struct Words {
     pub wait: u32,
 }
 
-/// `args` as [`Words`], or none for `--help`. `machines` are the values
-/// `--machine` takes; with none, `--machine` is an unknown option.
-pub fn parse(args: &[String], machines: &[&str]) -> Result<Option<Words>, String> {
+/// `args` as [`Words`], or none for `--help`. `machine` is the one value
+/// `--machine` takes, which names the machine the run goes to anyway; with
+/// none, `--machine` is an unknown option.
+pub fn parse(args: &[String], machine: Option<&str>) -> Result<Option<Words>, String> {
     let mut words = Words {
         wait: DEFAULT_WAIT_MINUTES,
         ..Words::default()
     };
     let mut waits = false;
+    let mut named = false;
     let mut at = 0;
     while let Some(word) = args.get(at) {
         at += 1;
@@ -119,23 +119,24 @@ pub fn parse(args: &[String], machines: &[&str]) -> Result<Option<Words>, String
                         )
                     })?;
             }
-            "--machine" if !machines.is_empty() => {
-                if words.machine.is_some() {
+            "--machine" if let Some(machine) = machine => {
+                if named {
                     return Err("--machine is given once".into());
                 }
-                let list = machines.join(", ");
+                named = true;
                 let value = match inline {
                     Some(value) => value,
                     None => {
                         let next = args.get(at).filter(|next| !next.starts_with('-'));
                         at += 1;
-                        next.ok_or_else(|| format!("--machine takes a machine: {list}"))?
+                        next.ok_or_else(|| format!("--machine takes the machine: {machine}"))?
                     }
                 };
-                if !machines.contains(&value) {
-                    return Err(format!("--machine is one of {list}, not {value}"));
+                if value != machine {
+                    return Err(format!(
+                        "--machine is {machine}, the one machine, not {value}"
+                    ));
                 }
-                words.machine = Some(value.to_owned());
             }
             other if other.starts_with('-') => return Err(format!("unknown option: {other}")),
             other => {

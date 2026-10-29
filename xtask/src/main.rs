@@ -27,9 +27,9 @@ Tasks:
       once), checked for plugin text and for mentioned files that are not
       shipped. --check writes nothing and exits 1 when vendored/ is stale;
       --diff prints the full diffs.
-  windows [--machine zeewin|zeewin2] [--wait MINUTES] [-- <cargo test args>]
-      Run cargo test on a household Windows machine over ssh, after its
-      turn in the machines' shared queue. `cargo xtask windows --help` says
+  windows [--machine zeewin2] [--wait MINUTES] [-- <cargo test args>]
+      Run cargo test on zeewin2, the household laptop's Windows, over ssh,
+      after its turn in the machines' shared queue. `cargo xtask windows --help` says
       more.";
 
 fn main() -> ExitCode {

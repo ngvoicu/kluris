@@ -13,7 +13,7 @@
 //! - The stop ([`stop_script`]) ends a run that was stopped on this side, which
 //!   Windows' SSH server does not pass on.
 //! - The state ([`state_script`]) is what zeewin2 is asked before a run: C:'s
-//!   free space and who holds the shared lock, read without opening it.
+//!   free space.
 //!
 //! Every script that runs a command ends its output with the line `== exit N`
 //! ([`EXIT_MARK`]): ssh to a PowerShell answers 1 for any failure, so the
@@ -298,10 +298,9 @@ pub fn cleanup_script(id: &str) -> String {
     fill(CLEANUP, &[("tarball", &tarball_name(id))])
 }
 
-/// Says `free N` (whole GiB free on C:) and, while a run of either project
-/// holds the shared lock, `held <id> <process>` from its record.
+/// Says `free N`: the whole GiB free on C:.
 pub fn state_script() -> String {
-    fill(STATE, &[("lock_dir", LOCK_DIR), ("owner", OWNER)])
+    STATE.to_owned()
 }
 
 /// The bootstrap. The lock is ConsensFlow's, taken the way its runner takes it
@@ -561,6 +560,4 @@ exit 0
 const STATE: &str = r##"
 $ProgressPreference = 'SilentlyContinue'
 "free $([math]::Floor((Get-PSDrive -Name C).Free / 1GB))"
-$of = @(Get-Content -LiteralPath (Join-Path $env:USERPROFILE '«lock_dir»\«owner»') -ErrorAction SilentlyContinue)
-if ($of.Count) { "held $($of -join ' ')" }
 "##;

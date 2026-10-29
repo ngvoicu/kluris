@@ -1,29 +1,30 @@
 //! The words of `cargo xtask windows` ([`crate::ssh_ci::words`]): `--machine
-//! zeewin|zeewin2`, `--wait MINUTES`, `--installer-smoke`,
+//! zeewin2`, `--wait MINUTES`, `--installer-smoke`,
 //! `--wrapper`, `--published`, `--unpinned`, `--help`, and after `--` the
 //! extra arguments of `cargo test`.
 
+use super::machine::ZEEWIN2;
 use crate::ssh_ci::words;
 
 pub const USAGE: &str =
-    "usage: cargo xtask windows [--machine zeewin|zeewin2] [--wait MINUTES] [-- <cargo test args>]
-       cargo xtask windows [--machine zeewin|zeewin2] [--wait MINUTES] --installer-smoke [--wrapper <site install.ps1>]
-       cargo xtask windows [--machine zeewin|zeewin2] [--wait MINUTES] --installer-smoke --published <version> [--unpinned]
-       cargo xtask windows [--machine zeewin|zeewin2] [--wait MINUTES] --clippy
+    "usage: cargo xtask windows [--machine zeewin2] [--wait MINUTES] [-- <cargo test args>]
+       cargo xtask windows [--machine zeewin2] [--wait MINUTES] --installer-smoke [--wrapper <site install.ps1>]
+       cargo xtask windows [--machine zeewin2] [--wait MINUTES] --installer-smoke --published <version> [--unpinned]
+       cargo xtask windows [--machine zeewin2] [--wait MINUTES] --clippy
 
-Runs `cargo test --workspace --no-fail-fast` on a household Windows machine
-over ssh, on this worktree as it is now (HEAD plus uncommitted tracked
-changes). With no --machine the run goes to zeewin2 while no run is queued for it and
-it is free and allowed, else to zeewin.
+Runs `cargo test --workspace --no-fail-fast` on zeewin2, the household
+laptop's Windows, over ssh, on this worktree as it is now (HEAD plus
+uncommitted tracked changes). zeewin2 is the one machine: --machine zeewin2
+says so and changes nothing.
 
-A busy machine is waited for, first come first served, in the queue every
-runner on this Mac shares with ConsensFlow's (~/.cf-windows-queues/<machine>,
+A busy zeewin2 is waited for, first come first served, in the queue every
+runner on this Mac shares with ConsensFlow's (~/.cf-windows-queues/zeewin2,
 or $CF_WINDOWS_QUEUES): up to --wait MINUTES (60 unless given, at most 1440),
 saying each minute where the run stands, then 75. At the head of the queue
-the machine's own checks decide (zeewin2: poker-lab's lock, a Kluris Linux
-run on zeelin, the disk floor), and a one-run lock that still refuses the run
-sends it back to wait. --wait 0 asks once and ends with 75 if the machine is
-busy or a run is queued for it.
+zeewin2's own checks decide (poker-lab's lock, a Kluris Linux run on zeelin,
+the disk floor), and a one-run lock that still refuses the run sends it back
+to wait. --wait 0 asks once and ends with 75 if zeewin2 is busy or a run is
+queued for it.
 
 --clippy runs no tests: `cargo clippy --workspace --all-targets -- -D
 warnings`, ci.yml's gate, on Windows.
@@ -43,17 +44,8 @@ PATH is saved, written back and compared the same way. With --unpinned the
 wrapper runs without KLURIS_VERSION, so it installs GitHub's latest release,
 which must be <version>.";
 
-/// The machines `--machine` names.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Name {
-    Zeewin,
-    Zeewin2,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Options {
-    /// None: the default machine, chosen when the run goes.
-    pub machine: Option<Name>,
     /// Appended to `cargo test --workspace`.
     pub cargo_args: Vec<String>,
     /// The release installer smoke instead of the tests.
@@ -80,16 +72,10 @@ pub enum Parsed {
 }
 
 pub fn parse(args: &[String]) -> Result<Parsed, String> {
-    let Some(words) = words::parse(args, &["zeewin", "zeewin2"])? else {
+    let Some(words) = words::parse(args, Some(ZEEWIN2.name))? else {
         return Ok(Parsed::Help);
     };
-    let machine = match words.machine.as_deref() {
-        None => None,
-        Some("zeewin") => Some(Name::Zeewin),
-        Some(_) => Some(Name::Zeewin2),
-    };
     Ok(Parsed::Run(Options {
-        machine,
         cargo_args: words.cargo_args,
         installer_smoke: words.installer_smoke,
         wrapper: words.wrapper,

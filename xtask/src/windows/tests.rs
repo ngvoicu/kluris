@@ -1,4 +1,4 @@
-//! Unit tests of `cargo xtask windows`: the words, the machines, the PowerShell
+//! Unit tests of `cargo xtask windows`: the words, the machine, the PowerShell
 //! the machine is sent, the answer a run ends with, and a whole run against a
 //! fake ssh. Nothing here reaches the network; the pack tests run git on a
 //! repository made for the case.
@@ -11,8 +11,8 @@ use std::time::Duration;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 
-use super::machine::{self, FLOOR_GIB, Machine, Ready};
-use super::options::{self, Name, Options, Parsed};
+use super::machine::{self, FLOOR_GIB, Machine, Ready, ZEEWIN2};
+use super::options::{self, Options, Parsed};
 use super::remote::{Stream, Streamed};
 use super::run::{self, Ctx};
 use super::script::{self, Spec};
@@ -93,11 +93,10 @@ mod words_of_the_command {
     }
 
     #[test]
-    fn no_words_is_the_default_machine() {
+    fn no_words_is_a_tests_run() {
         assert_eq!(
             run_of(""),
             Options {
-                machine: None,
                 cargo_args: vec![],
                 installer_smoke: false,
                 wrapper: None,
@@ -114,8 +113,7 @@ mod words_of_the_command {
         let options = run_of("--installer-smoke");
         assert!(options.installer_smoke, "{options:?}");
         assert_eq!(options.wrapper, None);
-        let options = run_of("--machine zeewin --installer-smoke --wrapper ../site/install.ps1");
-        assert_eq!(options.machine, Some(Name::Zeewin));
+        let options = run_of("--machine zeewin2 --installer-smoke --wrapper ../site/install.ps1");
         assert_eq!(options.wrapper.as_deref(), Some("../site/install.ps1"));
         assert_eq!(
             run_of("--wrapper=x.ps1 --installer-smoke")
@@ -129,7 +127,7 @@ mod words_of_the_command {
             ("--installer-smoke -- -p kluris-core", "runs no cargo test"),
             ("--installer-smoke --wrapper", "--wrapper takes"),
             (
-                "--installer-smoke --wrapper --machine zeewin",
+                "--installer-smoke --wrapper --machine zeewin2",
                 "--wrapper takes",
             ),
             ("--installer-smoke=yes", "--installer-smoke takes no value"),
@@ -142,7 +140,7 @@ mod words_of_the_command {
 
     #[test]
     fn unpinned_installs_githubs_latest_and_expects_the_named_release() {
-        let options = run_of("--machine zeewin --installer-smoke --published 3.0.0 --unpinned");
+        let options = run_of("--machine zeewin2 --installer-smoke --published 3.0.0 --unpinned");
         assert!(options.unpinned, "{options:?}");
         assert_eq!(options.published.as_deref(), Some("3.0.0"));
         assert!(!run_of("--installer-smoke --published 3.0.0").unpinned);
@@ -164,8 +162,7 @@ mod words_of_the_command {
 
     #[test]
     fn the_published_smoke_names_a_release_and_takes_no_wrapper_file() {
-        let options = run_of("--machine zeewin --installer-smoke --published 3.0.0-rc.1");
-        assert_eq!(options.machine, Some(Name::Zeewin));
+        let options = run_of("--machine zeewin2 --installer-smoke --published 3.0.0-rc.1");
         assert!(options.installer_smoke, "{options:?}");
         assert_eq!(options.published.as_deref(), Some("3.0.0-rc.1"));
         assert_eq!(options.wrapper, None);
@@ -187,7 +184,7 @@ mod words_of_the_command {
                 "the live site's install",
             ),
             (
-                "--installer-smoke --published --machine zeewin",
+                "--installer-smoke --published --machine zeewin2",
                 "--published takes",
             ),
             ("--installer-smoke --published 3.0", "a release number"),
@@ -209,7 +206,7 @@ mod words_of_the_command {
 
     #[test]
     fn the_clippy_run() {
-        let options = run_of("--machine zeewin --clippy");
+        let options = run_of("--machine zeewin2 --clippy");
         assert!(options.clippy && !options.installer_smoke);
         assert!(!run_of("").clippy);
         for (line, says) in [
@@ -249,14 +246,21 @@ mod words_of_the_command {
     }
 
     #[test]
-    fn the_machine_in_both_spellings() {
-        assert_eq!(run_of("--machine zeewin").machine, Some(Name::Zeewin));
-        assert_eq!(run_of("--machine=zeewin2").machine, Some(Name::Zeewin2));
+    fn zeewin2_is_the_one_machine_in_both_spellings() {
+        assert_eq!(run_of("--machine zeewin2"), run_of(""));
+        assert_eq!(run_of("--machine=zeewin2 --clippy"), run_of("--clippy"));
+        for line in ["--machine zeewin", "--machine=zeewin --clippy"] {
+            assert_eq!(
+                options::parse(&words(line)),
+                Err("--machine is zeewin2, the one machine, not zeewin".into()),
+                "{line:?}"
+            );
+        }
     }
 
     #[test]
     fn words_after_the_dashes_go_to_cargo_test_as_they_are() {
-        let options = run_of("--machine zeewin -- -p kluris-core -- --nocapture --clippy");
+        let options = run_of("--machine zeewin2 -- -p kluris-core -- --nocapture --clippy");
         assert_eq!(
             options.cargo_args,
             words("-p kluris-core -- --nocapture --clippy")
@@ -305,7 +309,7 @@ mod words_of_the_command {
     fn parity_and_parity_files_are_usage_errors() {
         for (line, says) in [
             ("--parity", "unknown option: --parity"),
-            ("--machine zeewin --parity", "unknown option: --parity"),
+            ("--machine zeewin2 --parity", "unknown option: --parity"),
             (
                 "--parity-files parity/test_smoke.py",
                 "unknown option: --parity-files",
@@ -323,12 +327,15 @@ mod words_of_the_command {
     #[test]
     fn refusals() {
         for (line, says) in [
-            ("--machine zeewin3", "zeewin, zeewin2"),
-            ("--machine", "--machine takes"),
+            (
+                "--machine zeewin3",
+                "--machine is zeewin2, the one machine, not zeewin3",
+            ),
+            ("--machine", "--machine takes the machine: zeewin2"),
             ("--machine --clippy", "--machine takes"),
             ("--bogus", "unknown option: --bogus"),
             ("test", "after --"),
-            ("--machine zeewin --machine zeewin2", "once"),
+            ("--machine zeewin2 --machine zeewin2", "once"),
         ] {
             let refused = options::parse(&words(line)).expect_err(line);
             assert!(refused.contains(says), "{line:?}: {refused}");
@@ -341,38 +348,26 @@ mod words_of_the_command {
 mod machines {
     use super::*;
 
-    fn zeewin2() -> Machine {
-        Machine::named(Name::Zeewin2)
+    fn zeewin2() -> &'static Machine {
+        &ZEEWIN2
     }
 
     #[test]
-    fn the_two_machines() {
-        let zeewin = Machine::named(Name::Zeewin);
-        assert_eq!((zeewin.name, zeewin.host), ("zeewin", "zeewin"));
-        assert!(zeewin.shared.is_none());
+    fn zeewin2_is_the_machine() {
         let laptop = zeewin2();
         assert_eq!((laptop.name, laptop.host), ("zeewin2", "zeewin2"));
-        let shared = laptop.shared.expect("zeewin2 is shared with poker-lab");
         assert_eq!(
-            (shared.linux, shared.lock, shared.floor_gib),
+            (laptop.linux, laptop.lock, laptop.floor_gib),
             ("zeelin", ".compile-lock/owner", 50)
         );
         assert_eq!(FLOOR_GIB, 50);
-        assert!(zeewin.jobs < laptop.jobs, "zeewin is short of memory");
-    }
-
-    #[test]
-    fn zeewin_is_asked_nothing_before_a_run() {
-        let mut fake = Fake::default();
-        let ready = machine::ready(&Machine::named(Name::Zeewin), &mut fake).unwrap();
-        assert_eq!(ready, Ready::Go(vec![]));
-        assert!(fake.calls.is_empty());
+        assert_eq!(laptop.jobs, 8);
     }
 
     #[test]
     fn zeewin2_is_refused_while_poker_lab_holds_its_lock() {
         let mut fake = Fake::new(vec![said(0, "held\n")]);
-        let Ready::Refused(why) = machine::ready(&zeewin2(), &mut fake).unwrap() else {
+        let Ready::Refused(why) = machine::ready(zeewin2(), &mut fake).unwrap() else {
             panic!("not refused")
         };
         assert!(
@@ -394,7 +389,7 @@ mod machines {
             ("kluris\n", "a run that left no record"),
         ] {
             let mut fake = Fake::new(vec![said(0, answer)]);
-            let Ready::Refused(why) = machine::ready(&zeewin2(), &mut fake).unwrap() else {
+            let Ready::Refused(why) = machine::ready(zeewin2(), &mut fake).unwrap() else {
                 panic!("not refused for {answer:?}")
             };
             assert!(
@@ -411,7 +406,7 @@ mod machines {
     #[test]
     fn the_poker_lab_check_is_bounded_and_only_looks() {
         let mut fake = Fake::new(vec![said(0, "free\n"), said(0, "free 600\n")]);
-        machine::ready(&zeewin2(), &mut fake).unwrap();
+        machine::ready(zeewin2(), &mut fake).unwrap();
         let zeelin = &fake.calls[0];
         assert_eq!(zeelin.program, "ssh");
         let line = zeelin.args.join(" ");
@@ -458,7 +453,7 @@ mod machines {
             Answer::Capture(Err("no ssh".into())),
         ] {
             let mut fake = Fake::new(vec![zeelin, said(0, "free 600\n")]);
-            let Ready::Go(notes) = machine::ready(&zeewin2(), &mut fake).unwrap() else {
+            let Ready::Go(notes) = machine::ready(zeewin2(), &mut fake).unwrap() else {
                 panic!("refused")
             };
             assert_eq!(notes.len(), 1, "{notes:?}");
@@ -469,26 +464,14 @@ mod machines {
     #[test]
     fn zeewin2_is_refused_under_the_disk_floor() {
         let mut fake = Fake::new(vec![said(0, "free\n"), said(0, "free 49\r\n")]);
-        let Ready::Refused(why) = machine::ready(&zeewin2(), &mut fake).unwrap() else {
+        let Ready::Refused(why) = machine::ready(zeewin2(), &mut fake).unwrap() else {
             panic!("not refused")
         };
         assert!(why.contains("50 GiB") && why.contains("49"), "{why}");
 
         let mut fake = Fake::new(vec![said(0, "free\n"), said(0, "free 50\r\n")]);
         assert_eq!(
-            machine::ready(&zeewin2(), &mut fake).unwrap(),
-            Ready::Go(vec![])
-        );
-    }
-
-    #[test]
-    fn a_held_run_lock_is_left_to_the_lock_itself() {
-        let mut fake = Fake::new(vec![
-            said(0, "free\n"),
-            said(0, "free 600\r\nheld 0000abcd-12345678 4242\r\n"),
-        ]);
-        assert_eq!(
-            machine::ready(&zeewin2(), &mut fake).unwrap(),
+            machine::ready(zeewin2(), &mut fake).unwrap(),
             Ready::Go(vec![])
         );
     }
@@ -496,62 +479,20 @@ mod machines {
     #[test]
     fn a_windows_that_does_not_answer_is_an_error() {
         let mut fake = Fake::new(vec![said(0, "free\n"), said(255, "")]);
-        let error = machine::ready(&zeewin2(), &mut fake).unwrap_err();
+        let error = machine::ready(zeewin2(), &mut fake).unwrap_err();
         assert!(error.contains("zeewin2"), "{error}");
         let mut fake = Fake::new(vec![said(0, "free\n"), said(0, "nonsense")]);
-        assert!(machine::ready(&zeewin2(), &mut fake).is_err());
+        assert!(machine::ready(zeewin2(), &mut fake).is_err());
     }
 
+    /// The run lock is left to the bootstrap, the last word: the state is C:
+    /// alone, and the lock is never opened or read before a run.
     #[test]
-    fn the_state_script_reads_c_and_the_shared_lock_owner() {
+    fn the_state_script_reads_c_alone() {
         let script = script::state_script();
         assert!(script.contains("Get-PSDrive -Name C"), "{script}");
-        assert!(
-            script.contains(r"consensflow-build\.windows-run.id"),
-            "{script}"
-        );
+        assert!(!script.contains("consensflow-build"), "{script}");
         assert!(!script.contains("Open("), "the probe never opens the lock");
-    }
-
-    fn chosen(answers: Vec<Answer>) -> (Machine, String, Fake) {
-        let mut fake = Fake::new(answers);
-        let (machine, why) = machine::choose(&mut fake, None, NOW);
-        (machine, why, fake)
-    }
-
-    #[test]
-    fn the_default_is_zeewin2_while_it_is_free_and_allowed() {
-        let (machine, why, _) = chosen(vec![said(0, "free\n"), said(0, "free 600\n")]);
-        assert_eq!(machine.name, "zeewin2");
-        assert_eq!(why, "windows: on zeewin2");
-    }
-
-    #[test]
-    fn the_default_is_zeewin_when_zeewin2_is_not() {
-        for (answers, says) in [
-            (vec![said(0, "held\n")], "poker-lab"),
-            (
-                vec![said(0, "kluris kluris-0000abcd-12345678 4242\n")],
-                "a Kluris run (kluris-0000abcd-12345678, process 4242)",
-            ),
-            (vec![said(0, "free\n"), said(0, "free 10\n")], "50 GiB"),
-            (
-                vec![
-                    said(0, "free\n"),
-                    said(0, "free 600\nheld 0000abcd-12345678 4242\n"),
-                ],
-                "0000abcd-12345678",
-            ),
-            (vec![said(0, "free\n"), said(255, "")], "did not say"),
-        ] {
-            let (machine, why, _) = chosen(answers);
-            assert_eq!(machine.name, "zeewin", "{why}");
-            assert!(
-                why.starts_with("windows: on zeewin, as zeewin2 is not free: "),
-                "{why}"
-            );
-            assert!(why.contains(says), "{why}");
-        }
     }
 }
 
@@ -1255,7 +1196,7 @@ mod runs {
             let mut pack = |tarball: &Path, script: &str| -> Result<String, String> {
                 assert!(script.contains("Invoke-Step 'cargo-test'"));
                 packed.push(tarball.to_path_buf());
-                held.push([tickets(&folder, "zeewin"), tickets(&folder, "zeewin2")].concat());
+                held.push(tickets(&folder, "zeewin2"));
                 fs::write(tarball, b"tarball").map_err(|e| e.to_string())?;
                 Ok("5f54983aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into())
             };
@@ -1286,9 +1227,9 @@ mod runs {
         }
     }
 
-    fn on(name: Name) -> Options {
+    /// A tests run that asks once (`--wait 0`).
+    fn options() -> Options {
         Options {
-            machine: Some(name),
             cargo_args: vec![],
             installer_smoke: false,
             wrapper: None,
@@ -1297,6 +1238,28 @@ mod runs {
             unpinned: false,
             wait: 0,
         }
+    }
+
+    /// zeewin2's answers at the head of its queue: no lock held on zeelin, and
+    /// room on C:.
+    fn free() -> Vec<Answer> {
+        vec![said(0, "free\n"), said(0, "free 600\n")]
+    }
+
+    /// Checks that `fake` first asked zeelin, then zeewin2, and takes those
+    /// two calls out.
+    fn unprobed(fake: &mut Fake) {
+        let probes: Vec<_> = fake.calls.drain(..2).collect();
+        assert!(probes[0].args.contains(&"zeelin".to_owned()), "{probes:?}");
+        assert!(probes[1].args.contains(&"zeewin2".to_owned()), "{probes:?}");
+    }
+
+    /// A run that finds zeewin2 free: `answers` come after its two probes,
+    /// which [`unprobed`] takes out of the calls.
+    fn ran_free(options: Options, answers: Vec<Answer>) -> Ran {
+        let mut ran = ran(options, [free(), answers].into_iter().flatten().collect());
+        unprobed(&mut ran.fake);
+        ran
     }
 
     const PASSED: &str = "== tree 5f54983aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\r\n\
@@ -1316,8 +1279,8 @@ mod runs {
             == step cargo-test exit 101 2s kluris-ffffffff-00000000\r\n\
             == step cargo-test exit 0 412s kluris-0000abcd-12345678\r\n\
             \r\n== exit 0\r\n";
-        let ran = ran(
-            on(Name::Zeewin),
+        let ran = ran_free(
+            options(),
             vec![
                 said(0, ""),
                 Answer::Stream(vec![(Stream::Out, out)], Ok(Streamed::Exited(Some(1)))),
@@ -1326,14 +1289,14 @@ mod runs {
         assert_eq!(ran.code, 0, "{}", ran.err);
         assert_eq!(
             ran.err.lines().last().unwrap(),
-            "windows: zeewin run kluris-0000abcd-12345678 tree 5f54983aaaaa: toolchain 0 (3s), cargo-test 0 (412s); exit 0"
+            "windows: zeewin2 run kluris-0000abcd-12345678 tree 5f54983aaaaa: toolchain 0 (3s), cargo-test 0 (412s); exit 0"
         );
     }
 
     #[test]
-    fn a_run_on_zeewin_sends_the_tree_and_streams_the_answer() {
-        let ran = ran(
-            on(Name::Zeewin),
+    fn a_run_on_zeewin2_sends_the_tree_and_streams_the_answer() {
+        let ran = ran_free(
+            options(),
             vec![
                 said(0, ""),
                 Answer::Stream(
@@ -1350,7 +1313,7 @@ mod runs {
         assert_eq!(calls[0].program, "scp");
         let target = calls[0].args.last().unwrap();
         assert!(
-            target.starts_with("zeewin:kluris-") && target.ends_with(".tgz"),
+            target.starts_with("zeewin2:kluris-") && target.ends_with(".tgz"),
             "{target}"
         );
         assert_eq!(
@@ -1358,18 +1321,18 @@ mod runs {
             ran.packed[0].to_string_lossy()
         );
         assert_eq!(calls[1].program, "ssh");
-        assert!(calls[1].args.contains(&"zeewin".to_owned()));
+        assert!(calls[1].args.contains(&"zeewin2".to_owned()));
         let line = calls[1].args.join(" ");
         assert!(line.contains("ServerAliveInterval"), "{line}");
         let bootstrap = decoded(calls[1].args.last().unwrap());
         let id = target
-            .trim_start_matches("zeewin:")
+            .trim_start_matches("zeewin2:")
             .trim_end_matches(".tgz");
         assert_eq!(bootstrap, script::bootstrap(id));
         assert!(calls[1].bound >= script::bound(&spec(&[])));
         let summary = ran.err.lines().last().unwrap();
         assert!(
-            summary.starts_with(&format!("windows: zeewin run {id} tree 5f54983aaaaa")),
+            summary.starts_with(&format!("windows: zeewin2 run {id} tree 5f54983aaaaa")),
             "{summary}"
         );
         assert!(
@@ -1388,10 +1351,18 @@ mod runs {
             installer-smoke: user PATH restored: 120 bytes, REG_EXPAND_SZ, byte for byte identical to the saved value\r\n\
             == step installer-smoke exit 0 40s kluris-0000abcd-12345678\r\n\
             \r\n== exit 0\r\n";
-        let mut fake = Fake::new(vec![
-            said(0, ""),
-            Answer::Stream(vec![(Stream::Out, passed)], Ok(Streamed::Exited(Some(1)))),
-        ]);
+        let mut fake = Fake::new(
+            [
+                free(),
+                vec![
+                    said(0, ""),
+                    Answer::Stream(vec![(Stream::Out, passed)], Ok(Streamed::Exited(Some(1)))),
+                ],
+            ]
+            .into_iter()
+            .flatten()
+            .collect(),
+        );
         let mut out = Vec::new();
         let mut err = Vec::new();
         let mut run_script = String::new();
@@ -1400,7 +1371,7 @@ mod runs {
         let options = Options {
             installer_smoke: true,
             wrapper: Some("site/install.ps1".into()),
-            ..on(Name::Zeewin)
+            ..options()
         };
         let code = {
             let mut pack = |tarball: &Path, script: &str| -> Result<String, String> {
@@ -1425,6 +1396,7 @@ mod runs {
         };
         let err = String::from_utf8(err).unwrap();
         assert_eq!(code, 0, "{err}");
+        unprobed(&mut fake);
         assert!(
             run_script.contains("installer-smoke.ps1 -Release"),
             "{run_script}"
@@ -1448,8 +1420,8 @@ mod runs {
 
     #[test]
     fn a_held_lock_is_75_with_the_holder_named() {
-        let ran = ran(
-            on(Name::Zeewin),
+        let ran = ran_free(
+            options(),
             vec![
                 said(0, ""),
                 Answer::Stream(
@@ -1469,7 +1441,7 @@ mod runs {
 
     #[test]
     fn zeewin2_refused_sends_nothing_and_is_75() {
-        let ran = ran(on(Name::Zeewin2), vec![said(0, "held\n")]);
+        let ran = ran(options(), vec![said(0, "held\n")]);
         assert_eq!(ran.code, 75);
         assert!(ran.err.contains("poker-lab"), "{}", ran.err);
         assert_eq!(ran.fake.calls.len(), 1);
@@ -1481,50 +1453,39 @@ mod runs {
     }
 
     fn ran_low_disk() -> Ran {
-        ran(
-            on(Name::Zeewin2),
-            vec![said(0, "free\n"), said(0, "free 12\n")],
-        )
+        ran(options(), vec![said(0, "free\n"), said(0, "free 12\n")])
     }
 
     #[test]
-    fn no_machine_takes_zeewin_when_zeewin2_is_held() {
+    fn with_no_machine_the_run_goes_to_zeewin2_in_its_turn() {
+        let Ok(Parsed::Run(options)) = options::parse(&words("--wait 60")) else {
+            panic!("--wait 60 is a run")
+        };
         let ran = ran(
-            Options {
-                machine: None,
-                cargo_args: vec![],
-                installer_smoke: false,
-                wrapper: None,
-                clippy: false,
-                published: None,
-                unpinned: false,
-                wait: 0,
-            },
-            vec![
-                said(0, "held\n"),
-                said(0, ""),
-                Answer::Stream(vec![(Stream::Out, PASSED)], Ok(Streamed::Exited(Some(0)))),
-            ],
+            options,
+            [free(), vec![said(0, ""), passed()]]
+                .into_iter()
+                .flatten()
+                .collect(),
         );
         assert_eq!(ran.code, 0, "{}", ran.err);
-        assert!(
-            ran.err
-                .starts_with("windows: on zeewin, as zeewin2 is not free"),
-            "{}",
-            ran.err
-        );
-        assert!(
-            ran.fake.calls[1]
-                .args
-                .last()
-                .unwrap()
-                .starts_with("zeewin:")
-        );
+        let calls = &ran.fake.calls;
+        assert_eq!(calls.len(), 4, "{:?}", ran.fake.called());
+        assert!(calls[0].args.contains(&"zeelin".to_owned()));
+        assert!(calls[1].args.contains(&"zeewin2".to_owned()));
+        assert_eq!(calls[2].program, "scp");
+        assert!(calls[2].args.last().unwrap().starts_with("zeewin2:"));
+        assert!(calls[3].args.contains(&"zeewin2".to_owned()));
+        // Its ticket was in zeewin2's queue while it went, and went with it.
+        assert_eq!(ran.held.len(), 1);
+        assert!(ran.held[0][0].ends_with(&mine()), "{:?}", ran.held);
+        assert_eq!(tickets(ran.queues.path(), "zeewin2"), Vec::<String>::new());
+        assert!(!ran.err.contains("windows: on "), "{}", ran.err);
     }
 
     #[test]
     fn a_failed_upload_runs_nothing_and_removes_its_tarball() {
-        let ran = ran(on(Name::Zeewin), vec![said(1, ""), said(0, "removed\r\n")]);
+        let ran = ran_free(options(), vec![said(1, ""), said(0, "removed\r\n")]);
         assert_eq!(ran.code, 1);
         assert!(ran.err.contains("scp"), "{}", ran.err);
         let calls = &ran.fake.calls;
@@ -1533,12 +1494,12 @@ mod runs {
             .args
             .last()
             .unwrap()
-            .trim_start_matches("zeewin:")
+            .trim_start_matches("zeewin2:")
             .trim_end_matches(".tgz")
             .to_owned();
         let cleanup = &calls[1];
         assert_eq!(cleanup.program, "ssh");
-        assert!(cleanup.args.contains(&"zeewin".to_owned()));
+        assert!(cleanup.args.contains(&"zeewin2".to_owned()));
         assert!(
             cleanup.bound <= Duration::from_secs(30),
             "{:?}",
@@ -1562,7 +1523,7 @@ mod runs {
 
     #[test]
     fn an_upload_cleanup_that_finds_nothing_says_so() {
-        let ran = ran(on(Name::Zeewin), vec![said(1, ""), said(0, "absent\n")]);
+        let ran = ran_free(options(), vec![said(1, ""), said(0, "absent\n")]);
         assert_eq!(ran.code, 1);
         assert!(ran.err.contains("was not there"), "{}", ran.err);
     }
@@ -1570,17 +1531,9 @@ mod runs {
     #[test]
     fn an_upload_cleanup_that_cannot_reach_the_machine_says_so() {
         for cleanup in [said(255, ""), timed_out()] {
-            let ran = ran(
-                on(Name::Zeewin2),
-                vec![
-                    said(0, "free\n"),
-                    said(0, "free 600\n"),
-                    timed_out(),
-                    cleanup,
-                ],
-            );
+            let ran = ran_free(options(), vec![timed_out(), cleanup]);
             assert_eq!(ran.code, 1);
-            assert_eq!(ran.fake.calls.len(), 4, "{:?}", ran.fake.called());
+            assert_eq!(ran.fake.calls.len(), 2, "{:?}", ran.fake.called());
             assert!(ran.err.contains("not done in 10 min"), "{}", ran.err);
             assert!(ran.err.contains("could not reach zeewin2"), "{}", ran.err);
             assert!(ran.err.contains("sweep"), "{}", ran.err);
@@ -1589,8 +1542,8 @@ mod runs {
 
     #[test]
     fn an_upload_cleanup_that_fails_there_says_why() {
-        let ran = ran(
-            on(Name::Zeewin),
+        let ran = ran_free(
+            options(),
             vec![said(1, ""), said(0, "failed: access denied\n")],
         );
         assert_eq!(ran.code, 1);
@@ -1610,8 +1563,8 @@ mod runs {
 
     #[test]
     fn a_stopped_run_is_ended_there_and_is_130() {
-        let ran = ran(
-            on(Name::Zeewin),
+        let ran = ran_free(
+            options(),
             vec![
                 said(0, ""),
                 Answer::Stream(vec![(Stream::Out, "== tree x\n")], Ok(Streamed::Stopped)),
@@ -1623,7 +1576,7 @@ mod runs {
             .args
             .last()
             .unwrap()
-            .trim_start_matches("zeewin:")
+            .trim_start_matches("zeewin2:")
             .trim_end_matches(".tgz")
             .to_owned();
         assert_eq!(stop_sent(&ran.fake), script::stop_script(&id));
@@ -1631,8 +1584,8 @@ mod runs {
 
     #[test]
     fn a_run_past_its_bound_is_ended_there_and_is_124() {
-        let ran = ran(
-            on(Name::Zeewin),
+        let ran = ran_free(
+            options(),
             vec![
                 said(0, ""),
                 Answer::Stream(vec![], Ok(Streamed::TimedOut)),
@@ -1646,8 +1599,8 @@ mod runs {
 
     #[test]
     fn a_lost_connection_ends_the_run_there_too() {
-        let ran = ran(
-            on(Name::Zeewin),
+        let ran = ran_free(
+            options(),
             vec![
                 said(0, ""),
                 Answer::Stream(
@@ -1664,11 +1617,10 @@ mod runs {
 
     // --- the queue every runner on this Mac shares --------------------------------
 
-    fn waiting(machine: Option<Name>) -> Options {
+    fn waiting() -> Options {
         Options {
-            machine,
             wait: 60,
-            ..on(Name::Zeewin)
+            ..options()
         }
     }
 
@@ -1699,24 +1651,28 @@ mod runs {
     #[test]
     fn a_run_waits_behind_a_queued_run_then_goes_holding_its_ticket() {
         let queues = tempfile::tempdir().unwrap();
-        let mut ahead = Some(queued_ahead(&queues, "zeewin"));
+        let mut ahead = Some(queued_ahead(&queues, "zeewin2"));
         let clock = Clock {
             on_pause: Box::new(move |_| drop(ahead.take())),
             ..Clock::default()
         };
         let root = tempfile::tempdir().unwrap();
-        let ran = ran_queued(
+        let mut ran = ran_queued(
             root.path(),
-            waiting(Some(Name::Zeewin)),
-            vec![said(0, ""), passed()],
+            waiting(),
+            [free(), vec![said(0, ""), passed()]]
+                .into_iter()
+                .flatten()
+                .collect(),
             queues,
             clock,
         );
+        unprobed(&mut ran.fake);
         assert_eq!(ran.code, 0, "{}", ran.err);
         assert_eq!(ran.pauses, [10_000]);
         assert!(
             ran.err.starts_with(
-                "windows: waiting for zeewin, 0 s of up to 60 min: 2nd in the queue for zeewin; \
+                "windows: waiting for zeewin2, 0 s of up to 60 min: 2nd in the queue for zeewin2; \
                  the run ahead is consensflow (cargo xtask windows -- cargo test), here for 1 s\n"
             ),
             "{}",
@@ -1726,28 +1682,33 @@ mod runs {
         assert_eq!(ran.held.len(), 1);
         assert_eq!(ran.held[0].len(), 1, "{:?}", ran.held);
         assert!(ran.held[0][0].ends_with(&mine()), "{:?}", ran.held);
-        assert_eq!(tickets(ran.queues.path(), "zeewin"), Vec::<String>::new());
+        assert_eq!(tickets(ran.queues.path(), "zeewin2"), Vec::<String>::new());
     }
 
     #[test]
     fn a_refusal_by_the_machines_lock_at_the_head_keeps_the_place_and_tries_again() {
-        let ran = ran(
-            waiting(Some(Name::Zeewin)),
-            vec![
-                said(0, ""),
-                Answer::Stream(
-                    vec![(Stream::Out, REFUSED_THERE)],
-                    Ok(Streamed::Exited(Some(1))),
-                ),
-                said(0, ""),
-                passed(),
-            ],
+        let ran = ran_free(
+            waiting(),
+            [
+                vec![
+                    said(0, ""),
+                    Answer::Stream(
+                        vec![(Stream::Out, REFUSED_THERE)],
+                        Ok(Streamed::Exited(Some(1))),
+                    ),
+                ],
+                free(),
+                vec![said(0, ""), passed()],
+            ]
+            .into_iter()
+            .flatten()
+            .collect(),
         );
         assert_eq!(ran.code, 0, "{}", ran.err);
         assert_eq!(ran.pauses, [30_000]);
         assert!(
             ran.err.contains(
-                "windows: waiting for zeewin, 0 s of up to 60 min: The machine's one-run lock is held by a ConsensFlow run (0000abcd-12345678, process 4242): one run at a time.\n"
+                "windows: waiting for zeewin2, 0 s of up to 60 min: The machine's one-run lock is held by a ConsensFlow run (0000abcd-12345678, process 4242): one run at a time.\n"
             ),
             "{}",
             ran.err
@@ -1762,7 +1723,7 @@ mod runs {
         assert_eq!(scp.len(), 2, "the same tarball sent again");
         assert_eq!(scp[0], scp[1]);
         assert_eq!(ran.packed.len(), 1, "packed once");
-        assert_eq!(tickets(ran.queues.path(), "zeewin"), Vec::<String>::new());
+        assert_eq!(tickets(ran.queues.path(), "zeewin2"), Vec::<String>::new());
     }
 
     #[test]
@@ -1770,7 +1731,7 @@ mod runs {
         let ran = ran(
             Options {
                 wait: 1,
-                ..waiting(Some(Name::Zeewin2))
+                ..waiting()
             },
             vec![said(0, "held\n"), said(0, "held\n"), said(0, "held\n")],
         );
@@ -1793,13 +1754,7 @@ mod runs {
         let queues = tempfile::tempdir().unwrap();
         let ahead = queued_ahead(&queues, "zeewin2");
         let root = tempfile::tempdir().unwrap();
-        let ran = ran_queued(
-            root.path(),
-            on(Name::Zeewin2),
-            vec![],
-            queues,
-            Clock::default(),
-        );
+        let ran = ran_queued(root.path(), options(), vec![], queues, Clock::default());
         assert_eq!(ran.code, 75);
         assert_eq!(
             ran.err,
@@ -1811,40 +1766,6 @@ mod runs {
             1,
             "the live one stays"
         );
-        drop(ahead);
-    }
-
-    #[test]
-    fn with_no_machine_a_queued_zeewin2_sends_the_run_to_zeewin_unasked() {
-        let queues = tempfile::tempdir().unwrap();
-        let ahead = queued_ahead(&queues, "zeewin2");
-        let root = tempfile::tempdir().unwrap();
-        let ran = ran_queued(
-            root.path(),
-            waiting(None),
-            vec![said(0, ""), passed()],
-            queues,
-            Clock::default(),
-        );
-        assert_eq!(ran.code, 0, "{}", ran.err);
-        assert!(
-            ran.err.starts_with(
-                "windows: on zeewin, as zeewin2 is not free: 1 run is queued for it\n"
-            ),
-            "{}",
-            ran.err
-        );
-        assert!(
-            ran.fake.calls[0]
-                .args
-                .last()
-                .unwrap()
-                .starts_with("zeewin:")
-        );
-        // It queued in zeewin's folder; zeewin2's run is left where it was.
-        assert_eq!(ran.held[0].len(), 2);
-        assert_eq!(tickets(ran.queues.path(), "zeewin"), Vec::<String>::new());
-        assert_eq!(tickets(ran.queues.path(), "zeewin2").len(), 1);
         drop(ahead);
     }
 
@@ -1888,12 +1809,12 @@ mod runs {
             (1, vec![said(1, ""), said(0, "removed\r\n")]),
         ];
         for (code, answers) in cases {
-            let ran = ran(waiting(Some(Name::Zeewin)), answers);
+            let ran = ran_free(waiting(), answers);
             assert_eq!(ran.code, code, "{}", ran.err);
             assert_eq!(ran.held.len(), 1);
             assert!(ran.held[0][0].ends_with(&mine()), "{code}: {:?}", ran.held);
             assert_eq!(
-                tickets(ran.queues.path(), "zeewin"),
+                tickets(ran.queues.path(), "zeewin2"),
                 Vec::<String>::new(),
                 "{code}"
             );
@@ -1901,7 +1822,7 @@ mod runs {
         // A stop while it waits: 130, nothing sent, the ticket gone.
         let ran = ran_queued(
             Path::new("."),
-            waiting(Some(Name::Zeewin2)),
+            waiting(),
             vec![said(0, "held\n")],
             tempfile::tempdir().unwrap(),
             Clock {
@@ -2057,7 +1978,7 @@ mod tarball {
     #[test]
     fn the_tarball_holds_the_committed_bytes_whatever_autocrlf_says() {
         // Git for Windows sets core.autocrlf=true system-wide, and git archive
-        // then writes CRLF (zeewin, 2026-10-25).
+        // then writes CRLF.
         let dir = repo();
         let root = dir.path();
         git(root, &["config", "core.autocrlf", "true"]);
@@ -2066,6 +1987,109 @@ mod tarball {
         super::super::pack::pack(root, &tarball, "s\n").unwrap();
         assert_eq!(member(&tarball, "kept.txt").as_deref(), Some("committed\n"));
         assert_eq!(member(&tarball, "src/lib.rs").as_deref(), Some("changed\n"));
+    }
+
+    /// A git in `dir` that answers every call with `stdout` and `stderr`, each
+    /// a line when given, and ends with `status`.
+    fn fake_git(dir: &Path, status: u8, stdout: &str, stderr: &str) -> PathBuf {
+        let said = |text: &str, to: &str| {
+            if text.is_empty() {
+                String::new()
+            } else if cfg!(windows) {
+                format!("echo {text}{to}\r\n")
+            } else {
+                format!("printf '%s\\n' '{text}'{to}\n")
+            }
+        };
+        let (path, text) = if cfg!(windows) {
+            (
+                dir.join("git.cmd"),
+                format!(
+                    "@echo off\r\n{}{}exit /b {status}\r\n",
+                    said(stdout, ""),
+                    said(stderr, " 1>&2")
+                ),
+            )
+        } else {
+            (
+                dir.join("git"),
+                format!(
+                    "#!/bin/sh\n{}{}exit {status}\n",
+                    said(stdout, ""),
+                    said(stderr, " >&2")
+                ),
+            )
+        };
+        fs::write(&path, text).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        path
+    }
+
+    fn packed_by(git: &Path) -> Result<String, String> {
+        let dir = repo();
+        let tarball = dir.path().join("out.tgz");
+        crate::ssh_ci::pack::pack_by(
+            git.as_os_str(),
+            dir.path(),
+            &tarball,
+            script::RUN_FILE,
+            "s",
+            &[],
+        )
+    }
+
+    #[test]
+    fn a_failed_stash_create_says_its_status_stderr_and_stdout() {
+        let bin = tempfile::tempdir().unwrap();
+        let git = fake_git(
+            bin.path(),
+            3,
+            "half an answer",
+            "fatal: the test git failed",
+        );
+        assert_eq!(
+            packed_by(&git),
+            Err(
+                "git stash create failed: status 3; stderr: fatal: the test git failed; \
+                 stdout: half an answer"
+                    .into()
+            )
+        );
+    }
+
+    #[test]
+    fn a_stash_create_that_fails_saying_nothing_says_so() {
+        let bin = tempfile::tempdir().unwrap();
+        let git = fake_git(bin.path(), 1, "", "");
+        assert_eq!(
+            packed_by(&git),
+            Err("git stash create failed: status 1, and nothing on stderr or stdout".into())
+        );
+        let git = fake_git(bin.path(), 128, "", "fatal: not a git repository");
+        assert_eq!(
+            packed_by(&git),
+            Err("git stash create failed: status 128; stderr: fatal: not a git repository".into())
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_stash_create_ended_by_a_signal_names_it() {
+        let bin = tempfile::tempdir().unwrap();
+        let git = bin.path().join("git");
+        fs::write(&git, "#!/bin/sh\necho partial\nkill -KILL $$\n").unwrap();
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&git, fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        assert_eq!(
+            packed_by(&git),
+            Err("git stash create failed: ended by signal 9; stdout: partial".into())
+        );
     }
 
     #[test]

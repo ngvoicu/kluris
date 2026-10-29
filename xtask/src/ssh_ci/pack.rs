@@ -4,9 +4,10 @@
 //! commit beside the files. Untracked files do not go, nor the build folder.
 //! The same for every machine: only the run script's name differs.
 
+use std::ffi::OsStr;
 use std::fs;
 use std::path::Path;
-use std::process::Command;
+use std::process::{Command, ExitStatus, Output};
 
 use super::plan::TREE_FILE;
 
@@ -33,9 +34,32 @@ pub fn pack_with_files(
     run_script: &str,
     files: &[(String, String)],
 ) -> Result<String, String> {
-    // An identity of its own, so the stash commit can be made in any repository.
-    let stash = git(
+    pack_by(
+        OsStr::new("git"),
         root,
+        tarball,
+        run_file,
+        run_script,
+        files,
+    )
+}
+
+/// [`pack_with_files`], with `git` as the git it runs.
+pub fn pack_by(
+    git: &OsStr,
+    root: &Path,
+    tarball: &Path,
+    run_file: &str,
+    run_script: &str,
+    files: &[(String, String)],
+) -> Result<String, String> {
+    let git = |what: &str, args: &[&str]| run_git(git, root, what, args);
+    // An identity of its own, so the stash commit can be made in any repository.
+    // `stash create` ends with 1 and says nothing when the tracked files it
+    // first sees as changed differ from the index only in their stat (bytes
+    // rewritten as they were): it refreshes the index, finds no change, and
+    // the next pack goes.
+    let stash = git(
         "stash create",
         &[
             "-c",
@@ -47,7 +71,7 @@ pub fn pack_with_files(
         ],
     )?;
     let commit = if stash.is_empty() {
-        git(root, "rev-parse", &["rev-parse", "--verify", "HEAD"])?
+        git("rev-parse", &["rev-parse", "--verify", "HEAD"])?
     } else {
         stash
     };
@@ -73,7 +97,7 @@ pub fn pack_with_files(
     args.extend([commit.clone(), "--".to_owned(), ".".to_owned()]);
     args.extend(EXCLUDED.iter().map(|path| format!(":(exclude){path}")));
     let words: Vec<&str> = args.iter().map(String::as_str).collect();
-    git(root, "archive", &words)?;
+    git("archive", &words)?;
     Ok(commit)
 }
 
@@ -95,8 +119,8 @@ pub fn channel(root: &Path) -> Result<String, String> {
         .ok_or_else(|| format!("{} pins no channel", path.display()))
 }
 
-fn git(root: &Path, what: &str, args: &[&str]) -> Result<String, String> {
-    let out = Command::new("git")
+fn run_git(git: &OsStr, root: &Path, what: &str, args: &[&str]) -> Result<String, String> {
+    let out = Command::new(git)
         .args(args)
         .current_dir(root)
         .env_remove("GIT_DIR")
@@ -105,10 +129,41 @@ fn git(root: &Path, what: &str, args: &[&str]) -> Result<String, String> {
         .output()
         .map_err(|e| format!("could not start git: {e}"))?;
     if !out.status.success() {
-        return Err(format!(
-            "git {what} failed: {}",
-            String::from_utf8_lossy(&out.stderr).trim()
-        ));
+        return Err(format!("git {what} failed: {}", failure(&out)));
     }
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_owned())
+}
+
+/// How a git that failed ended, then what it said on stderr and on stdout:
+/// `status 1; stderr: ...; stdout: ...`, each stream left out when it said
+/// nothing, and `, and nothing on stderr or stdout` when neither said a thing.
+fn failure(out: &Output) -> String {
+    let said: Vec<String> = [("stderr", &out.stderr), ("stdout", &out.stdout)]
+        .into_iter()
+        .filter_map(|(stream, bytes)| {
+            let text = String::from_utf8_lossy(bytes);
+            let text = text.trim();
+            (!text.is_empty()).then(|| format!("{stream}: {text}"))
+        })
+        .collect();
+    let ended = ended(out.status);
+    if said.is_empty() {
+        format!("{ended}, and nothing on stderr or stdout")
+    } else {
+        format!("{ended}; {}", said.join("; "))
+    }
+}
+
+/// `status N`, or the signal that ended the process.
+fn ended(status: ExitStatus) -> String {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt;
+        if let Some(signal) = status.signal() {
+            return format!("ended by signal {signal}");
+        }
+    }
+    status
+        .code()
+        .map_or_else(|| "no status".to_owned(), |code| format!("status {code}"))
 }
