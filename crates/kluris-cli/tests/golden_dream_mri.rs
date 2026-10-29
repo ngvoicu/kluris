@@ -78,6 +78,7 @@ impl<'a> Scenario<'a> {
         self
     }
 
+    #[cfg(unix)]
     fn prepare(mut self, prepare: &'a dyn Fn(&mut Command)) -> Self {
         self.prepare = Some(prepare);
         self
