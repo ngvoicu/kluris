@@ -10,7 +10,7 @@ use std::process::Command;
 use common::shared::vendored_marker;
 use common::{
     Entry, PINNED_ENV, PINNED_GIT_DATE, Sandbox, Tree, changes_dump, decode, file_body, git_dump,
-    native_path, native_paths, normalize, normalize_json, slashed, tree_dump,
+    git_state, native_path, native_paths, normalize, normalize_json, slashed, tree_dump,
 };
 
 /// A temp root whose name has a space and a non-ASCII letter, so its
@@ -332,6 +332,49 @@ fn git_dump_prints_the_head_commit_and_its_tree() {
             yml = yml.trim_end(),
             a = a.trim_end(),
         )
+    );
+}
+
+/// A repository in `sb` whose `a.md` holds `work` and whose HEAD holds
+/// `committed` for it, its status clean: git is told the file did not
+/// change (`update-index --assume-unchanged`).
+fn repo_committing(sb: &Sandbox, committed: &str, work: &str) -> PathBuf {
+    let repo = sb.work.join("repo");
+    fs::create_dir(&repo).unwrap();
+    sb.init(&repo);
+    fs::write(repo.join("a.md"), committed).unwrap();
+    sb.commit(&repo, "initial", PINNED_GIT_DATE);
+    fs::write(repo.join("a.md"), work).unwrap();
+    sb.git(
+        &repo,
+        &["update-index", "--assume-unchanged", "a.md"],
+        PINNED_GIT_DATE,
+    );
+    assert_eq!(sb.porcelain(&repo), "");
+    repo
+}
+
+#[test]
+fn the_git_state_shows_committed_bytes_the_work_tree_does_not_hold() {
+    let (plain_sb, filtered_sb) = (Sandbox::new(), Sandbox::new());
+    let plain = repo_committing(&plain_sb, "body\n", "body\n");
+    let filtered = repo_committing(&filtered_sb, "BODY\n", "body\n");
+    assert_eq!(
+        tree_dump(&plain, str::to_string),
+        tree_dump(&filtered, str::to_string)
+    );
+
+    let plain = git_state(&plain, str::to_string);
+    let filtered = git_state(&filtered, str::to_string);
+    assert_ne!(plain, filtered);
+    let blobs = "== git cat-file blob <each blob of HEAD>\n== a.md (file, 5 bytes)\n";
+    assert!(
+        plain.ends_with(&format!("{blobs}<the work tree's bytes>\n<end of dump>\n")),
+        "{plain}"
+    );
+    assert!(
+        filtered.ends_with(&format!("{blobs}BODY\n<end of dump>\n")),
+        "{filtered}"
     );
 }
 

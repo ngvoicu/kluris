@@ -7,7 +7,9 @@ author Kluris Parity <parity@kluris.invalid> 1767268800 +0000
 committer Kluris Parity <parity@kluris.invalid> 1767268800 +0000
 
 brain: initialize demo
-== git ls-tree -r HEAD
+== git log --date=format:%Y-%m-%dT%H:%M:%S%z --format=%an <%ae>|%cn <%ce>|%ad|%cd|%s
+Kluris Parity <parity@kluris.invalid>|Kluris Parity <parity@kluris.invalid>|2026-01-01T12:00:00+0000|2026-01-01T12:00:00+0000|brain: initialize demo
+== git ls-tree -r -z HEAD
 100644 blob	.gitignore
 100644 blob	README.md
 100644 blob	brain.md
@@ -20,3 +22,19 @@ refs/heads/main
 == git remote -v
 == git status --porcelain --ignored
 !! kluris.yml
+== git cat-file blob <each blob of HEAD>
+== .gitignore (file, 204 bytes)
+<the work tree's bytes>
+== README.md (file, 11365 bytes)
+<the work tree's bytes>
+== brain.md (file, 424 bytes)
+<the work tree's bytes>
+== glossary.md (file, 149 bytes)
+<the work tree's bytes>
+== notes/map.md (file, 317 bytes)
+<the work tree's bytes>
+== projects/map.md (file, 349 bytes)
+<the work tree's bytes>
+== tasks/map.md (file, 351 bytes)
+<the work tree's bytes>
+<end of dump>

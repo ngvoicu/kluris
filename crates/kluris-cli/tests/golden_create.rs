@@ -6,7 +6,8 @@
 //! scaffolded brain, `config.yml`, the HOME skills, with each installed
 //! companion file and each brain's skill shown by reference, see [`tree`])
 //! and, for a new brain,
-//! `<name>__git` (its first commit, branch, remote and status). A run that
+//! `<name>__git` (its first commit, history, branch, remote, status and
+//! the bytes of each file it committed, see [`git_state`]). A run that
 //! must write nothing is checked against the tree from before it. The paths
 //! Kluris prints and writes as the OS writes them are checked in that form
 //! and shown `/`-joined, so one snapshot holds on every OS (see [`shown`]).
@@ -210,7 +211,7 @@ fn skill_variant(text: &str) -> String {
 
 /// The repository at `rel` (relative to `work/`), normalized.
 fn repo_state(sb: &Sandbox, rel: &str) -> String {
-    normalize(&git_state(&sb.work.join(rel)), &sb.root)
+    git_state(&sb.work.join(rel), |text| normalize(text, &sb.root))
 }
 
 /// `rel`, a `/`-joined path, under `base` as the OS writes it.

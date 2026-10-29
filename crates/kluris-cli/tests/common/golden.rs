@@ -451,57 +451,132 @@ pub fn git_dump(repo: &Path) -> String {
 }
 
 /// How the repository at `repo` is set up and what its HEAD holds, each
-/// under a `== <command>` line: the HEAD commit (`git cat-file -p HEAD`)
-/// without its `tree` line, the mode, type and path of every file it holds
-/// (`git ls-tree -r HEAD` without the object ids), its branch (`git
-/// symbolic-ref HEAD`), its remotes (`git remote -v`) and its work tree's
-/// state (`git status --porcelain --ignored`). The ids are left out because
-/// a brain's files hold today's date, so their ids change every day; the
-/// committed bytes are the work tree's whenever the status lists no change
-/// to them, and a tree dump shows those. A command that fails is `<exit N>`
-/// (git words its errors by version, so its stderr is left out); a folder
-/// without `.git` is `<no repository>`.
-pub fn git_state(repo: &Path) -> String {
+/// under a `== <command>` line and through `show` (the root and today's
+/// date as markers), a line of git's output that starts with `<` or `=`
+/// written `\<` or `\=` as in a [`Dump`]:
+/// - the HEAD commit (`git cat-file -p HEAD`) without its `tree` line and
+///   its history (`git log`: each commit's author, committer, their dates
+///   and its subject; the dates in a format given whole, as git's own ISO
+///   form writes UTC as `+00:00` or `Z` by version);
+/// - the mode, type and path of every entry HEAD holds (`git ls-tree -r -z
+///   HEAD`), its branch (`git symbolic-ref HEAD`), its remotes (`git remote
+///   -v`) and its work tree's state (`git status --porcelain --ignored`);
+/// - then, under `== git cat-file blob <each blob of HEAD>`, each blob HEAD
+///   holds as a [`Dump`] writes an entry, read from the repository (`git
+///   cat-file blob`), never inferred from the status (a clean status does
+///   not mean the committed bytes are the work tree's: a clean filter or
+///   an index flag hides the difference): a blob whose bytes are, byte for
+///   byte, those of the work tree's entry at its path reads `<the work
+///   tree's bytes>` (a tree dump shows them); any other is written out.
+///
+/// The object ids (the commit's `tree` line, each blob's id) are left out:
+/// an id is the hash of bytes the blobs show, and a brain's files hold
+/// today's date, so their ids change every day. A command that fails is
+/// `<exit N>` (git words its errors by version, so its stderr is left
+/// out); a folder without `.git` is `<no repository>`.
+pub fn git_state(repo: &Path, show: impl Fn(&str) -> String) -> String {
     if !repo.join(".git").exists() {
         return "<no repository>\n".to_string();
     }
-    let commands: [&[&str]; 5] = [
+    let commands: [&[&str]; 6] = [
         &["cat-file", "-p", "HEAD"],
-        &["ls-tree", "-r", "HEAD"],
+        &[
+            "log",
+            "--date=format:%Y-%m-%dT%H:%M:%S%z",
+            "--format=%an <%ae>|%cn <%ce>|%ad|%cd|%s",
+        ],
+        &["ls-tree", "-r", "-z", "HEAD"],
         &["symbolic-ref", "HEAD"],
         &["remote", "-v"],
         &["status", "--porcelain", "--ignored"],
     ];
     let mut out = String::new();
+    let mut blobs = Vec::new();
     for args in commands {
-        let run = Command::new("git")
-            .arg("-C")
-            .arg(repo)
-            .args(args)
-            .env("GIT_CONFIG_NOSYSTEM", "1")
-            .env("GIT_CONFIG_GLOBAL", repo.join("kluris-golden-no-gitconfig"))
-            .env_remove("GIT_DIR")
-            .env_remove("GIT_WORK_TREE")
-            .output()
-            .unwrap_or_else(|e| panic!("git {}: {e}", args.join(" ")));
+        let run = git_in(repo, args);
         out.push_str(&format!("== git {}\n", args.join(" ")));
-        let text = escape(&run.stdout);
         match (run.status.code(), args[0]) {
-            (Some(0), "cat-file") => text
+            (Some(0), "cat-file") => escape(&run.stdout)
                 .lines()
                 .filter(|line| !line.starts_with("tree "))
-                .for_each(|line| out.push_str(&format!("{line}\n"))),
-            // `<mode> <type> <id>\t<path>`
-            (Some(0), "ls-tree") => text.lines().for_each(|line| {
-                let (meta, path) = line.split_once('\t').unwrap_or((line, ""));
-                let fields: Vec<&str> = meta.split(' ').collect();
-                out.push_str(&format!("{} {}\t{path}\n", fields[0], fields[1]));
-            }),
-            (Some(0), _) => out.push_str(&text),
+                .for_each(|line| out.push_str(&guard_line_starts(&format!("{line}\n")))),
+            // `<mode> <type> <id>\t<path>\0`
+            (Some(0), "ls-tree") => {
+                for row in run.stdout.split(|b| *b == 0).filter(|row| !row.is_empty()) {
+                    let tab = row.iter().position(|b| *b == b'\t').unwrap_or(row.len());
+                    let meta = String::from_utf8_lossy(&row[..tab]);
+                    let path = row.get(tab + 1..).unwrap_or_default();
+                    let fields: Vec<&str> = meta.split(' ').collect();
+                    let (mode, kind, id) = (fields[0], fields[1], fields[2]);
+                    out.push_str(&format!("{mode} {kind}\t{}\n", escape_line(path)));
+                    if kind == "blob" {
+                        blobs.push((mode.to_string(), id.to_string(), path.to_vec()));
+                    }
+                }
+            }
+            (Some(0), _) => out.push_str(&guard_line_starts(&escape(&run.stdout))),
             (code, _) => out.push_str(&format!("<exit {}>\n", code.unwrap_or(-1))),
         }
     }
+    out.push_str("== git cat-file blob <each blob of HEAD>\n");
+    let mut out = show(&out);
+    let mut dump = Dump::new(&show);
+    for (mode, id, path) in blobs {
+        let run = git_in(repo, &["cat-file", "blob", &id]);
+        assert!(
+            run.status.success(),
+            "git cat-file blob {id} in {}",
+            repo.display()
+        );
+        let entry = if mode == "120000" {
+            Entry::Symlink(run.stdout)
+        } else {
+            Entry::File(run.stdout)
+        };
+        let path = String::from_utf8_lossy(&path).into_owned();
+        if work_tree_entry(repo, &path).as_ref() == Some(&entry) {
+            let len = dump.body(&entry).len;
+            let marker = "<the work tree's bytes>".to_string();
+            dump.reference(&path, &entry, &Reference { marker, len });
+        } else {
+            dump.entry(&path, &entry);
+        }
+    }
+    out.push_str(&dump.end());
     out
+}
+
+/// `git args` in `repo`, with no config but the repository's own.
+fn git_in(repo: &Path, args: &[&str]) -> std::process::Output {
+    Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(args)
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_CONFIG_GLOBAL", repo.join("kluris-golden-no-gitconfig"))
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .output()
+        .unwrap_or_else(|e| panic!("git {}: {e}", args.join(" ")))
+}
+
+/// The entry at `rel`, a `/`-joined path, in the work tree of `repo`, as
+/// [`tree_files`] reads it; `None` when there is no file or symlink there.
+fn work_tree_entry(repo: &Path, rel: &str) -> Option<Entry> {
+    let path = rel
+        .split('/')
+        .fold(repo.to_path_buf(), |p, part| p.join(part));
+    let meta = fs::symlink_metadata(&path).ok()?;
+    if meta.is_symlink() {
+        let target = fs::read_link(&path).ok()?;
+        Some(Entry::Symlink(
+            target.as_os_str().as_encoded_bytes().to_vec(),
+        ))
+    } else if meta.is_file() {
+        fs::read(&path).ok().map(Entry::File)
+    } else {
+        None
+    }
 }
 
 /// `root` as given and resolved (macOS `/var` is `/private/var`), as the
