@@ -1,0 +1,63 @@
+---
+source: crates/kluris-cli/tests/golden_list_status_help.rs
+---
+$ kluris list --json --json
+== stdout
+{"ok": true, "brains": [{"name": "a", "path": "<ROOT>/work/brains/a", "description": "demo brain", "companions": null}, {"name": "b", "path": "<ROOT>/work/brains/b", "description": "demo brain", "companions": null}]}
+== stderr
+== exit 0
+$ kluris help --json --json
+== stdout
+{"ok": true, "commands": [{"name": "create", "description": "Create a new brain (--type, --remote, --no-git)"}, {"name": "register", "description": "Register an existing brain directory on disk"}, {"name": "list", "description": "List registered brains"}, {"name": "status", "description": "Show brain tree, recent changes, and neuron counts"}, {"name": "search", "description": "Search a brain for a query string (neurons, glossary, brain.md)"}, {"name": "wake-up", "description": "Compact brain snapshot for agent session bootstrap"}, {"name": "companion", "description": "Opt brains into embedded companion playbooks"}, {"name": "dream", "description": "Regenerate maps, auto-fix safe issues, and validate links"}, {"name": "mri", "description": "Generate interactive brain visualization; prints a file:// link"}, {"name": "remove", "description": "Unregister a brain (keeps files on disk)"}, {"name": "doctor", "description": "Check prerequisites and refresh installed agent skills (--no-refresh to skip)"}, {"name": "help", "description": "Show this help"}, {"name": "commit", "description": "Commit approved brain files and the maps they change (--paths)"}, {"name": "sync", "description": "Fetch, merge and push brains; conflicts go to a person (--brain all)"}, {"name": "resolve", "description": "Settle an open sync conflict path by path (--ours, --theirs, --file)"}, {"name": "self-update", "description": "Update kluris to the newest release (--check only looks)"}, {"name": "self-uninstall", "description": "Remove the installed kluris (--purge: also ~/.kluris and Kluris skills)"}]}
+== stderr
+== exit 0
+$ kluris help status --json --json
+== stdout
+{"ok": true, "commands": [{"name": "status", "description": "Show brain tree, recent changes, and neuron counts"}]}
+== stderr
+== exit 0
+$ kluris status --brain b --brain a --json --json
+== stdout
+{"ok": true, "brains": [{"name": "a", "lobes": 1, "neurons": 1, "uncommitted": "", "git_enabled": false, "recent_commits": []}]}
+== stderr
+== exit 0
+$ kluris wake-up --brain b --brain a --json --json
+== stdout
+{"ok": true, "name": "a", "path": "<ROOT>/work/brains/a", "description": "demo brain", "brain_md": "# a", "lobes": [{"name": "lobe", "description": "", "neurons": 1, "yaml_count": 0}], "total_neurons": 1, "total_yaml_neurons": 0, "recent": [{"path": "lobe/needle.md", "updated": "2026-01-01", "file_type": "markdown"}], "glossary": [], "deprecation_count": 0, "deprecation": [], "parse_errors": 0}
+== stderr
+== exit 0
+$ kluris search needle --brain b --brain a --json --json
+== stdout
+{"ok": true, "brain": "a", "query": "needle", "total": 1, "results": [{"file": "lobe/needle.md", "file_type": "markdown", "title": "Needle", "matched_fields": ["title", "path", "body"], "snippet": "# Needle\n\nneedle text", "score": 55, "deprecated": false, "heading": null, "line": 6, "matched_terms": ["needle"], "coverage": 1.0, "related": [], "updated": "2026-01-01"}], "engine": "bm25"}
+== stderr
+== exit 0
+$ kluris search needle --brain a --lobe nope --lobe lobe --json
+== stdout
+{"ok": true, "brain": "a", "query": "needle", "total": 1, "results": [{"file": "lobe/needle.md", "file_type": "markdown", "title": "Needle", "matched_fields": ["title", "path", "body"], "snippet": "# Needle\n\nneedle text", "score": 55, "deprecated": false, "heading": null, "line": 6, "matched_terms": ["needle"], "coverage": 1.0, "related": [], "updated": "2026-01-01"}], "engine": "bm25"}
+== stderr
+== exit 0
+$ kluris search needle --brain a --lobe lobe --lobe nope --json
+== stdout
+{"ok": true, "brain": "a", "query": "needle", "total": 0, "results": [], "engine": "bm25"}
+== stderr
+== exit 0
+$ kluris search needle --brain a --tag x --tag y --json
+== stdout
+{"ok": true, "brain": "a", "query": "needle", "total": 1, "results": [{"file": "lobe/needle.md", "file_type": "markdown", "title": "Needle", "matched_fields": ["title", "path", "body"], "snippet": "# Needle\n\nneedle text", "score": 55, "deprecated": false, "heading": null, "line": 6, "matched_terms": ["needle"], "coverage": 1.0, "related": [], "updated": "2026-01-01"}], "engine": "bm25"}
+== stderr
+== exit 0
+$ kluris search needle --brain a --tag y --tag x --json
+== stdout
+{"ok": true, "brain": "a", "query": "needle", "total": 0, "results": [], "engine": "bm25"}
+== stderr
+== exit 0
+$ kluris search needle --brain a --limit 0 --limit 1 --json
+== stdout
+{"ok": true, "brain": "a", "query": "needle", "total": 1, "results": [{"file": "lobe/needle.md", "file_type": "markdown", "title": "Needle", "matched_fields": ["title", "path", "body"], "snippet": "# Needle\n\nneedle text", "score": 55, "deprecated": false, "heading": null, "line": 6, "matched_terms": ["needle"], "coverage": 1.0, "related": [], "updated": "2026-01-01"}], "engine": "bm25"}
+== stderr
+== exit 0
+$ kluris search needle --brain a --limit 1 --limit 0 --json
+== stdout
+{"ok": true, "brain": "a", "query": "needle", "total": 0, "results": [], "engine": "bm25"}
+== stderr
+== exit 0

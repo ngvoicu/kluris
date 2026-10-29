@@ -1,0 +1,8 @@
+---
+source: crates/kluris-cli/tests/golden_list_status_help.rs
+description: kluris list --json
+---
+== stdout
+{"ok": true, "brains": [{"name": "a", "path": "<ROOT>/work/brains/a", "description": "a knowledge base", "companions": []}, {"name": "b", "path": "<ROOT>/work/brains/b", "description": "b knowledge base", "companions": ["specmint-core"]}]}
+== stderr
+== exit 0

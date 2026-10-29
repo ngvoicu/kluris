@@ -1,0 +1,79 @@
+---
+source: crates/kluris-cli/tests/golden_list_status_help.rs
+---
+$ kluris list --help --bogus
+error 2 Error: No such option '--bogus'.
+$ kluris list --bogus --help
+error 2 Error: No such option '--bogus'.
+$ kluris list --help --json=1
+error 2 Error: Option '--json' does not take a value.
+$ kluris list --json=1 --help
+error 2 Error: Option '--json' does not take a value.
+$ kluris list --help --help
+help kluris list
+$ kluris list --json --help --json
+help kluris list
+$ kluris status --help --brain
+error 2 Error: Option '--brain' requires an argument.
+$ kluris status --brain x --help
+help kluris status
+$ kluris status --brain=x --help --bogus
+error 2 Error: No such option '--bogus'.
+$ kluris wake-up --help --brain
+error 2 Error: Option '--brain' requires an argument.
+$ kluris search --help
+help kluris search
+$ kluris search needle --limit x --help
+help kluris search
+$ kluris search --limit x needle --help
+help kluris search
+$ kluris search needle --limit=x --help
+help kluris search
+$ kluris search needle --help extra
+help kluris search
+$ kluris search --help --limit
+error 2 Error: Option '--limit' requires an argument.
+$ kluris search --tag --help
+error 2 Error: Missing argument 'QUERY'.
+$ kluris help a b --help
+help kluris help
+$ kluris help bogus --help
+help kluris help
+$ kluris help --json --json --help
+help kluris help
+$ kluris --help --help
+help kluris
+$ kluris --help list
+help kluris
+$ kluris --help bogus
+help kluris
+$ kluris --help --bogus
+error 2 Error: No such option '--bogus'.
+$ kluris bogus --help
+error 2 Error: No such command 'bogus'.
+$ kluris --version --version
+version
+$ kluris --version --help
+version
+$ kluris --help --version
+help kluris
+$ kluris --version --bogus
+error 2 Error: No such option '--bogus'.
+$ kluris --bogus --version
+error 2 Error: No such option '--bogus'.
+$ kluris --version list
+version
+$ kluris --help list --bogus
+help kluris
+$ kluris --version list --bogus
+version
+$ kluris --version bogus --bogus
+version
+$ kluris --help search
+help kluris
+$ kluris --help --version --help
+help kluris
+$ kluris --version --help --version
+version
+$ kluris --version --help --help --version
+version

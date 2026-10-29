@@ -1,0 +1,8 @@
+---
+source: crates/kluris-cli/tests/golden_list_status_help.rs
+description: kluris help --json
+---
+== stdout
+{"ok": true, "commands": [{"name": "create", "description": "Create a new brain (--type, --remote, --no-git)"}, {"name": "register", "description": "Register an existing brain directory on disk"}, {"name": "list", "description": "List registered brains"}, {"name": "status", "description": "Show brain tree, recent changes, and neuron counts"}, {"name": "search", "description": "Search a brain for a query string (neurons, glossary, brain.md)"}, {"name": "wake-up", "description": "Compact brain snapshot for agent session bootstrap"}, {"name": "companion", "description": "Opt brains into embedded companion playbooks"}, {"name": "dream", "description": "Regenerate maps, auto-fix safe issues, and validate links"}, {"name": "mri", "description": "Generate interactive brain visualization; prints a file:// link"}, {"name": "remove", "description": "Unregister a brain (keeps files on disk)"}, {"name": "doctor", "description": "Check prerequisites and refresh installed agent skills (--no-refresh to skip)"}, {"name": "help", "description": "Show this help"}, {"name": "commit", "description": "Commit approved brain files and the maps they change (--paths)"}, {"name": "sync", "description": "Fetch, merge and push brains; conflicts go to a person (--brain all)"}, {"name": "resolve", "description": "Settle an open sync conflict path by path (--ours, --theirs, --file)"}, {"name": "self-update", "description": "Update kluris to the newest release (--check only looks)"}, {"name": "self-uninstall", "description": "Remove the installed kluris (--purge: also ~/.kluris and Kluris skills)"}]}
+== stderr
+== exit 0

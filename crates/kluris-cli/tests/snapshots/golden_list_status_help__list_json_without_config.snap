@@ -1,0 +1,8 @@
+---
+source: crates/kluris-cli/tests/golden_list_status_help.rs
+description: kluris list --json
+---
+== stdout
+{"ok": true, "brains": []}
+== stderr
+== exit 0

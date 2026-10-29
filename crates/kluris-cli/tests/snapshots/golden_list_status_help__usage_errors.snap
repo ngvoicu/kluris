@@ -1,0 +1,67 @@
+---
+source: crates/kluris-cli/tests/golden_list_status_help.rs
+---
+$ kluris -h
+== stdout
+== stderr
+Usage: kluris [OPTIONS] COMMAND [ARGS]...
+Try 'kluris --help' for help.
+
+Error: No such option '-h'.
+== exit 2
+$ kluris -V
+== stdout
+== stderr
+Usage: kluris [OPTIONS] COMMAND [ARGS]...
+Try 'kluris --help' for help.
+
+Error: No such option '-V'.
+== exit 2
+$ kluris status -h
+== stdout
+== stderr
+Usage: kluris status [OPTIONS]
+Try 'kluris status --help' for help.
+
+Error: No such option '-h'.
+== exit 2
+$ kluris help -h
+== stdout
+== stderr
+Usage: kluris help [OPTIONS] [COMMAND]
+Try 'kluris help --help' for help.
+
+Error: No such option '-h'.
+== exit 2
+$ kluris help --bogus
+== stdout
+== stderr
+Usage: kluris help [OPTIONS] [COMMAND]
+Try 'kluris help --help' for help.
+
+Error: No such option '--bogus'.
+== exit 2
+$ kluris help a b
+== stdout
+== stderr
+Usage: kluris help [OPTIONS] [COMMAND]
+Try 'kluris help --help' for help.
+
+Error: Got unexpected extra argument (b)
+== exit 2
+$ kluris bogus
+== stdout
+== stderr
+Usage: kluris [OPTIONS] COMMAND [ARGS]...
+Try 'kluris --help' for help.
+
+Error: No such command 'bogus'.
+== exit 2
+$ kluris list -h
+== stdout
+== stderr
+Usage: kluris list [OPTIONS]
+Try 'kluris list --help' for help.
+
+Error: No such option '-h'.
+== exit 2

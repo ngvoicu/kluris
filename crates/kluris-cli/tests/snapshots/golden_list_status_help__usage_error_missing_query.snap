@@ -1,0 +1,11 @@
+---
+source: crates/kluris-cli/tests/golden_list_status_help.rs
+description: kluris search
+---
+== stdout
+== stderr
+Usage: kluris search [OPTIONS] QUERY
+Try 'kluris search --help' for help.
+
+Error: Missing argument 'QUERY'.
+== exit 2

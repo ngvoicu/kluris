@@ -1,0 +1,8 @@
+---
+source: crates/kluris-cli/tests/golden_list_status_help.rs
+description: kluris status --json
+---
+== stdout
+{"ok": false, "error": "`git log -10 --format=%H%x00%s%x00%aI%x00` failed (exit 128): fatal: bad object HEAD"}
+== stderr
+== exit 1

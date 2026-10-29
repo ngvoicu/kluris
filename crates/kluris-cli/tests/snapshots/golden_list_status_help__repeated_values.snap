@@ -1,0 +1,96 @@
+---
+source: crates/kluris-cli/tests/golden_list_status_help.rs
+---
+$ kluris search needle --brain a --limit '' --limit 2 --json
+== stdout
+{"ok": true, "brain": "a", "query": "needle", "total": 1, "results": [{"file": "lobe/needle.md", "file_type": "markdown", "title": "Needle", "matched_fields": ["title", "path", "body"], "snippet": "# Needle\n\nneedle text", "score": 55, "deprecated": false, "heading": null, "line": 6, "matched_terms": ["needle"], "coverage": 1.0, "related": [], "updated": "2026-01-01"}], "engine": "bm25"}
+== stderr
+== exit 0
+$ kluris search needle --brain a --limit invalid --limit 2 --json
+== stdout
+{"ok": true, "brain": "a", "query": "needle", "total": 1, "results": [{"file": "lobe/needle.md", "file_type": "markdown", "title": "Needle", "matched_fields": ["title", "path", "body"], "snippet": "# Needle\n\nneedle text", "score": 55, "deprecated": false, "heading": null, "line": 6, "matched_terms": ["needle"], "coverage": 1.0, "related": [], "updated": "2026-01-01"}], "engine": "bm25"}
+== stderr
+== exit 0
+$ kluris search needle --brain a --limit 2.0 --limit 2 --json
+== stdout
+{"ok": true, "brain": "a", "query": "needle", "total": 1, "results": [{"file": "lobe/needle.md", "file_type": "markdown", "title": "Needle", "matched_fields": ["title", "path", "body"], "snippet": "# Needle\n\nneedle text", "score": 55, "deprecated": false, "heading": null, "line": 6, "matched_terms": ["needle"], "coverage": 1.0, "related": [], "updated": "2026-01-01"}], "engine": "bm25"}
+== stderr
+== exit 0
+$ kluris search needle --brain a --limit 2 --limit x --json
+== stdout
+{"ok": false, "error": "Invalid value for '--limit': 'x' is not a valid integer."}
+== stderr
+== exit 1
+$ kluris search needle --brain a --limit 2 --limit x
+== stdout
+== stderr
+Usage: kluris search [OPTIONS] QUERY
+Try 'kluris search --help' for help.
+
+Error: Invalid value for '--limit': 'x' is not a valid integer.
+== exit 2
+$ kluris search needle --brain a --limit 2 --limit '' --json
+== stdout
+{"ok": false, "error": "Invalid value for '--limit': '' is not a valid integer."}
+== stderr
+== exit 1
+$ kluris search needle --brain nope --brain a --json
+== stdout
+{"ok": true, "brain": "a", "query": "needle", "total": 1, "results": [{"file": "lobe/needle.md", "file_type": "markdown", "title": "Needle", "matched_fields": ["title", "path", "body"], "snippet": "# Needle\n\nneedle text", "score": 55, "deprecated": false, "heading": null, "line": 6, "matched_terms": ["needle"], "coverage": 1.0, "related": [], "updated": "2026-01-01"}], "engine": "bm25"}
+== stderr
+== exit 0
+$ kluris search needle --brain a --brain nope --json
+== stdout
+{"ok": false, "error": "No brain named 'nope' is registered. Run 'kluris list' to see available brains."}
+== stderr
+== exit 1
+$ kluris search needle --brain '' --brain a --json
+== stdout
+{"ok": true, "brain": "a", "query": "needle", "total": 1, "results": [{"file": "lobe/needle.md", "file_type": "markdown", "title": "Needle", "matched_fields": ["title", "path", "body"], "snippet": "# Needle\n\nneedle text", "score": 55, "deprecated": false, "heading": null, "line": 6, "matched_terms": ["needle"], "coverage": 1.0, "related": [], "updated": "2026-01-01"}], "engine": "bm25"}
+== stderr
+== exit 0
+$ kluris search needle --brain a --lobe '' --lobe lobe --json
+== stdout
+{"ok": true, "brain": "a", "query": "needle", "total": 1, "results": [{"file": "lobe/needle.md", "file_type": "markdown", "title": "Needle", "matched_fields": ["title", "path", "body"], "snippet": "# Needle\n\nneedle text", "score": 55, "deprecated": false, "heading": null, "line": 6, "matched_terms": ["needle"], "coverage": 1.0, "related": [], "updated": "2026-01-01"}], "engine": "bm25"}
+== stderr
+== exit 0
+$ kluris search needle --brain a --tag '' --tag y --json
+== stdout
+{"ok": true, "brain": "a", "query": "needle", "total": 1, "results": [{"file": "lobe/needle.md", "file_type": "markdown", "title": "Needle", "matched_fields": ["title", "path", "body"], "snippet": "# Needle\n\nneedle text", "score": 55, "deprecated": false, "heading": null, "line": 6, "matched_terms": ["needle"], "coverage": 1.0, "related": [], "updated": "2026-01-01"}], "engine": "bm25"}
+== stderr
+== exit 0
+$ kluris status --brain nope --brain a --json
+== stdout
+{"ok": true, "brains": [{"name": "a", "lobes": 1, "neurons": 1, "uncommitted": "", "git_enabled": false, "recent_commits": []}]}
+== stderr
+== exit 0
+$ kluris status --brain a --brain nope --json
+== stdout
+{"ok": false, "error": "No brain named 'nope' is registered. Run 'kluris list' to see available brains."}
+== stderr
+== exit 1
+$ kluris status --brain a --brain nope
+== stdout
+== stderr
+Error: No brain named 'nope' is registered. Run 'kluris list' to see available brains.
+== exit 1
+$ kluris status --brain '' --brain all --json
+== stdout
+{"ok": true, "brains": [{"name": "a", "lobes": 1, "neurons": 1, "uncommitted": "", "git_enabled": false, "recent_commits": []}, {"name": "b", "lobes": 0, "neurons": 0, "uncommitted": "", "git_enabled": false, "recent_commits": []}]}
+== stderr
+== exit 0
+$ kluris wake-up --brain nope --brain a --json
+== stdout
+{"ok": true, "name": "a", "path": "<ROOT>/work/brains/a", "description": "demo brain", "brain_md": "# a", "lobes": [{"name": "lobe", "description": "", "neurons": 1, "yaml_count": 0}], "total_neurons": 1, "total_yaml_neurons": 0, "recent": [{"path": "lobe/needle.md", "updated": "2026-01-01", "file_type": "markdown"}], "glossary": [], "deprecation_count": 0, "deprecation": [], "parse_errors": 0}
+== stderr
+== exit 0
+$ kluris wake-up --brain a --brain nope --json
+== stdout
+{"ok": false, "error": "No brain named 'nope' is registered. Run 'kluris list' to see available brains."}
+== stderr
+== exit 1
+$ kluris wake-up --brain all --brain a --json
+== stdout
+{"ok": true, "name": "a", "path": "<ROOT>/work/brains/a", "description": "demo brain", "brain_md": "# a", "lobes": [{"name": "lobe", "description": "", "neurons": 1, "yaml_count": 0}], "total_neurons": 1, "total_yaml_neurons": 0, "recent": [{"path": "lobe/needle.md", "updated": "2026-01-01", "file_type": "markdown"}], "glossary": [], "deprecation_count": 0, "deprecation": [], "parse_errors": 0}
+== stderr
+== exit 0

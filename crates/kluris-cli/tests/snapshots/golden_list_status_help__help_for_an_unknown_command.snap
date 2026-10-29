@@ -1,0 +1,13 @@
+---
+source: crates/kluris-cli/tests/golden_list_status_help.rs
+---
+$ kluris help bogus
+== stdout
+== stderr
+Error: Unknown command: bogus
+== exit 1
+$ kluris help pack
+== stdout
+== stderr
+Error: Unknown command: pack
+== exit 1

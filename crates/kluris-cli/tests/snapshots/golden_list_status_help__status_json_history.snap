@@ -1,0 +1,8 @@
+---
+source: crates/kluris-cli/tests/golden_list_status_help.rs
+description: kluris status --json
+---
+== stdout
+{"ok": true, "brains": [{"name": "demo", "lobes": 2, "neurons": 4, "uncommitted": "", "git_enabled": true, "recent_commits": ["update 11", "update 10", "update 9", "update 8", "update 7", "update 6", "update 5", "update 4", "update 3", "update 2"]}]}
+== stderr
+== exit 0

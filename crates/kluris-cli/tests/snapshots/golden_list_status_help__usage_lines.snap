@@ -1,0 +1,19 @@
+---
+source: crates/kluris-cli/tests/golden_list_status_help.rs
+---
+$ kluris --help
+Usage: kluris [OPTIONS] COMMAND [ARGS]...
+$ kluris list --help
+Usage: kluris list [OPTIONS]
+$ kluris status --help
+Usage: kluris status [OPTIONS]
+$ kluris wake-up --help
+Usage: kluris wake-up [OPTIONS]
+$ kluris search --help
+Usage: kluris search [OPTIONS] QUERY
+$ kluris help --help
+Usage: kluris help [OPTIONS] [COMMAND]
+$ kluris companion --help
+Usage: kluris companion [OPTIONS] COMMAND [ARGS]...
+$ kluris companion list --help
+Usage: kluris companion list [OPTIONS]

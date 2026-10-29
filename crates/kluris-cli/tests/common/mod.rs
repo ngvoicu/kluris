@@ -1,14 +1,17 @@
 //! Helpers shared by the CLI tests: the golden-snapshot normalizations
-//! ([`golden`]) and a fake release binary for the self-update tests.
+//! ([`golden`]), the sandboxed runs golden tests snapshot ([`sandbox`]) and a
+//! fake release binary for the self-update tests.
 
 #![allow(dead_code, unused_imports)]
 
 pub mod golden;
+pub mod sandbox;
 
 pub use golden::{
     PASSTHROUGH_ENV, PINNED_ENV, PINNED_GIT_DATE, decode, git_dump, normalize, normalize_json,
     tree_dump,
 };
+pub use sandbox::{Run, Sandbox, command_line, write_files};
 
 use std::path::{Path, PathBuf};
 

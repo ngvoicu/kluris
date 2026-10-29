@@ -1,0 +1,122 @@
+---
+source: crates/kluris-cli/tests/golden_list_status_help.rs
+---
+$ kluris help create
+== stdout
+kluris create — Create a new brain (--type, --remote, --no-git)
+
+Run 'kluris create --help' for full usage.
+== stderr
+== exit 0
+$ kluris help register
+== stdout
+kluris register — Register an existing brain directory on disk
+
+Run 'kluris register --help' for full usage.
+== stderr
+== exit 0
+$ kluris help list
+== stdout
+kluris list — List registered brains
+
+Run 'kluris list --help' for full usage.
+== stderr
+== exit 0
+$ kluris help status
+== stdout
+kluris status — Show brain tree, recent changes, and neuron counts
+
+Run 'kluris status --help' for full usage.
+== stderr
+== exit 0
+$ kluris help search
+== stdout
+kluris search — Search a brain for a query string (neurons, glossary, brain.md)
+
+Run 'kluris search --help' for full usage.
+== stderr
+== exit 0
+$ kluris help wake-up
+== stdout
+kluris wake-up — Compact brain snapshot for agent session bootstrap
+
+Run 'kluris wake-up --help' for full usage.
+== stderr
+== exit 0
+$ kluris help companion
+== stdout
+kluris companion — Opt brains into embedded companion playbooks
+
+Run 'kluris companion --help' for full usage.
+== stderr
+== exit 0
+$ kluris help dream
+== stdout
+kluris dream — Regenerate maps, auto-fix safe issues, and validate links
+
+Run 'kluris dream --help' for full usage.
+== stderr
+== exit 0
+$ kluris help mri
+== stdout
+kluris mri — Generate interactive brain visualization; prints a file:// link
+
+Run 'kluris mri --help' for full usage.
+== stderr
+== exit 0
+$ kluris help remove
+== stdout
+kluris remove — Unregister a brain (keeps files on disk)
+
+Run 'kluris remove --help' for full usage.
+== stderr
+== exit 0
+$ kluris help doctor
+== stdout
+kluris doctor — Check prerequisites and refresh installed agent skills (--no-refresh to skip)
+
+Run 'kluris doctor --help' for full usage.
+== stderr
+== exit 0
+$ kluris help help
+== stdout
+kluris help — Show this help
+
+Run 'kluris help --help' for full usage.
+== stderr
+== exit 0
+$ kluris help commit
+== stdout
+kluris commit — Commit approved brain files and the maps they change (--paths)
+
+Run 'kluris commit --help' for full usage.
+== stderr
+== exit 0
+$ kluris help sync
+== stdout
+kluris sync — Fetch, merge and push brains; conflicts go to a person (--brain all)
+
+Run 'kluris sync --help' for full usage.
+== stderr
+== exit 0
+$ kluris help resolve
+== stdout
+kluris resolve — Settle an open sync conflict path by path (--ours, --theirs, --file)
+
+Run 'kluris resolve --help' for full usage.
+== stderr
+== exit 0
+$ kluris help self-update
+== stdout
+kluris self-update — Update kluris to the newest release (--check only looks)
+
+Run 'kluris self-update --help' for full usage.
+== stderr
+== exit 0
+$ kluris help self-uninstall
+== stdout
+kluris self-uninstall — Remove the installed kluris (--purge: also ~/.kluris and Kluris skills)
+
+Run 'kluris self-uninstall --help' for full usage.
+== stderr
+== exit 0

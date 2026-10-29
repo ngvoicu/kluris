@@ -1,0 +1,28 @@
+---
+source: crates/kluris-cli/tests/golden_list_status_help.rs
+---
+$ kluris help commit --json
+== stdout
+{"ok": true, "commands": [{"name": "commit", "description": "Commit approved brain files and the maps they change (--paths)"}]}
+== stderr
+== exit 0
+$ kluris help sync --json
+== stdout
+{"ok": true, "commands": [{"name": "sync", "description": "Fetch, merge and push brains; conflicts go to a person (--brain all)"}]}
+== stderr
+== exit 0
+$ kluris help resolve --json
+== stdout
+{"ok": true, "commands": [{"name": "resolve", "description": "Settle an open sync conflict path by path (--ours, --theirs, --file)"}]}
+== stderr
+== exit 0
+$ kluris help self-update --json
+== stdout
+{"ok": true, "commands": [{"name": "self-update", "description": "Update kluris to the newest release (--check only looks)"}]}
+== stderr
+== exit 0
+$ kluris help self-uninstall --json
+== stdout
+{"ok": true, "commands": [{"name": "self-uninstall", "description": "Remove the installed kluris (--purge: also ~/.kluris and Kluris skills)"}]}
+== stderr
+== exit 0

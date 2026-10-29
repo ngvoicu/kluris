@@ -1,0 +1,17 @@
+---
+source: crates/kluris-cli/tests/golden_list_status_help.rs
+description: kluris status --brain all
+---
+== stdout
+
+a
+  Lobes: 2, Neurons: 5
+  Uncommitted:
+?? projects/draft.md
+  2026-01-01 brain: initialize a
+
+b
+  Lobes: 1, Neurons: 1
+  Git: disabled
+== stderr
+== exit 0

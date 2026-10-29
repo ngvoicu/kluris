@@ -1,0 +1,30 @@
+---
+source: crates/kluris-cli/tests/golden_list_status_help.rs
+description: kluris help
+---
+== stdout
+kluris — Turn AI agents into team subject matter experts
+
+Commands:
+  create     Create a new brain (--type, --remote, --no-git)
+  register   Register an existing brain directory on disk
+  list       List registered brains
+  status     Show brain tree, recent changes, and neuron counts
+  search     Search a brain for a query string (neurons, glossary, brain.md)
+  wake-up    Compact brain snapshot for agent session bootstrap
+  companion  Opt brains into embedded companion playbooks
+  dream      Regenerate maps, auto-fix safe issues, and validate links
+  mri        Generate interactive brain visualization; prints a file:// link
+  remove     Unregister a brain (keeps files on disk)
+  doctor     Check prerequisites and refresh installed agent skills (--no-refresh to skip)
+  help       Show this help
+  commit     Commit approved brain files and the maps they change (--paths)
+  sync       Fetch, merge and push brains; conflicts go to a person (--brain all)
+  resolve    Settle an open sync conflict path by path (--ours, --theirs, --file)
+  self-update Update kluris to the newest release (--check only looks)
+  self-uninstall Remove the installed kluris (--purge: also ~/.kluris and Kluris skills)
+
+Config: <ROOT>/work/home/.kluris/config.yml
+Brains: 2 registered
+== stderr
+== exit 0

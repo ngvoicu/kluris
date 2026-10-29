@@ -1,0 +1,15 @@
+---
+source: crates/kluris-cli/tests/golden_list_status_help.rs
+description: kluris status
+---
+== stdout
+
+demo
+  Lobes: 2, Neurons: 4
+  2026-02-11 update 11
+  2026-02-10 update 10
+  2026-02-09 update 9
+  2026-02-08 update 8
+  2026-02-07 update 7
+== stderr
+== exit 0
