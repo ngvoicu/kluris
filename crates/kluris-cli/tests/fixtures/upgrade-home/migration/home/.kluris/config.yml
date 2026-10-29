@@ -1,0 +1,7 @@
+brains:
+  prod:
+    path: @WORK@/brains/prod
+    description: The prod brain
+  team:
+    path: @WORK@/brains/team
+    description: The team brain

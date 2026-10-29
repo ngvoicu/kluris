@@ -1,0 +1,8 @@
+---
+source: crates/kluris-cli/tests/golden_upgrade.rs
+expression: world.render(&out)
+---
+== stdout
+{"ok": true, "brain": "prod", "query": "access token", "total": 3, "results": [{"file": "features/login.md", "file_type": "markdown", "title": "Login flow", "matched_fields": ["body"], "snippet": "# Login flow\n\nUsers sign in with email and password; the API returns a JWT access token.", "score": 198, "deprecated": false, "heading": null, "line": 10, "matched_terms": ["access", "token"], "coverage": 1.0, "related": ["decisions/jwt-auth.md"], "updated": "2026-01-01"}, {"file": "decisions/jwt-auth.md", "file_type": "markdown", "title": "Use JWT access tokens", "matched_fields": ["title", "body"], "snippet": "# Use JWT access tokens\n\nWe chose stateless JWT access tokens over server sessions.", "score": 119, "deprecated": false, "heading": null, "line": 12, "matched_terms": ["access", "token"], "coverage": 1.0, "related": ["features/login.md"], "updated": "2026-01-01"}, {"file": "decisions/server-sessions.md", "file_type": "markdown", "title": "Server-side sessions", "matched_fields": ["body"], "snippet": "# Server-side sessions\n\nSessions lived in Redis. Superseded by JWT access tokens.", "score": 46, "deprecated": true, "heading": null, "line": 11, "matched_terms": ["access", "token"], "coverage": 1.0, "related": [], "updated": "2026-01-01", "replaced_by": "./jwt-auth.md"}], "engine": "bm25"}
+== stderr
+== exit 0

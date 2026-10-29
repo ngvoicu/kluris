@@ -1,0 +1,176 @@
+---
+source: crates/kluris-cli/tests/golden_upgrade.rs
+expression: "report_text(&report, &world)"
+---
+{
+  "ok": true,
+  "skills": [
+    "kluris-acme",
+    "kluris-beta"
+  ],
+  "agents": [
+    "antigravity",
+    "claude",
+    "copilot",
+    "hermes"
+  ],
+  "destinations": [
+    {
+      "path": ".agents/skills",
+      "role": "universal",
+      "alias_of": null,
+      "written": [
+        "kluris-acme",
+        "kluris-beta"
+      ],
+      "removed": [],
+      "kept": [],
+      "failed": []
+    },
+    {
+      "path": ".gemini/config/skills",
+      "role": "agent:antigravity",
+      "alias_of": null,
+      "written": [
+        "kluris-acme",
+        "kluris-beta"
+      ],
+      "removed": [],
+      "kept": [],
+      "failed": []
+    },
+    {
+      "path": ".claude/skills",
+      "role": "agent:claude",
+      "alias_of": null,
+      "written": [
+        "kluris-acme",
+        "kluris-beta"
+      ],
+      "removed": [],
+      "kept": [],
+      "failed": []
+    },
+    {
+      "path": "copilot-home/skills",
+      "role": "agent:copilot",
+      "alias_of": null,
+      "written": [
+        "kluris-acme",
+        "kluris-beta"
+      ],
+      "removed": [],
+      "kept": [],
+      "failed": []
+    },
+    {
+      "path": ".hermes/skills",
+      "role": "agent:hermes",
+      "alias_of": null,
+      "written": [
+        "kluris-acme",
+        "kluris-beta"
+      ],
+      "removed": [],
+      "kept": [],
+      "failed": []
+    },
+    {
+      "path": ".hermes/profiles/work/skills",
+      "role": "agent:hermes",
+      "alias_of": null,
+      "written": [
+        "kluris-acme",
+        "kluris-beta"
+      ],
+      "removed": [],
+      "kept": [],
+      "failed": []
+    },
+    {
+      "path": ".codeium/windsurf/skills",
+      "role": "migration",
+      "alias_of": null,
+      "written": [],
+      "removed": [
+        "kluris-acme",
+        "kluris-beta"
+      ],
+      "kept": [],
+      "failed": []
+    },
+    {
+      "path": ".codeium/windsurf/global_workflows",
+      "role": "migration",
+      "alias_of": null,
+      "written": [],
+      "removed": [
+        "kluris-acme.md",
+        "kluris-beta.md"
+      ],
+      "kept": [],
+      "failed": []
+    },
+    {
+      "path": ".cursor/skills",
+      "role": "migration",
+      "alias_of": null,
+      "written": [],
+      "removed": [
+        "kluris-acme",
+        "kluris-beta"
+      ],
+      "kept": [],
+      "failed": []
+    },
+    {
+      "path": ".codex/skills",
+      "role": "migration",
+      "alias_of": null,
+      "written": [],
+      "removed": [
+        "kluris-acme",
+        "kluris-beta"
+      ],
+      "kept": [],
+      "failed": []
+    },
+    {
+      "path": ".gemini/skills",
+      "role": "migration",
+      "alias_of": null,
+      "written": [],
+      "removed": [
+        "kluris-acme",
+        "kluris-beta"
+      ],
+      "kept": [],
+      "failed": []
+    },
+    {
+      "path": ".kilo/skills",
+      "role": "migration",
+      "alias_of": null,
+      "written": [],
+      "removed": [
+        "kluris-acme",
+        "kluris-beta"
+      ],
+      "kept": [],
+      "failed": []
+    },
+    {
+      "path": ".junie/skills",
+      "role": "migration",
+      "alias_of": null,
+      "written": [],
+      "removed": [
+        "kluris-acme",
+        "kluris-beta"
+      ],
+      "kept": [],
+      "failed": []
+    }
+  ],
+  "brain_errors": []
+}

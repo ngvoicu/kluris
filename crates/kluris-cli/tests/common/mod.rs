@@ -2,7 +2,8 @@
 //! ([`golden`]), the sandboxed runs golden tests snapshot ([`sandbox`]), the
 //! brains a sandbox reads ([`brains`]), the fixture brains of the dream and
 //! MRI goldens ([`dream_brains`]), runs with stdin on a pseudo-terminal
-//! ([`pty`], Unix) and a fake release binary for the self-update tests.
+//! ([`pty`], Unix), the frozen homes an earlier Kluris set up ([`upgrade`])
+//! and a fake release binary for the self-update tests.
 
 #![allow(dead_code, unused_imports)]
 
@@ -12,6 +13,7 @@ pub mod golden;
 #[cfg(unix)]
 pub mod pty;
 pub mod sandbox;
+pub mod upgrade;
 
 pub use golden::{
     PASSTHROUGH_ENV, PINNED_ENV, PINNED_GIT_DATE, decode, file_body, git_dump, git_state,
