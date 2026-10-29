@@ -1,0 +1,9 @@
+---
+source: crates/kluris-cli/tests/config_reading.rs
+expression: run.render(&sb.root)
+---
+== stdout (0 bytes)
+== stderr (181 bytes)
+Error: Invalid config file <ROOT>/work/home/.kluris/config.yml: ScannerError: while scanning for the next token: found character '|' that cannot start any token (line 2, column 19)
+== exit 1
+<end of run>

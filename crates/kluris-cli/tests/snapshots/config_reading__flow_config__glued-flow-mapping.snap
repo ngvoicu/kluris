@@ -1,0 +1,9 @@
+---
+source: crates/kluris-cli/tests/config_reading.rs
+expression: run.render(&sb.root)
+---
+== stdout (103 bytes)
+{"ok": true, "brains": [{"name": "alpha", "path": "/missing", "description": "", "companions": null}]}
+== stderr (0 bytes)
+== exit 0
+<end of run>

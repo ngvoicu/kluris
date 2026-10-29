@@ -1,0 +1,9 @@
+---
+source: crates/kluris-cli/tests/config_reading.rs
+expression: run.render(&sb.root)
+---
+== stdout (199 bytes)
+{"ok": false, "error": "Invalid config file <ROOT>/work/home/.kluris/config.yml: ParserError: while parsing a flow sequence (line 2, column 8): expected ',' or ']', but got '?' (line 2, column 11)"}
+== stderr (0 bytes)
+== exit 1
+<end of run>

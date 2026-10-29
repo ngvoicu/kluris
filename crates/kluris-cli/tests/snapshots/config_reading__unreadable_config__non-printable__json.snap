@@ -1,0 +1,9 @@
+---
+source: crates/kluris-cli/tests/config_reading.rs
+expression: run.render(&sb.root)
+---
+== stdout (196 bytes)
+{"ok": false, "error": "Invalid config file <ROOT>/work/home/.kluris/config.yml: ReaderError: unacceptable character #x0007: special characters are not allowed (position 20) (line 2, column 10)"}
+== stderr (0 bytes)
+== exit 1
+<end of run>

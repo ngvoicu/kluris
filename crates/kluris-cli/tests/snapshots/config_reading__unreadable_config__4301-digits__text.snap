@@ -1,0 +1,9 @@
+---
+source: crates/kluris-cli/tests/config_reading.rs
+expression: run.render(&sb.root)
+---
+== stdout (0 bytes)
+== stderr (242 bytes)
+Error: Invalid config file <ROOT>/work/home/.kluris/config.yml: ConstructorError: Exceeds the limit (4300 digits) for integer string conversion: value has 4301 digits; use sys.set_int_max_str_digits() to increase the limit (line 2, column 8)
+== exit 1
+<end of run>

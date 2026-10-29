@@ -1,0 +1,9 @@
+---
+source: crates/kluris-cli/tests/config_reading.rs
+expression: run.render(&sb.root)
+---
+== stdout (0 bytes)
+== stderr (122 bytes)
+Error: Invalid config file <ROOT>/work/home/.kluris/config.yml: ConstructorError: invalid integer '1' (line 2, column 8)
+== exit 1
+<end of run>

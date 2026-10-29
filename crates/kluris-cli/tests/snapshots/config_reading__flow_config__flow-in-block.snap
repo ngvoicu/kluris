@@ -1,0 +1,9 @@
+---
+source: crates/kluris-cli/tests/config_reading.rs
+expression: run.render(&sb.root)
+---
+== stdout (129 bytes)
+{"ok": false, "error": "Invalid config file <ROOT>/work/home/.kluris/config.yml: brain 'alpha': 'description' must be a string"}
+== stderr (0 bytes)
+== exit 1
+<end of run>
