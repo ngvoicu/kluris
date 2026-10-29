@@ -1,0 +1,33 @@
+---
+source: crates/kluris-cli/tests/golden_wake_up_search.rs
+expression: out
+---
+== search --lobe "operations"
+total: 5
+operations/backups.md | "Database backups and restore drills" | markdown | deprecated false | body
+operations/deploy-runbook.md | "Deploy runbook" | markdown | deprecated false | body
+operations/memory-limits.md | "Container memory limits" | markdown | deprecated false | body
+operations/on-call.md | "On-call rota and paging" | markdown | deprecated false | body
+operations/operator-access.md | "Operator access to production" | markdown | deprecated false | body
+== search --lobe "operations/"
+total: 5
+operations/backups.md | "Database backups and restore drills" | markdown | deprecated false | body
+operations/deploy-runbook.md | "Deploy runbook" | markdown | deprecated false | body
+operations/memory-limits.md | "Container memory limits" | markdown | deprecated false | body
+operations/on-call.md | "On-call rota and paging" | markdown | deprecated false | body
+operations/operator-access.md | "Operator access to production" | markdown | deprecated false | body
+== search --lobe "knowledge" --tag "auth"
+total: 1
+knowledge/deprecated-sessions.md | "Server-side sessions" | markdown | deprecated true | body
+== search --tag "postgres"
+total: 2
+operations/backups.md | "Database backups and restore drills" | markdown | deprecated false | body
+operations/operator-access.md | "Operator access to production" | markdown | deprecated false | body
+== search --tag "Postgres"
+total: 0
+== search --lobe "nope"
+total: 0
+== search --lobe "architecture/overview.md"
+total: 0
+== search --lobe ""
+total: 0

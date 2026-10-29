@@ -1,0 +1,12 @@
+---
+source: crates/kluris-cli/tests/golden_wake_up_search.rs
+expression: found_list(&doc)
+---
+total: 7
+architecture/job-queue.md | "Job queue" | markdown | deprecated false | body
+architecture/overview.md | "System overview" | markdown | deprecated false | body
+brain.md | "acme-sme" | markdown | deprecated false | body
+decisions/2026-05-02-one-repo.md | "One repository for every app" | markdown | deprecated false | body
+glossary.md | "Freeze" | markdown | deprecated false | body
+knowledge/release-notes.md | "Release notes" | markdown | deprecated false | title tag path body
+operations/deploy-runbook.md | "Deploy runbook" | markdown | deprecated false | body

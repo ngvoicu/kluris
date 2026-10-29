@@ -1,0 +1,5 @@
+---
+source: crates/kluris-cli/tests/golden_wake_up_search.rs
+expression: "normalize(&run.stderr, &sb.root)"
+---
+Skipped k/bad.md: invalid frontmatter: ParserError: while parsing a flow node: expected the node content, but found '<stream end>' (line 2, column 1)

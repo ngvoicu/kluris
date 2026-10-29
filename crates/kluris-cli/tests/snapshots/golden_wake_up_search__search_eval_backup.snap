@@ -1,0 +1,9 @@
+---
+source: crates/kluris-cli/tests/golden_wake_up_search.rs
+expression: found_list(&doc)
+---
+total: 4
+brain.md | "acme-sme" | markdown | deprecated false | body
+glossary.md | "Drill" | markdown | deprecated false | body
+operations/backups.md | "Database backups and restore drills" | markdown | deprecated false | title tag path body
+operations/on-call.md | "On-call rota and paging" | markdown | deprecated false | body

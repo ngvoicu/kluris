@@ -1,0 +1,13 @@
+---
+source: crates/kluris-cli/tests/golden_wake_up_search.rs
+expression: "format!(\"{}{}\", found_list(&doc), section(\"skipped\", &(skipped + \"\\n\")))"
+---
+total: 1
+k/good.md | "Good" | markdown | deprecated false | body
+== skipped
+[
+  {
+    "file": "k/bad.md",
+    "error": "invalid frontmatter: ParserError: while parsing a flow node: expected the node content, but found '<stream end>' (line 2, column 1)"
+  }
+]

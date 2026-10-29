@@ -1,0 +1,8 @@
+---
+source: crates/kluris-cli/tests/golden_wake_up_search.rs
+expression: "render_error(&run, &sb.root)"
+---
+== stdout
+== stderr, last line
+Error: Invalid value for '--limit': 'abc' is not a valid integer.
+== exit 2

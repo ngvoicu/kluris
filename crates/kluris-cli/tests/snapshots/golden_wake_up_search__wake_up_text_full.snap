@@ -1,0 +1,29 @@
+---
+source: crates/kluris-cli/tests/golden_wake_up_search.rs
+expression: "wake_up_text(&sb, &brain)"
+---
+== stdout
+
+Brain: full
+  Path: <ROOT>
+  A described brain
+
+Lobes (3)
+  - knowledge/: 29 neurons
+  - knowledge-extra/: 1 neurons
+  - projects/: 9 neurons
+
+Total neurons: 39
+
+Glossary (21 terms)
+
+Deprecation warnings: 21 (run `kluris dream` for details)
+
+Recently updated (5)
+  2026-01-05 projects/api/openapi.yml
+  2026-01-04 projects/api/endpoints.md
+  2026-01-03 root-spec.yml
+  2026-01-02 root-note.md
+  2026-01-01 projects/alpha.md
+== stderr
+== exit 0

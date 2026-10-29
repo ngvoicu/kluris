@@ -1,0 +1,22 @@
+---
+source: crates/kluris-cli/tests/golden_wake_up_search.rs
+expression: out
+---
+== search --lobe "operations"
+total: 1
+operations/deploy-runbook.md | "Deploy runbook" | markdown | deprecated false | body
+== search --lobe "operations/"
+total: 1
+operations/deploy-runbook.md | "Deploy runbook" | markdown | deprecated false | body
+== search --lobe "knowledge" --tag "auth"
+total: 0
+== search --tag "postgres"
+total: 0
+== search --tag "Postgres"
+total: 0
+== search --lobe "nope"
+total: 0
+== search --lobe "architecture/overview.md"
+total: 0
+== search --lobe ""
+total: 0

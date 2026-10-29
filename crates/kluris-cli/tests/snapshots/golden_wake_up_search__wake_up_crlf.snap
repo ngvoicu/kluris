@@ -1,0 +1,8 @@
+---
+source: crates/kluris-cli/tests/golden_wake_up_search.rs
+expression: "wake_up_json(&sb, &brain)"
+---
+== stdout
+{"ok": true, "name": "crlf", "path": "<ROOT>", "description": "Fixture brain", "brain_md": "# crlf\n\nbody line", "lobes": [{"name": "lobe", "description": "The lobe.", "neurons": 3, "yaml_count": 1}], "total_neurons": 3, "total_yaml_neurons": 1, "recent": [{"path": "lobe/cr.md", "updated": "2026-02-04", "file_type": "markdown"}, {"path": "lobe/y.yml", "updated": "2026-02-03", "file_type": "yaml"}, {"path": "lobe/n.md", "updated": "2026-02-02", "file_type": "markdown"}], "glossary": [{"term": "A", "definition": "first"}, {"term": "B", "definition": "second"}], "deprecation_count": 0, "deprecation": [], "parse_errors": 0}
+== stderr
+== exit 0

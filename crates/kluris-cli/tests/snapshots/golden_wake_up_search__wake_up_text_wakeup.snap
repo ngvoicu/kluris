@@ -1,0 +1,32 @@
+---
+source: crates/kluris-cli/tests/golden_wake_up_search.rs
+expression: "wake_up_text(&sb, &brain)"
+---
+== stdout
+
+Brain: wakeup
+  Path: <ROOT>
+  A described brain
+
+Lobes (6)
+  - Zebra/: 1 neurons
+  - alpha/: 7 neurons
+  - beta/: 9 neurons
+  - desc-types/: 0 neurons
+  - empty-lobe/: 0 neurons
+  - legacy/: 1 neurons
+
+Total neurons: 18
+
+Glossary (4 terms)
+
+Deprecation warnings: 3 (run `kluris dream` for details)
+
+Recently updated (5)
+  20260105 beta/b2.md
+  2026-W10-3 Zebra/z.md
+  2026-04-01 alpha/spec.yml
+  2026-03-01 root-note.md
+  2026-02-01T10:00:00 alpha/a3.md
+== stderr
+== exit 0

@@ -1,0 +1,26 @@
+---
+source: crates/kluris-cli/tests/golden_wake_up_search.rs
+expression: out
+---
+== search --lobe "operations"
+total: 2
+operations/backups.md | "Database backups and restore drills" | markdown | deprecated false | tag
+operations/operator-access.md | "Operator access to production" | markdown | deprecated false | tag
+== search --lobe "operations/"
+total: 2
+operations/backups.md | "Database backups and restore drills" | markdown | deprecated false | tag
+operations/operator-access.md | "Operator access to production" | markdown | deprecated false | tag
+== search --lobe "knowledge" --tag "auth"
+total: 0
+== search --tag "postgres"
+total: 2
+operations/backups.md | "Database backups and restore drills" | markdown | deprecated false | tag
+operations/operator-access.md | "Operator access to production" | markdown | deprecated false | tag
+== search --tag "Postgres"
+total: 0
+== search --lobe "nope"
+total: 0
+== search --lobe "architecture/overview.md"
+total: 0
+== search --lobe ""
+total: 0

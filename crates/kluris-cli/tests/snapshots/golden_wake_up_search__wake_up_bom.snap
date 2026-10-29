@@ -1,0 +1,8 @@
+---
+source: crates/kluris-cli/tests/golden_wake_up_search.rs
+expression: "wake_up_json(&sb, &brain)"
+---
+== stdout
+{"ok": true, "name": "bom", "path": "<ROOT>", "description": "Fixture brain", "brain_md": "# bom", "lobes": [{"name": "lobe", "description": "From frontmatter", "neurons": 2, "yaml_count": 0}], "total_neurons": 2, "total_yaml_neurons": 0, "recent": [{"path": "lobe/n.md", "updated": "2026-03-03", "file_type": "markdown"}, {"path": "lobe/plain.md", "updated": "2026-01-01", "file_type": "markdown"}], "glossary": [], "deprecation_count": 0, "deprecation": [], "parse_errors": 0}
+== stderr
+== exit 0

@@ -4,6 +4,7 @@
 
 #![allow(dead_code, unused_imports)]
 
+pub mod brains;
 pub mod golden;
 pub mod sandbox;
 

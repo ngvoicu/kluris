@@ -1,0 +1,5 @@
+---
+source: crates/kluris-cli/tests/golden_wake_up_search.rs
+expression: "format!(\"limit {text:?}: total {}\\n\", doc[\"total\"])"
+---
+limit " 3": total 3

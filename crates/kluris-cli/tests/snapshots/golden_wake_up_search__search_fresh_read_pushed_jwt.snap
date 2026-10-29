@@ -1,0 +1,7 @@
+---
+source: crates/kluris-cli/tests/golden_wake_up_search.rs
+expression: found_list(&doc)
+---
+total: 2
+glossary.md | "JWT" | markdown | deprecated false | title
+k/jwt.md | "JWT tokens" | markdown | deprecated false | title path body

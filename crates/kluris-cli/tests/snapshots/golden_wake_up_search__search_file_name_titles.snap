@@ -1,0 +1,42 @@
+---
+source: crates/kluris-cli/tests/golden_wake_up_search.rs
+expression: out
+---
+md/2nd-try.md | 2Nd Try
+md/ALL-CAPS.md | All Caps
+md/aΣ.md | Aς
+md/o'neil.md | O'Neil
+md/straße.md | Straße
+md/ßa.md | Ssa
+md/İstanbul.md | İstanbul
+md/ŉ-x.md | ʼN X
+md/ǆemal.md | ǅemal
+md/ǰx.md | J̌x
+md/ʰa.md | ʰa
+md/ΑΣ.Β-c.md | Ασ.Β C
+md/ΟΣ.md | Ος
+md/ΣΑΣ-ΣΑΣ.md | Σας Σας
+md/თბილისი.md | თბილისი
+md/ᾈ.md | ᾈ
+md/ꭰꭱ.md | Ꭰꭱ
+md/ﬁle.md | File
+md/𐐨𐐩.md | 𐐀𐐩
+yml/2nd-try.yml | 2Nd Try
+yml/ALL-CAPS.yml | All Caps
+yml/aΣ.yml | Aς
+yml/o'neil.yml | O'Neil
+yml/straße.yml | Straße
+yml/ßa.yml | Ssa
+yml/İstanbul.yml | İstanbul
+yml/ŉ-x.yml | ʼN X
+yml/ǆemal.yml | ǅemal
+yml/ǰx.yml | J̌x
+yml/ʰa.yml | ʰa
+yml/ΑΣ.Β-c.yml | Ασ.Β C
+yml/ΟΣ.yml | Ος
+yml/ΣΑΣ-ΣΑΣ.yml | Σας Σας
+yml/თბილისი.yml | თბილისი
+yml/ᾈ.yml | ᾈ
+yml/ꭰꭱ.yml | Ꭰꭱ
+yml/ﬁle.yml | File
+yml/𐐨𐐩.yml | 𐐀𐐩

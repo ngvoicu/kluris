@@ -1,0 +1,8 @@
+---
+source: crates/kluris-cli/tests/golden_wake_up_search.rs
+expression: out
+---
+== stdout
+{"ok": true, "name": "odd", "path": "<ROOT>", "description": "Fixture brain", "brain_md": "", "lobes": [{"name": "lobe", "description": "", "neurons": 5, "yaml_count": 0}], "total_neurons": 5, "total_yaml_neurons": 0, "recent": [{"path": "lobe/n3.md", "updated": "{'a': 1, \"b'c\": [None, datetime.datetime(2026, 1, 1, 10, 0)]}", "file_type": "markdown"}, {"path": "lobe/n4.md", "updated": "[datetime.datetime(2026, 1, 1, 10, 0, tzinfo=datetime.timezone(datetime.timedelta(seconds=3600))), datetime.datetime(2026, 1, 1, 10, 0, tzinfo=datetime.timezone(datetime.timedelta(days=-1, seconds=66600))), datetime.datetime(2026, 1, 1, 10, 0, tzinfo=datetime.timezone.utc)]", "file_type": "markdown"}, {"path": "lobe/n0.md", "updated": "[datetime.date(2026, 1, 1), 'x']", "file_type": "markdown"}, {"path": "lobe/n1.md", "updated": "True", "file_type": "markdown"}, {"path": "lobe/n2.md", "updated": "1.5", "file_type": "markdown"}], "glossary": [], "deprecation_count": 0, "deprecation": [], "parse_errors": 0}
+== stderr
+== exit 0

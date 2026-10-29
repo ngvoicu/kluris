@@ -1,0 +1,7 @@
+---
+source: crates/kluris-cli/tests/golden_wake_up_search.rs
+expression: "format!(\"{}== exit {}\\n\",\nsection(\"stdout\", &normalize(&run.stdout, &sb.root)), run.code)"
+---
+== stdout
+{"ok": false, "error": "No brains registered. Run 'kluris create <name>' to create one."}
+== exit 1

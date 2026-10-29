@@ -1,0 +1,12 @@
+---
+source: crates/kluris-cli/tests/golden_wake_up_search.rs
+expression: found_list(&doc)
+---
+total: 7
+brain.md | "acme-sme" | markdown | deprecated false | body
+glossary.md | "Booking" | markdown | deprecated false | path
+glossary.md | "DLQ" | markdown | deprecated false | path
+glossary.md | "Drill" | markdown | deprecated false | path
+glossary.md | "Freeze" | markdown | deprecated false | path
+glossary.md | "NamedParameterJdbcTemplate" | markdown | deprecated false | path
+glossary.md | "Practitioner" | markdown | deprecated false | path

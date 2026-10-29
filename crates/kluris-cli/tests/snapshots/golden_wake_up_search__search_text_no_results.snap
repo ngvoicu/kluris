@@ -1,0 +1,8 @@
+---
+source: crates/kluris-cli/tests/golden_wake_up_search.rs
+expression: "sb.kluris(&[\"search\", \"zebra-not-there\"]).render(&sb.root)"
+---
+== stdout
+No results for 'zebra-not-there' in acme-sme.
+== stderr
+== exit 0

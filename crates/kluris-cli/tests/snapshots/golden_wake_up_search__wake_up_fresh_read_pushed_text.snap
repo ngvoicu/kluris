@@ -1,0 +1,20 @@
+---
+source: crates/kluris-cli/tests/golden_wake_up_search.rs
+expression: out
+---
+== stdout
+
+Brain: team
+  Path: <ROOT>
+
+Lobes (1)
+  - k/: 1 neurons
+
+Total neurons: 1
+
+Glossary (1 terms)
+
+Recently updated (1)
+  2026-02-03 k/jwt.md
+== stderr
+== exit 0

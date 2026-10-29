@@ -1,0 +1,7 @@
+---
+source: crates/kluris-cli/tests/golden_wake_up_search.rs
+expression: found_list(&doc)
+---
+total: 2
+architecture/job-queue.md | "Job queue" | markdown | deprecated false | body
+glossary.md | "DLQ" | markdown | deprecated false | title
