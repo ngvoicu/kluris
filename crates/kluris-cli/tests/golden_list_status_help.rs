@@ -47,6 +47,18 @@ fn golden_table(
     });
 }
 
+/// Runs `check` with its snapshots named for the paths this OS prints: a
+/// configured path is printed as written, with native separators, so on
+/// Windows (`\`) such a snapshot is the `windows` variant of the one macOS
+/// and Linux share.
+fn printed_paths(check: impl FnOnce()) {
+    #[allow(unused_mut)]
+    let mut settings = insta::Settings::clone_current();
+    #[cfg(windows)]
+    settings.set_snapshot_suffix("windows");
+    settings.bind(check);
+}
+
 /// The whole run: its streams and exit code.
 fn whole(run: &Run, root: &Path) -> String {
     run.render(root)
@@ -446,7 +458,7 @@ fn list_and_status_print_user_text_literally() {
         DATE,
     );
     register_described(&sb, &[("demo", &brain)], "see [red]docs[/red]");
-    golden(&sb, "list_text_markup_in_description", &["list"]);
+    printed_paths(|| golden(&sb, "list_text_markup_in_description", &["list"]));
     golden(&sb, "status_text_markup_in_subject", &["status"]);
 }
 
@@ -456,7 +468,7 @@ fn list_with_a_closing_tag_in_the_description() {
     let brain = sb.work.join("brains").join("demo");
     fs::create_dir_all(&brain).unwrap();
     register_described(&sb, &[("demo", &brain)], "ends [/oops]");
-    golden(&sb, "list_text_closing_tag_in_description", &["list"]);
+    printed_paths(|| golden(&sb, "list_text_closing_tag_in_description", &["list"]));
 }
 
 // --- list ------------------------------------------------------------------------
@@ -485,8 +497,8 @@ fn list_of_three_brains() {
             ("gamma", &brains.join("gamma")),
         ],
     );
-    golden(&sb, "list_text_three_brains", &["list"]);
-    golden(&sb, "list_json_three_brains", &["list", "--json"]);
+    printed_paths(|| golden(&sb, "list_text_three_brains", &["list"]));
+    printed_paths(|| golden(&sb, "list_json_three_brains", &["list", "--json"]));
 }
 
 #[test]
@@ -533,7 +545,7 @@ fn list_json_of_two_brains_writes_nothing() {
         ],
     );
     let before = tree_dump(&sb.work);
-    golden(&sb, "list_json_two_brains", &["list", "--json"]);
+    printed_paths(|| golden(&sb, "list_json_two_brains", &["list", "--json"]));
     assert_eq!(tree_dump(&sb.work), before, "list must not write anything");
 }
 
@@ -570,7 +582,7 @@ fn help_text_with_two_brains() {
         ("a", &sb.work.join("a"), "x"),
         ("b", &sb.work.join("b"), "y"),
     ]);
-    golden(&sb, "help_text", &["help"]);
+    printed_paths(|| golden(&sb, "help_text", &["help"]));
 }
 
 #[test]
@@ -624,7 +636,7 @@ fn help_with_a_corrupt_config() {
     let sb = Sandbox::new();
     fs::create_dir_all(sb.config.parent().unwrap()).unwrap();
     fs::write(&sb.config, "brains: [\n").unwrap();
-    golden(&sb, "help_text_corrupt_config", &["help"]);
+    printed_paths(|| golden(&sb, "help_text_corrupt_config", &["help"]));
 }
 
 // --- the --help flag -------------------------------------------------------------
@@ -719,7 +731,7 @@ const REPEATED: &[&[&str]] = &[
 
 #[test]
 fn a_repeated_option_takes_its_last_value() {
-    golden_table("repeated_options", REPEATED, two_brains, whole);
+    printed_paths(|| golden_table("repeated_options", REPEATED, two_brains, whole));
 }
 
 /// Every token is parsed first (an unknown option, an option without its
@@ -819,7 +831,7 @@ const REPEATED_VALUES: &[&[&str]] = &[
 
 #[test]
 fn only_the_winning_value_is_converted() {
-    golden_table("repeated_values", REPEATED_VALUES, two_brains, whole);
+    printed_paths(|| golden_table("repeated_values", REPEATED_VALUES, two_brains, whole));
 }
 
 #[test]
