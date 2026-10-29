@@ -1,21 +1,21 @@
 ---
 source: crates/kluris-cli/tests/golden_create.rs
-expression: text
+expression: text.as_ref()
 ---
-== home/.agents/skills/kluris-solo/SKILL.md
+== home/.agents/skills/kluris-solo/SKILL.md (file, 35556 bytes)
 <snapshot skill_solo_none_at-solo_git>
-== home/.claude/skills/kluris-solo/SKILL.md
+== home/.claude/skills/kluris-solo/SKILL.md (file, 35556 bytes)
 <snapshot skill_solo_none_at-solo_git>
-== home/.gemini/config/skills/kluris-solo/SKILL.md
+== home/.gemini/config/skills/kluris-solo/SKILL.md (file, 35556 bytes)
 <snapshot skill_solo_none_at-solo_git>
-== home/.hermes/skills/kluris-solo/SKILL.md
+== home/.hermes/skills/kluris-solo/SKILL.md (file, 35556 bytes)
 <snapshot skill_solo_none_at-solo_git>
-== home/.kluris/config.yml
+== home/.kluris/config.yml (file, 80 bytes)
 brains:
   solo:
     path: <ROOT>/work/solo
     description: solo knowledge base
-== solo/.gitignore
+== solo/.gitignore (file, 204 bytes)
 # Secrets
 .env
 *.key
@@ -34,7 +34,7 @@ brain-mri.html
 # OS
 .DS_Store
 Thumbs.db
-== solo/README.md
+== solo/README.md (file, 11352 bytes)
 # solo
 
 > solo knowledge base
@@ -356,7 +356,7 @@ description: my-brain knowledge base
 6. **Bidirectional synapses** -- if A links to B, add the reverse link in B
 7. **Run `kluris dream` after adding neurons** -- keeps maps and brain.md fresh
 8. **Use git directly to commit and sync** -- kluris brains are plain git repos
-== solo/brain.md
+== solo/brain.md (file, 499 bytes)
 ---
 auto_generated: true
 updated: '<TODAY>'
@@ -375,7 +375,7 @@ solo knowledge base
 ## Reference
 
 - [glossary.md](./glossary.md) — Domain-specific terms, acronyms, and conventions
-== solo/glossary.md
+== solo/glossary.md (file, 149 bytes)
 ---
 auto_generated: false
 updated: <TODAY>
@@ -386,7 +386,7 @@ Project-specific terms, acronyms, and conventions.
 
 | Term | Meaning |
 |------|---------|
-== solo/infrastructure/map.md
+== solo/infrastructure/map.md (file, 396 bytes)
 ---
 auto_generated: true
 description: Hosting, CI/CD, Docker, deployment, environments, env vars
@@ -407,7 +407,7 @@ sideways [knowledge](../knowledge/map.md) | [projects](../projects/map.md)
 ## Contents
 
 (empty)
-== solo/kluris.yml
+== solo/kluris.yml (file, 187 bytes)
 name: solo
 description: solo knowledge base
 agents:
@@ -422,7 +422,7 @@ agents:
   - junie
   - antigravity
 companions: []
-== solo/knowledge/map.md
+== solo/knowledge/map.md (file, 410 bytes)
 ---
 auto_generated: true
 description: Decisions, learnings, troubleshooting tips, domain expertise
@@ -443,7 +443,7 @@ sideways [infrastructure](../infrastructure/map.md) | [projects](../projects/map
 ## Contents
 
 (empty)
-== solo/projects/map.md
+== solo/projects/map.md (file, 424 bytes)
 ---
 auto_generated: true
 description: Per-project sub-folders with APIs, data models, setup, conventions
@@ -464,3 +464,4 @@ sideways [infrastructure](../infrastructure/map.md) | [knowledge](../knowledge/m
 ## Contents
 
 (empty)
+<end of dump>

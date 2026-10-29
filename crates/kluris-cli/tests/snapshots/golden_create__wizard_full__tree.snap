@@ -1,39 +1,39 @@
 ---
 source: crates/kluris-cli/tests/golden_create.rs
-expression: text
+expression: text.as_ref()
 ---
-== home/.agents/skills/kluris-wiz/SKILL.md
+== home/.agents/skills/kluris-wiz/SKILL.md (file, 36452 bytes)
 <snapshot skill_wiz_specmint-core+specmint-tdd_at-wiz_git_desc-my-desc>
-== home/.claude/skills/kluris-wiz/SKILL.md
+== home/.claude/skills/kluris-wiz/SKILL.md (file, 36452 bytes)
 <snapshot skill_wiz_specmint-core+specmint-tdd_at-wiz_git_desc-my-desc>
-== home/.gemini/config/skills/kluris-wiz/SKILL.md
+== home/.gemini/config/skills/kluris-wiz/SKILL.md (file, 36452 bytes)
 <snapshot skill_wiz_specmint-core+specmint-tdd_at-wiz_git_desc-my-desc>
-== home/.hermes/skills/kluris-wiz/SKILL.md
+== home/.hermes/skills/kluris-wiz/SKILL.md (file, 36452 bytes)
 <snapshot skill_wiz_specmint-core+specmint-tdd_at-wiz_git_desc-my-desc>
-== home/.kluris/companions/specmint-core/SKILL.md
+== home/.kluris/companions/specmint-core/SKILL.md (file, 29959 bytes)
 <vendored/specmint-core/SKILL.md>
-== home/.kluris/companions/specmint-core/references/command-contracts.md
+== home/.kluris/companions/specmint-core/references/command-contracts.md (file, 3883 bytes)
 <vendored/specmint-core/references/command-contracts.md>
-== home/.kluris/companions/specmint-core/references/researcher.md
+== home/.kluris/companions/specmint-core/references/researcher.md (file, 11696 bytes)
 <vendored/specmint-core/references/researcher.md>
-== home/.kluris/companions/specmint-core/references/spec-format.md
+== home/.kluris/companions/specmint-core/references/spec-format.md (file, 13261 bytes)
 <vendored/specmint-core/references/spec-format.md>
-== home/.kluris/companions/specmint-tdd/SKILL.md
+== home/.kluris/companions/specmint-tdd/SKILL.md (file, 34836 bytes)
 <vendored/specmint-tdd/SKILL.md>
-== home/.kluris/companions/specmint-tdd/references/command-contracts.md
+== home/.kluris/companions/specmint-tdd/references/command-contracts.md (file, 11171 bytes)
 <vendored/specmint-tdd/references/command-contracts.md>
-== home/.kluris/companions/specmint-tdd/references/researcher.md
+== home/.kluris/companions/specmint-tdd/references/researcher.md (file, 18325 bytes)
 <vendored/specmint-tdd/references/researcher.md>
-== home/.kluris/companions/specmint-tdd/references/spec-format.md
+== home/.kluris/companions/specmint-tdd/references/spec-format.md (file, 25513 bytes)
 <vendored/specmint-tdd/references/spec-format.md>
-== home/.kluris/companions/specmint-tdd/references/testing-knowledge.md
+== home/.kluris/companions/specmint-tdd/references/testing-knowledge.md (file, 11937 bytes)
 <vendored/specmint-tdd/references/testing-knowledge.md>
-== home/.kluris/config.yml
+== home/.kluris/config.yml (file, 70 bytes)
 brains:
   wiz:
     path: <ROOT>/work/wiz
     description: ' my desc '
-== wiz/.gitignore
+== wiz/.gitignore (file, 204 bytes)
 # Secrets
 .env
 *.key
@@ -52,7 +52,7 @@ brain-mri.html
 # OS
 .DS_Store
 Thumbs.db
-== wiz/README.md
+== wiz/README.md (file, 11281 bytes)
 # wiz
 
 >  my desc 
@@ -374,7 +374,7 @@ description: my-brain knowledge base
 6. **Bidirectional synapses** -- if A links to B, add the reverse link in B
 7. **Run `kluris dream` after adding neurons** -- keeps maps and brain.md fresh
 8. **Use git directly to commit and sync** -- kluris brains are plain git repos
-== wiz/brain.md
+== wiz/brain.md (file, 400 bytes)
 ---
 auto_generated: true
 updated: '<TODAY>'
@@ -393,7 +393,7 @@ updated: '<TODAY>'
 ## Reference
 
 - [glossary.md](./glossary.md) — Domain-specific terms, acronyms, and conventions
-== wiz/glossary.md
+== wiz/glossary.md (file, 149 bytes)
 ---
 auto_generated: false
 updated: <TODAY>
@@ -404,7 +404,7 @@ Project-specific terms, acronyms, and conventions.
 
 | Term | Meaning |
 |------|---------|
-== wiz/kluris.yml
+== wiz/kluris.yml (file, 206 bytes)
 name: wiz
 description: ' my desc '
 agents:
@@ -421,7 +421,7 @@ agents:
 companions:
 - specmint-core
 - specmint-tdd
-== wiz/notes/map.md
+== wiz/notes/map.md (file, 317 bytes)
 ---
 auto_generated: true
 description: Daily notes, ideas, learnings
@@ -442,7 +442,7 @@ sideways [projects](../projects/map.md) | [tasks](../tasks/map.md)
 ## Contents
 
 (empty)
-== wiz/projects/map.md
+== wiz/projects/map.md (file, 349 bytes)
 ---
 auto_generated: true
 description: 'Sub-folder per project: branches, status, TODOs'
@@ -463,7 +463,7 @@ sideways [notes](../notes/map.md) | [tasks](../tasks/map.md)
 ## Contents
 
 (empty)
-== wiz/tasks/map.md
+== wiz/tasks/map.md (file, 351 bytes)
 ---
 auto_generated: true
 description: Current priorities, blockers, in-progress work
@@ -484,3 +484,4 @@ sideways [notes](../notes/map.md) | [projects](../projects/map.md)
 ## Contents
 
 (empty)
+<end of dump>

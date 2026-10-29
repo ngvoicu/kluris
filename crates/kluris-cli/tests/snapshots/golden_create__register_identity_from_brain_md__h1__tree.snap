@@ -1,8 +1,8 @@
 ---
 source: crates/kluris-cli/tests/golden_create.rs
-expression: text
+expression: text.as_ref()
 ---
-== brains/Some Folder/brain.md
+== brains/Some Folder/brain.md (file, 66 bytes)
 ---
 auto_generated: true
 ---
@@ -12,7 +12,7 @@ auto_generated: true
 The team brain.
 
 ## Lobes
-== brains/Some Folder/kluris.yml
+== brains/Some Folder/kluris.yml (file, 185 bytes)
 name: team-x
 description: The team brain.
 agents:
@@ -27,17 +27,18 @@ agents:
   - junie
   - antigravity
 companions: []
-== home/.agents/skills/kluris-team-x/SKILL.md
+== home/.agents/skills/kluris-team-x/SKILL.md (file, 35775 bytes)
 <snapshot skill_team-x_none_at-brains-some-folder_desc-the-team-brain>
-== home/.claude/skills/kluris-team-x/SKILL.md
+== home/.claude/skills/kluris-team-x/SKILL.md (file, 35775 bytes)
 <snapshot skill_team-x_none_at-brains-some-folder_desc-the-team-brain>
-== home/.gemini/config/skills/kluris-team-x/SKILL.md
+== home/.gemini/config/skills/kluris-team-x/SKILL.md (file, 35775 bytes)
 <snapshot skill_team-x_none_at-brains-some-folder_desc-the-team-brain>
-== home/.hermes/skills/kluris-team-x/SKILL.md
+== home/.hermes/skills/kluris-team-x/SKILL.md (file, 35775 bytes)
 <snapshot skill_team-x_none_at-brains-some-folder_desc-the-team-brain>
-== home/.kluris/config.yml
+== home/.kluris/config.yml (file, 98 bytes)
 brains:
   team-x:
     path: <ROOT>/work/brains/Some
       Folder
     description: The team brain.
+<end of dump>

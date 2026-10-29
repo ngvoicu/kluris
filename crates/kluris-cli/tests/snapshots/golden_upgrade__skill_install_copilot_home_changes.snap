@@ -2,55 +2,42 @@
 source: crates/kluris-cli/tests/golden_upgrade.rs
 expression: lf
 ---
-== home/.agents/skills/kluris-acme/SKILL.md
+== home/.agents/skills/kluris-acme/SKILL.md (file, 36598 bytes)
 <snapshot skill_acme_specmint-core>
-== home/.agents/skills/kluris-beta/SKILL.md
+== home/.agents/skills/kluris-beta/SKILL.md (file, 35622 bytes)
 <snapshot skill_beta_none>
-== home/.claude/skills/kluris-acme/SKILL.md
+== home/.claude/skills/kluris-acme/SKILL.md (file, 36598 bytes)
 <snapshot skill_acme_specmint-core>
-== home/.claude/skills/kluris-beta/SKILL.md
+== home/.claude/skills/kluris-beta/SKILL.md (file, 35622 bytes)
 <snapshot skill_beta_none>
-== home/.codeium/windsurf/global_workflows/kluris-acme.md
-<removed>
-== home/.codeium/windsurf/global_workflows/kluris-beta.md
-<removed>
-== home/.codeium/windsurf/skills/kluris-acme/SKILL.md
-<removed>
-== home/.codeium/windsurf/skills/kluris-beta/SKILL.md
-<removed>
-== home/.codex/skills/kluris-acme/SKILL.md
-<removed>
-== home/.codex/skills/kluris-beta/SKILL.md
-<removed>
-== home/.cursor/skills/kluris-acme/SKILL.md
-<removed>
-== home/.cursor/skills/kluris-beta/SKILL.md
-<removed>
-== home/.gemini/config/skills/kluris-acme/SKILL.md
+== home/.codeium/windsurf/global_workflows/kluris-acme.md (removed)
+== home/.codeium/windsurf/global_workflows/kluris-beta.md (removed)
+== home/.codeium/windsurf/skills/kluris-acme/SKILL.md (removed)
+== home/.codeium/windsurf/skills/kluris-beta/SKILL.md (removed)
+== home/.codex/skills/kluris-acme/SKILL.md (removed)
+== home/.codex/skills/kluris-beta/SKILL.md (removed)
+== home/.cursor/skills/kluris-acme/SKILL.md (removed)
+== home/.cursor/skills/kluris-beta/SKILL.md (removed)
+== home/.gemini/config/skills/kluris-acme/SKILL.md (file, 36598 bytes)
 <snapshot skill_acme_specmint-core>
-== home/.gemini/config/skills/kluris-beta/SKILL.md
+== home/.gemini/config/skills/kluris-beta/SKILL.md (file, 35622 bytes)
 <snapshot skill_beta_none>
-== home/.gemini/skills/kluris-acme/SKILL.md
-<removed>
-== home/.gemini/skills/kluris-beta/SKILL.md
-<removed>
-== home/.hermes/profiles/work/skills/kluris-acme/SKILL.md
+== home/.gemini/skills/kluris-acme/SKILL.md (removed)
+== home/.gemini/skills/kluris-beta/SKILL.md (removed)
+== home/.hermes/profiles/work/skills/kluris-acme/SKILL.md (file, 36598 bytes)
 <snapshot skill_acme_specmint-core>
-== home/.hermes/profiles/work/skills/kluris-beta/SKILL.md
+== home/.hermes/profiles/work/skills/kluris-beta/SKILL.md (file, 35622 bytes)
 <snapshot skill_beta_none>
-== home/.hermes/skills/kluris-acme/SKILL.md
+== home/.hermes/skills/kluris-acme/SKILL.md (file, 36598 bytes)
 <snapshot skill_acme_specmint-core>
-== home/.hermes/skills/kluris-beta/SKILL.md
+== home/.hermes/skills/kluris-beta/SKILL.md (file, 35622 bytes)
 <snapshot skill_beta_none>
-== home/.junie/skills/kluris-acme/SKILL.md
-<removed>
-== home/.junie/skills/kluris-beta/SKILL.md
-<removed>
-== home/.kilo/skills/kluris-acme/SKILL.md
-<removed>
-== home/.kilo/skills/kluris-beta/SKILL.md
-<removed>
-== home/copilot-home/skills/kluris-acme/SKILL.md
+== home/.junie/skills/kluris-acme/SKILL.md (removed)
+== home/.junie/skills/kluris-beta/SKILL.md (removed)
+== home/.kilo/skills/kluris-acme/SKILL.md (removed)
+== home/.kilo/skills/kluris-beta/SKILL.md (removed)
+== home/copilot-home/skills/kluris-acme/SKILL.md (file, 36598 bytes)
 <snapshot skill_acme_specmint-core>
-== home/copilot-home/skills/kluris-beta/SKILL.md
+== home/copilot-home/skills/kluris-beta/SKILL.md (file, 35622 bytes)
 <snapshot skill_beta_none>
+<end of dump>

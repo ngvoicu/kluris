@@ -27,7 +27,7 @@ use std::path::Path;
 
 use common::shared::{skill_reference, vendored_marker};
 use common::upgrade::{Brain, World};
-use common::{PINNED_GIT_DATE, changes_dump, file_body, git_dump, normalize};
+use common::{PINNED_GIT_DATE, Tree, assert_unchanged, changes_dump, git_dump, normalize};
 use kluris_core::agents::install::{
     DestinationRole, InstallReport, InstallRequest, install_skills, read_brain_configs,
 };
@@ -149,13 +149,16 @@ fn on_both_forms(forms: &Forms, crlf_differs: &[&str], scenario: impl Fn(&World)
 /// with a runtime companion file and a generated brain SKILL.md shown by
 /// reference (`common::shared`): a SKILL.md as its shared skill snapshot,
 /// which checks its bytes.
-fn changes(world: &World, before: &std::collections::BTreeMap<String, Vec<u8>>) -> String {
-    let out = changes_dump(before, &world.files(), |path, bytes| {
-        vendored_marker(path, bytes)
-            .or_else(|| skill_reference(path, bytes, &world.root, |_| String::new()))
-            .unwrap_or_else(|| file_body(bytes))
-    });
-    normalize(&out, &world.root)
+fn changes(world: &World, before: &Tree) -> String {
+    changes_dump(
+        before,
+        &world.files(),
+        |text| normalize(text, &world.root),
+        |path, entry| {
+            vendored_marker(path, entry)
+                .or_else(|| skill_reference(path, entry, &world.root, |_| String::new()))
+        },
+    )
 }
 
 fn output(name: impl Into<String>, text: String) -> (String, String) {
@@ -303,13 +306,10 @@ fn doctor_text_output() {
 #[test]
 fn doctor_no_refresh_writes_nothing() {
     on_both_forms(&SKILL_INSTALL, &[], |world| {
-        let outputs = doctor(
-            world,
-            &["doctor", "--no-refresh", "--json"],
-            "doctor_no_refresh",
-        );
-        assert_eq!(outputs[1].1, "", "--no-refresh changed files");
-        outputs[..1].to_vec()
+        let before = world.files();
+        let out = world.kluris(&["doctor", "--no-refresh", "--json"], &[]);
+        assert_unchanged(&before, &world.files(), "doctor --no-refresh");
+        vec![output("doctor_no_refresh", world.render(&out))]
     });
 }
 
@@ -441,11 +441,7 @@ fn first_commands(world: &World, copilot_home: bool) -> Outputs {
         format!("migration_second_doctor{variant}"),
         world.render(&doctor),
     ));
-    assert_eq!(
-        changes(world, &before),
-        "",
-        "the second doctor changed files"
-    );
+    assert_unchanged(&before, &world.files(), "the second doctor");
     assert_emptied_folders_stay(world);
     outputs
 }

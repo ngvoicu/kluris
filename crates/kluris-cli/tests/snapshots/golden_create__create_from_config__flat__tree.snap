@@ -1,8 +1,8 @@
 ---
 source: crates/kluris-cli/tests/golden_create.rs
-expression: text
+expression: text.as_ref()
 ---
-== demo/.gitignore
+== demo/.gitignore (file, 204 bytes)
 # Secrets
 .env
 *.key
@@ -21,7 +21,7 @@ brain-mri.html
 # OS
 .DS_Store
 Thumbs.db
-== demo/README.md
+== demo/README.md (file, 11352 bytes)
 # demo
 
 > demo knowledge base
@@ -343,7 +343,7 @@ description: my-brain knowledge base
 6. **Bidirectional synapses** -- if A links to B, add the reverse link in B
 7. **Run `kluris dream` after adding neurons** -- keeps maps and brain.md fresh
 8. **Use git directly to commit and sync** -- kluris brains are plain git repos
-== demo/alpha-beta/map.md
+== demo/alpha-beta/map.md (file, 296 bytes)
 ---
 auto_generated: true
 description: First lobe
@@ -364,7 +364,7 @@ sideways [mid-lobe-name](../mid-lobe-name/map.md) | [zeta](../zeta/map.md)
 ## Contents
 
 (empty)
-== demo/brain.md
+== demo/brain.md (file, 338 bytes)
 ---
 auto_generated: true
 updated: '<TODAY>'
@@ -383,7 +383,7 @@ demo knowledge base
 ## Reference
 
 - [glossary.md](./glossary.md) — Domain-specific terms, acronyms, and conventions
-== demo/glossary.md
+== demo/glossary.md (file, 149 bytes)
 ---
 auto_generated: false
 updated: <TODAY>
@@ -394,7 +394,7 @@ Project-specific terms, acronyms, and conventions.
 
 | Term | Meaning |
 |------|---------|
-== demo/kluris.yml
+== demo/kluris.yml (file, 187 bytes)
 name: demo
 description: demo knowledge base
 agents:
@@ -409,7 +409,7 @@ agents:
   - junie
   - antigravity
 companions: []
-== demo/mid-lobe-name/map.md
+== demo/mid-lobe-name/map.md (file, 276 bytes)
 ---
 auto_generated: true
 description: Mid
@@ -430,7 +430,7 @@ sideways [alpha-beta](../alpha-beta/map.md) | [zeta](../zeta/map.md)
 ## Contents
 
 (empty)
-== demo/zeta/map.md
+== demo/zeta/map.md (file, 324 bytes)
 ---
 auto_generated: true
 description: Ünïcode — dash
@@ -451,21 +451,22 @@ sideways [alpha-beta](../alpha-beta/map.md) | [mid-lobe-name](../mid-lobe-name/m
 ## Contents
 
 (empty)
-== home/.agents/skills/kluris-demo/SKILL.md
+== home/.agents/skills/kluris-demo/SKILL.md (file, 35556 bytes)
 <snapshot skill_demo_none_at-demo_git>
-== home/.claude/skills/kluris-demo/SKILL.md
+== home/.claude/skills/kluris-demo/SKILL.md (file, 35556 bytes)
 <snapshot skill_demo_none_at-demo_git>
-== home/.gemini/config/skills/kluris-demo/SKILL.md
+== home/.gemini/config/skills/kluris-demo/SKILL.md (file, 35556 bytes)
 <snapshot skill_demo_none_at-demo_git>
-== home/.hermes/skills/kluris-demo/SKILL.md
+== home/.hermes/skills/kluris-demo/SKILL.md (file, 35556 bytes)
 <snapshot skill_demo_none_at-demo_git>
-== home/.kluris/config.yml
+== home/.kluris/config.yml (file, 80 bytes)
 brains:
   demo:
     path: <ROOT>/work/demo
     description: demo knowledge base
-== structure.yml
+== structure.yml (file, 84 bytes)
 structure:
   alpha-beta: First lobe
   zeta: Ünïcode — dash
   mid-lobe-name: Mid
+<end of dump>

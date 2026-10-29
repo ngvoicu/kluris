@@ -18,13 +18,12 @@
 
 mod common;
 
-use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 
 use common::shared::{COMPANIONS, skill_reference, vendored, vendored_marker};
 use common::{
-    PINNED_GIT_DATE, Run, Sandbox, changes_dump, file_body, normalize, tree_files, unstored,
+    Entry, PINNED_GIT_DATE, Run, Sandbox, Tree, changes_dump, normalize, tree_files, unstored,
     windows_variant, write,
 };
 
@@ -79,8 +78,11 @@ fn state(name: &str) -> Sandbox {
         layers.push(name);
     }
     for layer in layers {
-        for (rel, bytes) in tree_files(&fixtures.join(layer)) {
-            write(&sb.work.join(unstored(&rel)), fill(bytes).as_bytes());
+        for (rel, entry) in tree_files(&fixtures.join(layer)) {
+            write(
+                &sb.work.join(unstored(&rel)),
+                fill(entry.file().to_vec()).as_bytes(),
+            );
         }
     }
     for b in ["a", "b"] {
@@ -92,8 +94,8 @@ fn state(name: &str) -> Sandbox {
     }
     for companion in companions {
         let installed = sb.home.join(".kluris/companions").join(companion);
-        for (rel, bytes) in tree_files(&vendored().join(companion)) {
-            write(&installed.join(rel), &bytes);
+        for (rel, entry) in tree_files(&vendored().join(companion)) {
+            write(&installed.join(rel), entry.file());
         }
     }
     let a = sb.work.join("brains").join("a");
@@ -134,33 +136,28 @@ fn check(sb: &Sandbox, name: &str, run: &Run) {
     }
 }
 
-/// Snapshot what a run changed under `work/` as `name`: each added or
-/// changed file as `tree_dump` writes it, a removed one with the body
-/// `<removed>`. A runtime companion file that holds its vendored bytes
+/// Snapshot what a run changed under `work/` as `name`, as `changes_dump`
+/// writes it. A runtime companion file that holds its vendored bytes
 /// reads `<vendored/NAME/PATH>`; a brain's SKILL.md reads `<snapshot
 /// skill_BRAIN_COMPANIONS>`, its text checked against that snapshot (one
 /// per brain and companion set, shared by every scenario that writes it).
-fn check_changes(sb: &Sandbox, name: &str, before: &BTreeMap<String, Vec<u8>>) {
-    let out = changes_dump(before, &tree_files(&sb.work), |path, bytes| {
-        body(sb, path, bytes)
-    });
-    insta::assert_snapshot!(name, normalize(&out, &sb.root));
+fn check_changes(sb: &Sandbox, name: &str, before: &Tree) {
+    let out = changes_dump(
+        before,
+        &tree_files(&sb.work),
+        |text| normalize(text, &sb.root),
+        |path, entry| reference(sb, path, entry),
+    );
+    insta::assert_snapshot!(name, out);
 }
 
-fn body(sb: &Sandbox, path: &str, bytes: &[u8]) -> String {
-    vendored_marker(path, bytes)
-        .or_else(|| skill_reference(path, bytes, &sb.root, |_| String::new()))
-        .unwrap_or_else(|| file_body(bytes))
+fn reference(sb: &Sandbox, path: &str, entry: &Entry) -> Option<common::Reference> {
+    vendored_marker(path, entry)
+        .or_else(|| skill_reference(path, entry, &sb.root, |_| String::new()))
 }
 
-fn assert_unchanged(sb: &Sandbox, before: &BTreeMap<String, Vec<u8>>) {
-    let after = tree_files(&sb.work);
-    let changed: Vec<&String> = before
-        .keys()
-        .chain(after.keys())
-        .filter(|path| before.get(*path) != after.get(*path))
-        .collect();
-    assert!(changed.is_empty(), "the run changed {changed:?}");
+fn assert_unchanged(sb: &Sandbox, before: &Tree) {
+    common::assert_unchanged(before, &tree_files(&sb.work), "the run");
 }
 
 /// A snapshot name for `args`: their letters and digits, each run of

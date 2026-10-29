@@ -3,7 +3,7 @@
 //! but [`PINNED_ENV`] and [`PASSTHROUGH_ENV`], and each run's exit code and
 //! streams rendered as one snapshot text.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -12,7 +12,8 @@ use std::process::{Command, Stdio};
 use kluris_core::json;
 
 use super::golden::{
-    PASSTHROUGH_ENV, PINNED_ENV, decode, native_paths, normalize, python_json, slashed,
+    Dump, Entry, PASSTHROUGH_ENV, PINNED_ENV, Reference, Tree, decode, native_paths, normalize,
+    python_json, slashed,
 };
 
 /// The length of every sandbox root, as Kluris prints it. A table whose
@@ -371,33 +372,34 @@ pub fn write_tree<P: AsRef<str>, B: AsRef<[u8]>>(
     }
 }
 
-/// What changed between two [`super::tree_files`]: each added or changed
-/// file under `== <path>` with the text `body` gives for its new bytes, a
-/// removed one with `<removed>`; empty when nothing changed.
+/// What changed between two [`Tree`]s as a [`Dump`] writes it, each body
+/// through `show`: each added or changed entry, shown by the [`Reference`]
+/// `reference` gives for it when it gives one, and
+/// each removed entry; only the `<end of dump>` line when nothing changed.
 pub fn changes_dump(
-    before: &BTreeMap<String, Vec<u8>>,
-    after: &BTreeMap<String, Vec<u8>>,
-    mut body: impl FnMut(&str, &[u8]) -> String,
+    before: &Tree,
+    after: &Tree,
+    show: impl Fn(&str) -> String,
+    mut reference: impl FnMut(&str, &Entry) -> Option<Reference>,
 ) -> String {
     let paths: BTreeSet<&String> = before.keys().chain(after.keys()).collect();
-    let mut out = String::new();
+    let mut dump = Dump::new(show);
     for path in paths {
-        let text = match (before.get(path), after.get(path)) {
-            (Some(old), Some(new)) if old == new => continue,
-            (_, None) => "<removed>\n".to_string(),
-            (_, Some(new)) => body(path, new),
-        };
-        out.push_str(&format!("== {path}\n{text}"));
+        match (before.get(path), after.get(path)) {
+            (Some(old), Some(new)) if old == new => {}
+            (_, None) => dump.removed(path),
+            (_, Some(new)) => match reference(path, new) {
+                Some(marker) => dump.reference(path, new, &marker),
+                None => dump.entry(path, new),
+            },
+        }
     }
-    out
+    dump.end()
 }
 
-/// The paths whose bytes differ between two [`super::tree_files`], each marked
-/// `+` (new), `-` (gone) or `~` (changed); `(none)` when none do.
-pub fn changed_files(
-    before: &BTreeMap<String, Vec<u8>>,
-    after: &BTreeMap<String, Vec<u8>>,
-) -> String {
+/// The paths whose entries differ between two [`Tree`]s, each marked `+`
+/// (new), `-` (gone) or `~` (changed); `(none)` when none do.
+pub fn changed_files(before: &Tree, after: &Tree) -> String {
     let mut lines = String::new();
     let paths: BTreeSet<&String> = before.keys().chain(after.keys()).collect();
     for path in paths {
@@ -413,6 +415,16 @@ pub fn changed_files(
         lines.push_str("(none)\n");
     }
     lines
+}
+
+/// Fails the test, naming `what` and each changed path, unless `after`
+/// holds exactly the entries and bytes of `before`.
+pub fn assert_unchanged(before: &Tree, after: &Tree, what: &str) {
+    assert!(
+        before == after,
+        "{what} changed files:\n{}",
+        changed_files(before, after)
+    );
 }
 
 /// A `--json` stdout as a snapshot shows it: checked to be exactly one line

@@ -1,21 +1,21 @@
 ---
 source: crates/kluris-cli/tests/golden_create.rs
-expression: text
+expression: text.as_ref()
 ---
-== home/.agents/skills/kluris-wiz/SKILL.md
+== home/.agents/skills/kluris-wiz/SKILL.md (file, 35482 bytes)
 <snapshot skill_wiz_none_at-wiz_git_desc-d>
-== home/.claude/skills/kluris-wiz/SKILL.md
+== home/.claude/skills/kluris-wiz/SKILL.md (file, 35482 bytes)
 <snapshot skill_wiz_none_at-wiz_git_desc-d>
-== home/.gemini/config/skills/kluris-wiz/SKILL.md
+== home/.gemini/config/skills/kluris-wiz/SKILL.md (file, 35482 bytes)
 <snapshot skill_wiz_none_at-wiz_git_desc-d>
-== home/.hermes/skills/kluris-wiz/SKILL.md
+== home/.hermes/skills/kluris-wiz/SKILL.md (file, 35482 bytes)
 <snapshot skill_wiz_none_at-wiz_git_desc-d>
-== home/.kluris/config.yml
+== home/.kluris/config.yml (file, 60 bytes)
 brains:
   wiz:
     path: <ROOT>/work/wiz
     description: d
-== wiz/.gitignore
+== wiz/.gitignore (file, 204 bytes)
 # Secrets
 .env
 *.key
@@ -34,7 +34,7 @@ brain-mri.html
 # OS
 .DS_Store
 Thumbs.db
-== wiz/README.md
+== wiz/README.md (file, 11273 bytes)
 # wiz
 
 > d
@@ -356,7 +356,7 @@ description: my-brain knowledge base
 6. **Bidirectional synapses** -- if A links to B, add the reverse link in B
 7. **Run `kluris dream` after adding neurons** -- keeps maps and brain.md fresh
 8. **Use git directly to commit and sync** -- kluris brains are plain git repos
-== wiz/brain.md
+== wiz/brain.md (file, 614 bytes)
 ---
 auto_generated: true
 updated: '<TODAY>'
@@ -378,7 +378,7 @@ d
 ## Reference
 
 - [glossary.md](./glossary.md) — Domain-specific terms, acronyms, and conventions
-== wiz/datasets/map.md
+== wiz/datasets/map.md (file, 512 bytes)
 ---
 auto_generated: true
 description: Data sources, schemas, access notes
@@ -402,7 +402,7 @@ sideways [experiments](../experiments/map.md) | [findings](../findings/map.md) |
 ## Contents
 
 (empty)
-== wiz/experiments/map.md
+== wiz/experiments/map.md (file, 500 bytes)
 ---
 auto_generated: true
 description: Hypotheses, methodology, results
@@ -426,7 +426,7 @@ sideways [datasets](../datasets/map.md) | [findings](../findings/map.md) | [lite
 ## Contents
 
 (empty)
-== wiz/findings/map.md
+== wiz/findings/map.md (file, 508 bytes)
 ---
 auto_generated: true
 description: Synthesized insights, conclusions
@@ -450,7 +450,7 @@ sideways [datasets](../datasets/map.md) | [experiments](../experiments/map.md) |
 ## Contents
 
 (empty)
-== wiz/glossary.md
+== wiz/glossary.md (file, 149 bytes)
 ---
 auto_generated: false
 updated: <TODAY>
@@ -461,7 +461,7 @@ Project-specific terms, acronyms, and conventions.
 
 | Term | Meaning |
 |------|---------|
-== wiz/kluris.yml
+== wiz/kluris.yml (file, 168 bytes)
 name: wiz
 description: d
 agents:
@@ -476,7 +476,7 @@ agents:
   - junie
   - antigravity
 companions: []
-== wiz/literature/map.md
+== wiz/literature/map.md (file, 520 bytes)
 ---
 auto_generated: true
 description: Papers, articles, summaries, key findings
@@ -500,7 +500,7 @@ sideways [datasets](../datasets/map.md) | [experiments](../experiments/map.md) |
 ## Contents
 
 (empty)
-== wiz/questions/map.md
+== wiz/questions/map.md (file, 508 bytes)
 ---
 auto_generated: true
 description: Open questions, hypotheses to test
@@ -524,7 +524,7 @@ sideways [datasets](../datasets/map.md) | [experiments](../experiments/map.md) |
 ## Contents
 
 (empty)
-== wiz/tools/map.md
+== wiz/tools/map.md (file, 522 bytes)
 ---
 auto_generated: true
 description: Research tools, scripts, environments
@@ -548,3 +548,4 @@ sideways [datasets](../datasets/map.md) | [experiments](../experiments/map.md) |
 ## Contents
 
 (empty)
+<end of dump>

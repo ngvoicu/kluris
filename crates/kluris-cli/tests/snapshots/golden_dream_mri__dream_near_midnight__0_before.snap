@@ -2,7 +2,7 @@
 source: crates/kluris-cli/tests/golden_dream_mri.rs
 expression: text
 ---
-== brains/calm/glossary.md
+== brains/calm/glossary.md (file, 70 bytes)
 ---
 updated: '2026-01-01'
 ---
@@ -10,10 +10,10 @@ updated: '2026-01-01'
 # Glossary
 
 **JWT** -- JSON Web Token.
-== brains/calm/kluris.yml
+== brains/calm/kluris.yml (file, 40 bytes)
 name: calm
 description: A healthy brain
-== brains/calm/knowledge/gamma.md
+== brains/calm/knowledge/gamma.md (file, 94 bytes)
 ---
 created: '2026-01-01'
 parent: ./map.md
@@ -23,7 +23,7 @@ updated: '2026-01-01'
 # Gamma
 
 Body of Gamma.
-== brains/calm/projects/alpha.md
+== brains/calm/projects/alpha.md (file, 115 bytes)
 ---
 created: '2026-01-01'
 related:
@@ -35,7 +35,7 @@ updated: '2026-01-01'
 # Alpha
 
 Body of Alpha.
-== brains/calm/projects/beta.md
+== brains/calm/projects/beta.md (file, 114 bytes)
 ---
 created: '2026-01-01'
 related:
@@ -47,7 +47,7 @@ updated: '2026-01-01'
 # Beta
 
 Body of Beta.
-== brains/calm/projects/early.md
+== brains/calm/projects/early.md (file, 94 bytes)
 ---
 created: '2026-01-01'
 parent: ./map.md
@@ -57,7 +57,7 @@ updated: '2020-01-01'
 # Early
 
 Body of Early.
-== brains/calm/projects/late.md
+== brains/calm/projects/late.md (file, 92 bytes)
 ---
 created: '2020-01-01'
 parent: ./map.md
@@ -67,8 +67,9 @@ updated: '2020-01-01'
 # Late
 
 Body of Late.
-== home/.kluris/config.yml
+== home/.kluris/config.yml (file, 81 bytes)
 brains:
   "calm":
     path: "<ROOT>/work/brains/calm"
     description: "fixture"
+<end of dump>

@@ -21,7 +21,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use common::brains::{Brains, eval_fixtures};
-use common::{Run, Sandbox, normalize, tree_dump, windows_variant, write, write_files};
+use common::{
+    Run, Sandbox, assert_unchanged, normalize, tree_files, windows_variant, write, write_files,
+};
 use kluris_core::brain::store::LocalGitStore;
 use kluris_core::config::read_brain_config;
 use kluris_core::pycase;
@@ -361,11 +363,11 @@ fn wake_up_counts_frontmatter_it_refuses() {
 fn wake_up_writes_nothing() {
     let sb = Sandbox::new();
     let brain = registered_fixture(&sb, "wakeup", "Fixture brain").unwrap();
-    let before = tree_dump(&sb.work);
+    let before = tree_files(&sb.work);
     let run = sb.kluris(&["wake-up", "--json"]);
     assert_eq!(run.code, 0, "{}", run.render(&sb.root));
     assert!(!run.stdout.is_empty());
-    assert_eq!(tree_dump(&sb.work), before);
+    assert_unchanged(&before, &tree_files(&sb.work), "wake-up");
     assert!(brain.is_dir());
 }
 
@@ -374,13 +376,14 @@ fn wake_up_fresh_read_with_nothing_new() {
     for (id, text) in [("json", false), ("text", true)] {
         let sb = Sandbox::new();
         let brain = sb.team_brain(false);
-        let before = (tree_dump(&sb.work), sb.team_refs());
+        let (files, refs) = (tree_files(&sb.work), sb.team_refs());
         let out = if text {
             wake_up_text(&sb, &brain)
         } else {
             wake_up_json(&sb, &brain)
         };
-        assert_eq!((tree_dump(&sb.work), sb.team_refs()), before);
+        assert_unchanged(&files, &tree_files(&sb.work), "the fresh read");
+        assert_eq!(sb.team_refs(), refs);
         insta::assert_snapshot!(format!("wake_up_fresh_read_nothing_new_{id}"), out);
     }
 }
@@ -393,14 +396,15 @@ fn wake_up_fresh_read_fetches_a_teammates_push() {
         let sb = Sandbox::new();
         let brain = sb.team_brain(true);
         assert!(!sb.has_remote_main());
-        let before = (tree_dump(&sb.work), sb.team_refs());
+        let (files, refs) = (tree_files(&sb.work), sb.team_refs());
         let out = if text {
             wake_up_text(&sb, &brain)
         } else {
             wake_up_json(&sb, &brain)
         };
         assert!(sb.has_remote_main(), "the teammate's push was not fetched");
-        assert_eq!((tree_dump(&sb.work), sb.team_refs()), before);
+        assert_unchanged(&files, &tree_files(&sb.work), "the fresh read");
+        assert_eq!(sb.team_refs(), refs);
         assert!(!brain.join("k/zebra.md").exists());
         insta::assert_snapshot!(format!("wake_up_fresh_read_pushed_{id}"), out);
     }
@@ -703,10 +707,10 @@ fn search_text_output() {
 #[test]
 fn search_writes_nothing() {
     let (sb, _) = demo();
-    let before = tree_dump(&sb.work);
+    let before = tree_files(&sb.work);
     let run = sb.kluris(&["search", "backup", "--json"]);
     assert_eq!(run.code, 0, "{}", run.render(&sb.root));
-    assert_eq!(tree_dump(&sb.work), before);
+    assert_unchanged(&before, &tree_files(&sb.work), "search");
 }
 
 #[test]
@@ -954,12 +958,13 @@ fn search_reads_a_file_name_with_a_backslash() {
 fn search_fresh_read_with_nothing_new() {
     let sb = Sandbox::new();
     sb.team_brain(false);
-    let before = (tree_dump(&sb.work), sb.team_refs());
+    let (files, refs) = (tree_files(&sb.work), sb.team_refs());
     let run = sb.kluris(&["search", "jwt", "--json"]);
     assert_eq!(run.stderr, "");
     let doc = parse(&run.stdout);
     check_shape(&doc, "team", "jwt", 10);
-    assert_eq!((tree_dump(&sb.work), sb.team_refs()), before);
+    assert_unchanged(&files, &tree_files(&sb.work), "the fresh read");
+    assert_eq!(sb.team_refs(), refs);
     insta::assert_snapshot!("search_fresh_read_nothing_new_jwt", found_list(&doc));
 }
 
@@ -970,14 +975,15 @@ fn search_fresh_read_fetches_a_teammates_push() {
     for query in ["zebras", "jwt"] {
         let sb = Sandbox::new();
         sb.team_brain(true);
-        let before = (tree_dump(&sb.work), sb.team_refs());
+        let (files, refs) = (tree_files(&sb.work), sb.team_refs());
         let run = sb.kluris(&["search", query, "--json"]);
         assert_eq!(run.code, 0, "{}", run.render(&sb.root));
         assert_eq!(run.stderr, "");
         let doc = parse(&run.stdout);
         check_shape(&doc, "team", query, 10);
         assert!(sb.has_remote_main(), "the teammate's push was not fetched");
-        assert_eq!((tree_dump(&sb.work), sb.team_refs()), before);
+        assert_unchanged(&files, &tree_files(&sb.work), "the fresh read");
+        assert_eq!(sb.team_refs(), refs);
         insta::assert_snapshot!(
             format!("search_fresh_read_pushed_{query}"),
             found_list(&doc)

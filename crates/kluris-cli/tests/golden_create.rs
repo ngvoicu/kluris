@@ -28,8 +28,8 @@ use std::sync::LazyLock;
 use common::sandbox::GITCONFIG;
 use common::shared::{skill_brain, skill_reference, vendored_marker};
 use common::{
-    PINNED_GIT_DATE, Run, Sandbox, file_body, fixture, git_state, native_paths, normalize, slashed,
-    tree_dump, tree_files, windows_variant, write_files,
+    Dump, Entry, NativePaths, PINNED_GIT_DATE, Run, Sandbox, fixture, git_state, normalize,
+    slashed, tree_dump, tree_files, windows_variant, write_files,
 };
 use regex::Regex;
 
@@ -103,10 +103,9 @@ fn paths_in_os_form(sb: &Sandbox, named: &[PathBuf]) -> Vec<PathBuf> {
     paths
 }
 
-/// `text` (a run's stream or a dump of `work/`) with the paths of
-/// [`paths_in_os_form`] checked in the OS's form and shown `/`-joined
-/// ([`native_paths`]).
-fn shown(sb: &Sandbox, text: &str, named: &[PathBuf]) -> String {
+/// The paths of [`paths_in_os_form`], to be checked in the OS's form and
+/// shown `/`-joined in a run's stream or a body of a dump of `work/`.
+fn native(sb: &Sandbox, named: &[PathBuf]) -> NativePaths {
     let paths = paths_in_os_form(sb, named);
     let shown: Vec<String> = paths.iter().map(|path| slashed(path)).collect();
     let pairs: Vec<(&Path, &str)> = paths
@@ -114,7 +113,12 @@ fn shown(sb: &Sandbox, text: &str, named: &[PathBuf]) -> String {
         .zip(&shown)
         .map(|(path, shown)| (path.as_path(), shown.as_str()))
         .collect();
-    native_paths(text, &pairs)
+    NativePaths::new(&pairs)
+}
+
+/// `text`, a run's stream, with the paths of [`native`] checked and shown.
+fn shown(sb: &Sandbox, text: &str, named: &[PathBuf]) -> String {
+    native(sb, named).show(text)
 }
 
 /// `run` as its snapshot holds it, its streams [`shown`].
@@ -138,7 +142,7 @@ fn on_terminal(sb: &Sandbox, args: &[&str], lines: &[&str]) -> Run {
 
 /// Every file under `work/` (HOME included), normalized.
 fn files(sb: &Sandbox) -> String {
-    normalize(&tree_dump(&sb.work), &sb.root)
+    tree_dump(&sb.work, |text| normalize(text, &sb.root))
 }
 
 /// [`files`] as a snapshot holds it: an installed companion file that holds
@@ -147,21 +151,24 @@ fn files(sb: &Sandbox) -> String {
 /// `<snapshot skill_...>` (see [`common::shared`] and [`skill_variant`]).
 fn tree(sb: &Sandbox) -> String {
     let files = tree_files(&sb.work);
-    let mut skills: BTreeMap<&str, (&str, &[u8])> = BTreeMap::new();
-    for (path, bytes) in &files {
+    let mut skills: BTreeMap<&str, (&str, &Entry)> = BTreeMap::new();
+    for (path, entry) in &files {
         if let Some(brain) = skill_brain(path) {
-            let (first, copy) = *skills.entry(brain).or_insert((path, bytes));
-            assert_eq!(copy, bytes.as_slice(), "{path} differs from {first}");
+            let (first, copy) = *skills.entry(brain).or_insert((path, entry));
+            assert!(copy == entry, "{path} differs from {first}");
         }
     }
-    let mut out = String::new();
-    for (path, bytes) in &files {
-        let body = vendored_marker(path, bytes)
-            .or_else(|| skill_reference(path, bytes, &sb.root, skill_variant))
-            .unwrap_or_else(|| file_body(bytes));
-        out.push_str(&format!("== {path}\n{body}"));
+    let native = native(sb, &[]);
+    let mut dump = Dump::new(|text: &str| normalize(&native.show(text), &sb.root));
+    for (path, entry) in &files {
+        match vendored_marker(path, entry)
+            .or_else(|| skill_reference(path, entry, &sb.root, skill_variant))
+        {
+            Some(marker) => dump.reference(path, entry, &marker),
+            None => dump.entry(path, entry),
+        }
     }
-    normalize(&shown(sb, &out, &[]), &sb.root)
+    dump.end()
 }
 
 /// What tells a brain's skill text from the others of the same brain and

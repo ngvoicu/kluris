@@ -1,15 +1,15 @@
 ---
 source: crates/kluris-cli/tests/golden_create.rs
-expression: text
+expression: text.as_ref()
 ---
-== brains/team-z/brain.md
+== brains/team-z/brain.md (file, 37 bytes)
 # first
 # second
 
 ## Sub
 
 later line
-== brains/team-z/kluris.yml
+== brains/team-z/kluris.yml (file, 179 bytes)
 name: first
 description: '# second'
 agents:
@@ -24,16 +24,17 @@ agents:
   - junie
   - antigravity
 companions: []
-== home/.agents/skills/kluris-first/SKILL.md
+== home/.agents/skills/kluris-first/SKILL.md (file, 35676 bytes)
 <snapshot skill_first_none_at-brains-team-z_desc-second>
-== home/.claude/skills/kluris-first/SKILL.md
+== home/.claude/skills/kluris-first/SKILL.md (file, 35676 bytes)
 <snapshot skill_first_none_at-brains-team-z_desc-second>
-== home/.gemini/config/skills/kluris-first/SKILL.md
+== home/.gemini/config/skills/kluris-first/SKILL.md (file, 35676 bytes)
 <snapshot skill_first_none_at-brains-team-z_desc-second>
-== home/.hermes/skills/kluris-first/SKILL.md
+== home/.hermes/skills/kluris-first/SKILL.md (file, 35676 bytes)
 <snapshot skill_first_none_at-brains-team-z_desc-second>
-== home/.kluris/config.yml
+== home/.kluris/config.yml (file, 81 bytes)
 brains:
   first:
     path: <ROOT>/work/brains/team-z
     description: '# second'
+<end of dump>

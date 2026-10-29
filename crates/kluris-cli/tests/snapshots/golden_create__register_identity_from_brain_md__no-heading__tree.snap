@@ -1,10 +1,10 @@
 ---
 source: crates/kluris-cli/tests/golden_create.rs
-expression: text
+expression: text.as_ref()
 ---
-== brains/plain/brain.md
+== brains/plain/brain.md (file, 16 bytes)
 no heading here
-== brains/plain/kluris.yml
+== brains/plain/kluris.yml (file, 189 bytes)
 name: plain
 description: plain knowledge base
 agents:
@@ -19,16 +19,17 @@ agents:
   - junie
   - antigravity
 companions: []
-== home/.agents/skills/kluris-plain/SKILL.md
+== home/.agents/skills/kluris-plain/SKILL.md (file, 35679 bytes)
 <snapshot skill_plain_none>
-== home/.claude/skills/kluris-plain/SKILL.md
+== home/.claude/skills/kluris-plain/SKILL.md (file, 35679 bytes)
 <snapshot skill_plain_none>
-== home/.gemini/config/skills/kluris-plain/SKILL.md
+== home/.gemini/config/skills/kluris-plain/SKILL.md (file, 35679 bytes)
 <snapshot skill_plain_none>
-== home/.hermes/skills/kluris-plain/SKILL.md
+== home/.hermes/skills/kluris-plain/SKILL.md (file, 35679 bytes)
 <snapshot skill_plain_none>
-== home/.kluris/config.yml
+== home/.kluris/config.yml (file, 90 bytes)
 brains:
   plain:
     path: <ROOT>/work/brains/plain
     description: plain knowledge base
+<end of dump>

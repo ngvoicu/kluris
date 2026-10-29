@@ -1,15 +1,15 @@
 ---
 source: crates/kluris-cli/tests/golden_create.rs
-expression: text
+expression: text.as_ref()
 ---
-== brains/rawscan/brain.md
+== brains/rawscan/brain.md (file, 44 bytes)
 ---
 key: [unclosed
 ---
 # raw-name
 
 raw desc
-== brains/rawscan/kluris.yml
+== brains/rawscan/kluris.yml (file, 180 bytes)
 name: raw-name
 description: raw desc
 agents:
@@ -24,16 +24,17 @@ agents:
   - junie
   - antigravity
 companions: []
-== home/.agents/skills/kluris-raw-name/SKILL.md
+== home/.agents/skills/kluris-raw-name/SKILL.md (file, 35826 bytes)
 <snapshot skill_raw-name_none_at-brains-rawscan_desc-raw-desc>
-== home/.claude/skills/kluris-raw-name/SKILL.md
+== home/.claude/skills/kluris-raw-name/SKILL.md (file, 35826 bytes)
 <snapshot skill_raw-name_none_at-brains-rawscan_desc-raw-desc>
-== home/.gemini/config/skills/kluris-raw-name/SKILL.md
+== home/.gemini/config/skills/kluris-raw-name/SKILL.md (file, 35826 bytes)
 <snapshot skill_raw-name_none_at-brains-rawscan_desc-raw-desc>
-== home/.hermes/skills/kluris-raw-name/SKILL.md
+== home/.hermes/skills/kluris-raw-name/SKILL.md (file, 35826 bytes)
 <snapshot skill_raw-name_none_at-brains-rawscan_desc-raw-desc>
-== home/.kluris/config.yml
+== home/.kluris/config.yml (file, 83 bytes)
 brains:
   raw-name:
     path: <ROOT>/work/brains/rawscan
     description: raw desc
+<end of dump>

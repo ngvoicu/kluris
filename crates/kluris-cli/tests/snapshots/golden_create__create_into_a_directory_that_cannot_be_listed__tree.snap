@@ -1,6 +1,7 @@
 ---
 source: crates/kluris-cli/tests/golden_create.rs
-expression: sb.tree()
+expression: text.as_ref()
 ---
-== brains/demo/README.md
+== brains/demo/README.md (file, 14 bytes)
 my own readme
+<end of dump>

@@ -1,16 +1,17 @@
 ---
 source: crates/kluris-cli/tests/golden.rs
-expression: tree_dump(dir)
+expression: "tree_dump(dir, as_is)"
 ---
-== backslashes.md
+== backslashes.md (file, 17 bytes)
 C:\\brain \\r \\x41
-== bom.md
+== bom.md (file, 6 bytes)
 \u{feff}hi
-== crlf.md
+== crlf.md (file, 10 bytes)
 one\r
 two\r
-== latin1.md
+== latin1.md (file, 5 bytes)
 caf\xe9
-== no-eol.md
+== no-eol.md (file, 3 bytes)
 end
 <no newline at end>
+<end of dump>

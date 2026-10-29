@@ -1,21 +1,21 @@
 ---
 source: crates/kluris-cli/tests/golden_create.rs
-expression: text
+expression: text.as_ref()
 ---
-== home/.agents/skills/kluris-wiz/SKILL.md
+== home/.agents/skills/kluris-wiz/SKILL.md (file, 35485 bytes)
 <snapshot skill_wiz_none_at-wiz_desc-d>
-== home/.claude/skills/kluris-wiz/SKILL.md
+== home/.claude/skills/kluris-wiz/SKILL.md (file, 35485 bytes)
 <snapshot skill_wiz_none_at-wiz_desc-d>
-== home/.gemini/config/skills/kluris-wiz/SKILL.md
+== home/.gemini/config/skills/kluris-wiz/SKILL.md (file, 35485 bytes)
 <snapshot skill_wiz_none_at-wiz_desc-d>
-== home/.hermes/skills/kluris-wiz/SKILL.md
+== home/.hermes/skills/kluris-wiz/SKILL.md (file, 35485 bytes)
 <snapshot skill_wiz_none_at-wiz_desc-d>
-== home/.kluris/config.yml
+== home/.kluris/config.yml (file, 60 bytes)
 brains:
   wiz:
     path: <ROOT>/work/wiz
     description: d
-== wiz/.gitignore
+== wiz/.gitignore (file, 204 bytes)
 # Secrets
 .env
 *.key
@@ -34,7 +34,7 @@ brain-mri.html
 # OS
 .DS_Store
 Thumbs.db
-== wiz/README.md
+== wiz/README.md (file, 11273 bytes)
 # wiz
 
 > d
@@ -356,7 +356,7 @@ description: my-brain knowledge base
 6. **Bidirectional synapses** -- if A links to B, add the reverse link in B
 7. **Run `kluris dream` after adding neurons** -- keeps maps and brain.md fresh
 8. **Use git directly to commit and sync** -- kluris brains are plain git repos
-== wiz/brain.md
+== wiz/brain.md (file, 392 bytes)
 ---
 auto_generated: true
 updated: '<TODAY>'
@@ -375,7 +375,7 @@ d
 ## Reference
 
 - [glossary.md](./glossary.md) — Domain-specific terms, acronyms, and conventions
-== wiz/glossary.md
+== wiz/glossary.md (file, 149 bytes)
 ---
 auto_generated: false
 updated: <TODAY>
@@ -386,7 +386,7 @@ Project-specific terms, acronyms, and conventions.
 
 | Term | Meaning |
 |------|---------|
-== wiz/kluris.yml
+== wiz/kluris.yml (file, 168 bytes)
 name: wiz
 description: d
 agents:
@@ -401,7 +401,7 @@ agents:
   - junie
   - antigravity
 companions: []
-== wiz/notes/map.md
+== wiz/notes/map.md (file, 317 bytes)
 ---
 auto_generated: true
 description: Daily notes, ideas, learnings
@@ -422,7 +422,7 @@ sideways [projects](../projects/map.md) | [tasks](../tasks/map.md)
 ## Contents
 
 (empty)
-== wiz/projects/map.md
+== wiz/projects/map.md (file, 349 bytes)
 ---
 auto_generated: true
 description: 'Sub-folder per project: branches, status, TODOs'
@@ -443,7 +443,7 @@ sideways [notes](../notes/map.md) | [tasks](../tasks/map.md)
 ## Contents
 
 (empty)
-== wiz/tasks/map.md
+== wiz/tasks/map.md (file, 351 bytes)
 ---
 auto_generated: true
 description: Current priorities, blockers, in-progress work
@@ -464,3 +464,4 @@ sideways [notes](../notes/map.md) | [projects](../projects/map.md)
 ## Contents
 
 (empty)
+<end of dump>

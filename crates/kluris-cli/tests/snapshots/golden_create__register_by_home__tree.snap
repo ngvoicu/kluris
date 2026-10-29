@@ -1,21 +1,21 @@
 ---
 source: crates/kluris-cli/tests/golden_create.rs
-expression: text
+expression: text.as_ref()
 ---
-== home/.agents/skills/kluris-team/SKILL.md
+== home/.agents/skills/kluris-team/SKILL.md (file, 35659 bytes)
 <snapshot skill_team_none_at-home-brains-team_git_desc-the-team-brain>
-== home/.claude/skills/kluris-team/SKILL.md
+== home/.claude/skills/kluris-team/SKILL.md (file, 35659 bytes)
 <snapshot skill_team_none_at-home-brains-team_git_desc-the-team-brain>
-== home/.gemini/config/skills/kluris-team/SKILL.md
+== home/.gemini/config/skills/kluris-team/SKILL.md (file, 35659 bytes)
 <snapshot skill_team_none_at-home-brains-team_git_desc-the-team-brain>
-== home/.hermes/skills/kluris-team/SKILL.md
+== home/.hermes/skills/kluris-team/SKILL.md (file, 35659 bytes)
 <snapshot skill_team_none_at-home-brains-team_git_desc-the-team-brain>
-== home/.kluris/config.yml
+== home/.kluris/config.yml (file, 87 bytes)
 brains:
   team:
     path: <ROOT>/work/home/brains/team
     description: The team brain
-== home/brains/team/.gitignore
+== home/brains/team/.gitignore (file, 204 bytes)
 # Secrets
 .env
 *.key
@@ -34,7 +34,7 @@ brain-mri.html
 # OS
 .DS_Store
 Thumbs.db
-== home/brains/team/README.md
+== home/brains/team/README.md (file, 11045 bytes)
 # team
 
 > The team brain
@@ -345,7 +345,7 @@ description: my-brain knowledge base
 6. **Bidirectional synapses** -- if A links to B, add the reverse link in B
 7. **Run `kluris dream` after adding neurons** -- keeps maps and brain.md fresh
 8. **Use git directly to commit and sync** -- kluris brains are plain git repos
-== home/brains/team/brain.md
+== home/brains/team/brain.md (file, 494 bytes)
 ---
 auto_generated: true
 updated: '<TODAY>'
@@ -364,7 +364,7 @@ The team brain
 ## Reference
 
 - [glossary.md](./glossary.md) — Domain-specific terms, acronyms, and conventions
-== home/brains/team/glossary.md
+== home/brains/team/glossary.md (file, 149 bytes)
 ---
 auto_generated: false
 updated: <TODAY>
@@ -375,7 +375,7 @@ Project-specific terms, acronyms, and conventions.
 
 | Term | Meaning |
 |------|---------|
-== home/brains/team/infrastructure/map.md
+== home/brains/team/infrastructure/map.md (file, 396 bytes)
 ---
 auto_generated: true
 description: Hosting, CI/CD, Docker, deployment, environments, env vars
@@ -396,7 +396,7 @@ sideways [knowledge](../knowledge/map.md) | [projects](../projects/map.md)
 ## Contents
 
 (empty)
-== home/brains/team/kluris.yml
+== home/brains/team/kluris.yml (file, 180 bytes)
 name: team
 description: The team brain
 agents:
@@ -411,7 +411,7 @@ agents:
   - kilocode
   - junie
 companions: []
-== home/brains/team/knowledge/map.md
+== home/brains/team/knowledge/map.md (file, 410 bytes)
 ---
 auto_generated: true
 description: Decisions, learnings, troubleshooting tips, domain expertise
@@ -432,7 +432,7 @@ sideways [infrastructure](../infrastructure/map.md) | [projects](../projects/map
 ## Contents
 
 (empty)
-== home/brains/team/projects/map.md
+== home/brains/team/projects/map.md (file, 424 bytes)
 ---
 auto_generated: true
 description: Per-project sub-folders with APIs, data models, setup, conventions
@@ -453,5 +453,6 @@ sideways [infrastructure](../infrastructure/map.md) | [knowledge](../knowledge/m
 ## Contents
 
 (empty)
-== link
-<symlink> <ROOT>/work/home/brains/team
+== link (symlink, 28 bytes)
+\<ROOT>/work/home/brains/team
+<end of dump>

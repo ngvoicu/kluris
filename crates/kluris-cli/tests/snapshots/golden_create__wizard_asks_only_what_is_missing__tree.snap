@@ -1,8 +1,8 @@
 ---
 source: crates/kluris-cli/tests/golden_create.rs
-expression: text
+expression: text.as_ref()
 ---
-== brains/demo/.gitignore
+== brains/demo/.gitignore (file, 204 bytes)
 # Secrets
 .env
 *.key
@@ -21,7 +21,7 @@ brain-mri.html
 # OS
 .DS_Store
 Thumbs.db
-== brains/demo/README.md
+== brains/demo/README.md (file, 11334 bytes)
 # demo
 
 > d
@@ -343,7 +343,7 @@ description: my-brain knowledge base
 6. **Bidirectional synapses** -- if A links to B, add the reverse link in B
 7. **Run `kluris dream` after adding neurons** -- keeps maps and brain.md fresh
 8. **Use git directly to commit and sync** -- kluris brains are plain git repos
-== brains/demo/brain.md
+== brains/demo/brain.md (file, 170 bytes)
 ---
 auto_generated: true
 updated: '<TODAY>'
@@ -360,7 +360,7 @@ d
 ## Reference
 
 - [glossary.md](./glossary.md) — Domain-specific terms, acronyms, and conventions
-== brains/demo/glossary.md
+== brains/demo/glossary.md (file, 149 bytes)
 ---
 auto_generated: false
 updated: <TODAY>
@@ -371,7 +371,7 @@ Project-specific terms, acronyms, and conventions.
 
 | Term | Meaning |
 |------|---------|
-== brains/demo/kluris.yml
+== brains/demo/kluris.yml (file, 187 bytes)
 name: demo
 description: d
 agents:
@@ -387,38 +387,39 @@ agents:
   - antigravity
 companions:
 - specmint-core-html
-== home/.agents/skills/kluris-demo/SKILL.md
+== home/.agents/skills/kluris-demo/SKILL.md (file, 36591 bytes)
 <snapshot skill_demo_specmint-core-html_git_desc-d>
-== home/.claude/skills/kluris-demo/SKILL.md
+== home/.claude/skills/kluris-demo/SKILL.md (file, 36591 bytes)
 <snapshot skill_demo_specmint-core-html_git_desc-d>
-== home/.gemini/config/skills/kluris-demo/SKILL.md
+== home/.gemini/config/skills/kluris-demo/SKILL.md (file, 36591 bytes)
 <snapshot skill_demo_specmint-core-html_git_desc-d>
-== home/.hermes/skills/kluris-demo/SKILL.md
+== home/.hermes/skills/kluris-demo/SKILL.md (file, 36591 bytes)
 <snapshot skill_demo_specmint-core-html_git_desc-d>
-== home/.kluris/companions/specmint-core-html/SKILL.md
+== home/.kluris/companions/specmint-core-html/SKILL.md (file, 42542 bytes)
 <vendored/specmint-core-html/SKILL.md>
-== home/.kluris/companions/specmint-core-html/assets/spec-runtime.js
+== home/.kluris/companions/specmint-core-html/assets/spec-runtime.js (file, 35527 bytes)
 <vendored/specmint-core-html/assets/spec-runtime.js>
-== home/.kluris/companions/specmint-core-html/assets/spec-styles.css
+== home/.kluris/companions/specmint-core-html/assets/spec-styles.css (file, 51709 bytes)
 <vendored/specmint-core-html/assets/spec-styles.css>
-== home/.kluris/companions/specmint-core-html/references/command-contracts.md
+== home/.kluris/companions/specmint-core-html/references/command-contracts.md (file, 5957 bytes)
 <vendored/specmint-core-html/references/command-contracts.md>
-== home/.kluris/companions/specmint-core-html/references/edit-recipes.md
+== home/.kluris/companions/specmint-core-html/references/edit-recipes.md (file, 12786 bytes)
 <vendored/specmint-core-html/references/edit-recipes.md>
-== home/.kluris/companions/specmint-core-html/references/html-template.html
+== home/.kluris/companions/specmint-core-html/references/html-template.html (file, 10435 bytes)
 <vendored/specmint-core-html/references/html-template.html>
-== home/.kluris/companions/specmint-core-html/references/mockup-library.md
+== home/.kluris/companions/specmint-core-html/references/mockup-library.md (file, 9994 bytes)
 <vendored/specmint-core-html/references/mockup-library.md>
-== home/.kluris/companions/specmint-core-html/references/researcher.md
+== home/.kluris/companions/specmint-core-html/references/researcher.md (file, 11711 bytes)
 <vendored/specmint-core-html/references/researcher.md>
-== home/.kluris/companions/specmint-core-html/references/spec-format.md
+== home/.kluris/companions/specmint-core-html/references/spec-format.md (file, 12071 bytes)
 <vendored/specmint-core-html/references/spec-format.md>
-== home/.kluris/companions/specmint-core-html/references/validate.md
+== home/.kluris/companions/specmint-core-html/references/validate.md (file, 5787 bytes)
 <vendored/specmint-core-html/references/validate.md>
-== home/.kluris/companions/specmint-core-html/references/wireframe-library.md
+== home/.kluris/companions/specmint-core-html/references/wireframe-library.md (file, 9585 bytes)
 <vendored/specmint-core-html/references/wireframe-library.md>
-== home/.kluris/config.yml
+== home/.kluris/config.yml (file, 69 bytes)
 brains:
   demo:
     path: <ROOT>/work/brains/demo
     description: d
+<end of dump>

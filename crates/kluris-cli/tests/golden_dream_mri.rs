@@ -28,7 +28,9 @@ use common::dream_brains::{
 };
 use common::golden::python_json;
 use common::sandbox::{Run, Sandbox, changed_files, json_dump, stream, write_tree};
-use common::{native_path, native_paths, normalize, tree_dump, tree_files, windows_variant};
+use common::{
+    Tree, files_dump, native_path, native_paths, normalize, tree_dump, tree_files, windows_variant,
+};
 use kluris_core::json;
 use regex::Regex;
 
@@ -194,10 +196,10 @@ impl<'a> Scenario<'a> {
 
     /// Run the dream `steps`; snapshot the tree before them, each run and
     /// each tree a run changed. Returns each run with the tree after it.
-    fn dream(&self, steps: &[Step]) -> Vec<(Run, BTreeMap<String, Vec<u8>>)> {
+    fn dream(&self, steps: &[Step]) -> Vec<(Run, Tree)> {
         snapshot(
             &format!("{}__0_before", self.name),
-            &self.shown(&tree_dump(&self.sb.work)),
+            &tree_dump(&self.sb.work, |t| self.shown(t)),
         );
         let mut outcomes = Vec::new();
         for (i, step) in steps.iter().enumerate() {
@@ -221,7 +223,7 @@ impl<'a> Scenario<'a> {
             if before != after {
                 snapshot(
                     &format!("{}__{}_tree", self.name, i + 1),
-                    &self.shown(&tree_dump(&self.sb.work)),
+                    &tree_dump(&self.sb.work, |t| self.shown(t)),
                 );
             }
             outcomes.push((out, after));
@@ -269,11 +271,7 @@ fn slashed(path: &Path) -> String {
 }
 
 /// A file a `--json` dream reports in `skipped` keeps its bytes.
-fn assert_skipped_untouched(
-    out: &Run,
-    before: &BTreeMap<String, Vec<u8>>,
-    after: &BTreeMap<String, Vec<u8>>,
-) {
+fn assert_skipped_untouched(out: &Run, before: &Tree, after: &Tree) {
     let Ok(doc) = serde_json::from_str::<serde_json::Value>(&out.stdout) else {
         return;
     };
@@ -387,7 +385,7 @@ fn dream_dates_near_midnight_in_the_author_time_zone() {
     }
     snapshot(
         "dream_near_midnight__0_before",
-        &scenario.shown(&tree_dump(&sb.work)),
+        &tree_dump(&sb.work, |t| scenario.shown(t)),
     );
     let out = scenario.run(&["dream", "--json"]);
     let after = tree_files(&sb.work);
@@ -413,7 +411,7 @@ fn dream_dates_near_midnight_in_the_author_time_zone() {
     );
     snapshot(
         "dream_near_midnight__1_tree",
-        &local_today(&scenario.shown(&tree_dump(&sb.work))),
+        &tree_dump(&sb.work, |t| local_today(&scenario.shown(t))),
     );
 }
 
@@ -451,7 +449,9 @@ fn dream_writes_a_file_only_when_its_body_changed() {
     sb.commit(&brain, "normalized", D3);
     let outcomes = Scenario::new("dream_body_changed", &sb, &[&brain]).dream(&[DREAM]);
     let tree = &outcomes[0].1;
-    assert!(String::from_utf8_lossy(&tree["brains/calm/projects/map.md"]).contains("extra: kept"));
+    assert!(
+        String::from_utf8_lossy(tree["brains/calm/projects/map.md"].file()).contains("extra: kept")
+    );
 }
 
 #[test]
@@ -642,7 +642,7 @@ fn dream_on_a_brain_without_kluris_yml() {
     let scenario = Scenario::new("dream_no_kluris_yml", &sb, &[&brain]);
     snapshot(
         "dream_no_kluris_yml__0_before",
-        &scenario.shown(&tree_dump(&sb.work)),
+        &tree_dump(&sb.work, |t| scenario.shown(t)),
     );
     let before = tree_files(&sb.work);
     for (i, args) in [&["dream"][..], &["dream", "--json"]].iter().enumerate() {
@@ -764,7 +764,10 @@ fn dream_keeps_a_file_whose_write_is_cut_short() {
         .prepare(&limit)
         .dream(&[DREAM]);
     let tree = &outcomes[0].1;
-    assert_eq!(tree["brains/calm/projects/large.md"], large.as_bytes());
+    assert_eq!(
+        tree["brains/calm/projects/large.md"].file(),
+        large.as_bytes()
+    );
     assert!(!tree.keys().any(|rel| rel.contains("kluris-tmp")));
 }
 
@@ -933,7 +936,7 @@ struct MriRun<'a> {
     pages: &'a [(&'a str, &'a str)],
 }
 
-fn without_pages(tree: BTreeMap<String, Vec<u8>>) -> BTreeMap<String, Vec<u8>> {
+fn without_pages(tree: Tree) -> Tree {
     tree.into_iter()
         .filter(|(rel, _)| !rel.ends_with(".html"))
         .collect()
@@ -1044,7 +1047,7 @@ impl Scenario<'_> {
             if after != tree {
                 snapshot(
                     &format!("{}__{n}_tree", self.name),
-                    &self.shown(&tree_dump_without_pages(&self.sb.work)),
+                    &files_dump(&after, |t| self.shown(t)),
                 );
             }
             tree = after;
@@ -1114,23 +1117,6 @@ impl Scenario<'_> {
             })
             .unwrap_or_else(|| panic!("no brain registered as {name}"))
     }
-}
-
-/// [`tree_dump`] of `dir` without the `.html` pages.
-fn tree_dump_without_pages(dir: &Path) -> String {
-    tree_dump(dir)
-        .split_inclusive('\n')
-        .fold((String::new(), false), |(mut out, skip), line| {
-            let skip = match line.strip_prefix("== ") {
-                Some(path) => path.trim_end().ends_with(".html"),
-                None => skip,
-            };
-            if !skip {
-                out.push_str(line);
-            }
-            (out, skip)
-        })
-        .0
 }
 
 // --- mri: scenarios ----------------------------------------------------------------
@@ -1217,7 +1203,7 @@ fn mri_output_relative_to_the_working_directory() {
     );
     snapshot(
         "mri_output_relative__1_tree",
-        &scenario.shown(&tree_dump_without_pages(&sb.work)),
+        &files_dump(&after, |t| scenario.shown(t)),
     );
     assert!(!sb.work.join("brains/calm/brain-mri.html").exists());
     tree = after;

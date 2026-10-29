@@ -2,7 +2,7 @@
 source: crates/kluris-cli/tests/golden_dream_mri.rs
 expression: text
 ---
-== brains/calm/.archive/old.md
+== brains/calm/.archive/old.md (file, 117 bytes)
 ---
 created: '2026-01-01'
 parent: ./map.md
@@ -12,7 +12,7 @@ updated: '2026-01-01'
 # Old archived
 
 [gamma](../knowledge/gamma.md)
-== brains/calm/brain.md
+== brains/calm/brain.md (file, 261 bytes)
 ---
 auto_generated: true
 updated: '<TODAY>'
@@ -30,7 +30,7 @@ A healthy brain
 ## Reference
 
 - [glossary.md](./glossary.md) — Domain-specific terms, acronyms, and conventions
-== brains/calm/glossary.md
+== brains/calm/glossary.md (file, 70 bytes)
 ---
 updated: '2026-01-01'
 ---
@@ -38,10 +38,10 @@ updated: '2026-01-01'
 # Glossary
 
 **JWT** -- JSON Web Token.
-== brains/calm/kluris.yml
+== brains/calm/kluris.yml (file, 40 bytes)
 name: calm
 description: A healthy brain
-== brains/calm/knowledge/gamma.md
+== brains/calm/knowledge/gamma.md (file, 94 bytes)
 ---
 created: '2026-01-01'
 parent: ./map.md
@@ -51,7 +51,7 @@ updated: '2026-01-01'
 # Gamma
 
 Body of Gamma.
-== brains/calm/knowledge/map.md
+== brains/calm/knowledge/map.md (file, 229 bytes)
 ---
 auto_generated: true
 parent: ../brain.md
@@ -68,13 +68,13 @@ sideways [projects](../projects/map.md)
 ## Contents
 
 - [gamma.md](./gamma.md) — Gamma
-== brains/calm/node_modules/pkg/readme-like.md
+== brains/calm/node_modules/pkg/readme-like.md (file, 6 bytes)
 # pkg
-== brains/calm/projects/.hidden/note.md
+== brains/calm/projects/.hidden/note.md (file, 9 bytes)
 # Hidden
-== brains/calm/projects/alias.md
-<symlink> linked.md
-== brains/calm/projects/alpha.md
+== brains/calm/projects/alias.md (symlink, 9 bytes)
+linked.md
+== brains/calm/projects/alpha.md (file, 115 bytes)
 ---
 created: '2026-01-01'
 related:
@@ -86,7 +86,7 @@ updated: '2026-01-01'
 # Alpha
 
 Body of Alpha.
-== brains/calm/projects/beta.md
+== brains/calm/projects/beta.md (file, 114 bytes)
 ---
 created: '2026-01-01'
 related:
@@ -98,9 +98,9 @@ updated: '2026-01-01'
 # Beta
 
 Body of Beta.
-== brains/calm/projects/leak.md
-<symlink> <ROOT>/outside/secret.md
-== brains/calm/projects/linked.md
+== brains/calm/projects/leak.md (symlink, 24 bytes)
+\<ROOT>/outside/secret.md
+== brains/calm/projects/linked.md (file, 111 bytes)
 ---
 created: '2026-01-01'
 parent: ./map.md
@@ -110,7 +110,7 @@ updated: '2026-02-03'
 # Linked
 
 [archived](../.archive/old.md)
-== brains/calm/projects/map.md
+== brains/calm/projects/map.md (file, 371 bytes)
 ---
 auto_generated: true
 parent: ../brain.md
@@ -131,8 +131,9 @@ sideways [knowledge](../knowledge/map.md)
 - [beta.md](./beta.md) — Beta
 - [leak.md](./leak.md) — Secret
 - [linked.md](./linked.md) — Linked
-== home/.kluris/config.yml
+== home/.kluris/config.yml (file, 81 bytes)
 brains:
   "calm":
     path: "<ROOT>/work/brains/calm"
     description: "fixture"
+<end of dump>

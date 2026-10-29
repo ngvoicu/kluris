@@ -24,7 +24,6 @@
 //! environment and the world's own paths, and their output is written as
 //! snapshot text by [`World::render`].
 
-use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::fs;
 use std::ops::Deref;
@@ -34,7 +33,9 @@ use std::sync::LazyLock;
 
 use regex::Regex;
 
-use super::golden::{PINNED_GIT_DATE, decode, native_path, tree_files};
+use super::golden::{
+    PINNED_GIT_DATE, Tree, assert_shown_from_native, decode, native_path, tree_files,
+};
 use super::sandbox::{Run, Sandbox, fixture, unstored, write};
 
 /// A brain of a frozen world: its commit messages, oldest first (none: a
@@ -85,9 +86,12 @@ impl World {
         let src = fixture("upgrade-home").join(name);
         assert_crlf_files(&src);
         let home = src.join("home");
-        for (rel, bytes) in tree_files(&home) {
+        for (rel, entry) in tree_files(&home) {
             let rel = unstored(&rel);
-            write(&world.home.join(&rel), &world.place(&rel, bytes));
+            write(
+                &world.home.join(&rel),
+                &world.place(&rel, entry.file().to_vec()),
+            );
         }
         for brain in brains {
             world.rebuild(&src.join("brains").join(brain.name), brain);
@@ -128,8 +132,8 @@ impl World {
         let copy = |step: &str| {
             let from = src.join(step);
             assert!(from.is_dir(), "{} has no {step}/", src.display());
-            for (rel, bytes) in tree_files(&from) {
-                write(&dest.join(unstored(&rel)), &bytes);
+            for (rel, entry) in tree_files(&from) {
+                write(&dest.join(unstored(&rel)), entry.file());
             }
         };
         let git = |args: &[&str]| self.git(&dest, args, PINNED_GIT_DATE);
@@ -199,7 +203,9 @@ impl World {
     /// and JSON-escaped) becomes `<KLURIS>`, and git's version
     /// `git version <GIT>`. The config's path and each brain's, which
     /// Kluris prints as the OS writes them, are checked to be in that form
-    /// and shown `/`-joined ([`native_path`]).
+    /// and shown `/`-joined ([`native_path`]); then each place the rendered
+    /// text shows one of them is checked to stand for the path the run
+    /// printed in that form ([`assert_shown_from_native`]).
     pub fn render(&self, run: &Run) -> String {
         let bin = kluris_bin().display().to_string();
         let mut native = vec![self.config.clone()];
@@ -213,12 +219,17 @@ impl World {
                 native_path(&text, path, &self.shown(path))
             })
         };
-        Run {
+        let rendered = Run {
             code: run.code,
             stdout: mark(&run.stdout),
             stderr: mark(&run.stderr),
         }
-        .render(&self.root)
+        .render(&self.root);
+        let printed = format!("{}{}", run.stdout, run.stderr);
+        for path in &native {
+            assert_shown_from_native(&printed, &rendered, path, &self.shown(path));
+        }
+        rendered
     }
 
     /// `path`, under the temp root, as `<ROOT>/` and its parts `/`-joined.
@@ -232,7 +243,7 @@ impl World {
     }
 
     /// Every file under `work/` as [`tree_files`] reads it.
-    pub fn files(&self) -> BTreeMap<String, Vec<u8>> {
+    pub fn files(&self) -> Tree {
         tree_files(&self.work)
     }
 }
@@ -248,7 +259,9 @@ fn assert_crlf_files(src: &Path) {
     };
     let found: Vec<String> = tree_files(src)
         .into_iter()
-        .filter(|(rel, bytes)| rel != "crlf-files.txt" && bytes.windows(2).any(|w| w == b"\r\n"))
+        .filter(|(rel, entry)| {
+            rel != "crlf-files.txt" && entry.file().windows(2).any(|w| w == b"\r\n")
+        })
         .map(|(rel, _)| rel)
         .collect();
     assert_eq!(found, listed, "{}: the files with CRLF", src.display());

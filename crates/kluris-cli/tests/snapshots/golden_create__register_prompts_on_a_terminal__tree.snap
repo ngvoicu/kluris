@@ -1,8 +1,8 @@
 ---
 source: crates/kluris-cli/tests/golden_create.rs
-expression: text
+expression: text.as_ref()
 ---
-== brains/team/.gitignore
+== brains/team/.gitignore (file, 204 bytes)
 # Secrets
 .env
 *.key
@@ -21,7 +21,7 @@ brain-mri.html
 # OS
 .DS_Store
 Thumbs.db
-== brains/team/README.md
+== brains/team/README.md (file, 11045 bytes)
 # team
 
 > The team brain
@@ -332,7 +332,7 @@ description: my-brain knowledge base
 6. **Bidirectional synapses** -- if A links to B, add the reverse link in B
 7. **Run `kluris dream` after adding neurons** -- keeps maps and brain.md fresh
 8. **Use git directly to commit and sync** -- kluris brains are plain git repos
-== brains/team/brain.md
+== brains/team/brain.md (file, 494 bytes)
 ---
 auto_generated: true
 updated: '<TODAY>'
@@ -351,7 +351,7 @@ The team brain
 ## Reference
 
 - [glossary.md](./glossary.md) — Domain-specific terms, acronyms, and conventions
-== brains/team/glossary.md
+== brains/team/glossary.md (file, 149 bytes)
 ---
 auto_generated: false
 updated: <TODAY>
@@ -362,7 +362,7 @@ Project-specific terms, acronyms, and conventions.
 
 | Term | Meaning |
 |------|---------|
-== brains/team/infrastructure/map.md
+== brains/team/infrastructure/map.md (file, 396 bytes)
 ---
 auto_generated: true
 description: Hosting, CI/CD, Docker, deployment, environments, env vars
@@ -383,7 +383,7 @@ sideways [knowledge](../knowledge/map.md) | [projects](../projects/map.md)
 ## Contents
 
 (empty)
-== brains/team/kluris.yml
+== brains/team/kluris.yml (file, 199 bytes)
 name: team
 description: The team brain
 agents:
@@ -399,7 +399,7 @@ agents:
   - antigravity
 companions:
 - specmint-tdd-html
-== brains/team/knowledge/map.md
+== brains/team/knowledge/map.md (file, 410 bytes)
 ---
 auto_generated: true
 description: Decisions, learnings, troubleshooting tips, domain expertise
@@ -420,7 +420,7 @@ sideways [infrastructure](../infrastructure/map.md) | [projects](../projects/map
 ## Contents
 
 (empty)
-== brains/team/projects/map.md
+== brains/team/projects/map.md (file, 424 bytes)
 ---
 auto_generated: true
 description: Per-project sub-folders with APIs, data models, setup, conventions
@@ -441,40 +441,41 @@ sideways [infrastructure](../infrastructure/map.md) | [knowledge](../knowledge/m
 ## Contents
 
 (empty)
-== home/.agents/skills/kluris-team/SKILL.md
+== home/.agents/skills/kluris-team/SKILL.md (file, 36492 bytes)
 <snapshot skill_team_specmint-tdd-html_git_desc-the-team-brain>
-== home/.claude/skills/kluris-team/SKILL.md
+== home/.claude/skills/kluris-team/SKILL.md (file, 36492 bytes)
 <snapshot skill_team_specmint-tdd-html_git_desc-the-team-brain>
-== home/.gemini/config/skills/kluris-team/SKILL.md
+== home/.gemini/config/skills/kluris-team/SKILL.md (file, 36492 bytes)
 <snapshot skill_team_specmint-tdd-html_git_desc-the-team-brain>
-== home/.hermes/skills/kluris-team/SKILL.md
+== home/.hermes/skills/kluris-team/SKILL.md (file, 36492 bytes)
 <snapshot skill_team_specmint-tdd-html_git_desc-the-team-brain>
-== home/.kluris/companions/specmint-tdd-html/SKILL.md
+== home/.kluris/companions/specmint-tdd-html/SKILL.md (file, 44894 bytes)
 <vendored/specmint-tdd-html/SKILL.md>
-== home/.kluris/companions/specmint-tdd-html/assets/spec-runtime.js
+== home/.kluris/companions/specmint-tdd-html/assets/spec-runtime.js (file, 35527 bytes)
 <vendored/specmint-tdd-html/assets/spec-runtime.js>
-== home/.kluris/companions/specmint-tdd-html/assets/spec-styles.css
+== home/.kluris/companions/specmint-tdd-html/assets/spec-styles.css (file, 51709 bytes)
 <vendored/specmint-tdd-html/assets/spec-styles.css>
-== home/.kluris/companions/specmint-tdd-html/references/command-contracts.md
+== home/.kluris/companions/specmint-tdd-html/references/command-contracts.md (file, 14963 bytes)
 <vendored/specmint-tdd-html/references/command-contracts.md>
-== home/.kluris/companions/specmint-tdd-html/references/edit-recipes.md
+== home/.kluris/companions/specmint-tdd-html/references/edit-recipes.md (file, 17780 bytes)
 <vendored/specmint-tdd-html/references/edit-recipes.md>
-== home/.kluris/companions/specmint-tdd-html/references/html-template.html
+== home/.kluris/companions/specmint-tdd-html/references/html-template.html (file, 12343 bytes)
 <vendored/specmint-tdd-html/references/html-template.html>
-== home/.kluris/companions/specmint-tdd-html/references/mockup-library.md
+== home/.kluris/companions/specmint-tdd-html/references/mockup-library.md (file, 9994 bytes)
 <vendored/specmint-tdd-html/references/mockup-library.md>
-== home/.kluris/companions/specmint-tdd-html/references/researcher.md
+== home/.kluris/companions/specmint-tdd-html/references/researcher.md (file, 18335 bytes)
 <vendored/specmint-tdd-html/references/researcher.md>
-== home/.kluris/companions/specmint-tdd-html/references/spec-format.md
+== home/.kluris/companions/specmint-tdd-html/references/spec-format.md (file, 9394 bytes)
 <vendored/specmint-tdd-html/references/spec-format.md>
-== home/.kluris/companions/specmint-tdd-html/references/testing-knowledge.md
+== home/.kluris/companions/specmint-tdd-html/references/testing-knowledge.md (file, 11942 bytes)
 <vendored/specmint-tdd-html/references/testing-knowledge.md>
-== home/.kluris/companions/specmint-tdd-html/references/validate.md
+== home/.kluris/companions/specmint-tdd-html/references/validate.md (file, 6048 bytes)
 <vendored/specmint-tdd-html/references/validate.md>
-== home/.kluris/companions/specmint-tdd-html/references/wireframe-library.md
+== home/.kluris/companions/specmint-tdd-html/references/wireframe-library.md (file, 9585 bytes)
 <vendored/specmint-tdd-html/references/wireframe-library.md>
-== home/.kluris/config.yml
+== home/.kluris/config.yml (file, 82 bytes)
 brains:
   team:
     path: <ROOT>/work/brains/team
     description: The team brain
+<end of dump>

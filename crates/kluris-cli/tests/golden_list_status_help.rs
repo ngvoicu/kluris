@@ -13,7 +13,10 @@ mod common;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use common::{PINNED_GIT_DATE, Run, Sandbox, command_line, normalize, tree_dump, write_files};
+use common::{
+    PINNED_GIT_DATE, Run, Sandbox, assert_unchanged, command_line, normalize, tree_files,
+    write_files,
+};
 
 // --- snapshots -----------------------------------------------------------------
 
@@ -534,9 +537,9 @@ fn list_json_of_two_brains_writes_nothing() {
             "--json",
         ],
     );
-    let before = tree_dump(&sb.work);
+    let before = tree_files(&sb.work);
     golden(&sb, "list_json_two_brains", &["list", "--json"]);
-    assert_eq!(tree_dump(&sb.work), before, "list must not write anything");
+    assert_unchanged(&before, &tree_files(&sb.work), "list");
 }
 
 // --- help ------------------------------------------------------------------------

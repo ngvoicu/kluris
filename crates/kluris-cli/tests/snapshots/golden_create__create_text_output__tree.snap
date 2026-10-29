@@ -1,8 +1,8 @@
 ---
 source: crates/kluris-cli/tests/golden_create.rs
-expression: text
+expression: text.as_ref()
 ---
-== brains/demo/.gitignore
+== brains/demo/.gitignore (file, 204 bytes)
 # Secrets
 .env
 *.key
@@ -21,7 +21,7 @@ brain-mri.html
 # OS
 .DS_Store
 Thumbs.db
-== brains/demo/README.md
+== brains/demo/README.md (file, 11334 bytes)
 # demo
 
 > d
@@ -343,7 +343,7 @@ description: my-brain knowledge base
 6. **Bidirectional synapses** -- if A links to B, add the reverse link in B
 7. **Run `kluris dream` after adding neurons** -- keeps maps and brain.md fresh
 8. **Use git directly to commit and sync** -- kluris brains are plain git repos
-== brains/demo/brain.md
+== brains/demo/brain.md (file, 393 bytes)
 ---
 auto_generated: true
 updated: '<TODAY>'
@@ -362,7 +362,7 @@ d
 ## Reference
 
 - [glossary.md](./glossary.md) — Domain-specific terms, acronyms, and conventions
-== brains/demo/glossary.md
+== brains/demo/glossary.md (file, 149 bytes)
 ---
 auto_generated: false
 updated: <TODAY>
@@ -373,7 +373,7 @@ Project-specific terms, acronyms, and conventions.
 
 | Term | Meaning |
 |------|---------|
-== brains/demo/kluris.yml
+== brains/demo/kluris.yml (file, 169 bytes)
 name: demo
 description: d
 agents:
@@ -388,7 +388,7 @@ agents:
   - junie
   - antigravity
 companions: []
-== brains/demo/notes/map.md
+== brains/demo/notes/map.md (file, 317 bytes)
 ---
 auto_generated: true
 description: Daily notes, ideas, learnings
@@ -409,7 +409,7 @@ sideways [projects](../projects/map.md) | [tasks](../tasks/map.md)
 ## Contents
 
 (empty)
-== brains/demo/projects/map.md
+== brains/demo/projects/map.md (file, 349 bytes)
 ---
 auto_generated: true
 description: 'Sub-folder per project: branches, status, TODOs'
@@ -430,7 +430,7 @@ sideways [notes](../notes/map.md) | [tasks](../tasks/map.md)
 ## Contents
 
 (empty)
-== brains/demo/tasks/map.md
+== brains/demo/tasks/map.md (file, 351 bytes)
 ---
 auto_generated: true
 description: Current priorities, blockers, in-progress work
@@ -451,16 +451,17 @@ sideways [notes](../notes/map.md) | [projects](../projects/map.md)
 ## Contents
 
 (empty)
-== home/.agents/skills/kluris-demo/SKILL.md
+== home/.agents/skills/kluris-demo/SKILL.md (file, 35604 bytes)
 <snapshot skill_demo_none_desc-d>
-== home/.claude/skills/kluris-demo/SKILL.md
+== home/.claude/skills/kluris-demo/SKILL.md (file, 35604 bytes)
 <snapshot skill_demo_none_desc-d>
-== home/.gemini/config/skills/kluris-demo/SKILL.md
+== home/.gemini/config/skills/kluris-demo/SKILL.md (file, 35604 bytes)
 <snapshot skill_demo_none_desc-d>
-== home/.hermes/skills/kluris-demo/SKILL.md
+== home/.hermes/skills/kluris-demo/SKILL.md (file, 35604 bytes)
 <snapshot skill_demo_none_desc-d>
-== home/.kluris/config.yml
+== home/.kluris/config.yml (file, 69 bytes)
 brains:
   demo:
     path: <ROOT>/work/brains/demo
     description: d
+<end of dump>

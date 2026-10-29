@@ -1,21 +1,21 @@
 ---
 source: crates/kluris-cli/tests/golden_create.rs
-expression: text
+expression: text.as_ref()
 ---
-== home/.agents/skills/kluris-x/SKILL.md
+== home/.agents/skills/kluris-x/SKILL.md (file, 35388 bytes)
 <snapshot skill_x_none_at-x>
-== home/.claude/skills/kluris-x/SKILL.md
+== home/.claude/skills/kluris-x/SKILL.md (file, 35388 bytes)
 <snapshot skill_x_none_at-x>
-== home/.gemini/config/skills/kluris-x/SKILL.md
+== home/.gemini/config/skills/kluris-x/SKILL.md (file, 35388 bytes)
 <snapshot skill_x_none_at-x>
-== home/.hermes/skills/kluris-x/SKILL.md
+== home/.hermes/skills/kluris-x/SKILL.md (file, 35388 bytes)
 <snapshot skill_x_none_at-x>
-== home/.kluris/config.yml
+== home/.kluris/config.yml (file, 71 bytes)
 brains:
   x:
     path: <ROOT>/work/x
     description: x knowledge base
-== x/.gitignore
+== x/.gitignore (file, 204 bytes)
 # Secrets
 .env
 *.key
@@ -34,7 +34,7 @@ brain-mri.html
 # OS
 .DS_Store
 Thumbs.db
-== x/README.md
+== x/README.md (file, 11166 bytes)
 # x
 
 > x knowledge base
@@ -356,7 +356,7 @@ description: my-brain knowledge base
 6. **Bidirectional synapses** -- if A links to B, add the reverse link in B
 7. **Run `kluris dream` after adding neurons** -- keeps maps and brain.md fresh
 8. **Use git directly to commit and sync** -- kluris brains are plain git repos
-== x/brain.md
+== x/brain.md (file, 182 bytes)
 ---
 auto_generated: true
 updated: '<TODAY>'
@@ -373,7 +373,7 @@ x knowledge base
 ## Reference
 
 - [glossary.md](./glossary.md) — Domain-specific terms, acronyms, and conventions
-== x/glossary.md
+== x/glossary.md (file, 149 bytes)
 ---
 auto_generated: false
 updated: <TODAY>
@@ -384,7 +384,7 @@ Project-specific terms, acronyms, and conventions.
 
 | Term | Meaning |
 |------|---------|
-== x/kluris.yml
+== x/kluris.yml (file, 181 bytes)
 name: x
 description: x knowledge base
 agents:
@@ -399,3 +399,4 @@ agents:
   - junie
   - antigravity
 companions: []
+<end of dump>

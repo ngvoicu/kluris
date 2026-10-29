@@ -1,8 +1,8 @@
 ---
 source: crates/kluris-cli/tests/golden_create.rs
-expression: text
+expression: text.as_ref()
 ---
-== brains/demo/.gitignore
+== brains/demo/.gitignore (file, 204 bytes)
 # Secrets
 .env
 *.key
@@ -21,7 +21,7 @@ brain-mri.html
 # OS
 .DS_Store
 Thumbs.db
-== brains/demo/README.md
+== brains/demo/README.md (file, 11365 bytes)
 # demo
 
 > Dëmo "brain" — it's ünïcode
@@ -343,7 +343,7 @@ description: my-brain knowledge base
 6. **Bidirectional synapses** -- if A links to B, add the reverse link in B
 7. **Run `kluris dream` after adding neurons** -- keeps maps and brain.md fresh
 8. **Use git directly to commit and sync** -- kluris brains are plain git repos
-== brains/demo/analytics/map.md
+== brains/demo/analytics/map.md (file, 479 bytes)
 ---
 auto_generated: true
 description: Metrics, KPIs, experiment results
@@ -367,7 +367,7 @@ sideways [competitors](../competitors/map.md) | [decisions](../decisions/map.md)
 ## Contents
 
 (empty)
-== brains/demo/brain.md
+== brains/demo/brain.md (file, 663 bytes)
 ---
 auto_generated: true
 updated: '<TODAY>'
@@ -389,7 +389,7 @@ Dëmo "brain" — it's ünïcode
 ## Reference
 
 - [glossary.md](./glossary.md) — Domain-specific terms, acronyms, and conventions
-== brains/demo/competitors/map.md
+== brains/demo/competitors/map.md (file, 489 bytes)
 ---
 auto_generated: true
 description: Competitive analysis, market positioning
@@ -413,7 +413,7 @@ sideways [analytics](../analytics/map.md) | [decisions](../decisions/map.md) | [
 ## Contents
 
 (empty)
-== brains/demo/decisions/map.md
+== brains/demo/decisions/map.md (file, 475 bytes)
 ---
 auto_generated: true
 description: Product decisions and rationale
@@ -437,7 +437,7 @@ sideways [analytics](../analytics/map.md) | [competitors](../competitors/map.md)
 ## Contents
 
 (empty)
-== brains/demo/features/map.md
+== brains/demo/features/map.md (file, 511 bytes)
 ---
 auto_generated: true
 description: 'Sub-folder per feature: specs, status, feedback'
@@ -461,7 +461,7 @@ sideways [analytics](../analytics/map.md) | [competitors](../competitors/map.md)
 ## Contents
 
 (empty)
-== brains/demo/glossary.md
+== brains/demo/glossary.md (file, 149 bytes)
 ---
 auto_generated: false
 updated: <TODAY>
@@ -472,7 +472,7 @@ Project-specific terms, acronyms, and conventions.
 
 | Term | Meaning |
 |------|---------|
-== brains/demo/kluris.yml
+== brains/demo/kluris.yml (file, 213 bytes)
 name: demo
 description: "D\\xEBmo \\"brain\\" \\u2014 it's \\xFCn\\xEFcode"
 agents:
@@ -487,7 +487,7 @@ agents:
   - junie
   - antigravity
 companions: []
-== brains/demo/prd/map.md
+== brains/demo/prd/map.md (file, 519 bytes)
 ---
 auto_generated: true
 description: Requirements, user stories, acceptance criteria
@@ -511,7 +511,7 @@ sideways [analytics](../analytics/map.md) | [competitors](../competitors/map.md)
 ## Contents
 
 (empty)
-== brains/demo/ux/map.md
+== brains/demo/ux/map.md (file, 525 bytes)
 ---
 auto_generated: true
 description: User research, personas, journey maps, wireframes
@@ -535,16 +535,17 @@ sideways [analytics](../analytics/map.md) | [competitors](../competitors/map.md)
 ## Contents
 
 (empty)
-== home/.agents/skills/kluris-demo/SKILL.md
+== home/.agents/skills/kluris-demo/SKILL.md (file, 35632 bytes)
 <snapshot skill_demo_none_git_desc-d-mo-brain-it-s-n-code>
-== home/.claude/skills/kluris-demo/SKILL.md
+== home/.claude/skills/kluris-demo/SKILL.md (file, 35632 bytes)
 <snapshot skill_demo_none_git_desc-d-mo-brain-it-s-n-code>
-== home/.gemini/config/skills/kluris-demo/SKILL.md
+== home/.gemini/config/skills/kluris-demo/SKILL.md (file, 35632 bytes)
 <snapshot skill_demo_none_git_desc-d-mo-brain-it-s-n-code>
-== home/.hermes/skills/kluris-demo/SKILL.md
+== home/.hermes/skills/kluris-demo/SKILL.md (file, 35632 bytes)
 <snapshot skill_demo_none_git_desc-d-mo-brain-it-s-n-code>
-== home/.kluris/config.yml
+== home/.kluris/config.yml (file, 113 bytes)
 brains:
   demo:
     path: <ROOT>/work/brains/demo
     description: "D\\xEBmo \\"brain\\" \\u2014 it's \\xFCn\\xEFcode"
+<end of dump>

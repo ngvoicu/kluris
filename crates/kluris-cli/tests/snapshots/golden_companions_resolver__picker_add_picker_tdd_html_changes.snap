@@ -1,8 +1,8 @@
 ---
 source: crates/kluris-cli/tests/golden_companions_resolver.rs
-expression: "normalize(&out, &sb.root)"
+expression: out
 ---
-== brains/a/kluris.yml
+== brains/a/kluris.yml (file, 189 bytes)
 name: a
 description: Brain A
 agents:
@@ -18,75 +18,60 @@ agents:
   - antigravity
 companions:
 - specmint-tdd-html
-== home/.agents/skills/kluris-a/SKILL.md
+== home/.agents/skills/kluris-a/SKILL.md (file, 36317 bytes)
 <snapshot skill_a_specmint-tdd-html>
-== home/.agents/skills/kluris-b/SKILL.md
+== home/.agents/skills/kluris-b/SKILL.md (file, 35451 bytes)
 <snapshot skill_b_none>
-== home/.claude/skills/kluris-a/SKILL.md
+== home/.claude/skills/kluris-a/SKILL.md (file, 36317 bytes)
 <snapshot skill_a_specmint-tdd-html>
-== home/.claude/skills/kluris-b/SKILL.md
+== home/.claude/skills/kluris-b/SKILL.md (file, 35451 bytes)
 <snapshot skill_b_none>
-== home/.codeium/windsurf/global_workflows/kluris-a.md
-<removed>
-== home/.codeium/windsurf/global_workflows/kluris-b.md
-<removed>
-== home/.codeium/windsurf/skills/kluris-a/SKILL.md
-<removed>
-== home/.codeium/windsurf/skills/kluris-b/SKILL.md
-<removed>
-== home/.codex/skills/kluris-a/SKILL.md
-<removed>
-== home/.codex/skills/kluris-b/SKILL.md
-<removed>
-== home/.copilot/skills/kluris-a/SKILL.md
-<removed>
-== home/.copilot/skills/kluris-b/SKILL.md
-<removed>
-== home/.cursor/skills/kluris-a/SKILL.md
-<removed>
-== home/.cursor/skills/kluris-b/SKILL.md
-<removed>
-== home/.gemini/config/skills/kluris-a/SKILL.md
+== home/.codeium/windsurf/global_workflows/kluris-a.md (removed)
+== home/.codeium/windsurf/global_workflows/kluris-b.md (removed)
+== home/.codeium/windsurf/skills/kluris-a/SKILL.md (removed)
+== home/.codeium/windsurf/skills/kluris-b/SKILL.md (removed)
+== home/.codex/skills/kluris-a/SKILL.md (removed)
+== home/.codex/skills/kluris-b/SKILL.md (removed)
+== home/.copilot/skills/kluris-a/SKILL.md (removed)
+== home/.copilot/skills/kluris-b/SKILL.md (removed)
+== home/.cursor/skills/kluris-a/SKILL.md (removed)
+== home/.cursor/skills/kluris-b/SKILL.md (removed)
+== home/.gemini/config/skills/kluris-a/SKILL.md (file, 36317 bytes)
 <snapshot skill_a_specmint-tdd-html>
-== home/.gemini/config/skills/kluris-b/SKILL.md
+== home/.gemini/config/skills/kluris-b/SKILL.md (file, 35451 bytes)
 <snapshot skill_b_none>
-== home/.gemini/skills/kluris-a/SKILL.md
-<removed>
-== home/.gemini/skills/kluris-b/SKILL.md
-<removed>
-== home/.hermes/skills/kluris-a/SKILL.md
+== home/.gemini/skills/kluris-a/SKILL.md (removed)
+== home/.gemini/skills/kluris-b/SKILL.md (removed)
+== home/.hermes/skills/kluris-a/SKILL.md (file, 36317 bytes)
 <snapshot skill_a_specmint-tdd-html>
-== home/.hermes/skills/kluris-b/SKILL.md
+== home/.hermes/skills/kluris-b/SKILL.md (file, 35451 bytes)
 <snapshot skill_b_none>
-== home/.junie/skills/kluris-a/SKILL.md
-<removed>
-== home/.junie/skills/kluris-b/SKILL.md
-<removed>
-== home/.kilo/skills/kluris-a/SKILL.md
-<removed>
-== home/.kilo/skills/kluris-b/SKILL.md
-<removed>
-== home/.kluris/companions/specmint-tdd-html/SKILL.md
+== home/.junie/skills/kluris-a/SKILL.md (removed)
+== home/.junie/skills/kluris-b/SKILL.md (removed)
+== home/.kilo/skills/kluris-a/SKILL.md (removed)
+== home/.kilo/skills/kluris-b/SKILL.md (removed)
+== home/.kluris/companions/specmint-tdd-html/SKILL.md (file, 44894 bytes)
 <vendored/specmint-tdd-html/SKILL.md>
-== home/.kluris/companions/specmint-tdd-html/assets/spec-runtime.js
+== home/.kluris/companions/specmint-tdd-html/assets/spec-runtime.js (file, 35527 bytes)
 <vendored/specmint-tdd-html/assets/spec-runtime.js>
-== home/.kluris/companions/specmint-tdd-html/assets/spec-styles.css
+== home/.kluris/companions/specmint-tdd-html/assets/spec-styles.css (file, 51709 bytes)
 <vendored/specmint-tdd-html/assets/spec-styles.css>
-== home/.kluris/companions/specmint-tdd-html/references/command-contracts.md
+== home/.kluris/companions/specmint-tdd-html/references/command-contracts.md (file, 14963 bytes)
 <vendored/specmint-tdd-html/references/command-contracts.md>
-== home/.kluris/companions/specmint-tdd-html/references/edit-recipes.md
+== home/.kluris/companions/specmint-tdd-html/references/edit-recipes.md (file, 17780 bytes)
 <vendored/specmint-tdd-html/references/edit-recipes.md>
-== home/.kluris/companions/specmint-tdd-html/references/html-template.html
+== home/.kluris/companions/specmint-tdd-html/references/html-template.html (file, 12343 bytes)
 <vendored/specmint-tdd-html/references/html-template.html>
-== home/.kluris/companions/specmint-tdd-html/references/mockup-library.md
+== home/.kluris/companions/specmint-tdd-html/references/mockup-library.md (file, 9994 bytes)
 <vendored/specmint-tdd-html/references/mockup-library.md>
-== home/.kluris/companions/specmint-tdd-html/references/researcher.md
+== home/.kluris/companions/specmint-tdd-html/references/researcher.md (file, 18335 bytes)
 <vendored/specmint-tdd-html/references/researcher.md>
-== home/.kluris/companions/specmint-tdd-html/references/spec-format.md
+== home/.kluris/companions/specmint-tdd-html/references/spec-format.md (file, 9394 bytes)
 <vendored/specmint-tdd-html/references/spec-format.md>
-== home/.kluris/companions/specmint-tdd-html/references/testing-knowledge.md
+== home/.kluris/companions/specmint-tdd-html/references/testing-knowledge.md (file, 11942 bytes)
 <vendored/specmint-tdd-html/references/testing-knowledge.md>
-== home/.kluris/companions/specmint-tdd-html/references/validate.md
+== home/.kluris/companions/specmint-tdd-html/references/validate.md (file, 6048 bytes)
 <vendored/specmint-tdd-html/references/validate.md>
-== home/.kluris/companions/specmint-tdd-html/references/wireframe-library.md
+== home/.kluris/companions/specmint-tdd-html/references/wireframe-library.md (file, 9585 bytes)
 <vendored/specmint-tdd-html/references/wireframe-library.md>
+<end of dump>

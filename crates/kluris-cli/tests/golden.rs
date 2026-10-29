@@ -7,9 +7,10 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use common::shared::vendored_marker;
 use common::{
-    PINNED_ENV, PINNED_GIT_DATE, Sandbox, decode, git_dump, native_path, native_paths, normalize,
-    normalize_json, slashed, tree_dump,
+    Entry, PINNED_ENV, PINNED_GIT_DATE, Sandbox, Tree, changes_dump, decode, file_body, git_dump,
+    native_path, native_paths, normalize, normalize_json, slashed, tree_dump,
 };
 
 /// A temp root whose name has a space and a non-ASCII letter, so its
@@ -48,6 +49,11 @@ fn posix(s: &str) -> String {
     }
 }
 
+/// A dump's body as the file holds it.
+fn as_is(text: &str) -> String {
+    text.to_string()
+}
+
 /// The resolved root as Python's `Path.resolve()` writes it (no `\\?\`).
 fn resolved(root: &Path) -> String {
     let r = fs::canonicalize(root).unwrap().display().to_string();
@@ -76,12 +82,8 @@ fn every_form_of_the_root_becomes_root() {
         ),
     ];
     for (name, form) in forms {
-        let text = format!("at {form}/brain/a.md: ok\n");
-        assert_eq!(
-            normalize(&text, &root),
-            "at <ROOT>/brain/a.md: ok\n",
-            "{name}: {form}"
-        );
+        let text = format!("at {form}: ok\n");
+        assert_eq!(normalize(&text, &root), "at <ROOT>: ok\n", "{name}: {form}");
     }
 }
 
@@ -251,18 +253,19 @@ fn tree_dump_lists_every_file_by_path_with_its_bytes() {
         fs::write(p, bytes).unwrap();
     }
     assert_eq!(
-        tree_dump(dir),
-        "== a-b/x.md\nx\n\
-         == a/x.md\ny\n\
-         == backslash-r.txt\na\\\\rb\n\
-         == bom.yml\n\\u{feff}key: v\n\
-         == crlf.md\none\\r\ntwo\\r\n\
-         == empty.txt\n\
-         == escapes.txt\n\\\\x41 \\\\u{feff} C:\\\\Users\\\\\\\\\n\
-         == latin1.txt\ncaf\\xe9 \\xff\\xfe end\n\
-         == lone-cr.txt\na\\rb\n\
-         == no-eol.txt\nlast line\n<no newline at end>\n\
-         == notes/a.md\n---\ntitle: A\n---\nbody\n"
+        tree_dump(dir, as_is),
+        "== a-b/x.md (file, 2 bytes)\nx\n\
+         == a/x.md (file, 2 bytes)\ny\n\
+         == backslash-r.txt (file, 5 bytes)\na\\\\rb\n\
+         == bom.yml (file, 10 bytes)\n\\u{feff}key: v\n\
+         == crlf.md (file, 10 bytes)\none\\r\ntwo\\r\n\
+         == empty.txt (file, 0 bytes)\n\
+         == escapes.txt (file, 25 bytes)\n\\\\x41 \\\\u{feff} C:\\\\Users\\\\\\\\\n\
+         == latin1.txt (file, 12 bytes)\ncaf\\xe9 \\xff\\xfe end\n\
+         == lone-cr.txt (file, 4 bytes)\na\\rb\n\
+         == no-eol.txt (file, 9 bytes)\nlast line\n<no newline at end>\n\
+         == notes/a.md (file, 22 bytes)\n---\ntitle: A\n---\nbody\n\
+         <end of dump>\n"
     );
 }
 
@@ -277,11 +280,12 @@ fn tree_dump_writes_a_symlink_as_its_target() {
     std::os::unix::fs::symlink("maps", dir.join("linked-dir")).unwrap();
     std::os::unix::fs::symlink("gone.md", dir.join("broken.md")).unwrap();
     assert_eq!(
-        tree_dump(dir),
-        "== broken.md\n<symlink> gone.md\n\
-         == link.md\n<symlink> maps/base.md\n\
-         == linked-dir\n<symlink> maps\n\
-         == maps/base.md\nbase\n"
+        tree_dump(dir, as_is),
+        "== broken.md (symlink, 7 bytes)\ngone.md\n\
+         == link.md (symlink, 12 bytes)\nmaps/base.md\n\
+         == linked-dir (symlink, 4 bytes)\nmaps\n\
+         == maps/base.md (file, 5 bytes)\nbase\n\
+         <end of dump>\n"
     );
 }
 
@@ -336,13 +340,16 @@ fn a_cr_and_the_text_backslash_r_dump_differently() {
     let tmp = tempfile::TempDir::new().unwrap();
     let dir = tmp.path();
     fs::write(dir.join("f"), b"a\rb\n").unwrap();
-    let cr = tree_dump(dir);
+    let cr = tree_dump(dir, as_is);
     fs::write(dir.join("f"), b"a\\rb\n").unwrap();
-    let text = tree_dump(dir);
+    let text = tree_dump(dir, as_is);
     assert_ne!(cr, text);
     assert_eq!(
         (cr.as_str(), text.as_str()),
-        ("== f\na\\rb\n", "== f\na\\\\rb\n")
+        (
+            "== f (file, 4 bytes)\na\\rb\n<end of dump>\n",
+            "== f (file, 5 bytes)\na\\\\rb\n<end of dump>\n"
+        )
     );
 }
 
@@ -366,9 +373,10 @@ fn a_windows_root_inside_a_file_dumps_as_root() {
         fs::write(dir.join(name), text).unwrap();
     }
     assert_eq!(
-        normalize(&tree_dump(dir), root),
-        "== config.yml\npath: <ROOT>\\\\brains\\\\b\n\
-         == map.json\n{\"path\": \"<ROOT>\\\\\\\\brains\"}\n"
+        tree_dump(dir, |text| normalize(text, root)),
+        "== config.yml (file, 22 bytes)\npath: <ROOT>\\\\brains\\\\b\n\
+         == map.json (file, 27 bytes)\n{\"path\": \"<ROOT>\\\\\\\\brains\"}\n\
+         <end of dump>\n"
     );
 }
 
@@ -379,8 +387,8 @@ fn a_windows_root_with_a_non_ascii_name_inside_a_file_dumps_as_root() {
     let root = format!(r"{WINDOWS_ROOT}\golden ü root");
     fs::write(dir.join("config.yml"), format!("path: {root}\\b\n")).unwrap();
     assert_eq!(
-        normalize(&tree_dump(dir), Path::new(&root)),
-        "== config.yml\npath: <ROOT>\\\\b\n"
+        tree_dump(dir, |text| normalize(text, Path::new(&root))),
+        "== config.yml (file, 15 bytes)\npath: <ROOT>\\\\b\n<end of dump>\n"
     );
 }
 
@@ -393,7 +401,7 @@ fn a_tree_dump_snapshot_shows_every_escape() {
     fs::write(dir.join("latin1.md"), b"caf\xe9\n").unwrap();
     fs::write(dir.join("backslashes.md"), b"C:\\brain \\r \\x41\n").unwrap();
     fs::write(dir.join("no-eol.md"), b"end").unwrap();
-    insta::assert_snapshot!("tree_dump_format", tree_dump(dir));
+    insta::assert_snapshot!("tree_dump_format", tree_dump(dir, as_is));
 }
 
 /// A path the OS writes with `\\`, found written with `/`, fails, raw or
@@ -480,4 +488,229 @@ fn sandboxed_git_starts_no_automatic_maintenance() {
         started.is_empty(),
         "automatic maintenance started: {started:?}"
     );
+}
+
+// --- every byte of a file shows --------------------------------------------
+
+/// insta compares a stored snapshot with its trailing whitespace trimmed, so
+/// two texts a snapshot cannot tell apart are equal once trimmed.
+fn snapshots_differ(a: &str, b: &str) -> bool {
+    a.trim_end() != b.trim_end()
+}
+
+/// The dump of a folder holding `files`.
+fn dump_of(files: &[(&str, &[u8])]) -> String {
+    let tmp = tempfile::TempDir::new().unwrap();
+    for (rel, bytes) in files {
+        common::write(&tmp.path().join(rel), bytes);
+    }
+    tree_dump(tmp.path(), as_is)
+}
+
+#[test]
+fn a_missing_final_newline_differs_from_a_marker_line() {
+    assert_ne!(
+        file_body(b"body", as_is).text,
+        file_body(b"body\n<no newline at end>\n", as_is).text
+    );
+    let a = dump_of(&[("a.md", b"body")]);
+    let b = dump_of(&[("a.md", b"body\n<no newline at end>\n")]);
+    assert!(snapshots_differ(&a, &b), "{a:?}");
+}
+
+#[test]
+fn a_body_holding_a_record_boundary_differs_from_two_files() {
+    let a = dump_of(&[("a.md", b"x\n== b.md\ny\n")]);
+    let b = dump_of(&[("a.md", b"x\n"), ("b.md", b"y\n")]);
+    assert!(snapshots_differ(&a, &b), "{a:?}");
+}
+
+#[test]
+fn trailing_blank_lines_of_the_last_file_show() {
+    let a = dump_of(&[("a.md", b"a\n"), ("z.md", b"body\n")]);
+    let b = dump_of(&[("a.md", b"a\n"), ("z.md", b"body\n\n\n")]);
+    assert!(snapshots_differ(&a, &b), "{a:?}");
+}
+
+#[cfg(unix)]
+#[test]
+fn a_body_holding_a_symlink_marker_differs_from_a_symlink() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    std::os::unix::fs::symlink("maps/base.md", tmp.path().join("link.md")).unwrap();
+    let a = tree_dump(tmp.path(), as_is);
+    let b = dump_of(&[("link.md", b"<symlink> maps/base.md\n")]);
+    assert!(snapshots_differ(&a, &b), "{a:?}");
+}
+
+/// `changes_dump` from nothing, or from `before`, to `after`, a companion
+/// file holding its vendored bytes shown by reference.
+fn changes_of(before: &[(&str, &[u8])], after: &[(&str, &[u8])]) -> String {
+    let map = |files: &[(&str, &[u8])]| -> Tree {
+        files
+            .iter()
+            .map(|(rel, bytes)| (rel.to_string(), Entry::File(bytes.to_vec())))
+            .collect()
+    };
+    changes_dump(&map(before), &map(after), as_is, vendored_marker)
+}
+
+#[test]
+fn a_body_holding_a_removal_record_differs_from_a_removal() {
+    let before: &[(&str, &[u8])] = &[("a.md", b"x\n")];
+    let removed = changes_of(before, &[]);
+    let rewritten = changes_of(before, &[("a.md", b"<removed>\n")]);
+    assert!(snapshots_differ(&removed, &rewritten), "{removed:?}");
+}
+
+#[test]
+fn a_body_holding_a_vendored_marker_differs_from_the_vendored_file() {
+    let rel = "specmint-core/SKILL.md";
+    let path = format!("home/.kluris/companions/{rel}");
+    let vendored = fs::read(common::shared::vendored().join(rel)).unwrap();
+    let marker = format!("<vendored/{rel}>\n");
+    let installed = changes_of(&[], &[(&path, &vendored)]);
+    let imitated = changes_of(&[], &[(&path, marker.as_bytes())]);
+    assert!(snapshots_differ(&installed, &imitated), "{installed:?}");
+}
+
+// --- every printed path is checked whole -----------------------------------
+
+const MIXED_ROOT: &str = r"C:\Temp\run";
+const MIXED_BRAIN: &str = r"C:\Temp\run\work\brains\alpha";
+
+/// Whether [`native_path`] refuses `text` for the brain [`MIXED_BRAIN`].
+fn refused(text: &str) -> bool {
+    std::panic::catch_unwind(|| {
+        native_path(text, Path::new(MIXED_BRAIN), "<ROOT>/work/brains/alpha")
+    })
+    .is_err()
+}
+
+#[test]
+fn a_path_written_partly_with_slashes_is_refused() {
+    for text in [
+        r"at C:\Temp\run/work/brains/alpha",
+        r"at C:\Temp\run\work/brains/alpha",
+        r"at C:\Temp\run\work\brains/alpha",
+        r"at C:/Temp/run\work\brains\alpha",
+    ] {
+        assert!(refused(text), "{text} was not refused");
+    }
+}
+
+#[test]
+fn a_json_escaped_path_written_partly_with_slashes_is_refused() {
+    for text in [
+        r#"{"path": "C:\\Temp\\run/work/brains/alpha"}"#,
+        r#"{"path": "C:\\Temp\\run\\work\\brains/alpha"}"#,
+    ] {
+        assert!(refused(text), "{text} was not refused");
+    }
+}
+
+#[test]
+fn a_dumped_path_written_partly_with_slashes_is_refused() {
+    let dump = dump_of(&[
+        ("config.yml", b"path: C:\\Temp\\run/work/brains/alpha\n"),
+        (
+            "map.json",
+            b"{\"path\": \"C:\\\\Temp\\\\run/work/brains/alpha\"}\n",
+        ),
+    ]);
+    assert!(refused(&dump), "{dump} was not refused");
+}
+
+#[test]
+fn a_path_continued_with_slashes_is_refused() {
+    for text in [
+        r"at C:\Temp\run\work\brains\alpha/notes/a.md",
+        r#"{"path": "C:\\Temp\\run\\work\\brains\\alpha/notes/a.md"}"#,
+    ] {
+        assert!(refused(text), "{text} was not refused");
+    }
+}
+
+#[test]
+fn a_root_continued_with_slashes_is_refused() {
+    for text in [
+        r"at C:\Temp\run/work/home/.kluris/config.yml",
+        r#"{"path": "C:\\Temp\\run/work/home"}"#,
+    ] {
+        let refused = std::panic::catch_unwind(|| normalize(text, Path::new(MIXED_ROOT))).is_err();
+        assert!(refused, "{text} was not refused");
+    }
+}
+
+// --- the run and the version fields ----------------------------------------
+
+/// `git raw` in a sandbox, its alias `raw` a shell command that writes
+/// `{"a": "<the byte FF>"}` with `redirect` (`>&1` stdout, `>&2` stderr).
+fn raw_byte_run(redirect: &str) -> common::Run {
+    let sb = Sandbox::new();
+    let mut cmd = Command::new("git");
+    sb.env(&mut cmd)
+        .arg("-c")
+        .arg(format!(
+            "alias.raw=!printf '{{\"a\": \"\\377\"}}\\n' {redirect}"
+        ))
+        .arg("raw")
+        .current_dir(&sb.work);
+    common::Run::of(cmd)
+}
+
+#[test]
+#[should_panic(expected = "is not valid UTF-8: invalid byte at 7, bytes [255]")]
+fn a_run_whose_stdout_is_not_utf8_fails() {
+    let run = raw_byte_run(">&1");
+    assert!(run.stdout.is_empty(), "stdout was read: {:?}", run.stdout);
+}
+
+#[test]
+#[should_panic(expected = "is not valid UTF-8: invalid byte at 7, bytes [255]")]
+fn a_run_whose_stderr_is_not_utf8_fails() {
+    let run = raw_byte_run(">&2");
+    assert!(run.stderr.is_empty(), "stderr was read: {:?}", run.stderr);
+}
+
+/// With the version field marked, everything else in the document still
+/// tells two outputs apart: one that does not hold where the other does is
+/// equally a difference.
+#[test]
+fn a_marked_version_field_hides_nothing_else() {
+    let (_tmp, root) = root();
+    let cases = [
+        (
+            "final newline",
+            "{\"version\": \"2.28.11\", \"n\": 1}\n",
+            "{\"version\": \"3.0.0\", \"n\": 1}",
+        ),
+        (
+            "key order",
+            "{\"version\": \"2.28.11\", \"a\": 1, \"b\": 2}\n",
+            "{\"version\": \"3.0.0\", \"b\": 2, \"a\": 1}\n",
+        ),
+        (
+            "true and 1",
+            "{\"version\": \"2.28.11\", \"n\": true}\n",
+            "{\"version\": \"3.0.0\", \"n\": 1}\n",
+        ),
+        (
+            "1 and 1.0",
+            "{\"version\": \"2.28.11\", \"n\": 1}\n",
+            "{\"version\": \"3.0.0\", \"n\": 1.0}\n",
+        ),
+        (
+            "-0.0 and 0.0",
+            "{\"version\": \"2.28.11\", \"n\": -0.0}\n",
+            "{\"version\": \"3.0.0\", \"n\": 0.0}\n",
+        ),
+    ];
+    for (what, a, b) in cases {
+        let marked = |text: &str| {
+            std::panic::catch_unwind(|| normalize_json(text, &root, &["/version"])).ok()
+        };
+        let (a, b) = (marked(a), marked(b));
+        assert!(a.is_some(), "{what}: the first document does not hold");
+        assert_ne!(a, b, "{what}: the marked documents are the same");
+    }
 }

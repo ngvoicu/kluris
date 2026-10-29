@@ -2,11 +2,11 @@
 source: crates/kluris-cli/tests/golden_dream_mri.rs
 expression: text
 ---
-== brains/rich/README.md
+== brains/rich/README.md (file, 52 bytes)
 # Rich
 
 A [link that is not checked](./nowhere.md).
-== brains/rich/brain.md
+== brains/rich/brain.md (file, 358 bytes)
 ---
 auto_generated: true
 updated: '<TODAY>'
@@ -26,7 +26,7 @@ The rich fixture brain
 ## Reference
 
 - [glossary.md](./glossary.md) — Domain-specific terms, acronyms, and conventions
-== brains/rich/glossary.md
+== brains/rich/glossary.md (file, 70 bytes)
 ---
 updated: '2026-01-01'
 ---
@@ -34,10 +34,10 @@ updated: '2026-01-01'
 # Glossary
 
 **JWT** -- JSON Web Token.
-== brains/rich/kluris.yml
+== brains/rich/kluris.yml (file, 47 bytes)
 name: rich
 description: The rich fixture brain
-== brains/rich/knowledge/beta.md
+== brains/rich/knowledge/beta.md (file, 136 bytes)
 ---
 created: '2026-01-01'
 parent: ./map.md
@@ -50,7 +50,7 @@ updated: '2026-01-01'
 # Beta
 
 Body of Beta.
-== brains/rich/knowledge/broken.md
+== brains/rich/knowledge/broken.md (file, 164 bytes)
 ---
 created: '2026-01-01'
 related:
@@ -63,7 +63,7 @@ updated: '2026-01-01'
 # Broken
 
 See [x](./missing.md#top) and [web](https://x.io).
-== brains/rich/knowledge/crlf.md
+== brains/rich/knowledge/crlf.md (file, 101 bytes)
 ---\r
 created: '2026-01-01'\r
 parent: ./map.md\r
@@ -73,7 +73,7 @@ updated: '2026-01-01'\r
 # Crlf\r
 \r
 Body of Crlf.\r
-== brains/rich/knowledge/deep/deeper/leaf.md
+== brains/rich/knowledge/deep/deeper/leaf.md (file, 92 bytes)
 ---
 created: '2026-01-01'
 parent: ./map.md
@@ -83,7 +83,7 @@ updated: '2026-01-01'
 # Leaf
 
 Body of Leaf.
-== brains/rich/knowledge/deep/deeper/map.md
+== brains/rich/knowledge/deep/deeper/map.md (file, 157 bytes)
 ---
 auto_generated: true
 parent: ../map.md
@@ -98,7 +98,7 @@ up [deep](../map.md)
 ## Contents
 
 - [leaf.md](./leaf.md) — Leaf
-== brains/rich/knowledge/deep/map.md
+== brains/rich/knowledge/deep/map.md (file, 200 bytes)
 ---
 auto_generated: true
 parent: ../map.md
@@ -115,7 +115,7 @@ sideways [src](../src/map.md)
 ## Contents
 
 - [deeper/](./deeper/map.md)
-== brains/rich/knowledge/map.md
+== brains/rich/knowledge/map.md (file, 642 bytes)
 ---
 auto_generated: true
 parent: ../brain.md
@@ -143,7 +143,7 @@ sideways [my-lobe](../my-lobe/map.md) | [projects](../projects/map.md) | [uncomm
 - [older.md](./older.md) — Older
 - [target.md](./target.md) — Target
 - [user.md](./user.md) — User
-== brains/rich/knowledge/newer.md
+== brains/rich/knowledge/newer.md (file, 135 bytes)
 ---
 created: '2026-01-01'
 replaced_by: ./old.md
@@ -155,7 +155,7 @@ updated: '2026-01-01'
 # Newer
 
 Body of Newer.
-== brains/rich/knowledge/old.md
+== brains/rich/knowledge/old.md (file, 128 bytes)
 ---
 created: '2026-01-01'
 parent: ./map.md
@@ -168,7 +168,7 @@ updated: '2026-01-01'
 # Old
 
 Body of Old.
-== brains/rich/knowledge/older.md
+== brains/rich/knowledge/older.md (file, 136 bytes)
 ---
 created: '2026-01-01'
 replaced_by: ./gone.md
@@ -180,7 +180,7 @@ updated: '2026-01-01'
 # Older
 
 Body of Older.
-== brains/rich/knowledge/src/Beta.md
+== brains/rich/knowledge/src/Beta.md (file, 116 bytes)
 ---
 created: '2026-01-01'
 related:
@@ -192,7 +192,7 @@ updated: '2026-01-01'
 # Beta
 
 Body of Beta.
-== brains/rich/knowledge/src/_u.md
+== brains/rich/knowledge/src/_u.md (file, 112 bytes)
 ---
 created: '2026-01-01'
 related:
@@ -204,7 +204,7 @@ updated: '2026-01-01'
 # _u
 
 Body of _u.
-== brains/rich/knowledge/src/a-b.md
+== brains/rich/knowledge/src/a-b.md (file, 114 bytes)
 ---
 created: '2026-01-01'
 related:
@@ -216,7 +216,7 @@ updated: '2026-01-01'
 # a-b
 
 Body of a-b.
-== brains/rich/knowledge/src/a.b.md
+== brains/rich/knowledge/src/a.b.md (file, 114 bytes)
 ---
 created: '2026-01-01'
 related:
@@ -228,7 +228,7 @@ updated: '2026-01-01'
 # a.b
 
 Body of a.b.
-== brains/rich/knowledge/src/alpha-2.md
+== brains/rich/knowledge/src/alpha-2.md (file, 122 bytes)
 ---
 created: '2026-01-01'
 related:
@@ -240,7 +240,7 @@ updated: '2026-01-01'
 # alpha-2
 
 Body of alpha-2.
-== brains/rich/knowledge/src/map.md
+== brains/rich/knowledge/src/map.md (file, 391 bytes)
 ---
 auto_generated: true
 parent: ../map.md
@@ -263,7 +263,7 @@ sideways [deep](../deep/map.md)
 - [Beta.md](./Beta.md) — Beta
 - [mid.md](./mid.md) — mid
 - [zeta.md](./zeta.md) — zeta
-== brains/rich/knowledge/src/mid.md
+== brains/rich/knowledge/src/mid.md (file, 114 bytes)
 ---
 created: '2026-01-01'
 related:
@@ -275,7 +275,7 @@ updated: '2026-01-01'
 # mid
 
 Body of mid.
-== brains/rich/knowledge/src/zeta.md
+== brains/rich/knowledge/src/zeta.md (file, 116 bytes)
 ---
 created: '2026-01-01'
 related:
@@ -287,7 +287,7 @@ updated: '2026-01-01'
 # zeta
 
 Body of zeta.
-== brains/rich/knowledge/target.md
+== brains/rich/knowledge/target.md (file, 211 bytes)
 ---
 created: '2026-01-01'
 parent: ./map.md
@@ -306,7 +306,7 @@ updated: '2026-01-01'
 # Target
 
 Body of Target.
-== brains/rich/knowledge/user.md
+== brains/rich/knowledge/user.md (file, 126 bytes)
 ---
 created: '2026-01-01'
 related:
@@ -319,7 +319,7 @@ updated: '2026-01-01'
 # User
 
 Body of User.
-== brains/rich/my-lobe/map.md
+== brains/rich/my-lobe/map.md (file, 362 bytes)
 ---
 auto_generated: true
 parent: ../brain.md
@@ -338,7 +338,7 @@ sideways [knowledge](../knowledge/map.md) | [projects](../projects/map.md) | [un
 ## Contents
 
 - [thing.md](./thing.md) — Thing
-== brains/rich/my-lobe/thing.md
+== brains/rich/my-lobe/thing.md (file, 94 bytes)
 ---
 created: '2026-01-01'
 parent: ./map.md
@@ -348,7 +348,7 @@ updated: '2026-01-01'
 # Thing
 
 Body of Thing.
-== brains/rich/projects/agent.md
+== brains/rich/projects/agent.md (file, 420 bytes)
 ---
 base:
 - x
@@ -380,7 +380,7 @@ when: '2026-01-02T10:00:00+00:00'
 # Agent written
 
 Text with [alpha](./alpha.md).
-== brains/rich/projects/alpha.md
+== brains/rich/projects/alpha.md (file, 146 bytes)
 ---
 created: '2026-01-01'
 parent: ./map.md
@@ -394,9 +394,9 @@ updated: '2026-02-03'
 # Alpha
 
 Changed.
-== brains/rich/projects/api/Shout.MD
+== brains/rich/projects/api/Shout.MD (file, 10 bytes)
 # Shouted
-== brains/rich/projects/api/endpoints.md
+== brains/rich/projects/api/endpoints.md (file, 114 bytes)
 ---
 created: '2026-01-01'
 tags:
@@ -408,7 +408,7 @@ updated: '2026-01-01'
 # Endpoints
 
 Body of Endpoints.
-== brains/rich/projects/api/map.md
+== brains/rich/projects/api/map.md (file, 248 bytes)
 ---
 auto_generated: true
 parent: ../map.md
@@ -425,9 +425,9 @@ up [projects](../map.md)
 - [endpoints.md](./endpoints.md) — Endpoints
 - [Shout.MD](./Shout.MD) — Shouted
 - [spec.yml](./spec.yml) — API spec
-== brains/rich/projects/api/raw.yaml
+== brains/rich/projects/api/raw.yaml (file, 14 bytes)
 not: a neuron
-== brains/rich/projects/api/spec.yml
+== brains/rich/projects/api/spec.yml (file, 133 bytes)
 #---
 # parent: ./map.md
 # related:
@@ -438,7 +438,7 @@ not: a neuron
 openapi: 3.0.0
 info:
   title: demo
-== brains/rich/projects/map.md
+== brains/rich/projects/map.md (file, 540 bytes)
 ---
 auto_generated: true
 parent: ../brain.md
@@ -461,7 +461,7 @@ sideways [knowledge](../knowledge/map.md) | [my-lobe](../my-lobe/map.md) | [unco
 - [alpha.md](./alpha.md) — Alpha
 - [no-frontmatter.md](./no-frontmatter.md) — No frontmatter
 - [no-parent.md](./no-parent.md) — Linker written
-== brains/rich/projects/no-frontmatter.md
+== brains/rich/projects/no-frontmatter.md (file, 99 bytes)
 ---
 created: '2026-01-01'
 parent: ./map.md
@@ -471,7 +471,7 @@ updated: '2026-01-01'
 # No frontmatter
 
 Just text.
-== brains/rich/projects/no-parent.md
+== brains/rich/projects/no-parent.md (file, 136 bytes)
 ---
 created: '2026-01-01'
 parent: ./map.md
@@ -482,7 +482,7 @@ when: '2026-01-02T10:00:00+00:00'
 ---
 
 # Linker written
-== brains/rich/root-note.md
+== brains/rich/root-note.md (file, 102 bytes)
 ---
 created: '2026-01-01'
 parent: ./map.md
@@ -492,7 +492,7 @@ updated: '2026-01-01'
 # Root note
 
 Body of Root note.
-== brains/rich/uncommitted-lobe/later.md
+== brains/rich/uncommitted-lobe/later.md (file, 94 bytes)
 ---
 created: '2026-01-01'
 parent: ./map.md
@@ -502,7 +502,7 @@ updated: '2025-05-05'
 # Later
 
 Body of Later.
-== brains/rich/uncommitted-lobe/map.md
+== brains/rich/uncommitted-lobe/map.md (file, 344 bytes)
 ---
 auto_generated: true
 parent: ../brain.md
@@ -521,8 +521,9 @@ sideways [knowledge](../knowledge/map.md) | [my-lobe](../my-lobe/map.md) | [proj
 ## Contents
 
 - [later.md](./later.md) — Later
-== home/.kluris/config.yml
+== home/.kluris/config.yml (file, 81 bytes)
 brains:
   "rich":
     path: "<ROOT>/work/brains/rich"
     description: "fixture"
+<end of dump>

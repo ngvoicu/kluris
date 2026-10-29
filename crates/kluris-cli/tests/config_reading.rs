@@ -11,7 +11,7 @@ mod common;
 
 use std::fs;
 
-use common::{Sandbox, copy_tree, fixture, tree_dump, write};
+use common::{Sandbox, assert_unchanged, copy_tree, fixture, tree_files, write};
 
 /// The brains `config.yml` registers, each at `/kf/brains/<name>`.
 const BRAINS: [&str; 6] = ["alpha", "beta", "custom", "legacy", "minimal", "broken"];
@@ -33,10 +33,10 @@ fn list_json_reads_written_and_stale_configs() {
         config = config.replace(&placeholder, &format!("{}\n", path.display()));
     }
     write(&sb.config, config.as_bytes());
-    let before = tree_dump(&sb.work);
+    let before = tree_files(&sb.work);
 
     let run = sb.kluris_shown(&["list", "--json"]);
 
     insta::assert_snapshot!("list_json", run.render(&sb.root));
-    assert_eq!(tree_dump(&sb.work), before, "list must not write anything");
+    assert_unchanged(&before, &tree_files(&sb.work), "list");
 }

@@ -1,8 +1,8 @@
 ---
 source: crates/kluris-cli/tests/golden_create.rs
-expression: sb.tree()
+expression: text.as_ref()
 ---
-== demo/.gitignore
+== demo/.gitignore (file, 204 bytes)
 # Secrets
 .env
 *.key
@@ -21,7 +21,7 @@ brain-mri.html
 # OS
 .DS_Store
 Thumbs.db
-== demo/README.md
+== demo/README.md (file, 11352 bytes)
 # demo
 
 > demo knowledge base
@@ -343,7 +343,7 @@ description: my-brain knowledge base
 6. **Bidirectional synapses** -- if A links to B, add the reverse link in B
 7. **Run `kluris dream` after adding neurons** -- keeps maps and brain.md fresh
 8. **Use git directly to commit and sync** -- kluris brains are plain git repos
-== demo/brain.md
+== demo/brain.md (file, 469 bytes)
 ---
 auto_generated: true
 updated: <TODAY>
@@ -361,7 +361,7 @@ demo knowledge base
 ## Reference
 
 - [glossary.md](./glossary.md) — Domain-specific terms
-== demo/glossary.md
+== demo/glossary.md (file, 149 bytes)
 ---
 auto_generated: false
 updated: <TODAY>
@@ -372,7 +372,7 @@ Project-specific terms, acronyms, and conventions.
 
 | Term | Meaning |
 |------|---------|
-== demo/infrastructure/map.md
+== demo/infrastructure/map.md (file, 215 bytes)
 ---
 auto_generated: true
 parent: ../brain.md
@@ -382,7 +382,7 @@ updated: <TODAY>
 # Infrastructure
 
 Hosting, CI/CD, Docker, deployment, environments, env vars
-== demo/kluris.yml
+== demo/kluris.yml (file, 187 bytes)
 name: demo
 description: demo knowledge base
 agents:
@@ -397,7 +397,7 @@ agents:
   - junie
   - antigravity
 companions: []
-== demo/knowledge/map.md
+== demo/knowledge/map.md (file, 214 bytes)
 ---
 auto_generated: true
 parent: ../brain.md
@@ -407,7 +407,7 @@ updated: <TODAY>
 # Knowledge
 
 Decisions, learnings, troubleshooting tips, domain expertise
-== demo/projects/map.md
+== demo/projects/map.md (file, 225 bytes)
 ---
 auto_generated: true
 parent: ../brain.md
@@ -417,3 +417,4 @@ updated: <TODAY>
 # Projects
 
 Per-project sub-folders with APIs, data models, setup, conventions
+<end of dump>

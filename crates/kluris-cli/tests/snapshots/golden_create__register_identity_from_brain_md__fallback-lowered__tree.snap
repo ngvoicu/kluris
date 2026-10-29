@@ -1,14 +1,14 @@
 ---
 source: crates/kluris-cli/tests/golden_create.rs
-expression: text
+expression: text.as_ref()
 ---
-== brains/My Brain/brain.md
+== brains/My Brain/brain.md (file, 36 bytes)
 # Not Valid!
 
 ## Lobes
 
 After lobes
-== brains/My Brain/kluris.yml
+== brains/My Brain/kluris.yml (file, 183 bytes)
 name: my-brain
 description: After lobes
 agents:
@@ -23,17 +23,18 @@ agents:
   - junie
   - antigravity
 companions: []
-== home/.agents/skills/kluris-my-brain/SKILL.md
+== home/.agents/skills/kluris-my-brain/SKILL.md (file, 35838 bytes)
 <snapshot skill_my-brain_none_at-brains-my-brain_desc-after-lobes>
-== home/.claude/skills/kluris-my-brain/SKILL.md
+== home/.claude/skills/kluris-my-brain/SKILL.md (file, 35838 bytes)
 <snapshot skill_my-brain_none_at-brains-my-brain_desc-after-lobes>
-== home/.gemini/config/skills/kluris-my-brain/SKILL.md
+== home/.gemini/config/skills/kluris-my-brain/SKILL.md (file, 35838 bytes)
 <snapshot skill_my-brain_none_at-brains-my-brain_desc-after-lobes>
-== home/.hermes/skills/kluris-my-brain/SKILL.md
+== home/.hermes/skills/kluris-my-brain/SKILL.md (file, 35838 bytes)
 <snapshot skill_my-brain_none_at-brains-my-brain_desc-after-lobes>
-== home/.kluris/config.yml
+== home/.kluris/config.yml (file, 93 bytes)
 brains:
   my-brain:
     path: <ROOT>/work/brains/My
       Brain
     description: After lobes
+<end of dump>

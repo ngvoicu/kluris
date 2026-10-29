@@ -1,8 +1,8 @@
 ---
 source: crates/kluris-cli/tests/golden_companions_resolver.rs
-expression: "normalize(&out, &sb.root)"
+expression: out
 ---
-== brains/a/kluris.yml
+== brains/a/kluris.yml (file, 185 bytes)
 name: a
 description: Brain A
 agents:
@@ -18,61 +18,45 @@ agents:
   - antigravity
 companions:
 - specmint-core
-== home/.agents/skills/kluris-a/SKILL.md
+== home/.agents/skills/kluris-a/SKILL.md (file, 36408 bytes)
 <snapshot skill_a_specmint-core>
-== home/.agents/skills/kluris-b/SKILL.md
+== home/.agents/skills/kluris-b/SKILL.md (file, 35451 bytes)
 <snapshot skill_b_none>
-== home/.claude/skills/kluris-a/SKILL.md
+== home/.claude/skills/kluris-a/SKILL.md (file, 36408 bytes)
 <snapshot skill_a_specmint-core>
-== home/.claude/skills/kluris-b/SKILL.md
+== home/.claude/skills/kluris-b/SKILL.md (file, 35451 bytes)
 <snapshot skill_b_none>
-== home/.codeium/windsurf/global_workflows/kluris-a.md
-<removed>
-== home/.codeium/windsurf/global_workflows/kluris-b.md
-<removed>
-== home/.codeium/windsurf/skills/kluris-a/SKILL.md
-<removed>
-== home/.codeium/windsurf/skills/kluris-b/SKILL.md
-<removed>
-== home/.codex/skills/kluris-a/SKILL.md
-<removed>
-== home/.codex/skills/kluris-b/SKILL.md
-<removed>
-== home/.copilot/skills/kluris-a/SKILL.md
-<removed>
-== home/.copilot/skills/kluris-b/SKILL.md
-<removed>
-== home/.cursor/skills/kluris-a/SKILL.md
-<removed>
-== home/.cursor/skills/kluris-b/SKILL.md
-<removed>
-== home/.gemini/config/skills/kluris-a/SKILL.md
+== home/.codeium/windsurf/global_workflows/kluris-a.md (removed)
+== home/.codeium/windsurf/global_workflows/kluris-b.md (removed)
+== home/.codeium/windsurf/skills/kluris-a/SKILL.md (removed)
+== home/.codeium/windsurf/skills/kluris-b/SKILL.md (removed)
+== home/.codex/skills/kluris-a/SKILL.md (removed)
+== home/.codex/skills/kluris-b/SKILL.md (removed)
+== home/.copilot/skills/kluris-a/SKILL.md (removed)
+== home/.copilot/skills/kluris-b/SKILL.md (removed)
+== home/.cursor/skills/kluris-a/SKILL.md (removed)
+== home/.cursor/skills/kluris-b/SKILL.md (removed)
+== home/.gemini/config/skills/kluris-a/SKILL.md (file, 36408 bytes)
 <snapshot skill_a_specmint-core>
-== home/.gemini/config/skills/kluris-b/SKILL.md
+== home/.gemini/config/skills/kluris-b/SKILL.md (file, 35451 bytes)
 <snapshot skill_b_none>
-== home/.gemini/skills/kluris-a/SKILL.md
-<removed>
-== home/.gemini/skills/kluris-b/SKILL.md
-<removed>
-== home/.hermes/skills/kluris-a/SKILL.md
+== home/.gemini/skills/kluris-a/SKILL.md (removed)
+== home/.gemini/skills/kluris-b/SKILL.md (removed)
+== home/.hermes/skills/kluris-a/SKILL.md (file, 36408 bytes)
 <snapshot skill_a_specmint-core>
-== home/.hermes/skills/kluris-b/SKILL.md
+== home/.hermes/skills/kluris-b/SKILL.md (file, 35451 bytes)
 <snapshot skill_b_none>
-== home/.junie/skills/kluris-a/SKILL.md
-<removed>
-== home/.junie/skills/kluris-b/SKILL.md
-<removed>
-== home/.kilo/skills/kluris-a/SKILL.md
-<removed>
-== home/.kilo/skills/kluris-b/SKILL.md
-<removed>
-== home/.kluris/companions/.specmint-core.old
-<removed>
-== home/.kluris/companions/specmint-core/SKILL.md
+== home/.junie/skills/kluris-a/SKILL.md (removed)
+== home/.junie/skills/kluris-b/SKILL.md (removed)
+== home/.kilo/skills/kluris-a/SKILL.md (removed)
+== home/.kilo/skills/kluris-b/SKILL.md (removed)
+== home/.kluris/companions/.specmint-core.old (removed)
+== home/.kluris/companions/specmint-core/SKILL.md (file, 29959 bytes)
 <vendored/specmint-core/SKILL.md>
-== home/.kluris/companions/specmint-core/references/command-contracts.md
+== home/.kluris/companions/specmint-core/references/command-contracts.md (file, 3883 bytes)
 <vendored/specmint-core/references/command-contracts.md>
-== home/.kluris/companions/specmint-core/references/researcher.md
+== home/.kluris/companions/specmint-core/references/researcher.md (file, 11696 bytes)
 <vendored/specmint-core/references/researcher.md>
-== home/.kluris/companions/specmint-core/references/spec-format.md
+== home/.kluris/companions/specmint-core/references/spec-format.md (file, 13261 bytes)
 <vendored/specmint-core/references/spec-format.md>
+<end of dump>

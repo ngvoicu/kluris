@@ -1,10 +1,10 @@
 ---
 source: crates/kluris-cli/tests/golden_create.rs
-expression: sb.tree()
+expression: text.as_ref()
 ---
-== home/.kluris/config.yml
+== home/.kluris/config.yml (file, 11 bytes)
 brains: {}
-== only/.gitignore
+== only/.gitignore (file, 204 bytes)
 # Secrets
 .env
 *.key
@@ -23,7 +23,7 @@ brain-mri.html
 # OS
 .DS_Store
 Thumbs.db
-== only/README.md
+== only/README.md (file, 11050 bytes)
 # only
 
 > only knowledge base
@@ -334,7 +334,7 @@ description: my-brain knowledge base
 6. **Bidirectional synapses** -- if A links to B, add the reverse link in B
 7. **Run `kluris dream` after adding neurons** -- keeps maps and brain.md fresh
 8. **Use git directly to commit and sync** -- kluris brains are plain git repos
-== only/brain.md
+== only/brain.md (file, 499 bytes)
 ---
 auto_generated: true
 updated: '<TODAY>'
@@ -353,7 +353,7 @@ only knowledge base
 ## Reference
 
 - [glossary.md](./glossary.md) — Domain-specific terms, acronyms, and conventions
-== only/glossary.md
+== only/glossary.md (file, 149 bytes)
 ---
 auto_generated: false
 updated: <TODAY>
@@ -364,7 +364,7 @@ Project-specific terms, acronyms, and conventions.
 
 | Term | Meaning |
 |------|---------|
-== only/infrastructure/map.md
+== only/infrastructure/map.md (file, 396 bytes)
 ---
 auto_generated: true
 description: Hosting, CI/CD, Docker, deployment, environments, env vars
@@ -385,7 +385,7 @@ sideways [knowledge](../knowledge/map.md) | [projects](../projects/map.md)
 ## Contents
 
 (empty)
-== only/kluris.yml
+== only/kluris.yml (file, 185 bytes)
 name: only
 description: only knowledge base
 agents:
@@ -400,7 +400,7 @@ agents:
   - kilocode
   - junie
 companions: []
-== only/knowledge/map.md
+== only/knowledge/map.md (file, 410 bytes)
 ---
 auto_generated: true
 description: Decisions, learnings, troubleshooting tips, domain expertise
@@ -421,7 +421,7 @@ sideways [infrastructure](../infrastructure/map.md) | [projects](../projects/map
 ## Contents
 
 (empty)
-== only/projects/map.md
+== only/projects/map.md (file, 424 bytes)
 ---
 auto_generated: true
 description: Per-project sub-folders with APIs, data models, setup, conventions
@@ -442,3 +442,4 @@ sideways [infrastructure](../infrastructure/map.md) | [knowledge](../knowledge/m
 ## Contents
 
 (empty)
+<end of dump>

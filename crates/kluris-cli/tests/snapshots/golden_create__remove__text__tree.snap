@@ -1,8 +1,8 @@
 ---
 source: crates/kluris-cli/tests/golden_create.rs
-expression: text
+expression: text.as_ref()
 ---
-== brains/a/.gitignore
+== brains/a/.gitignore (file, 204 bytes)
 # Secrets
 .env
 *.key
@@ -21,7 +21,7 @@ brain-mri.html
 # OS
 .DS_Store
 Thumbs.db
-== brains/a/README.md
+== brains/a/README.md (file, 10864 bytes)
 # a
 
 > a knowledge base
@@ -332,7 +332,7 @@ description: my-brain knowledge base
 6. **Bidirectional synapses** -- if A links to B, add the reverse link in B
 7. **Run `kluris dream` after adding neurons** -- keeps maps and brain.md fresh
 8. **Use git directly to commit and sync** -- kluris brains are plain git repos
-== brains/a/brain.md
+== brains/a/brain.md (file, 493 bytes)
 ---
 auto_generated: true
 updated: '<TODAY>'
@@ -351,7 +351,7 @@ a knowledge base
 ## Reference
 
 - [glossary.md](./glossary.md) — Domain-specific terms, acronyms, and conventions
-== brains/a/glossary.md
+== brains/a/glossary.md (file, 149 bytes)
 ---
 auto_generated: false
 updated: <TODAY>
@@ -362,7 +362,7 @@ Project-specific terms, acronyms, and conventions.
 
 | Term | Meaning |
 |------|---------|
-== brains/a/infrastructure/map.md
+== brains/a/infrastructure/map.md (file, 396 bytes)
 ---
 auto_generated: true
 description: Hosting, CI/CD, Docker, deployment, environments, env vars
@@ -383,7 +383,7 @@ sideways [knowledge](../knowledge/map.md) | [projects](../projects/map.md)
 ## Contents
 
 (empty)
-== brains/a/kluris.yml
+== brains/a/kluris.yml (file, 179 bytes)
 name: a
 description: a knowledge base
 agents:
@@ -398,7 +398,7 @@ agents:
   - kilocode
   - junie
 companions: []
-== brains/a/knowledge/map.md
+== brains/a/knowledge/map.md (file, 410 bytes)
 ---
 auto_generated: true
 description: Decisions, learnings, troubleshooting tips, domain expertise
@@ -419,7 +419,7 @@ sideways [infrastructure](../infrastructure/map.md) | [projects](../projects/map
 ## Contents
 
 (empty)
-== brains/a/projects/map.md
+== brains/a/projects/map.md (file, 424 bytes)
 ---
 auto_generated: true
 description: Per-project sub-folders with APIs, data models, setup, conventions
@@ -440,7 +440,7 @@ sideways [infrastructure](../infrastructure/map.md) | [knowledge](../knowledge/m
 ## Contents
 
 (empty)
-== brains/b/.gitignore
+== brains/b/.gitignore (file, 204 bytes)
 # Secrets
 .env
 *.key
@@ -459,7 +459,7 @@ brain-mri.html
 # OS
 .DS_Store
 Thumbs.db
-== brains/b/README.md
+== brains/b/README.md (file, 10864 bytes)
 # b
 
 > b knowledge base
@@ -770,7 +770,7 @@ description: my-brain knowledge base
 6. **Bidirectional synapses** -- if A links to B, add the reverse link in B
 7. **Run `kluris dream` after adding neurons** -- keeps maps and brain.md fresh
 8. **Use git directly to commit and sync** -- kluris brains are plain git repos
-== brains/b/brain.md
+== brains/b/brain.md (file, 493 bytes)
 ---
 auto_generated: true
 updated: '<TODAY>'
@@ -789,7 +789,7 @@ b knowledge base
 ## Reference
 
 - [glossary.md](./glossary.md) — Domain-specific terms, acronyms, and conventions
-== brains/b/glossary.md
+== brains/b/glossary.md (file, 149 bytes)
 ---
 auto_generated: false
 updated: <TODAY>
@@ -800,7 +800,7 @@ Project-specific terms, acronyms, and conventions.
 
 | Term | Meaning |
 |------|---------|
-== brains/b/infrastructure/map.md
+== brains/b/infrastructure/map.md (file, 396 bytes)
 ---
 auto_generated: true
 description: Hosting, CI/CD, Docker, deployment, environments, env vars
@@ -821,7 +821,7 @@ sideways [knowledge](../knowledge/map.md) | [projects](../projects/map.md)
 ## Contents
 
 (empty)
-== brains/b/kluris.yml
+== brains/b/kluris.yml (file, 179 bytes)
 name: b
 description: b knowledge base
 agents:
@@ -836,7 +836,7 @@ agents:
   - kilocode
   - junie
 companions: []
-== brains/b/knowledge/map.md
+== brains/b/knowledge/map.md (file, 410 bytes)
 ---
 auto_generated: true
 description: Decisions, learnings, troubleshooting tips, domain expertise
@@ -857,7 +857,7 @@ sideways [infrastructure](../infrastructure/map.md) | [projects](../projects/map
 ## Contents
 
 (empty)
-== brains/b/projects/map.md
+== brains/b/projects/map.md (file, 424 bytes)
 ---
 auto_generated: true
 description: Per-project sub-folders with APIs, data models, setup, conventions
@@ -878,16 +878,17 @@ sideways [infrastructure](../infrastructure/map.md) | [knowledge](../knowledge/m
 ## Contents
 
 (empty)
-== home/.agents/skills/kluris-b/SKILL.md
+== home/.agents/skills/kluris-b/SKILL.md (file, 35451 bytes)
 <snapshot skill_b_none>
-== home/.claude/skills/kluris-b/SKILL.md
+== home/.claude/skills/kluris-b/SKILL.md (file, 35451 bytes)
 <snapshot skill_b_none>
-== home/.gemini/config/skills/kluris-b/SKILL.md
+== home/.gemini/config/skills/kluris-b/SKILL.md (file, 35451 bytes)
 <snapshot skill_b_none>
-== home/.hermes/skills/kluris-b/SKILL.md
+== home/.hermes/skills/kluris-b/SKILL.md (file, 35451 bytes)
 <snapshot skill_b_none>
-== home/.kluris/config.yml
+== home/.kluris/config.yml (file, 78 bytes)
 brains:
   b:
     path: <ROOT>/work/brains/b
     description: b knowledge base
+<end of dump>

@@ -2,7 +2,7 @@
 source: crates/kluris-cli/tests/golden_dream_mri.rs
 expression: text
 ---
-== brains/Some Folder/brain.md
+== brains/Some Folder/brain.md (file, 261 bytes)
 ---
 auto_generated: true
 updated: '<TODAY>'
@@ -20,7 +20,7 @@ A healthy brain
 ## Reference
 
 - [glossary.md](./glossary.md) — Domain-specific terms, acronyms, and conventions
-== brains/Some Folder/glossary.md
+== brains/Some Folder/glossary.md (file, 70 bytes)
 ---
 updated: '2026-01-01'
 ---
@@ -28,10 +28,10 @@ updated: '2026-01-01'
 # Glossary
 
 **JWT** -- JSON Web Token.
-== brains/Some Folder/kluris.yml
+== brains/Some Folder/kluris.yml (file, 40 bytes)
 name: calm
 description: A healthy brain
-== brains/Some Folder/knowledge/gamma.md
+== brains/Some Folder/knowledge/gamma.md (file, 94 bytes)
 ---
 created: '2026-01-01'
 parent: ./map.md
@@ -41,7 +41,7 @@ updated: '2026-01-01'
 # Gamma
 
 Body of Gamma.
-== brains/Some Folder/knowledge/map.md
+== brains/Some Folder/knowledge/map.md (file, 229 bytes)
 ---
 auto_generated: true
 parent: ../brain.md
@@ -58,7 +58,7 @@ sideways [projects](../projects/map.md)
 ## Contents
 
 - [gamma.md](./gamma.md) — Gamma
-== brains/Some Folder/projects/alpha.md
+== brains/Some Folder/projects/alpha.md (file, 115 bytes)
 ---
 created: '2026-01-01'
 related:
@@ -70,7 +70,7 @@ updated: '2026-01-01'
 # Alpha
 
 Body of Alpha.
-== brains/Some Folder/projects/beta.md
+== brains/Some Folder/projects/beta.md (file, 114 bytes)
 ---
 created: '2026-01-01'
 related:
@@ -82,7 +82,7 @@ updated: '2026-01-01'
 # Beta
 
 Body of Beta.
-== brains/Some Folder/projects/map.md
+== brains/Some Folder/projects/map.md (file, 263 bytes)
 ---
 auto_generated: true
 parent: ../brain.md
@@ -100,8 +100,9 @@ sideways [knowledge](../knowledge/map.md)
 
 - [alpha.md](./alpha.md) — Alpha
 - [beta.md](./beta.md) — Beta
-== home/.kluris/config.yml
+== home/.kluris/config.yml (file, 94 bytes)
 brains:
   "calm-brain":
     path: "<ROOT>/work/brains/Some Folder"
     description: "fixture"
+<end of dump>

@@ -18,12 +18,13 @@ pub mod shared;
 pub mod upgrade;
 
 pub use golden::{
-    PASSTHROUGH_ENV, PINNED_ENV, PINNED_GIT_DATE, decode, file_body, git_dump, git_state,
-    native_path, native_paths, normalize, normalize_json, slashed, tree_dump, tree_files,
-    windows_variant,
+    Body, Dump, Entry, NativePaths, PASSTHROUGH_ENV, PINNED_ENV, PINNED_GIT_DATE, Reference, Tree,
+    decode, file_body, files_dump, git_dump, git_state, native_path, native_paths, normalize,
+    normalize_json, slashed, tree_dump, tree_files, windows_variant,
 };
 pub use sandbox::{
-    Run, Sandbox, changes_dump, command_line, copy_tree, fixture, unstored, write, write_files,
+    Run, Sandbox, assert_unchanged, changes_dump, command_line, copy_tree, fixture, unstored,
+    write, write_files,
 };
 
 use std::path::{Path, PathBuf};

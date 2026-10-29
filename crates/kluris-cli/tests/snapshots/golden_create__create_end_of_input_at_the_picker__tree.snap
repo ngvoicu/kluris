@@ -1,8 +1,8 @@
 ---
 source: crates/kluris-cli/tests/golden_create.rs
-expression: sb.tree()
+expression: text.as_ref()
 ---
-== wiz/.gitignore
+== wiz/.gitignore (file, 204 bytes)
 # Secrets
 .env
 *.key
@@ -21,7 +21,7 @@ brain-mri.html
 # OS
 .DS_Store
 Thumbs.db
-== wiz/README.md
+== wiz/README.md (file, 11273 bytes)
 # wiz
 
 > d
@@ -343,7 +343,7 @@ description: my-brain knowledge base
 6. **Bidirectional synapses** -- if A links to B, add the reverse link in B
 7. **Run `kluris dream` after adding neurons** -- keeps maps and brain.md fresh
 8. **Use git directly to commit and sync** -- kluris brains are plain git repos
-== wiz/brain.md
+== wiz/brain.md (file, 450 bytes)
 ---
 auto_generated: true
 updated: <TODAY>
@@ -361,7 +361,7 @@ d
 ## Reference
 
 - [glossary.md](./glossary.md) — Domain-specific terms
-== wiz/glossary.md
+== wiz/glossary.md (file, 149 bytes)
 ---
 auto_generated: false
 updated: <TODAY>
@@ -372,7 +372,7 @@ Project-specific terms, acronyms, and conventions.
 
 | Term | Meaning |
 |------|---------|
-== wiz/infrastructure/map.md
+== wiz/infrastructure/map.md (file, 215 bytes)
 ---
 auto_generated: true
 parent: ../brain.md
@@ -382,7 +382,7 @@ updated: <TODAY>
 # Infrastructure
 
 Hosting, CI/CD, Docker, deployment, environments, env vars
-== wiz/kluris.yml
+== wiz/kluris.yml (file, 168 bytes)
 name: wiz
 description: d
 agents:
@@ -397,7 +397,7 @@ agents:
   - junie
   - antigravity
 companions: []
-== wiz/knowledge/map.md
+== wiz/knowledge/map.md (file, 214 bytes)
 ---
 auto_generated: true
 parent: ../brain.md
@@ -407,7 +407,7 @@ updated: <TODAY>
 # Knowledge
 
 Decisions, learnings, troubleshooting tips, domain expertise
-== wiz/projects/map.md
+== wiz/projects/map.md (file, 225 bytes)
 ---
 auto_generated: true
 parent: ../brain.md
@@ -417,3 +417,4 @@ updated: <TODAY>
 # Projects
 
 Per-project sub-folders with APIs, data models, setup, conventions
+<end of dump>

@@ -2,7 +2,7 @@
 source: crates/kluris-cli/tests/golden_upgrade.rs
 expression: lf
 ---
-== brains/prod/features/map.md
+== brains/prod/features/map.md (file, 581 bytes)
 ---
 auto_generated: true
 description: 'Sub-folder per feature: specs, status, feedback'
@@ -27,7 +27,7 @@ sideways [analytics](../analytics/map.md) | [competitors](../competitors/map.md)
 
 - [login.md](./login.md) — Login flow
 - [search.md](./search.md) — Search
-== brains/prod/features/search.md
+== brains/prod/features/search.md (file, 161 bytes)
 ---
 created: '2026-01-01'
 parent: ./map.md
@@ -39,3 +39,4 @@ updated: '2026-01-01'
 # Search
 
 Full-text search over products; see [login](./login.md) for auth.
+<end of dump>
