@@ -1,25 +1,48 @@
-//! The git steps of `kluris sync` beyond [`Plumbing`] and [`FreshGit`]:
-//! the current branch's upstream, the fetch and the move of its
-//! remote-tracking ref, merge bases, the in-memory merge, the fast-forward
-//! that moves the branch and work tree, and the push.
+//! The git layer of the sync engine: [`SyncGit`] (the steps beyond
+//! [`Plumbing`]) and its [`SystemGit`].
+//!
+//! - **One upstream query:** [`SyncGit::upstream`], the current branch's
+//!   remote, remote-tracking ref and branch on the remote ([`Upstream`]).
+//! - **One remote environment:** [`SyncGit::for_remote`] gives a git whose
+//!   every run has [`remote_env`] (no terminal prompt, no askpass, no
+//!   interactive credential manager, ssh in batch mode unless the user chose
+//!   an ssh command) and [`NO_BACKGROUND`]. The engine takes it once per
+//!   brain, so no git it starts can prompt: not a fetch or a push, and not a
+//!   merge or a checkout whose lazy fetch (a partial clone) talks to the
+//!   remote. The steps that talk to a remote take it themselves when given
+//!   a git without it.
+//! - **stdin closed** for every git ([`SystemGit`]'s runs), so a hook that
+//!   reads it never waits.
+//! - **The push names no configured remote:** it goes to `kluris-<remote>`,
+//!   an alias defined for that one git (`-c`) with every
+//!   `remote.<remote>.*` value but `fetch` and `mirror`. git applies
+//!   `insteadOf`, `pushInsteadOf`, the push URLs, `receivepack`, the proxy
+//!   and the rest exactly as for the remote itself, but the alias has no
+//!   fetch refspec, so git moves no remote-tracking ref after the push (one
+//!   it would move through a symbolic ref, onto another branch): the caller
+//!   moves it ([`super::fetch::advance`]). The `pre-push` hook gets
+//!   `kluris-<remote>` and the push URL, and reads the alias's settings
+//!   (`git config remote.$1.url`) from `GIT_CONFIG_PARAMETERS`.
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
+use std::ffi::OsString;
 use std::path::Path;
 use std::process::Stdio;
 use std::time::Instant;
 
-use super::fresh::{FreshError, FreshGit, prompt_env};
 use super::merge::TextMerger;
 use crate::git::{GitError, Plumbing, Repo, SystemGit, TreeEntry};
+use crate::process::{Finished, RunError, run_until};
 
 /// Where the current branch pulls from and pushes to.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Tracking {
+pub struct Upstream {
     /// The remote (`%(upstream:remotename)`, `origin`).
     pub remote: String,
     /// The remote-tracking ref (`refs/remotes/origin/main`).
     pub refname: String,
-    /// The branch on the remote (`refs/heads/main`).
+    /// The branch on the remote (`branch.<name>.merge`, `refs/heads/main`).
     pub remote_ref: String,
 }
 
@@ -91,19 +114,6 @@ fn parse_merge_tree(out: &[u8]) -> MergeTree {
     }
 }
 
-/// What a fetch of the upstream's branch brought.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Fetch {
-    /// The commit the remote's branch is at, from this `ls-remote`, and
-    /// here.
-    Commit(String),
-    /// The remote has no such branch.
-    NoBranch,
-    /// The commit `ls-remote` gave is not here after the fetch: the remote
-    /// moved its branch away from it, or removed the branch, in between.
-    Gone,
-}
-
 /// How a push ended.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PushOutcome {
@@ -119,30 +129,54 @@ pub enum PushOutcome {
     Failed(String),
 }
 
-/// The git steps of a sync (see the module docs).
-pub trait SyncGit: Plumbing + FreshGit + TextMerger {
-    /// The current branch's upstream on a remote; `None` on a detached HEAD
-    /// or without one.
-    fn tracking(&self, repo: &Repo) -> Result<Option<Tracking>, GitError>;
+/// A git step bounded by a deadline that did not finish.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RemoteError {
+    /// The deadline passed and git was stopped.
+    TimedOut,
+    /// git could not run or failed.
+    Failed(GitError),
+}
 
-    /// The upstream's commit and its objects, never prompting, by
-    /// `deadline`, reading nothing another git in the brain can rewrite:
-    /// `git ls-remote <remote> <branch>` says the commit (its own output),
-    /// then a fetch of the branch brings the objects and writes nothing
-    /// else (no ref, `FETCH_HEAD`, tag, `packed-refs` or commit-graph),
-    /// then `git cat-file -e <commit>^{commit}` checks the commit is here,
-    /// locally and within the same bound.
-    /// `ls-remote <remote>` and `fetch <remote>` both take the remote's
-    /// own settings (git 2.38 to 2.55, `builtin/ls-remote.c` and
-    /// `builtin/fetch.c`: `remote_get`, then `transport_get(remote,
-    /// NULL)`): its first URL after `insteadOf`, its `uploadpack`, and the
+/// The git steps of the sync engine (see the module docs).
+pub trait SyncGit: Plumbing + TextMerger + Sized {
+    /// This git with the remote environment for `repo`: [`remote_env`]
+    /// (`core.sshCommand` read once, here) and [`NO_BACKGROUND`] on every
+    /// run. A git that has it already is given back as it is.
+    fn for_remote(&self, repo: &Repo) -> Result<Self, GitError>;
+
+    /// The current branch's upstream on a remote; `None` on a detached HEAD,
+    /// without one, or with a local branch as upstream.
+    fn upstream(&self, repo: &Repo) -> Result<Option<Upstream>, GitError>;
+
+    /// The commit the upstream's branch is at, from this git's own `git
+    /// ls-remote <remote> <branch>`, by `deadline`; `None` when the remote
+    /// has no such branch. `ls-remote <remote>` takes the remote's own
+    /// settings: its first URL after `insteadOf`, its `uploadpack`, and the
     /// http and ssh config.
-    fn fetch(
+    fn ls_remote(
         &self,
         repo: &Repo,
-        tracking: &Tracking,
+        upstream: &Upstream,
         deadline: Instant,
-    ) -> Result<Fetch, FreshError>;
+    ) -> Result<Option<String>, RemoteError>;
+
+    /// Fetch the objects of the upstream's branch by `deadline` and write
+    /// nothing else: no ref, `FETCH_HEAD`, tag, `packed-refs`, commit-graph
+    /// or bundle refs, so a fetch stopped at the deadline holds no ref lock
+    /// (a terminated job on Windows removes none).
+    fn fetch_branch(
+        &self,
+        repo: &Repo,
+        upstream: &Upstream,
+        deadline: Instant,
+    ) -> Result<(), RemoteError>;
+
+    /// Whether `commit` is here as a commit, checked locally by `deadline`:
+    /// lazy fetching off (`GIT_NO_LAZY_FETCH`, git 2.45 and newer), so a
+    /// partial clone reports a missing commit absent instead of fetching it.
+    fn has_commit(&self, repo: &Repo, commit: &str, deadline: Instant)
+    -> Result<bool, RemoteError>;
 
     /// The object a ref holds; `None` when there is no such ref.
     fn ref_value(&self, repo: &Repo, refname: &str) -> Result<Option<String>, GitError>;
@@ -168,6 +202,9 @@ pub trait SyncGit: Plumbing + FreshGit + TextMerger {
     /// The commit `rev` names.
     fn rev_parse(&self, repo: &Repo, rev: &str) -> Result<String, GitError>;
 
+    /// Whether `ancestor` is an ancestor of (or is) `descendant`.
+    fn is_ancestor(&self, repo: &Repo, ancestor: &str, descendant: &str) -> Result<bool, GitError>;
+
     /// `git merge-base --all`: every best common ancestor, git's order.
     fn merge_bases(&self, repo: &Repo, a: &str, b: &str) -> Result<Vec<String>, GitError>;
 
@@ -184,9 +221,16 @@ pub trait SyncGit: Plumbing + FreshGit + TextMerger {
     /// runs the `post-merge` hook.
     fn fast_forward_to(&self, repo: &Repo, to: &str) -> Result<(), GitError>;
 
-    /// Push `HEAD` to the upstream branch, never prompting, by `deadline`.
-    /// Runs the `pre-push` hook.
-    fn push(&self, repo: &Repo, tracking: &Tracking, deadline: Instant) -> PushOutcome;
+    /// Push `commit` to the upstream's branch through the `kluris-<remote>`
+    /// alias (see the module docs), never prompting, by `deadline`. Runs
+    /// the `pre-push` hook; moves no remote-tracking ref.
+    fn push(
+        &self,
+        repo: &Repo,
+        upstream: &Upstream,
+        commit: &str,
+        deadline: Instant,
+    ) -> PushOutcome;
 }
 
 /// A fetch git stopped because a ref is locked: the lock file git named,
@@ -222,12 +266,14 @@ pub(crate) fn ref_lock(stderr: &str) -> Option<RefLock> {
 ///   (`remote-curl.c`), the text after the last `': ` on that line, or
 ///   after git's `RPC failed; curl <n> ` when an http transfer failed once
 ///   it had started (`remote-curl.c`; with an `HTTP <code>` before `curl`
-///   the server answered, so it is never this form), when it holds `Could not resolve host` or `Could not resolve proxy`
-///   (`lib/hostip.c`, curl 8.11), `Failed to connect to ` (`lib/connect.c`),
-///   `timed out` (`Resolving timed out after`, `Connection timed out after`,
-///   `Operation timed out after` from `lib/multi.c`, `name lookup timed out`
-///   from `lib/hostip.c`), `Timeout was reached` (`lib/strerror.c`), or the
-///   C library's words for the errors themselves, `Connection refused`,
+///   the server answered, so it is never this form), when it holds `Could
+///   not resolve host` or `Could not resolve proxy` (`lib/hostip.c`, curl
+///   8.11), `Failed to connect to ` (`lib/connect.c`), `timed out`
+///   (`Resolving timed out after`, `Connection timed out after`, `Operation
+///   timed out after` from `lib/multi.c`, `name lookup timed out` from
+///   `lib/hostip.c`), `Operation too slow` (`lib/progress.c`, under
+///   `http.lowSpeedLimit`), `Timeout was reached` (`lib/strerror.c`), or
+///   the C library's words for the errors themselves, `Connection refused`,
 ///   `Network is unreachable`, `No route to host`;
 /// - OpenSSH's `ssh: connect to host <host> port <port>: <strerror>`
 ///   (`sshconnect.c`, `ssh_connect_direct`, 9.9p1) and `ssh: Could not
@@ -239,18 +285,49 @@ pub(crate) fn ref_lock(stderr: &str) -> Option<RefLock> {
 /// Each line is read from its start, after git's `fatal: ` or `error: `:
 /// a line the remote sent (`remote: ...`) is never one of them, and a
 /// quoted URL or path is never read for the words, so a remote or a path
-/// named `timed out.git` stays what git says it is. Anything else
-/// (`Permission denied (publickey).`, `Authentication failed`, `does not
-/// appear to be a git repository`, `Repository not found`, and git's
-/// `Could not read from remote repository.` after any of them) is not
-/// network trouble. git translates its own messages (`unable to access`,
-/// `unable to look up`, `unable to connect to`); under another language
-/// those read as a refusal, shown rather than hidden.
+/// named `timed out.git` stays what git says it is. A quoted field that a
+/// `fatal: ` or `error: ` line opens (a `'` at the start of a word) and does
+/// not close holds the lines up to the one with the closing `'`: a path
+/// with a newline in it, whose next line reads like ssh's, is still the
+/// path. Anything else (`Permission denied (publickey).`, `Authentication
+/// failed`, `does not appear to be a git repository`, `Repository not
+/// found`, and git's `Could not read from remote repository.` after any of
+/// them) is not network trouble. git translates its own messages (`unable
+/// to access`, `unable to look up`, `unable to connect to`); under another
+/// language those read as a refusal, shown rather than hidden.
 pub(crate) fn network_failure(stderr: &str) -> bool {
-    stderr.lines().any(network_line)
+    let mut in_field = false;
+    for line in stderr.lines() {
+        if in_field {
+            in_field = !line.contains('\'');
+            continue;
+        }
+        let line = line.trim();
+        let message = ["fatal: ", "error: "]
+            .iter()
+            .find_map(|prefix| line.strip_prefix(prefix));
+        let text = message.unwrap_or(line);
+        if network_line(text) {
+            return true;
+        }
+        in_field = message.is_some_and(opens_field);
+    }
+    false
 }
 
-/// One line of [`network_failure`].
+/// Whether git's message opens a quoted field it does not close on its
+/// line: its first `'` at the start of a word has no `'` after it.
+fn opens_field(message: &str) -> bool {
+    let bytes = message.as_bytes();
+    let opening = bytes
+        .iter()
+        .enumerate()
+        .find(|&(i, b)| *b == b'\'' && (i == 0 || bytes[i - 1] == b' '))
+        .map(|(i, _)| i);
+    opening.is_some_and(|i| !message[i + 1..].contains('\''))
+}
+
+/// One message of [`network_failure`], without git's `fatal: ` or `error: `.
 fn network_line(line: &str) -> bool {
     const BY_THEMSELVES: [&str; 4] = [
         "ssh: connect to host ",
@@ -258,11 +335,6 @@ fn network_line(line: &str) -> bool {
         "unable to look up ",
         "unable to connect to ",
     ];
-    let line = line.trim();
-    let line = ["fatal: ", "error: "]
-        .iter()
-        .find_map(|prefix| line.strip_prefix(prefix))
-        .unwrap_or(line);
     if BY_THEMSELVES.iter().any(|form| line.starts_with(form)) {
         return true;
     }
@@ -280,7 +352,7 @@ fn network_line(line: &str) -> bool {
 /// Whether curl's reason, as git prints it, says the network is in the way
 /// (see [`network_failure`]).
 fn curl_reason(reason: &str) -> bool {
-    const CURL_REASONS: [&str; 8] = [
+    const CURL_REASONS: [&str; 9] = [
         "Could not resolve host",
         "Could not resolve proxy",
         "Failed to connect to ",
@@ -288,6 +360,7 @@ fn curl_reason(reason: &str) -> bool {
         "Network is unreachable",
         "No route to host",
         "timed out",
+        "Operation too slow",
         "Timeout was reached",
     ];
     CURL_REASONS.iter().any(|words| reason.contains(words))
@@ -348,8 +421,145 @@ fn remote_moved(stdout: &str) -> bool {
     })
 }
 
+/// The settings that keep a git from starting a background process (which
+/// would be stopped with the step): no automatic maintenance or gc, no
+/// fsmonitor daemon.
+pub const NO_BACKGROUND: [&str; 3] = [
+    "maintenance.auto=false",
+    "gc.auto=0",
+    "core.fsmonitor=false",
+];
+
+/// The environment that keeps a git from prompting, given the caller's
+/// environment (`get`) and whether git config sets `core.sshCommand`:
+/// `GIT_TERMINAL_PROMPT=0` and an empty `GIT_ASKPASS` (git asks no askpass
+/// helper, `core.askPass` and `SSH_ASKPASS` included, and fails instead)
+/// always; `GCM_INTERACTIVE=never` unless the user set it;
+/// `GIT_SSH_COMMAND="ssh -o BatchMode=yes"` unless the user chose an ssh
+/// command (`GIT_SSH_COMMAND`, `GIT_SSH` or `core.sshCommand`, which the
+/// variable would override).
+pub fn remote_env(
+    get: impl Fn(&str) -> Option<OsString>,
+    ssh_command_configured: bool,
+) -> Vec<(&'static str, &'static str)> {
+    let set = |key: &str| get(key).is_some_and(|v| !v.is_empty());
+    let mut env = vec![("GIT_TERMINAL_PROMPT", "0"), ("GIT_ASKPASS", "")];
+    if !set("GCM_INTERACTIVE") {
+        env.push(("GCM_INTERACTIVE", "never"));
+    }
+    if !(ssh_command_configured || set("GIT_SSH_COMMAND") || set("GIT_SSH")) {
+        env.push(("GIT_SSH_COMMAND", "ssh -o BatchMode=yes"));
+    }
+    env
+}
+
+/// The `remote.<remote>.*` settings a push alias named `alias` takes
+/// (`git config --null --list`: `<key>\n<value>` entries, or `<key>` for a
+/// key with no value), as `-c` values in their order: every one but
+/// `fetch` and `mirror`. A remote already configured under the alias's
+/// name refuses the push, since its settings would add to the alias's.
+fn alias_settings(list: &[u8], remote: &str, alias: &str) -> Result<Vec<String>, String> {
+    let (own, taken) = (format!("remote.{remote}."), format!("remote.{alias}."));
+    let mut settings = Vec::new();
+    for entry in String::from_utf8_lossy(list).split('\0') {
+        let (key, value) = match entry.split_once('\n') {
+            Some((key, value)) => (key, Some(value)),
+            None => (entry, None),
+        };
+        if key.starts_with(&taken) {
+            return Err(format!(
+                "a remote named {alias} is configured; Kluris pushes to {remote} through a remote of that name, so rename it (git remote rename {alias} <another name>) and run kluris sync again"
+            ));
+        }
+        let Some(name) = key.strip_prefix(&own) else {
+            continue;
+        };
+        if name.contains('.') || name == "fetch" || name == "mirror" {
+            continue;
+        }
+        settings.push(match value {
+            Some(value) => format!("remote.{alias}.{name}={value}"),
+            None => format!("remote.{alias}.{name}"),
+        });
+    }
+    Ok(settings)
+}
+
+impl SystemGit {
+    /// git with `args` in `dir`, stopped with every process it started at
+    /// `deadline`.
+    pub(crate) fn bounded(
+        &self,
+        dir: &Path,
+        args: &[&str],
+        deadline: Instant,
+    ) -> Result<Finished, RemoteError> {
+        let error = |code, detail: String| GitError {
+            args: args.iter().map(|a| a.to_string()).collect(),
+            code,
+            detail,
+        };
+        match run_until(self.command(Some(dir), args), deadline) {
+            Ok(done) => Ok(done),
+            Err(RunError::TimedOut) => Err(RemoteError::TimedOut),
+            Err(RunError::Spawn(e)) => Err(RemoteError::Failed(error(None, e.to_string()))),
+        }
+    }
+
+    /// [`SystemGit::bounded`], failing unless git exits 0.
+    pub(crate) fn checked(
+        &self,
+        dir: &Path,
+        args: &[&str],
+        deadline: Instant,
+    ) -> Result<Vec<u8>, RemoteError> {
+        let done = self.bounded(dir, args, deadline)?;
+        if done.status.success() {
+            Ok(done.stdout)
+        } else {
+            Err(RemoteError::Failed(GitError {
+                args: args.iter().map(|a| a.to_string()).collect(),
+                code: done.status.code(),
+                detail: String::from_utf8_lossy(&done.stderr).trim().to_string(),
+            }))
+        }
+    }
+
+    /// This git when it has the remote environment, else one with it.
+    fn remote(&self, repo: &Repo) -> Result<Cow<'_, SystemGit>, RemoteError> {
+        if self.remote_ready {
+            Ok(Cow::Borrowed(self))
+        } else {
+            self.for_remote(repo)
+                .map(Cow::Owned)
+                .map_err(RemoteError::Failed)
+        }
+    }
+}
+
 impl SyncGit for SystemGit {
-    fn tracking(&self, repo: &Repo) -> Result<Option<Tracking>, GitError> {
+    fn for_remote(&self, repo: &Repo) -> Result<Self, GitError> {
+        if self.remote_ready {
+            return Ok(self.clone());
+        }
+        let args = ["config", "--get", "core.sshCommand"];
+        let configured = match self.run(&repo.dir, &args) {
+            Ok(out) => !out.trim_ascii().is_empty(),
+            Err(e) if e.code == Some(1) => false,
+            Err(e) => return Err(e),
+        };
+        let mut git = self.clone();
+        for (key, value) in remote_env(|key| self.env_var(key), configured) {
+            git = git.env(key, value);
+        }
+        for setting in NO_BACKGROUND {
+            git = git.config(setting);
+        }
+        git.remote_ready = true;
+        Ok(git)
+    }
+
+    fn upstream(&self, repo: &Repo) -> Result<Option<Upstream>, GitError> {
         let Ok(branch) = self.run(&repo.dir, &["symbolic-ref", "--quiet", "HEAD"]) else {
             return Ok(None);
         };
@@ -367,38 +577,42 @@ impl SyncGit for SystemGit {
         if remote.is_empty() || remote == "." || refname.is_empty() || remote_ref.is_empty() {
             return Ok(None);
         }
-        Ok(Some(Tracking {
+        Ok(Some(Upstream {
             remote: remote.to_string(),
             refname: refname.to_string(),
             remote_ref: remote_ref.to_string(),
         }))
     }
 
-    fn fetch(
+    fn ls_remote(
         &self,
         repo: &Repo,
-        tracking: &Tracking,
+        upstream: &Upstream,
         deadline: Instant,
-    ) -> Result<Fetch, FreshError> {
-        let dir = &repo.dir;
-        let env = self.no_prompt_env(dir, &[], deadline)?;
-        let remote = &tracking.remote;
-        let ls_remote = [
+    ) -> Result<Option<String>, RemoteError> {
+        let args = [
             "ls-remote",
             "--quiet",
             "--refs",
-            remote,
-            &tracking.remote_ref,
+            &upstream.remote,
+            &upstream.remote_ref,
         ];
-        let out = self.checked(dir, &ls_remote, &env, deadline)?;
-        let Some(commit) = listed(&out, &tracking.remote_ref) else {
-            return Ok(Fetch::NoBranch);
-        };
-        // As a fresh read's fetch (`FreshGit::fetch_objects`): the objects
-        // alone. Kluris moves the remote-tracking ref after, outside the
-        // bound (`move_ref`), so a fetch stopped at the deadline holds no
-        // ref lock (a terminated job on Windows removes none).
-        let args = SystemGit::with_no_background(&[
+        let out = self.remote(repo)?.checked(&repo.dir, &args, deadline)?;
+        Ok(listed(&out, &upstream.remote_ref))
+    }
+
+    fn fetch_branch(
+        &self,
+        repo: &Repo,
+        upstream: &Upstream,
+        deadline: Instant,
+    ) -> Result<(), RemoteError> {
+        // The source alone (no `:dst`) with an empty `--refmap=` updates no
+        // remote-tracking ref (`remote.<name>.fetch` is ignored, and so is
+        // `remote.<name>.followRemoteHEAD`); no tags, no pruning, no
+        // `FETCH_HEAD`; no commit-graph, and no bundle URI (which writes
+        // `refs/bundles/*` and `fetch.bundleCreationToken`).
+        let args = [
             "-c",
             "fetch.writeCommitGraph=false",
             "-c",
@@ -410,28 +624,29 @@ impl SyncGit for SystemGit {
             "--no-recurse-submodules",
             "--no-write-fetch-head",
             "--refmap=",
-            remote,
-            &tracking.remote_ref,
-        ]);
-        match self.checked(dir, &args, &env, deadline) {
-            Ok(_) => {}
-            // The branch went after `ls-remote` listed it.
-            Err(FreshError::Failed(e)) if e.detail.contains("couldn't find remote ref") => {
-                return Ok(Fetch::Gone);
-            }
-            Err(e) => return Err(e),
-        }
-        // Local only: in a partial clone git 2.45 and newer report a missing
-        // commit absent instead of fetching it (`GIT_NO_LAZY_FETCH`); older
-        // git fetches it, but never prompting and within the bound.
+            &upstream.remote,
+            &upstream.remote_ref,
+        ];
+        self.remote(repo)?
+            .checked(&repo.dir, &args, deadline)
+            .map(drop)
+    }
+
+    fn has_commit(
+        &self,
+        repo: &Repo,
+        commit: &str,
+        deadline: Instant,
+    ) -> Result<bool, RemoteError> {
         let spec = format!("{commit}^{{commit}}");
-        let check = ["cat-file", "-e", &spec];
-        let mut local = env;
-        local.push(("GIT_NO_LAZY_FETCH", "1"));
-        match self.checked(dir, &check, &local, deadline) {
-            Ok(_) => Ok(Fetch::Commit(commit)),
+        let git = self
+            .remote(repo)?
+            .into_owned()
+            .env("GIT_NO_LAZY_FETCH", "1");
+        match git.checked(&repo.dir, &["cat-file", "-e", &spec], deadline) {
+            Ok(_) => Ok(true),
             // Not here (git cannot name it, or it is no commit).
-            Err(FreshError::Failed(e)) if e.code.is_some() => Ok(Fetch::Gone),
+            Err(RemoteError::Failed(e)) if e.code.is_some() => Ok(false),
             Err(e) => Err(e),
         }
     }
@@ -475,6 +690,15 @@ impl SyncGit for SystemGit {
         let spec = format!("{rev}^{{commit}}");
         let out = self.run(&repo.dir, &["rev-parse", "--verify", &spec])?;
         Ok(first_line(&out))
+    }
+
+    fn is_ancestor(&self, repo: &Repo, ancestor: &str, descendant: &str) -> Result<bool, GitError> {
+        let args = ["merge-base", "--is-ancestor", ancestor, descendant];
+        match self.output(self.command(Some(&repo.dir), &args), &args) {
+            Ok(_) => Ok(true),
+            Err(e) if e.code == Some(1) => Ok(false),
+            Err(e) => Err(e),
+        }
     }
 
     fn merge_bases(&self, repo: &Repo, a: &str, b: &str) -> Result<Vec<String>, GitError> {
@@ -530,7 +754,7 @@ impl SyncGit for SystemGit {
         // Whatever the user's config says: an ignored file in the way stops
         // it (git overwrites one by default), and a local change stops it
         // instead of being stashed and applied back with conflict markers.
-        let args = SystemGit::with_no_background(&[
+        let args = [
             "-c",
             "merge.autostash=false",
             "-c",
@@ -540,7 +764,7 @@ impl SyncGit for SystemGit {
             "--no-overwrite-ignore",
             "--quiet",
             to,
-        ]);
+        ];
         // The post-merge hook's output reaches the user, all of it on
         // stderr so `--json` stays one document; so does git's own message
         // when it refuses.
@@ -563,21 +787,39 @@ impl SyncGit for SystemGit {
         }
     }
 
-    fn push(&self, repo: &Repo, tracking: &Tracking, deadline: Instant) -> PushOutcome {
-        let refspec = format!("HEAD:{}", tracking.remote_ref);
-        let ssh = self.run(&repo.dir, &["config", "--get", "core.sshCommand"]);
-        let configured = ssh.is_ok_and(|out| !out.trim_ascii().is_empty());
-        let env = prompt_env(|key| self.env_var(key), configured);
-        let args = SystemGit::with_no_background(&[
+    fn push(
+        &self,
+        repo: &Repo,
+        upstream: &Upstream,
+        commit: &str,
+        deadline: Instant,
+    ) -> PushOutcome {
+        let git = match self.remote(repo) {
+            Ok(git) => git,
+            Err(RemoteError::TimedOut) => return PushOutcome::Unreachable,
+            Err(RemoteError::Failed(e)) => return PushOutcome::Failed(e.to_string()),
+        };
+        let list = match git.run(&repo.dir, &["config", "--null", "--list"]) {
+            Ok(list) => list,
+            Err(e) => return PushOutcome::Failed(e.to_string()),
+        };
+        let alias = format!("kluris-{}", upstream.remote);
+        let settings = match alias_settings(&list, &upstream.remote, &alias) {
+            Ok(settings) => settings,
+            Err(why) => return PushOutcome::Failed(why),
+        };
+        let refspec = format!("{commit}:{}", upstream.remote_ref);
+        let mut args: Vec<&str> = settings.iter().flat_map(|s| ["-c", s.as_str()]).collect();
+        args.extend([
             "push",
             "--porcelain",
             "--no-recurse-submodules",
-            &tracking.remote,
+            &alias,
             &refspec,
         ]);
-        match self.bounded(&repo.dir, &args, &env, deadline) {
-            Err(FreshError::TimedOut) => PushOutcome::Unreachable,
-            Err(FreshError::Failed(e)) => PushOutcome::Failed(e.to_string()),
+        match git.bounded(&repo.dir, &args, deadline) {
+            Err(RemoteError::TimedOut) => PushOutcome::Unreachable,
+            Err(RemoteError::Failed(e)) => PushOutcome::Failed(e.to_string()),
             Ok(done) if done.status.success() => PushOutcome::Pushed,
             Ok(done) => {
                 let stdout = String::from_utf8_lossy(&done.stdout);
@@ -802,6 +1044,69 @@ mod tests {
         ] {
             assert!(!network_failure(&refused), "{refused}");
         }
+    }
+
+    #[test]
+    fn network_words_inside_a_quoted_field_that_spans_lines_are_a_refusal() {
+        // What git 2.55 printed on macOS for a remote path that holds a
+        // newline: the second line is inside the quoted path.
+        let read = "\nfatal: Could not read from remote repository.\n\nPlease make sure you have the correct access rights\nand the repository exists.\n";
+        for refused in [
+            format!(
+                "fatal: '/h/a\nssh: connect to host h port 22: Connection refused' does not appear to be a git repository{read}"
+            ),
+            format!(
+                "fatal: '/h/a\nb\nunable to access 'x': Could not resolve host: h' does not appear to be a git repository{read}"
+            ),
+        ] {
+            assert!(!network_failure(&refused), "{refused}");
+        }
+        // An apostrophe inside a word opens no field: the lines after it
+        // are read.
+        for network in [
+            "fatal: couldn't find remote ref refs/heads/x\nssh: connect to host h port 22: Connection refused\n",
+            "fatal: unable to access 'http://127.0.0.1:9/x.git/': Failed to connect to 127.0.0.1 port 9 after 0 ms: Couldn't connect to server\n",
+        ] {
+            assert!(network_failure(network), "{network}");
+        }
+    }
+
+    #[test]
+    fn a_transfer_too_slow_for_http_low_speed_limit_is_network_trouble() {
+        // curl's `lib/progress.c` under `http.lowSpeedLimit`.
+        for network in [
+            "fatal: unable to access 'http://127.0.0.1:9/x.git/': Operation too slow. Less than 1000 bytes/sec transferred the last 1 seconds\n",
+            "error: RPC failed; curl 28 Operation too slow. Less than 1000 bytes/sec transferred the last 1 seconds\nfatal: expected flush after ref listing\n",
+        ] {
+            assert!(network_failure(network), "{network}");
+        }
+    }
+
+    #[test]
+    fn a_push_alias_takes_every_remote_setting_but_fetch_and_mirror() {
+        let list = b"core.bare\nfalse\0remote.origin.url\n/r.git\0remote.origin.fetch\n+refs/heads/*:refs/remotes/origin/*\0remote.origin.pushurl\na\0remote.origin.pushurl\nb\0remote.origin.mirror\nfalse\0remote.origin.lfsurl\nhttps://l/x\0remote.origin.skipfetchall\0remote.origin.x.y\n1\0remote.originx.url\n/x.git\0remote.other.url\n/o.git\0";
+        assert_eq!(
+            alias_settings(list, "origin", "kluris-origin").unwrap(),
+            [
+                "remote.kluris-origin.url=/r.git",
+                "remote.kluris-origin.pushurl=a",
+                "remote.kluris-origin.pushurl=b",
+                "remote.kluris-origin.lfsurl=https://l/x",
+                "remote.kluris-origin.skipfetchall",
+            ]
+        );
+        // A remote whose name has a dot: only its own keys.
+        let dotted = b"remote.a.b.url\n/ab.git\0remote.a.url\n/a.git\0";
+        assert_eq!(
+            alias_settings(dotted, "a.b", "kluris-a.b").unwrap(),
+            ["remote.kluris-a.b.url=/ab.git"]
+        );
+        let taken = b"remote.origin.url\n/r.git\0remote.kluris-origin.url\n/k.git\0";
+        let why = alias_settings(taken, "origin", "kluris-origin").unwrap_err();
+        assert!(
+            why.starts_with("a remote named kluris-origin is configured"),
+            "{why}"
+        );
     }
 
     #[test]

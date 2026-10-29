@@ -24,8 +24,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use super::commit::{PathProblem, normalize_path};
+use super::git::SyncGit;
 use super::merge::{MergeOutcome, merge_commits};
-use super::plumbing::SyncGit;
 use super::{
     Conflict, ConflictKind, PENDING, Pending, ResolvedChoice, SyncError, SyncRequest,
     blocked_paths, check_git, commit_merge, sync,
@@ -237,6 +237,8 @@ pub fn resolve<G: SyncGit>(
     request: &ResolveRequest,
 ) -> Result<ResolveReport, ResolveError> {
     let (repo, path) = locate(root, git)?;
+    // Every git from here has the remote environment: none prompts.
+    let git = &git.for_remote(&repo)?;
     let mut pending = read_pending(&path)?;
     let rel = normalize_path(request.path).map_err(|problem| ResolveError::InvalidPath {
         path: request.path.to_string(),

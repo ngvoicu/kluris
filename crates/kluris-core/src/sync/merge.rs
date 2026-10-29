@@ -28,7 +28,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::frontmatter_merge::merge_meta;
-use super::plumbing::SyncGit;
+use super::git::SyncGit;
 use super::{Conflict, ConflictKind, ResolvedChoice};
 use crate::brain::tree_store::{Node, TreeStore};
 use crate::dream::{DreamOptions, map_changes};

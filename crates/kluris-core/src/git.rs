@@ -141,6 +141,10 @@ pub struct SystemGit {
     program: OsString,
     /// Environment changes for every run, in order (`None` removes).
     env: Vec<(OsString, Option<OsString>)>,
+    /// `-c <key>=<value>` before every run's own arguments, in order.
+    options: Vec<String>,
+    /// The remote environment is set ([`crate::sync::git::SyncGit::for_remote`]).
+    pub(crate) remote_ready: bool,
 }
 
 impl Default for SystemGit {
@@ -160,6 +164,8 @@ impl SystemGit {
         SystemGit {
             program: OsString::from("git"),
             env: Vec::new(),
+            options: Vec::new(),
+            remote_ready: false,
         }
     }
 
@@ -172,6 +178,13 @@ impl SystemGit {
     /// Set an environment variable for every run.
     pub fn env(mut self, key: impl Into<OsString>, value: impl Into<OsString>) -> SystemGit {
         self.env.push((key.into(), Some(value.into())));
+        self
+    }
+
+    /// Give every run `-c <key_value>` before its own arguments.
+    pub fn config(mut self, key_value: impl Into<String>) -> SystemGit {
+        self.options.push("-c".into());
+        self.options.push(key_value.into());
         self
     }
 
@@ -189,10 +202,11 @@ impl SystemGit {
         }
     }
 
-    /// git with `args`, in `dir` when given, with this runner's environment.
+    /// git with `args`, in `dir` when given, with this runner's options and
+    /// environment, and stdin closed: a hook that reads it never waits.
     pub(crate) fn command(&self, dir: Option<&Path>, args: &[&str]) -> Command {
         let mut cmd = Command::new(&self.program);
-        cmd.args(args);
+        cmd.args(&self.options).args(args).stdin(Stdio::null());
         if let Some(dir) = dir {
             cmd.current_dir(dir);
         }
@@ -961,7 +975,6 @@ impl Plumbing for SystemGit {
         }
         // As `git commit` runs them: no editor, the hook's output on stderr.
         cmd.env("GIT_EDITOR", ":")
-            .stdin(Stdio::null())
             .stdout(Stdio::from(std::io::stderr()))
             .stderr(Stdio::inherit());
         let status = cmd.status().map_err(|e| error(None, e.to_string()))?;
