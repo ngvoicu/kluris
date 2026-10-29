@@ -1,0 +1,9 @@
+---
+source: crates/kluris-cli/tests/golden_create.rs
+expression: run.dump()
+---
+== stdout
+
+== stderr
+Error: Brain name 'Bad' is invalid. Use lowercase letters, numbers, and hyphens only.
+== exit 1

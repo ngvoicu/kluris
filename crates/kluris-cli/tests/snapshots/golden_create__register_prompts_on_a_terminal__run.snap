@@ -1,0 +1,26 @@
+---
+source: crates/kluris-cli/tests/golden_create.rs
+expression: run.dump()
+---
+== stdout
+
+Register a brain
+
+  Path to brain directory:   Path to brain directory: 
+  Install specmint companions for this brain?
+    [1] specmint-core      (spec-driven-development companion)
+    [2] specmint-tdd       (spec-driven-development with test-driven-development focus)
+    [3] core + tdd
+    [4] skip
+    [5] specmint-core-html (spec-driven-development with canonical SPEC.html)
+    [6] specmint-tdd-html  (TDD-focused specs with canonical SPEC.html)
+    [7] all
+  Choice [4]: Brain registered: team
+  Path: <ROOT>/work/brains/team
+
+Agent skill installed: kluris-team
+  Claude/Codex/Antigravity/etc: /kluris-team
+  Hermes: /skill kluris-team  (or start with `hermes -s kluris-team`)
+  Created a new Hermes profile later? Run `kluris doctor` to refresh Kluris skills.
+== stderr
+== exit 0

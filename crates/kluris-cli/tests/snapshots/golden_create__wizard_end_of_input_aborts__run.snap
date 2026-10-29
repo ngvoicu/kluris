@@ -1,0 +1,13 @@
+---
+source: crates/kluris-cli/tests/golden_create.rs
+expression: run.dump()
+---
+== stdout
+
+Create a new brain
+
+  Brain name (lowercase, hyphens ok):   What does this brain cover? (one sentence): 
+<no newline at end>
+== stderr
+Aborted!
+== exit 1

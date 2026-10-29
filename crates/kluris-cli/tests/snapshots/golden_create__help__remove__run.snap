@@ -1,0 +1,23 @@
+---
+source: crates/kluris-cli/tests/golden_create.rs
+expression: run.dump()
+---
+== stdout
+Unregister a brain (does not delete files).
+
+Always preserves the files on disk. Git state is the user's responsibility after unregistering.
+
+Usage: kluris remove [OPTIONS] BRAIN_NAME
+
+Arguments:
+  <BRAIN_NAME>
+          
+
+Options:
+      --json
+          JSON output
+
+      --help
+          Show this message and exit.
+== stderr
+== exit 0

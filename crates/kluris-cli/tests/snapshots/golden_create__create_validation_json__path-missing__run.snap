@@ -1,0 +1,8 @@
+---
+source: crates/kluris-cli/tests/golden_create.rs
+expression: run.dump()
+---
+== stdout
+{"ok": false, "error": "--path 'no/such' is not a directory."}
+== stderr
+== exit 1

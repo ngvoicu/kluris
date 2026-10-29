@@ -1,0 +1,8 @@
+---
+source: crates/kluris-cli/tests/golden_create.rs
+expression: run.dump()
+---
+== stdout
+{"ok": true, "name": "sub-brain", "path": "<ROOT>/work/brains/team/projects/sub", "companions": []}
+== stderr
+== exit 0

@@ -1,0 +1,8 @@
+---
+source: crates/kluris-cli/tests/golden_create.rs
+expression: run.dump()
+---
+== stdout
+== stderr
+Error: Brain path is required in non-interactive mode. Run 'kluris register <path>'.
+== exit 1

@@ -1,0 +1,9 @@
+---
+source: crates/kluris-cli/tests/golden_create.rs
+expression: run.dump()
+---
+== stdout
+
+== stderr
+Error: --path 'brains/taken' is already a brain. Pass the parent directory, not the brain itself.
+== exit 1

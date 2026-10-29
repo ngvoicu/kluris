@@ -1,0 +1,49 @@
+---
+source: crates/kluris-cli/tests/golden_create.rs
+expression: run.dump()
+---
+== stdout
+Create a new brain.
+
+Prompts for anything not provided via flags. Use --json to skip all prompts.
+
+  kluris create                    # full wizard
+  kluris create my-brain           # prompts for description, location, type, git
+  kluris create my-brain --type personal --path ~/brains --no-git  # no prompts
+  kluris create team-brain --remote git@github.com:team/brain.git
+
+Usage: kluris create [OPTIONS] [NAME]
+
+Arguments:
+  [NAME]
+          
+
+Options:
+      --description <TEXT>
+          What this brain covers (one sentence)
+
+      --path <PATH>
+          Directory to create the brain in (default: current dir)
+
+      --type <[product-group|personal|product|research|blank]>
+          Brain type
+
+      --remote <TEXT>
+          Optional git remote URL (default: local git only)
+
+      --branch <TEXT>
+          Default git branch
+
+      --no-git
+          Skip git entirely (default: local git only)
+
+      --from-config <PATH>
+          Custom YAML config file for structure
+
+      --json
+          JSON output
+
+      --help
+          Show this message and exit.
+== stderr
+== exit 0

@@ -1,0 +1,14 @@
+name: only
+description: only knowledge base
+agents:
+  commands_for:
+  - claude
+  - cursor
+  - windsurf
+  - copilot
+  - codex
+  - gemini
+  - hermes
+  - kilocode
+  - junie
+companions: []

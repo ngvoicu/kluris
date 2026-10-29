@@ -1,0 +1,19 @@
+---
+source: crates/kluris-cli/tests/golden_create.rs
+expression: text.as_ref()
+---
+== git cat-file -p HEAD
+author Kluris Parity <parity@kluris.invalid> 1767268800 +0000
+committer Kluris Parity <parity@kluris.invalid> 1767268800 +0000
+
+brain: initialize demo
+== git ls-tree -r HEAD
+100644 blob	.gitignore
+100644 blob	README.md
+100644 blob	brain.md
+100644 blob	glossary.md
+== git symbolic-ref HEAD
+refs/heads/dev
+== git remote -v
+== git status --porcelain --ignored
+!! kluris.yml

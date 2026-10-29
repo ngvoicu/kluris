@@ -1,0 +1,14 @@
+name: taken
+description: taken knowledge base
+agents:
+  commands_for:
+  - claude
+  - cursor
+  - windsurf
+  - copilot
+  - codex
+  - gemini
+  - hermes
+  - kilocode
+  - junie
+companions: []

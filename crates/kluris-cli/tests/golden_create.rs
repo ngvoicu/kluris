@@ -1,0 +1,1229 @@
+//! Golden tests of `kluris create`, `register` and `remove`: every scenario
+//! of `parity/test_create_register_remove.py`, with the same inputs, as
+//! snapshots of Kluris's own output.
+//!
+//! Each run is snapshotted as `<name>__run` (stdout, stderr, exit code).
+//! A run that writes adds `<name>__tree` (every file under `work/`: the
+//! scaffolded brain, `config.yml`, the HOME skills) and, for a new brain,
+//! `<name>__git` (its first commit, branch, remote and status). A run that
+//! must write nothing is checked against the tree from before it. On
+//! Windows a snapshot holding a path under the root has its own `windows`
+//! variant (see [`snapshot`]).
+//!
+//! Scenarios that start from brains made earlier take them from
+//! `tests/fixtures/create`: each brain's files, and the skill and Windsurf
+//! workflow it had in every agent's own folder (see [`Prior`]).
+//!
+//! The wizard and the pickers need a terminal on stdin: those scenarios run
+//! Kluris on a pseudo-terminal and exist on Unix only.
+
+mod common;
+
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::sync::LazyLock;
+
+use common::{
+    PINNED_GIT_DATE, Run, Sandbox, fixture, git_state, normalize, printed_paths, tree_dump,
+    write_files,
+};
+use regex::Regex;
+
+#[cfg(unix)]
+use common::pty::{End, run_on_terminal};
+
+/// The lobes each `--type` scaffolds.
+const TYPES: &[(&str, i64)] = &[
+    ("product-group", 3),
+    ("personal", 3),
+    ("product", 6),
+    ("research", 6),
+    ("blank", 0),
+];
+
+const DESCRIPTION: &str = "Dëmo \"brain\" — it's ünïcode";
+
+const IDENTITY: &[&str] = &[
+    "GIT_AUTHOR_NAME",
+    "GIT_AUTHOR_EMAIL",
+    "GIT_COMMITTER_NAME",
+    "GIT_COMMITTER_EMAIL",
+];
+
+// --- snapshots -------------------------------------------------------------------
+
+/// `text` as the snapshot `name`. A path under the root is printed and
+/// written with native separators, so a snapshot holding one (`<ROOT>\` on
+/// Windows) is named for the paths this OS prints ([`printed_paths`]).
+fn snapshot(name: &str, text: impl AsRef<str>) {
+    let text = text.as_ref();
+    let check = || insta::assert_snapshot!(name, text);
+    if text.contains("<ROOT>\\") {
+        printed_paths(check);
+    } else {
+        check();
+    }
+}
+
+/// `kluris args` with stdin a pseudo-terminal and `KLURIS_NO_PROMPT` unset:
+/// `lines` are typed one per line, then Ctrl-D.
+#[cfg(unix)]
+fn on_terminal(sb: &Sandbox, args: &[&str], lines: &[&str]) -> Run {
+    let mut cmd = sb.command(args);
+    cmd.env_remove("KLURIS_NO_PROMPT");
+    run_on_terminal(cmd, lines, End::Eof)
+}
+
+/// Every file under `work/` (HOME included), normalized.
+fn tree(sb: &Sandbox) -> String {
+    normalize(&tree_dump(&sb.work), &sb.root)
+}
+
+/// The repository at `rel` (relative to `work/`), normalized.
+fn repo_state(sb: &Sandbox, rel: &str) -> String {
+    normalize(&git_state(&sb.work.join(rel)), &sb.root)
+}
+
+fn write(sb: &Sandbox, rel: &str, text: &str) {
+    write_files(&sb.work, &[(rel, text)]);
+}
+
+fn mkdir(sb: &Sandbox, rel: &str) {
+    fs::create_dir_all(sb.work.join(rel)).unwrap();
+}
+
+fn git(sb: &Sandbox, rel: &str, args: &[&str]) {
+    sb.git(&sb.work.join(rel), args, PINNED_GIT_DATE);
+}
+
+/// The run, the tree it leaves and, with `repo` (relative to `work/`), the
+/// repository there.
+fn assert_golden(name: &str, sb: &Sandbox, run: &Run, repo: Option<&str>) {
+    snapshot(&format!("{name}__run"), run.render(&sb.root));
+    snapshot(&format!("{name}__tree"), tree(sb));
+    if let Some(repo) = repo {
+        snapshot(&format!("{name}__git"), repo_state(sb, repo));
+    }
+}
+
+/// The run of a command that writes nothing: `before` is the tree from
+/// before it.
+fn assert_golden_unchanged(name: &str, sb: &Sandbox, before: &str, run: &Run) {
+    assert_eq!(tree(sb), before, "{name}: the run changed the tree");
+    snapshot(&format!("{name}__run"), run.render(&sb.root));
+}
+
+// --- brains made earlier -----------------------------------------------------------
+
+/// The folders that each held a copy of a brain's skill, under HOME; its
+/// Windsurf workflow was `.codeium/windsurf/global_workflows/kluris-<brain>.md`.
+const SKILL_FOLDERS: &[&str] = &[
+    ".agents/skills",
+    ".claude/skills",
+    ".codeium/windsurf/skills",
+    ".codex/skills",
+    ".copilot/skills",
+    ".cursor/skills",
+    ".gemini/skills",
+    ".hermes/skills",
+    ".junie/skills",
+    ".kilo/skills",
+];
+
+/// The state a scenario starts from: brains made and registered earlier.
+///
+/// `brains`: the fixture `brains/<name>` placed at a folder under `work/`,
+/// its `gitignore` as `.gitignore` (so it ignores nothing in this
+/// repository) and `<TODAY>` as today's date; with git, it is a repository
+/// whose first commit is made as `create` makes it. `skills`: the brains
+/// whose `skills/<name>/SKILL.md` sits in every [`SKILL_FOLDERS`] folder,
+/// beside its `workflow.md`. `config`: `config.yml`. In the skills and the
+/// config, `<ROOT>` is the sandbox's root.
+struct Prior {
+    brains: &'static [(&'static str, &'static str, bool)],
+    skills: &'static [&'static str],
+    config: &'static str,
+}
+
+/// `taken`, at `brains/taken` without git.
+const TAKEN: Prior = Prior {
+    brains: &[("taken", "brains/taken", false)],
+    skills: &["taken"],
+    config: "brains:\n  taken:\n    path: <ROOT>/work/brains/taken\n    description: taken knowledge base\n",
+};
+
+/// `first`, at `first` without git.
+const FIRST: Prior = Prior {
+    brains: &[("first", "first", false)],
+    skills: &["first"],
+    config: "brains:\n  first:\n    path: <ROOT>/work/first\n    description: first knowledge base\n",
+};
+
+/// `a--b`, at `a--b` with git: a name `create` refuses now.
+const A_B: Prior = Prior {
+    brains: &[("a--b", "a--b", true)],
+    skills: &["a--b"],
+    config: "brains:\n  a--b:\n    path: <ROOT>/work/a--b\n    description: a--b knowledge base\n",
+};
+
+/// `team`, at `brains/team` with git, unregistered.
+const TEAM_UNREGISTERED: Prior = Prior {
+    brains: &[("team", "brains/team", true)],
+    skills: &[],
+    config: "brains: {}\n",
+};
+
+/// `team`, at `brains/team` with git, registered.
+const TEAM: Prior = Prior {
+    brains: &[("team", "brains/team", true)],
+    skills: &["team"],
+    config: "brains:\n  team:\n    path: <ROOT>/work/brains/team\n    description: The team brain\n",
+};
+
+/// `a` (git) and `b` (no git) in `brains`.
+const TWO: Prior = Prior {
+    brains: &[("a", "brains/a", true), ("b", "brains/b", false)],
+    skills: &["a", "b"],
+    config: "brains:\n  a:\n    path: <ROOT>/work/brains/a\n    description: a knowledge base\n  b:\n    path: <ROOT>/work/brains/b\n    description: b knowledge base\n",
+};
+
+/// `only`, at `only` with git.
+const ONLY: Prior = Prior {
+    brains: &[("only", "only", true)],
+    skills: &["only"],
+    config: "brains:\n  only:\n    path: <ROOT>/work/only\n    description: only knowledge base\n",
+};
+
+fn place(sb: &Sandbox, prior: &Prior) {
+    let today = jiff::Timestamp::now()
+        .to_zoned(jiff::tz::TimeZone::UTC)
+        .date()
+        .to_string();
+    for (name, rel, with_git) in prior.brains {
+        let from = fixture("create/brains").join(name);
+        for (file, text) in fixture_files(&from) {
+            let file = if file == "gitignore" {
+                ".gitignore".to_string()
+            } else {
+                file
+            };
+            write(
+                sb,
+                &format!("{rel}/{file}"),
+                &text.replace("<TODAY>", &today),
+            );
+        }
+        if *with_git {
+            git(sb, rel, &["init", "-q"]);
+            git(sb, rel, &["checkout", "-q", "-b", "main"]);
+            git(sb, rel, &["add", "-A"]);
+            git(
+                sb,
+                rel,
+                &["commit", "-q", "-m", &format!("brain: initialize {name}")],
+            );
+        }
+    }
+    for name in prior.skills {
+        let read = |file: &str| {
+            let path = fixture("create/skills").join(name).join(file);
+            let text =
+                fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+            expand(&text, &sb.root)
+        };
+        let skill = read("SKILL.md");
+        for folder in SKILL_FOLDERS {
+            write(sb, &format!("home/{folder}/kluris-{name}/SKILL.md"), &skill);
+        }
+        write(
+            sb,
+            &format!("home/.codeium/windsurf/global_workflows/kluris-{name}.md"),
+            &read("workflow.md"),
+        );
+    }
+    write(
+        sb,
+        "home/.kluris/config.yml",
+        &expand(prior.config, &sb.root),
+    );
+}
+
+/// Every file under `dir`, `.git` left out, as (its `/`-joined relative
+/// path, its text).
+fn fixture_files(dir: &Path) -> Vec<(String, String)> {
+    fn walk(dir: &Path, prefix: &str, out: &mut Vec<(String, String)>) {
+        let entries = fs::read_dir(dir).unwrap_or_else(|e| panic!("{}: {e}", dir.display()));
+        for entry in entries {
+            let path = entry.unwrap_or_else(|e| panic!("{e}")).path();
+            let name = path.file_name().unwrap_or_default().to_string_lossy();
+            let rel = format!("{prefix}{name}");
+            if name == ".git" {
+                continue;
+            } else if path.is_dir() {
+                walk(&path, &format!("{rel}/"), out);
+            } else {
+                let text =
+                    fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+                out.push((rel, text));
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(dir, "", &mut out);
+    out
+}
+
+/// `text` with each `<ROOT>/a/b` as the native path of `root/a/b`.
+fn expand(text: &str, root: &Path) -> String {
+    static AT_ROOT: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"<ROOT>((?:/[A-Za-z0-9._-]+)*)").unwrap_or_else(|e| panic!("{e}"))
+    });
+    AT_ROOT
+        .replace_all(text, |caps: &regex::Captures| {
+            let path: PathBuf = caps[1]
+                .split('/')
+                .filter(|s| !s.is_empty())
+                .fold(root.to_path_buf(), |p, s| p.join(s));
+            path.display().to_string()
+        })
+        .into_owned()
+}
+
+// --- create: scaffolds -------------------------------------------------------------
+
+#[test]
+fn create_every_type() {
+    for (brain_type, lobes) in TYPES {
+        for git in [true, false] {
+            let sb = &Sandbox::new();
+            mkdir(sb, "brains");
+            let mut args = vec!["create", "demo", "--path", "brains", "--type", brain_type];
+            args.extend(["--description", DESCRIPTION]);
+            if !git {
+                args.push("--no-git");
+            }
+            args.push("--json");
+            let run = sb.kluris(&args);
+            assert!(
+                run.stdout.contains(&format!("\"lobes\": {lobes},")),
+                "{brain_type}: {}",
+                run.stdout
+            );
+            let name = format!(
+                "create_every_type__{brain_type}__{}",
+                if git { "git" } else { "no-git" }
+            );
+            assert_golden(&name, sb, &run, Some("brains/demo"));
+        }
+    }
+}
+
+/// No `--path`, `--type` or `--description`: `<cwd>/<name>`, the
+/// product-group lobes, `<name> knowledge base`.
+#[test]
+fn create_defaults_with_json() {
+    let sb = &Sandbox::new();
+    let run = sb.kluris(&["create", "solo", "--json"]);
+    assert_golden("create_defaults_with_json", sb, &run, Some("solo"));
+}
+
+#[test]
+fn create_text_output() {
+    let sb = &Sandbox::new();
+    mkdir(sb, "brains");
+    let args = [
+        "create",
+        "demo",
+        "--path",
+        "brains",
+        "--type",
+        "personal",
+        "--description",
+        "d",
+        "--no-git",
+    ];
+    let run = sb.kluris(&args);
+    assert_golden("create_text_output", sb, &run, None);
+}
+
+const GIT_SETUPS: &[(&str, &[&str])] = &[
+    ("branch", &["--branch", "dev"]),
+    ("remote", &["--remote", "git@example.com:team/brain.git"]),
+    (
+        "remote-branch",
+        &[
+            "--remote",
+            "https://example.com/brain.git",
+            "--branch",
+            "trunk",
+        ],
+    ),
+    ("branch-main", &["--branch", "main"]),
+    (
+        "remote-no-git",
+        &["--remote", "git@example.com:team/brain.git", "--no-git"],
+    ),
+];
+
+#[test]
+fn create_git_setup() {
+    for (case, extra) in GIT_SETUPS {
+        let sb = &Sandbox::new();
+        let mut args = vec!["create", "demo", "--type", "blank"];
+        args.extend(*extra);
+        args.push("--json");
+        let run = sb.kluris(&args);
+        assert_golden(&format!("create_git_setup__{case}"), sb, &run, Some("demo"));
+    }
+}
+
+/// Without a git identity the first commit is `kluris <kluris@local>`.
+#[test]
+fn create_commit_identity_fallback() {
+    let sb = &Sandbox::new();
+    let mut cmd = sb.command(&["create", "demo", "--json"]);
+    IDENTITY.iter().for_each(|key| {
+        cmd.env_remove(key);
+    });
+    let run = Run::of(cmd);
+    assert_golden("create_commit_identity_fallback", sb, &run, Some("demo"));
+}
+
+/// With `user.name`/`user.email` in git config and no identity in the
+/// environment, the commit is by that identity.
+#[test]
+fn create_keeps_a_git_identity() {
+    let sb = &Sandbox::new();
+    fs::write(
+        sb.root.join("gitconfig-empty"),
+        "[user]\n\tname = Ada\n\temail = ada@example.com\n",
+    )
+    .unwrap_or_else(|e| panic!("{e}"));
+    let mut cmd = sb.command(&["create", "demo", "--json"]);
+    IDENTITY.iter().for_each(|key| {
+        cmd.env_remove(key);
+    });
+    let run = Run::of(cmd);
+    assert_golden("create_keeps_a_git_identity", sb, &run, Some("demo"));
+}
+
+#[test]
+fn create_into_an_existing_empty_directory() {
+    let sb = &Sandbox::new();
+    mkdir(sb, "brains/demo");
+    let run = sb.kluris(&["create", "demo", "--path", "brains", "--json"]);
+    assert_golden(
+        "create_into_an_existing_empty_directory",
+        sb,
+        &run,
+        Some("brains/demo"),
+    );
+}
+
+/// A second brain beside `first`, whose skill sits in every agent folder:
+/// both brains' skills end up in the current folders.
+#[test]
+fn create_second_brain_installs_both_skills() {
+    let sb = &Sandbox::new();
+    place(sb, &FIRST);
+    let run = sb.kluris(&["create", "second", "--no-git", "--json"]);
+    assert_golden("create_second_brain_installs_both_skills", sb, &run, None);
+}
+
+/// A clean install adds no `skills` key to `create --json`, and the user's
+/// own plain `kluris-notes` skill is left alone.
+#[test]
+fn create_clean_json_keeps_its_bytes() {
+    let sb = &Sandbox::new();
+    write(
+        sb,
+        "home/.agents/skills/kluris-notes/SKILL.md",
+        "---\nname: kluris-notes\ndescription: mine\n---\n\n# Notes\n",
+    );
+    let run = sb.kluris(&["create", "demo", "--no-git", "--json"]);
+    assert!(!run.stdout.contains("\"skills\""), "{}", run.stdout);
+    assert_golden("create_clean_json_keeps_its_bytes", sb, &run, None);
+}
+
+// --- create: validation --------------------------------------------------------------
+
+/// A registered brain `taken`, a file, a non-empty directory, an empty one
+/// and two holding a `kluris.yml`.
+fn validation_scenario() -> Sandbox {
+    let sb = Sandbox::new();
+    place(&sb, &TAKEN);
+    write(&sb, "afile", "x");
+    write(&sb, "brains/full/notes.md", "x");
+    mkdir(&sb, "brains/empty");
+    write(&sb, "brains/hasyml/kluris.yml", "name: x\n");
+    write(&sb, "brains/outer/kluris.yml", "name: outer\n");
+    sb
+}
+
+/// The `create` arguments each validation error is asked with.
+const ERRORS: &[(&str, &[&str])] = &[
+    ("reserved", &["all"]),
+    (
+        "too-long",
+        &["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"],
+    ),
+    ("upper", &["Bad"]),
+    ("digit-first", &["9x"]),
+    ("dot", &[".x"]),
+    ("empty", &[""]),
+    ("registered", &["taken"]),
+    ("path-file", &["new", "--path", "afile"]),
+    ("path-missing", &["new", "--path", "no/such"]),
+    ("path-brain", &["new", "--path", "brains/taken"]),
+    (
+        "inside-brain",
+        &["inner", "--path", "brains/taken/projects"],
+    ),
+    ("not-empty", &["full", "--path", "brains"]),
+    ("has-yml", &["hasyml", "--path", "brains"]),
+    ("order-reserved", &["all", "--path", "afile"]),
+    ("order-registered", &["taken", "--path", "afile"]),
+    ("order-path", &["inner", "--path", "brains/taken"]),
+];
+
+#[test]
+fn create_validation_json() {
+    let sb = &validation_scenario();
+    let before = tree(sb);
+    for (case, given) in ERRORS {
+        let mut args = vec!["create"];
+        args.extend(*given);
+        args.push("--json");
+        let run = sb.kluris(&args);
+        assert_golden_unchanged(
+            &format!("create_validation_json__{case}"),
+            sb,
+            &before,
+            &run,
+        );
+    }
+}
+
+/// Every value given, so nothing is asked. An empty NAME is a missing one
+/// in text mode, so `empty` has no text case.
+#[test]
+fn create_validation_text() {
+    let sb = &validation_scenario();
+    let before = tree(sb);
+    for (case, given) in ERRORS.iter().filter(|(case, _)| *case != "empty") {
+        let mut args = vec!["create"];
+        args.extend(*given);
+        args.extend(["--description", "d", "--type", "blank", "--no-git"]);
+        if !given.contains(&"--path") {
+            args.extend(["--path", "brains"]);
+        }
+        let run = sb.kluris(&args);
+        assert_golden_unchanged(
+            &format!("create_validation_text__{case}"),
+            sb,
+            &before,
+            &run,
+        );
+    }
+}
+
+const OPTION_VALUES: &[(&str, &[&str])] = &[
+    ("type", &["create", "x", "--type", "bogus"]),
+    ("type-json", &["create", "x", "--type", "bogus", "--json"]),
+    ("from-config", &["create", "x", "--from-config", "nope.yml"]),
+    (
+        "from-config-json",
+        &["create", "x", "--from-config", "nope.yml", "--json"],
+    ),
+];
+
+#[test]
+fn create_option_values() {
+    for (case, args) in OPTION_VALUES {
+        let sb = &Sandbox::new();
+        let before = tree(sb);
+        let run = sb.kluris(args);
+        assert_golden_unchanged(&format!("create_option_values__{case}"), sb, &before, &run);
+    }
+}
+
+/// The last `--type` given wins.
+#[test]
+fn create_option_values_last_type_wins() {
+    let sb = &Sandbox::new();
+    let run = sb.kluris(&[
+        "create", "x", "--type", "bogus", "--type", "blank", "--no-git", "--json",
+    ]);
+    assert_golden("create_option_values__last-type-wins", sb, &run, None);
+}
+
+// --- create: --from-config ------------------------------------------------------------
+
+const FROM_CONFIG: &[(&str, &str)] = &[
+    (
+        "flat",
+        "structure:\n  alpha-beta: First lobe\n  zeta: Ünïcode — dash\n  mid-lobe-name: Mid\n",
+    ),
+    ("no-structure", "other: 1\n"),
+    ("empty-file", ""),
+    ("empty-structure", "structure: {}\n"),
+    ("number-value", "structure:\n  stats: 42\n"),
+];
+
+/// The lobes come from the file; `lobes` in the JSON counts `--type`'s.
+#[test]
+fn create_from_config() {
+    for (case, text) in FROM_CONFIG {
+        let sb = &Sandbox::new();
+        write(sb, "structure.yml", text);
+        let run = sb.kluris(&[
+            "create",
+            "demo",
+            "--type",
+            "research",
+            "--from-config",
+            "structure.yml",
+            "--json",
+        ]);
+        assert_golden(
+            &format!("create_from_config__{case}"),
+            sb,
+            &run,
+            Some("demo"),
+        );
+    }
+}
+
+const FROM_CONFIG_REFUSED: &[(&str, &str)] = &[
+    ("dotdot", "structure:\n  ../escape: x\n"),
+    ("slash", "structure:\n  a/b: x\n"),
+    ("backslash", "structure:\n  a\\b: x\n"),
+    ("absolute", "structure:\n  /abs: x\n"),
+    ("parent", "structure:\n  ..: x\n"),
+    ("nested-map", "structure:\n  lobe:\n    sub: x\n"),
+    ("nested-list", "structure:\n  lobe: [a, b]\n"),
+];
+
+/// A lobe name that is a path, or a nested value, is refused before
+/// anything is written.
+#[test]
+fn from_config_refuses_paths_and_nested_values() {
+    for (case, text) in FROM_CONFIG_REFUSED {
+        let sb = &Sandbox::new();
+        write(sb, "structure.yml", text);
+        let before = tree(sb);
+        let run = sb.kluris(&["create", "demo", "--from-config", "structure.yml", "--json"]);
+        assert_golden_unchanged(&format!("from_config_refused__{case}"), sb, &before, &run);
+    }
+}
+
+// --- create: the wizard (a terminal) ---------------------------------------------------
+
+/// Every prompt, empty answers asked again, answers kept unstripped, remote
+/// and branch, and the companion picker (an invalid choice asked again).
+#[cfg(unix)]
+#[test]
+fn wizard_full() {
+    let sb = &Sandbox::new();
+    let lines = [
+        "",
+        "wiz",
+        "",
+        " my desc ",
+        "",
+        "personal",
+        "2",
+        "",
+        "git@x:y.git",
+        "dev",
+        "9",
+        "3",
+    ];
+    let run = on_terminal(sb, &["create"], &lines);
+    assert_golden("wizard_full", sb, &run, Some("wiz"));
+}
+
+#[cfg(unix)]
+const WIZARD_GIT_CHOICES: &[(&str, &[&str])] = &[
+    ("no-git", &["wiz", "d", "", "", "3", "4"]),
+    (
+        "local-all-companions",
+        &["wiz", "d", "", "blank", "1", "", "7"],
+    ),
+    (
+        "other-choice-is-local",
+        &["wiz", "d", "", "research", "x", "trunk", ""],
+    ),
+];
+
+#[cfg(unix)]
+#[test]
+fn wizard_git_choices() {
+    for (case, lines) in WIZARD_GIT_CHOICES {
+        let sb = &Sandbox::new();
+        let run = on_terminal(sb, &["create"], lines);
+        assert_golden(
+            &format!("wizard_git_choices__{case}"),
+            sb,
+            &run,
+            Some("wiz"),
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn wizard_asks_only_what_is_missing() {
+    let sb = &Sandbox::new();
+    mkdir(sb, "brains");
+    let args = [
+        "create",
+        "demo",
+        "--description",
+        "d",
+        "--path",
+        "brains",
+        "--type",
+        "blank",
+    ];
+    let run = on_terminal(sb, &args, &["", "", "5"]);
+    assert_golden(
+        "wizard_asks_only_what_is_missing",
+        sb,
+        &run,
+        Some("brains/demo"),
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn wizard_with_every_value_given_asks_nothing() {
+    let sb = &Sandbox::new();
+    let args = [
+        "create",
+        "demo",
+        "--description",
+        "d",
+        "--path",
+        ".",
+        "--type",
+        "blank",
+        "--no-git",
+    ];
+    let run = on_terminal(sb, &args, &[]);
+    assert_golden("wizard_with_every_value_given_asks_nothing", sb, &run, None);
+}
+
+#[cfg(unix)]
+#[test]
+fn wizard_end_of_input_aborts() {
+    let sb = &Sandbox::new();
+    let before = tree(sb);
+    let run = on_terminal(sb, &["create"], &["wiz"]);
+    assert_golden_unchanged("wizard_end_of_input_aborts", sb, &before, &run);
+}
+
+#[cfg(unix)]
+#[test]
+fn wizard_validates_after_the_prompts() {
+    let sb = &Sandbox::new();
+    let before = tree(sb);
+    let run = on_terminal(sb, &["create"], &["Bad", "d", "", "", "3"]);
+    assert_golden_unchanged("wizard_validates_after_the_prompts", sb, &before, &run);
+}
+
+/// The brain type answer is checked like `--type` and asked again.
+#[cfg(unix)]
+#[test]
+fn wizard_brain_type_is_checked_like_the_option() {
+    let sb = &Sandbox::new();
+    let lines = ["wiz", "d", "", "foo", "Personal", "personal", "3", "4"];
+    let run = on_terminal(sb, &["create"], &lines);
+    assert_golden(
+        "wizard_brain_type_is_checked_like_the_option",
+        sb,
+        &run,
+        None,
+    );
+}
+
+/// `Aborted!` after the scaffold: the files stay, nothing is registered or
+/// committed.
+#[cfg(unix)]
+#[test]
+fn create_end_of_input_at_the_picker() {
+    let sb = &Sandbox::new();
+    let run = on_terminal(sb, &["create"], &["wiz", "d", "", "", "1", ""]);
+    assert_golden("create_end_of_input_at_the_picker", sb, &run, Some("wiz"));
+}
+
+#[cfg(unix)]
+#[test]
+fn create_with_no_prompt_set_asks_nothing_on_a_terminal() {
+    let sb = &Sandbox::new();
+    let mut cmd = sb.command(&["create", "demo", "--no-git"]);
+    cmd.env("KLURIS_NO_PROMPT", "1");
+    let run = run_on_terminal(cmd, &[], End::Eof);
+    assert_golden(
+        "create_with_no_prompt_set_asks_nothing_on_a_terminal",
+        sb,
+        &run,
+        None,
+    );
+}
+
+// --- create: no terminal -------------------------------------------------------------
+
+/// Nothing is asked; `create` makes what `--json` would.
+#[test]
+fn create_without_a_terminal_uses_the_defaults() {
+    let sb = &Sandbox::new();
+    let run = sb.kluris(&["create", "demo"]);
+    assert_golden(
+        "create_without_a_terminal_uses_the_defaults",
+        sb,
+        &run,
+        Some("demo"),
+    );
+}
+
+#[test]
+fn create_without_a_name_and_no_terminal_is_an_error() {
+    for (case, args) in [
+        ("text", &["create"][..]),
+        ("json", &["create", "--json"][..]),
+    ] {
+        let sb = &Sandbox::new();
+        let before = tree(sb);
+        let run = sb.kluris(args);
+        assert_golden_unchanged(
+            &format!("create_without_a_name_and_no_terminal_is_an_error__{case}"),
+            sb,
+            &before,
+            &run,
+        );
+    }
+}
+
+// --- create: the name rule -------------------------------------------------------------
+
+/// New names follow `^[a-z][a-z0-9]*(-[a-z0-9]+)*$`.
+#[test]
+fn new_names_follow_the_stricter_rule() {
+    for name in ["a--b", "a-", "ab-", "x--", "a-b--c"] {
+        let sb = &Sandbox::new();
+        let before = tree(sb);
+        let run = sb.kluris(&["create", name, "--no-git", "--json"]);
+        assert_golden_unchanged(
+            &format!("new_names_follow_the_stricter_rule__{name}"),
+            sb,
+            &before,
+            &run,
+        );
+    }
+}
+
+/// A registered `a--b`, a name `create` refuses, keeps working.
+#[test]
+fn a_registered_name_create_refuses_still_loads() {
+    let commands: &[(&str, &[&str])] = &[
+        ("wake-up", &["wake-up", "--brain", "a--b", "--json"]),
+        ("list", &["list", "--json"]),
+        ("status", &["status", "--brain", "a--b", "--json"]),
+        ("remove", &["remove", "a--b", "--json"]),
+    ];
+    for (case, args) in commands {
+        let sb = &Sandbox::new();
+        place(sb, &A_B);
+        let run = sb.kluris(args);
+        snapshot(
+            &format!("a_registered_name_create_refuses_still_loads__{case}__run"),
+            run.render(&sb.root),
+        );
+    }
+}
+
+// --- create: git failure ---------------------------------------------------------------
+
+/// The message names the git command, what git said and what is left; the
+/// scaffold stays on disk and nothing is registered. git words its own
+/// errors by version, so what it said is `<GIT STDERR>` in the snapshot.
+#[test]
+fn a_git_failure_leaves_the_brain_unregistered() {
+    let sb = &Sandbox::new();
+    let mut run = sb.kluris(&["create", "demo", "--branch", "bad..name", "--json"]);
+    let start = "failed (exit 128): ";
+    let end = " (the brain files are left in";
+    let (Some(from), Some(to)) = (run.stdout.find(start), run.stdout.find(end)) else {
+        panic!("no git error in {}", run.stdout);
+    };
+    let said = &run.stdout[from + start.len()..to];
+    assert!(
+        said.starts_with("fatal: 'bad..name' is not a valid branch name"),
+        "{said}"
+    );
+    run.stdout
+        .replace_range(from + start.len()..to, "<GIT STDERR>");
+    assert_golden(
+        "a_git_failure_leaves_the_brain_unregistered",
+        sb,
+        &run,
+        None,
+    );
+}
+
+// --- register --------------------------------------------------------------------------------
+
+/// `team`'s files and git in `brains/team`, unregistered.
+fn team_brain() -> Sandbox {
+    let sb = Sandbox::new();
+    place(&sb, &TEAM_UNREGISTERED);
+    sb
+}
+
+#[test]
+fn register_a_brain_made_earlier() {
+    for (case, args) in [
+        ("json", &["register", "brains/team", "--json"][..]),
+        ("text", &["register", "brains/team"][..]),
+    ] {
+        let sb = &team_brain();
+        let run = sb.kluris(args);
+        assert_golden(
+            &format!("register_a_brain_made_earlier__{case}"),
+            sb,
+            &run,
+            None,
+        );
+    }
+}
+
+#[test]
+fn register_writes_a_missing_kluris_yml() {
+    let sb = &team_brain();
+    fs::remove_file(sb.work.join("brains/team/kluris.yml")).unwrap_or_else(|e| panic!("{e}"));
+    let run = sb.kluris(&["register", "brains/team", "--json"]);
+    assert_golden("register_writes_a_missing_kluris_yml", sb, &run, None);
+}
+
+const IDENTITIES: &[(&str, &str, &str)] = &[
+    (
+        "h1",
+        "brains/Some Folder",
+        "---\nauto_generated: true\n---\n\n# team-x\n\nThe team brain.\n\n## Lobes\n",
+    ),
+    (
+        "fallback-lowered",
+        "brains/My Brain",
+        "# Not Valid!\n\n## Lobes\n\nAfter lobes\n",
+    ),
+    ("no-heading", "brains/plain", "no heading here\n"),
+    (
+        "frontmatter-fails",
+        "brains/rawscan",
+        "---\nkey: [unclosed\n---\n# raw-name\n\nraw desc\n",
+    ),
+    (
+        "spaces",
+        "brains/team-y",
+        "\n\n#   spaced-name  \n\n  Indented description.  \n",
+    ),
+    (
+        "two-h1",
+        "brains/team-z",
+        "# first\n# second\n\n## Sub\n\nlater line\n",
+    ),
+];
+
+/// A folder with only a `brain.md`: the name and description come from it.
+#[test]
+fn register_identity_from_brain_md() {
+    for (case, rel, brain_md) in IDENTITIES {
+        let sb = &Sandbox::new();
+        write(sb, &format!("{rel}/brain.md"), brain_md);
+        let run = sb.kluris(&["register", rel, "--json"]);
+        assert_golden(
+            &format!("register_identity_from_brain_md__{case}"),
+            sb,
+            &run,
+            None,
+        );
+    }
+}
+
+#[test]
+fn register_an_invalid_identity() {
+    let sb = &Sandbox::new();
+    write(sb, "brains/9bad/brain.md", "# Also Bad\n");
+    let before = tree(sb);
+    for (case, args) in [
+        ("json", &["register", "brains/9bad", "--json"][..]),
+        ("text", &["register", "brains/9bad"][..]),
+    ] {
+        let run = sb.kluris(args);
+        assert_golden_unchanged(
+            &format!("register_an_invalid_identity__{case}"),
+            sb,
+            &before,
+            &run,
+        );
+    }
+}
+
+const REGISTER_PATH_ERRORS: &[(&str, &str)] = &[
+    ("zip", "x.zip"),
+    ("zip-upper", "brains/X.ZIP"),
+    ("zip-home", "~/b.Zip"),
+    ("missing", "nope"),
+    ("missing-home", "~/nope"),
+    ("file", "afile"),
+    ("empty-dir", "empty"),
+    ("missing-deeper", "./nope//deeper/"),
+];
+
+#[test]
+fn register_path_errors() {
+    let sb = &Sandbox::new();
+    write(sb, "afile", "x");
+    mkdir(sb, "empty");
+    let before = tree(sb);
+    for (case, source) in REGISTER_PATH_ERRORS {
+        for (mode, json) in [("json", true), ("text", false)] {
+            let mut args = vec!["register", source];
+            if json {
+                args.push("--json");
+            }
+            let run = sb.kluris(&args);
+            assert_golden_unchanged(
+                &format!("register_path_errors__{case}__{mode}"),
+                sb,
+                &before,
+                &run,
+            );
+        }
+    }
+}
+
+/// Same name and path: success with `already_registered`, and nothing is
+/// written.
+#[test]
+fn register_the_same_brain_again() {
+    let sb = &Sandbox::new();
+    place(sb, &TEAM);
+    let before = tree(sb);
+    for (case, args) in [
+        ("json", &["register", "brains/team", "--json"][..]),
+        ("text", &["register", "brains/team"][..]),
+    ] {
+        let run = sb.kluris(args);
+        assert_golden_unchanged(
+            &format!("register_the_same_brain_again__{case}"),
+            sb,
+            &before,
+            &run,
+        );
+    }
+}
+
+/// The same name at another path, then the same path under another name.
+#[test]
+fn register_conflicts() {
+    let sb = &Sandbox::new();
+    place(sb, &TEAM);
+    for (file, text) in fixture_files(&sb.work.join("brains/team")) {
+        write(sb, &format!("brains/copy/{file}"), &text);
+    }
+    let before = tree(sb);
+    let run = sb.kluris(&["register", "brains/copy", "--json"]);
+    assert_golden_unchanged("register_conflicts__same-name", sb, &before, &run);
+
+    let brain_md = sb.work.join("brains/team/brain.md");
+    let text = fs::read_to_string(&brain_md).unwrap_or_else(|e| panic!("{e}"));
+    write(
+        sb,
+        "brains/team/brain.md",
+        &text.replace("# team", "# other"),
+    );
+    let before = tree(sb);
+    let run = sb.kluris(&["register", "brains/team", "--json"]);
+    assert_golden_unchanged("register_conflicts__same-path", sb, &before, &run);
+}
+
+/// A brain inside a registered one registers like any other.
+#[test]
+fn register_a_brain_inside_another() {
+    let sb = &Sandbox::new();
+    place(sb, &TEAM);
+    write(
+        sb,
+        "brains/team/projects/sub/brain.md",
+        "# sub-brain\n\nInner.\n",
+    );
+    let run = sb.kluris(&["register", "brains/team/projects/sub", "--json"]);
+    assert_golden("register_a_brain_inside_another", sb, &run, None);
+}
+
+/// `team` moved to `~/brains/team`, and on Unix `link` pointing at it.
+fn team_in_home() -> Sandbox {
+    let sb = team_brain();
+    mkdir(&sb, "home/brains");
+    fs::rename(sb.work.join("brains/team"), sb.home.join("brains/team"))
+        .unwrap_or_else(|e| panic!("{e}"));
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(sb.home.join("brains/team"), sb.work.join("link"))
+        .unwrap_or_else(|e| panic!("{e}"));
+    sb
+}
+
+#[test]
+fn register_by_home() {
+    let sb = &team_in_home();
+    let run = sb.kluris(&["register", "~/brains/team", "--json"]);
+    assert_golden("register_by_home", sb, &run, None);
+}
+
+#[cfg(unix)]
+#[test]
+fn register_by_symlink() {
+    let sb = &team_in_home();
+    let run = sb.kluris(&["register", "link", "--json"]);
+    assert_golden("register_by_symlink", sb, &run, None);
+}
+
+#[test]
+fn register_with_an_unreadable_kluris_yml() {
+    let sb = &team_brain();
+    write(sb, "brains/team/kluris.yml", "name: [broken\n");
+    let before = tree(sb);
+    let run = sb.kluris(&["register", "brains/team", "--json"]);
+    assert_golden_unchanged("register_with_an_unreadable_kluris_yml", sb, &before, &run);
+}
+
+#[cfg(unix)]
+#[test]
+fn register_prompts_on_a_terminal() {
+    let sb = &team_brain();
+    let run = on_terminal(sb, &["register"], &["", "brains/team", "6"]);
+    assert_golden("register_prompts_on_a_terminal", sb, &run, None);
+}
+
+/// End of input at the companion picker: `Register failed: ` with nothing
+/// after it, and the `kluris.yml` written before it stays.
+#[cfg(unix)]
+#[test]
+fn register_end_of_input_at_the_picker() {
+    let sb = &team_brain();
+    fs::remove_file(sb.work.join("brains/team/kluris.yml")).unwrap_or_else(|e| panic!("{e}"));
+    let run = on_terminal(sb, &["register"], &["brains/team"]);
+    assert_golden("register_end_of_input_at_the_picker", sb, &run, None);
+}
+
+#[test]
+fn register_without_a_path_and_no_terminal_is_an_error() {
+    for (case, args) in [
+        ("text", &["register"][..]),
+        ("json", &["register", "--json"][..]),
+    ] {
+        let sb = &Sandbox::new();
+        let before = tree(sb);
+        let run = sb.kluris(args);
+        assert_golden_unchanged(
+            &format!("register_without_a_path_and_no_terminal_is_an_error__{case}"),
+            sb,
+            &before,
+            &run,
+        );
+    }
+}
+
+// --- remove ------------------------------------------------------------------------------------
+
+/// Unregisters `a` and removes its skills from every folder; `b`'s skill
+/// moves to the current folders; the files stay.
+#[test]
+fn remove() {
+    for (case, args) in [
+        ("json", &["remove", "a", "--json"][..]),
+        ("text", &["remove", "a"][..]),
+    ] {
+        let sb = &Sandbox::new();
+        place(sb, &TWO);
+        let run = sb.kluris(args);
+        assert_golden(&format!("remove__{case}"), sb, &run, None);
+    }
+}
+
+#[test]
+fn remove_the_last_brain() {
+    let sb = &Sandbox::new();
+    place(sb, &ONLY);
+    let run = sb.kluris(&["remove", "only", "--json"]);
+    assert_golden("remove_the_last_brain", sb, &run, None);
+}
+
+#[test]
+fn remove_errors() {
+    let cases: &[(&str, &[&str])] = &[
+        ("unknown", &["remove", "nope"]),
+        ("unknown-json", &["remove", "nope", "--json"]),
+        ("missing", &["remove"]),
+        ("missing-json", &["remove", "--json"]),
+    ];
+    let sb = &Sandbox::new();
+    place(sb, &TWO);
+    let before = tree(sb);
+    for (case, args) in cases {
+        let run = sb.kluris(args);
+        assert_golden_unchanged(&format!("remove_errors__{case}"), sb, &before, &run);
+    }
+}
+
+// --- help ----------------------------------------------------------------------------------------
+
+#[test]
+fn help_of_the_commands() {
+    let sb = &Sandbox::new();
+    for (case, args) in [
+        ("root", &["--help"][..]),
+        ("create", &["create", "--help"][..]),
+        ("register", &["register", "--help"][..]),
+        ("remove", &["remove", "--help"][..]),
+    ] {
+        let run = sb.kluris(args);
+        snapshot(&format!("help__{case}__run"), run.render(&sb.root));
+    }
+}
+
+// --- write safety -----------------------------------------------------------------------------
+
+/// A target folder that cannot be listed is refused, and nothing is
+/// written.
+#[cfg(unix)]
+#[test]
+fn create_into_a_directory_that_cannot_be_listed() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let sb = &Sandbox::new();
+    write(sb, "brains/demo/README.md", "my own readme\n");
+    let target = sb.work.join("brains/demo");
+    let mode = |m| {
+        fs::set_permissions(&target, fs::Permissions::from_mode(m))
+            .unwrap_or_else(|e| panic!("{e}"))
+    };
+    mode(0o300);
+    if fs::read_dir(&target).is_ok() {
+        mode(0o755);
+        eprintln!("skipped: running as root, every directory can be listed");
+        return;
+    }
+    let run = sb.kluris(&[
+        "create", "demo", "--path", "brains", "--type", "blank", "--no-git", "--json",
+    ]);
+    mode(0o755);
+    assert_golden(
+        "create_into_a_directory_that_cannot_be_listed",
+        sb,
+        &run,
+        None,
+    );
+}

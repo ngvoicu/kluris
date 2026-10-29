@@ -1,0 +1,8 @@
+---
+source: crates/kluris-cli/tests/golden_create.rs
+expression: run.dump()
+---
+== stdout
+{"ok": false, "error": "A brain named 'team' is already registered at <ROOT>/work/brains/team. Run 'kluris remove team' first if you want to re-register it from <ROOT>/work/brains/copy."}
+== stderr
+== exit 1

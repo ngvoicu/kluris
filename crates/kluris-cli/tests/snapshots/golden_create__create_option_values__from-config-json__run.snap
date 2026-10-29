@@ -1,0 +1,8 @@
+---
+source: crates/kluris-cli/tests/golden_create.rs
+expression: run.dump()
+---
+== stdout
+{"ok": false, "error": "Invalid value for '--from-config': Path 'nope.yml' does not exist."}
+== stderr
+== exit 1

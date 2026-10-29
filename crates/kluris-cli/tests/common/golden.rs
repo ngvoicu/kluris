@@ -239,6 +239,60 @@ pub fn git_dump(repo: &Path) -> String {
     out
 }
 
+/// How the repository at `repo` is set up and what its HEAD holds, each
+/// under a `== <command>` line: the HEAD commit (`git cat-file -p HEAD`)
+/// without its `tree` line, the mode, type and path of every file it holds
+/// (`git ls-tree -r HEAD` without the object ids), its branch (`git
+/// symbolic-ref HEAD`), its remotes (`git remote -v`) and its work tree's
+/// state (`git status --porcelain --ignored`). The ids are left out because
+/// a brain's files hold today's date, so their ids change every day; the
+/// committed bytes are the work tree's whenever the status lists no change
+/// to them, and a tree dump shows those. A command that fails is `<exit N>`
+/// (git words its errors by version, so its stderr is left out); a folder
+/// without `.git` is `<no repository>`.
+pub fn git_state(repo: &Path) -> String {
+    if !repo.join(".git").exists() {
+        return "<no repository>\n".to_string();
+    }
+    let commands: [&[&str]; 5] = [
+        &["cat-file", "-p", "HEAD"],
+        &["ls-tree", "-r", "HEAD"],
+        &["symbolic-ref", "HEAD"],
+        &["remote", "-v"],
+        &["status", "--porcelain", "--ignored"],
+    ];
+    let mut out = String::new();
+    for args in commands {
+        let run = Command::new("git")
+            .arg("-C")
+            .arg(repo)
+            .args(args)
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_CONFIG_GLOBAL", repo.join("kluris-golden-no-gitconfig"))
+            .env_remove("GIT_DIR")
+            .env_remove("GIT_WORK_TREE")
+            .output()
+            .unwrap_or_else(|e| panic!("git {}: {e}", args.join(" ")));
+        out.push_str(&format!("== git {}\n", args.join(" ")));
+        let text = escape(&run.stdout);
+        match (run.status.code(), args[0]) {
+            (Some(0), "cat-file") => text
+                .lines()
+                .filter(|line| !line.starts_with("tree "))
+                .for_each(|line| out.push_str(&format!("{line}\n"))),
+            // `<mode> <type> <id>\t<path>`
+            (Some(0), "ls-tree") => text.lines().for_each(|line| {
+                let (meta, path) = line.split_once('\t').unwrap_or((line, ""));
+                let fields: Vec<&str> = meta.split(' ').collect();
+                out.push_str(&format!("{} {}\t{path}\n", fields[0], fields[1]));
+            }),
+            (Some(0), _) => out.push_str(&text),
+            (code, _) => out.push_str(&format!("<exit {}>\n", code.unwrap_or(-1))),
+        }
+    }
+    out
+}
+
 /// The text forms of `root` a program can print or a file can hold, longest
 /// first so a resolved form is not half-replaced by a shorter alias: as
 /// given and resolved (macOS `/var` is `/private/var`), each with its native

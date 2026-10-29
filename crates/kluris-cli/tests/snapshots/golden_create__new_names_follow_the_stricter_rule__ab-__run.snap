@@ -1,0 +1,8 @@
+---
+source: crates/kluris-cli/tests/golden_create.rs
+expression: run.dump()
+---
+== stdout
+{"ok": false, "error": "Brain name 'ab-' is invalid. Use lowercase letters and numbers, with single hyphens between them (no '--', no '-' at the end)."}
+== stderr
+== exit 1

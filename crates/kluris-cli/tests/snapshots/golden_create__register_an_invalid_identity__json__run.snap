@@ -1,0 +1,8 @@
+---
+source: crates/kluris-cli/tests/golden_create.rs
+expression: run.dump()
+---
+== stdout
+{"ok": false, "error": "Brain name '9bad' (from brain.md) is not a valid kluris brain name. Edit brain.md so the H1 heading is lowercase alphanumeric + hyphens (max 48 chars, not 'all')."}
+== stderr
+== exit 1

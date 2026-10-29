@@ -1,0 +1,8 @@
+---
+source: crates/kluris-cli/tests/golden_create.rs
+expression: run.dump()
+---
+== stdout
+{"ok": false, "error": "Register failed: Invalid config file <ROOT>/work/brains/team/kluris.yml: ParserError: while parsing a flow sequence (line 1, column 7): expected ',' or ']', but got '<stream end>' (line 2, column 1)"}
+== stderr
+== exit 1

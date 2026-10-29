@@ -1,0 +1,6 @@
+---
+source: crates/kluris-cli/tests/golden_create.rs
+expression: sb.tree()
+---
+== brains/demo/README.md
+my own readme

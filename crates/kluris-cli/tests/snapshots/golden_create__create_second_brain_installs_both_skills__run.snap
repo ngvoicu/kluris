@@ -1,0 +1,8 @@
+---
+source: crates/kluris-cli/tests/golden_create.rs
+expression: run.dump()
+---
+== stdout
+{"ok": true, "name": "second", "path": "<ROOT>/work/second", "type": "product-group", "lobes": 3, "companions": []}
+== stderr
+== exit 0

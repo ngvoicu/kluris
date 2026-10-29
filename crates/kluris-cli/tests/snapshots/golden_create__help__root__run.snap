@@ -1,0 +1,36 @@
+---
+source: crates/kluris-cli/tests/golden_create.rs
+expression: run.dump()
+---
+== stdout
+Kluris — Turn AI agents into team subject matter experts.
+
+Usage: kluris [OPTIONS] COMMAND [ARGS]...
+
+Commands:
+  create          Create a new brain.
+  register        Register an existing brain directory on disk.
+  list            List registered brains.
+  wake-up         Compact brain snapshot for agent session bootstrap.
+  search          Search a brain's neurons, glossary, and brain.md for a query string.
+  status          Show brain status and recent changes.
+  companion       Manage embedded companion playbooks per brain.
+  dream           Brain maintenance — regenerate maps, update dates, auto-fix safe issues, validate remaining links.
+  mri             Generate interactive brain visualization.
+  remove          Unregister a brain (does not delete files).
+  doctor          Check prerequisites and refresh installed agent skills.
+  commit          Commit approved brain files and the maps they change.
+  sync            Fetch, merge and push brains with their remotes.
+  resolve         Settle an open sync conflict path by path.
+  self-update     Update kluris to the newest release.
+  self-uninstall  Remove the installed kluris.
+  help            Show help for kluris commands.
+
+Options:
+      --version
+          Show the version and exit.
+
+      --help
+          Show this message and exit.
+== stderr
+== exit 0

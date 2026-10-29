@@ -1,0 +1,8 @@
+---
+source: crates/kluris-cli/tests/golden_create.rs
+expression: run.dump()
+---
+== stdout
+{"ok": false, "error": "No brain named 'nope' is registered. Run 'kluris list' to see available brains."}
+== stderr
+== exit 1

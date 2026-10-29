@@ -1,0 +1,27 @@
+---
+source: crates/kluris-cli/tests/golden_create.rs
+expression: run.dump()
+---
+== stdout
+
+Create a new brain
+
+  Brain name (lowercase, hyphens ok):   What does this brain cover? (one sentence):   Location [<ROOT>/work]:   Brain type (product-group, personal, product, research, blank) [product-group]:   Git setup (1=local, 2=with remote, 3=no git) [1]:   Default branch [main]: 
+  Install specmint companions for this brain?
+    [1] specmint-core      (spec-driven-development companion)
+    [2] specmint-tdd       (spec-driven-development with test-driven-development focus)
+    [3] core + tdd
+    [4] skip
+    [5] specmint-core-html (spec-driven-development with canonical SPEC.html)
+    [6] specmint-tdd-html  (TDD-focused specs with canonical SPEC.html)
+    [7] all
+  Choice [4]: Brain created: wiz (blank)
+  Path: <ROOT>/work/wiz
+  Lobes: 0
+
+Agent skill installed: kluris-wiz
+  Claude/Codex/Antigravity/etc: /kluris-wiz
+  Hermes: /skill kluris-wiz  (or start with `hermes -s kluris-wiz`)
+  Created a new Hermes profile later? Run `kluris doctor` to refresh Kluris skills.
+== stderr
+== exit 0

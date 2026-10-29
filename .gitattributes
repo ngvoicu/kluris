@@ -10,7 +10,6 @@ crates/kluris-cli/tests/fixtures/** -text
 crates/kluris-core/templates/** -text
 crates/kluris-core/tests/snapshots/** -text
 crates/kluris-cli/tests/snapshots/** -text
-crates/kluris-cli/tests/fixtures/** -text
 
 # The MRI page assets are v2.28.11's bytes.
 crates/kluris-core/assets/** -text

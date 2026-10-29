@@ -1,0 +1,5 @@
+---
+source: crates/kluris-cli/tests/golden_create.rs
+expression: sb.git_state(repo)
+---
+<no repository>
