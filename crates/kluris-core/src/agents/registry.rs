@@ -21,21 +21,6 @@ pub const REGISTRY: [&str; 4] = ["antigravity", "claude", "copilot", "hermes"];
 /// read as `devin` by the config reader and listed for old configs.
 pub const UNIVERSAL_ONLY: [&str; 6] = ["codex", "cursor", "devin", "junie", "kilocode", "windsurf"];
 
-/// Skill folders v2 wrote that v3 no longer uses, relative to HOME; their
-/// copies duplicate `~/.agents/skills` (research-07: Codex lists two enabled
-/// entries, Devin an `agents:` and a `claude:` copy). `~/.copilot/skills` is
-/// only one while `COPILOT_HOME` is unset. The Windsurf folders are found
-/// with [`windsurf_folders`].
-pub const V2_ONLY_SKILL_FOLDERS: [&str; 7] = [
-    ".cursor/skills",
-    ".codex/skills",
-    ".copilot/skills",
-    ".gemini/skills",
-    ".kilo/skills",
-    ".kilocode/skills",
-    ".junie/skills",
-];
-
 /// The skill folders of one registry agent, for `home` and an optional
 /// `COPILOT_HOME`: `~/.claude/skills`; `~/.hermes/skills` and the `skills`
 /// folder of every directory in `~/.hermes/profiles`, sorted by name;
@@ -58,23 +43,6 @@ pub fn skill_folders(agent: &str, home: &Path, copilot_home: Option<&Path>) -> V
         }
         _ => Vec::new(),
     }
-}
-
-/// The v2 Windsurf folders under `~/.codeium/windsurf*` (Windsurf,
-/// Windsurf Next, Windsurf Insiders): `(skills folders, workflow folders)`.
-pub fn windsurf_folders(home: &Path) -> (Vec<PathBuf>, Vec<PathBuf>) {
-    let roots: Vec<PathBuf> = sorted_dirs(&home.join(".codeium"))
-        .into_iter()
-        .filter(|p| {
-            p.file_name()
-                .and_then(|n| n.to_str())
-                .is_some_and(|n| n.starts_with("windsurf"))
-        })
-        .collect();
-    (
-        roots.iter().map(|r| r.join("skills")).collect(),
-        roots.iter().map(|r| r.join("global_workflows")).collect(),
-    )
 }
 
 /// The directories directly inside `dir` (a symlink to one counts, as in

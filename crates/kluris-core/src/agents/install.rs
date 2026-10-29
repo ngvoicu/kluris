@@ -14,9 +14,9 @@
 //!    skill (the folders stay). Every folder written or cleared also loses
 //!    the staging folders an earlier run left (`.kluris-<brain>.<pid>-<16
 //!    hex>.tmp` / `.old`) that hold a Kluris-written skill.
-//! 5. Once `~/.agents/skills` is written, the v2 migration removes the
-//!    Kluris-written skills and workflows v2 left in folders v3 no longer
-//!    uses ([`registry::V2_ONLY_SKILL_FOLDERS`], `~/.codeium/windsurf*`).
+//! 5. Once `~/.agents/skills` is written, the migration removes the
+//!    Kluris-written skills and workflows earlier releases left in folders
+//!    Kluris writes no skill to ([`crate::upgrade::skills::folders`]).
 //!
 //! What may be removed (SPEC decision 2026-10-26, T-103):
 //!
@@ -57,6 +57,7 @@ use super::render::{self, SkillInput};
 use crate::companions;
 use crate::config::{BrainConfig, ConfigError, ConfigErrorKind, GlobalConfig, read_brain_config};
 use crate::fileops::{FileOps, FolderId, RealFs, folder_id, is_unique_token, under, unique_token};
+use crate::upgrade::{self, skills::Folder};
 
 /// What [`install_skills`] works from.
 #[derive(Debug, Clone, Copy)]
@@ -79,7 +80,7 @@ pub enum DestinationRole {
     Agent(&'static str),
     /// A folder of a registry agent that is not selected: cleared.
     Deselected(&'static str),
-    /// A folder only v2 wrote to: cleared.
+    /// A folder only earlier releases wrote to: cleared.
     Migration,
 }
 
@@ -238,33 +239,17 @@ pub fn install_skills_with(req: &InstallRequest, ops: &dyn FileOps) -> InstallRe
         report.destinations.push(dest);
     }
 
-    // Cleared folders: deselected agents', then v2's.
+    // Cleared folders: deselected agents', then earlier releases'.
     let mut cleanup: Vec<(PathBuf, DestinationRole, Kind)> = Vec::new();
     for agent in REGISTRY.iter().copied().filter(|a| !active.contains(a)) {
         for folder in registry::skill_folders(agent, req.home, req.copilot_home) {
             cleanup.push((folder, DestinationRole::Deselected(agent), Kind::Skills));
         }
     }
-    // The migration waits for the universal copy, so an agent that read a
-    // v2 copy always has one to read.
+    // The migration waits for the universal copy, so an agent that read an
+    // earlier copy always has one to read.
     if universal_ok {
-        let (windsurf_skills, windsurf_workflows) = registry::windsurf_folders(req.home);
-        for folder in windsurf_skills {
-            cleanup.push((folder, DestinationRole::Migration, Kind::Skills));
-        }
-        for folder in windsurf_workflows {
-            cleanup.push((folder, DestinationRole::Migration, Kind::Workflows));
-        }
-        for rel in registry::V2_ONLY_SKILL_FOLDERS {
-            if rel == ".copilot/skills" && req.copilot_home.is_some() {
-                continue;
-            }
-            cleanup.push((
-                under(req.home, rel),
-                DestinationRole::Migration,
-                Kind::Skills,
-            ));
-        }
+        cleanup.extend(earlier_folders(req.home, req.copilot_home));
     }
     for (path, role, kind) in cleanup {
         if let Some(dest) = clear_existing(path, role, kind, ops, &mut seen) {
@@ -363,17 +348,24 @@ fn generated_skill_folders(
             folders.push((folder, DestinationRole::Agent(agent), Kind::Skills));
         }
     }
-    let (windsurf_skills, windsurf_workflows) = registry::windsurf_folders(home);
-    for folder in windsurf_skills {
-        folders.push((folder, DestinationRole::Migration, Kind::Skills));
-    }
-    for folder in windsurf_workflows {
-        folders.push((folder, DestinationRole::Migration, Kind::Workflows));
-    }
-    for rel in registry::V2_ONLY_SKILL_FOLDERS {
-        folders.push((under(home, rel), DestinationRole::Migration, Kind::Skills));
-    }
+    // Every earlier copy goes, `~/.copilot/skills`'s whatever COPILOT_HOME
+    // says.
+    folders.extend(earlier_folders(home, None));
     folders
+}
+
+/// The folders earlier releases wrote skills to ([`upgrade::skills`]), as
+/// cleared folders.
+fn earlier_folders(
+    home: &Path,
+    copilot_home: Option<&Path>,
+) -> impl Iterator<Item = (PathBuf, DestinationRole, Kind)> {
+    upgrade::skills::folders(home, copilot_home)
+        .into_iter()
+        .map(|folder| match folder {
+            Folder::Skills(path) => (path, DestinationRole::Migration, Kind::Skills),
+            Folder::Workflows(path) => (path, DestinationRole::Migration, Kind::Workflows),
+        })
 }
 
 /// The folders handled so far, by physical identity.

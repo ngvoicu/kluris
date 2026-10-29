@@ -27,5 +27,6 @@ pub mod search;
 pub mod service;
 pub mod status;
 pub mod sync;
+pub mod upgrade;
 pub mod wake_up;
 pub mod yaml;
