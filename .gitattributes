@@ -7,6 +7,7 @@
 # Byte-exact fixtures: never convert line endings on checkout.
 crates/kluris-core/tests/fixtures/** -text
 crates/kluris-cli/tests/fixtures/** -text
+xtask/fixtures/sync-specmint/** -text
 crates/kluris-core/templates/** -text
 crates/kluris-core/tests/snapshots/** -text
 crates/kluris-cli/tests/snapshots/** -text

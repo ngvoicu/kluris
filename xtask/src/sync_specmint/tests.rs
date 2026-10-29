@@ -1,7 +1,8 @@
 //! v2.28.11's `tests/test_sync_specmint.py`, ported, plus the Python texts
 //! the port must reproduce (generated with v2's script under the oracle's
-//! Python 3.11) and a real `--check` against the Specmint repos beside the
-//! workspace.
+//! Python 3.11), the frozen corpus of reports and path mentions that script
+//! gave (`fixtures/sync-specmint/corpus.jsonl`), and a real `--check`
+//! against the Specmint repos beside the workspace.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -497,4 +498,101 @@ fn real_check_against_specmint_is_in_sync() {
     let out = String::from_utf8(out).unwrap();
     assert_eq!(code, 0, "{out}");
     assert_eq!(out.matches("  in sync\n").count(), 4, "{out}");
+}
+
+// --- the frozen corpus ------------------------------------------------------------
+
+/// `fixtures/sync-specmint/corpus.jsonl`: a header object (how the rows were
+/// drawn and answered, `rows` their number), then one row per line. A
+/// report row holds two trees (`old`, `new`; each file's bytes as a string,
+/// or `{"base64": ...}` when they are not UTF-8) and the report printed
+/// without (`report`) and with (`diff`) the unified diffs, each
+/// `{"changed", "out"}`; a mentions row holds `text` and its `mentions`.
+fn corpus() -> (Value, Vec<Value>) {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/sync-specmint/corpus.jsonl");
+    let text =
+        fs::read_to_string(&path).unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
+    let mut lines = text.lines();
+    let header: Value = serde_json::from_str(lines.next().expect("an empty corpus"))
+        .expect("the header is not JSON");
+    let rows: Vec<Value> = lines
+        .enumerate()
+        .map(|(n, line)| {
+            serde_json::from_str(line).unwrap_or_else(|e| panic!("row {}: not JSON: {e}", n + 1))
+        })
+        .collect();
+    assert_eq!(
+        header["rows"].as_u64(),
+        Some(rows.len() as u64),
+        "the header's row count"
+    );
+    (header, rows)
+}
+
+fn corpus_tree(value: &Value) -> Tree {
+    let files = value.as_object().expect("a tree is a JSON object");
+    files
+        .iter()
+        .map(|(rel, data)| {
+            let bytes = match data {
+                Value::String(text) => text.clone().into_bytes(),
+                other => BASE64
+                    .decode(other["base64"].as_str().expect("a file is text or base64"))
+                    .expect("base64"),
+            };
+            (rel.clone(), bytes)
+        })
+        .collect()
+}
+
+fn corpus_report(row: &Value, full_diff: bool) -> Value {
+    let mut out = Vec::new();
+    let changed = report(
+        row["name"]
+            .as_str()
+            .expect("a report row names its companion"),
+        &corpus_tree(&row["old"]),
+        &corpus_tree(&row["new"]),
+        full_diff,
+        &mut out,
+    );
+    json!({"changed": changed, "out": String::from_utf8(out).expect("the report is UTF-8")})
+}
+
+#[test]
+fn reports_and_mentions_match_the_frozen_corpus() {
+    let (header, rows) = corpus();
+    let mut failures = Vec::new();
+    for (n, row) in rows.iter().enumerate() {
+        let area = row["area"].as_str().unwrap_or("?");
+        if let Some(text) = row.get("text") {
+            let got = json!(path_mentions(text.as_str().expect("text is a string")));
+            if got != row["mentions"] {
+                failures.push(format!(
+                    "row {} ({area}) {text}: expected {}, got {got}",
+                    n + 1,
+                    row["mentions"]
+                ));
+            }
+            continue;
+        }
+        for (key, full_diff) in [("report", false), ("diff", true)] {
+            let got = corpus_report(row, full_diff);
+            if got != row[key] {
+                failures.push(format!(
+                    "row {} ({area}) {key}: expected {}, got {got}",
+                    n + 1,
+                    row[key]
+                ));
+            }
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "{} of {} rows differ from {}:\n{}",
+        failures.len(),
+        rows.len(),
+        header["oracle"],
+        failures.join("\n")
+    );
 }
