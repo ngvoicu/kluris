@@ -1,9 +1,11 @@
 //! The two claims that let commands share one checkout: the remote claim
 //! (one network sync at a time, never waited for) and the tree claim
 //! (exclusive to change the work tree, shared to read it, waited for in
-//! steps up to a bound). Each is an OS lock on a file in the git directory,
-//! so it is taken in this process, in another one, and in a linked worktree
-//! alike, and goes with the process that holds it.
+//! steps up to a bound). Each is an OS lock on a file in a git directory:
+//! the remote claim in the repository's common one, shared by all its
+//! worktrees, the tree claim in each worktree's own. So a claim is taken in
+//! this process and in another one alike, and goes with the process that
+//! holds it.
 
 use std::fs;
 use std::io::Read;
@@ -80,15 +82,27 @@ impl Repo {
         String::from_utf8(out.stdout).unwrap().trim_end().to_owned()
     }
 
-    /// The git directory of the work tree at `work`.
+    /// The git directory of the work tree at `work`: its own, which for
+    /// the main work tree is also the repository's common one.
     fn git_dir(&self, work: &Path) -> PathBuf {
         PathBuf::from(self.git(work, &["rev-parse", "--absolute-git-dir"]))
+    }
+
+    /// The repository's common git directory, seen from the work tree at
+    /// `work` (`git rev-parse --git-common-dir`), as an absolute path.
+    fn common_dir(&self, work: &Path) -> PathBuf {
+        self.absolute(work, self.git(work, &["rev-parse", "--git-common-dir"]))
     }
 
     /// Where git puts `name` in the git directory of the work tree at
     /// `work` (`git rev-parse --git-path`), as an absolute path.
     fn git_path(&self, work: &Path, name: &str) -> PathBuf {
-        let path = PathBuf::from(self.git(work, &["rev-parse", "--git-path", name]));
+        self.absolute(work, self.git(work, &["rev-parse", "--git-path", name]))
+    }
+
+    /// A path git printed, which is relative to `work` when not absolute.
+    fn absolute(&self, work: &Path, printed: String) -> PathBuf {
+        let path = PathBuf::from(printed);
         if path.is_absolute() {
             path
         } else {
@@ -96,11 +110,11 @@ impl Repo {
         }
     }
 
-    /// A linked worktree of the repository on a new branch.
-    fn linked_worktree(&self) -> PathBuf {
-        let linked = self.dir.path().join("linked");
+    /// A linked worktree of the repository, `name`, on a new branch.
+    fn linked_worktree(&self, name: &str) -> PathBuf {
+        let linked = self.dir.path().join(name);
         let to = linked.to_string_lossy().into_owned();
-        self.git(&self.work, &["worktree", "add", "-q", "-b", "linked", &to]);
+        self.git(&self.work, &["worktree", "add", "-q", "-b", name, &to]);
         linked
     }
 }
@@ -285,13 +299,16 @@ fn the_claim_files_are_made_in_the_git_dir_and_never_removed() {
     assert!(busy(RemoteClaim::try_take(&git_dir)));
     drop(busy_remote);
     assert!(remote.is_file() && tree.is_file());
-    // Where git itself puts these names, so callers that ask git find them.
-    for (name, file) in [(REMOTE_CLAIM, &remote), (TREE_CLAIM, &tree)] {
-        assert_eq!(
-            fs::canonicalize(repo.git_path(&repo.work, name)).unwrap(),
-            fs::canonicalize(file).unwrap()
-        );
-    }
+    // The remote claim in the common git directory, the tree claim where
+    // git itself puts the name for this work tree.
+    assert_eq!(
+        fs::canonicalize(repo.common_dir(&repo.work).join(REMOTE_CLAIM)).unwrap(),
+        fs::canonicalize(&remote).unwrap()
+    );
+    assert_eq!(
+        fs::canonicalize(repo.git_path(&repo.work, TREE_CLAIM)).unwrap(),
+        fs::canonicalize(&tree).unwrap()
+    );
 }
 
 #[test]
@@ -315,33 +332,50 @@ fn a_claim_that_cannot_be_made_is_an_error_not_busy() {
 }
 
 #[test]
-fn a_linked_worktree_has_claims_of_its_own() {
+fn linked_worktrees_share_the_remote_claim_and_keep_their_own_tree_claims() {
     let repo = Repo::new();
-    let main = repo.git_dir(&repo.work);
-    let linked_work = repo.linked_worktree();
-    let linked = repo.git_dir(&linked_work);
+    let works = [
+        repo.work.clone(),
+        repo.linked_worktree("first"),
+        repo.linked_worktree("second"),
+    ];
+    let common = fs::canonicalize(repo.common_dir(&repo.work)).unwrap();
+    let own: Vec<PathBuf> = works.iter().map(|work| repo.git_dir(work)).collect();
+    for work in &works {
+        assert_eq!(fs::canonicalize(repo.common_dir(work)).unwrap(), common);
+    }
     assert_ne!(
-        fs::canonicalize(&main).unwrap(),
-        fs::canonicalize(&linked).unwrap()
+        fs::canonicalize(&own[1]).unwrap(),
+        fs::canonicalize(&own[2]).unwrap()
     );
 
-    let _main_remote = RemoteClaim::try_take(&main).unwrap();
-    let _main_tree = TreeClaim::exclusive(&main, SHORT).unwrap();
-    let linked_remote = RemoteClaim::try_take(&linked);
-    assert!(linked_remote.is_ok(), "{:?}", linked_remote.err());
-    let linked_tree = TreeClaim::exclusive(&linked, SHORT);
-    assert!(linked_tree.is_ok(), "{:?}", linked_tree.err());
-
-    // In the linked worktree's git directory, where git puts the names,
-    // and they hold there as anywhere.
-    for name in [REMOTE_CLAIM, TREE_CLAIM] {
-        assert_eq!(
-            fs::canonicalize(repo.git_path(&linked_work, name)).unwrap(),
-            fs::canonicalize(linked.join(name)).unwrap()
-        );
+    // One worktree holding the remote claim makes it busy for every other.
+    let held = RemoteClaim::try_take(&repo.common_dir(&works[1])).unwrap();
+    for work in [&works[0], &works[2]] {
+        assert!(busy(RemoteClaim::try_take(&repo.common_dir(work))));
     }
-    assert!(busy(RemoteClaim::try_take(&linked)));
-    assert!(busy(TreeClaim::shared(&linked, Duration::ZERO)));
+    drop(held);
+    let again = RemoteClaim::try_take(&repo.common_dir(&works[2]));
+    assert!(again.is_ok(), "{:?}", again.err());
+    assert!(common.join(REMOTE_CLAIM).is_file());
+    for linked in &own[1..] {
+        assert!(!linked.join(REMOTE_CLAIM).exists());
+    }
+
+    // Each worktree's tree claim is its own, where git puts the name for
+    // that worktree, and holds there.
+    let trees: Vec<TreeClaim> = own
+        .iter()
+        .map(|git_dir| TreeClaim::exclusive(git_dir, Duration::ZERO).unwrap())
+        .collect();
+    for (work, git_dir) in works.iter().zip(&own) {
+        assert_eq!(
+            fs::canonicalize(repo.git_path(work, TREE_CLAIM)).unwrap(),
+            fs::canonicalize(git_dir.join(TREE_CLAIM)).unwrap()
+        );
+        assert!(busy(TreeClaim::shared(git_dir, Duration::ZERO)));
+    }
+    drop(trees);
 }
 
 /// This test binary run again as a child that holds a claim in
