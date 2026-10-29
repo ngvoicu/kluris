@@ -1,7 +1,7 @@
 //! `kluris search`: BM25F over heading chunks, computed in memory on every
-//! call, nothing written (research-05 §6 rung 1; research-06 §6).
+//! call, nothing written.
 //!
-//! 1. The items are v2's ([`items::collect`]): neurons, glossary
+//! 1. The items are [`items::collect`]'s: neurons, glossary
 //!    entries (each its own result, `file: "glossary.md"`), `brain.md`. A
 //!    neuron or `glossary.md` that does not read is left out and listed in
 //!    [`SearchOutcome::skipped`].
@@ -22,7 +22,7 @@
 //!    ([`items::substring_match`]) is a candidate too, at [`FLOOR`] when
 //!    BM25 gave it nothing, so no substring hit is lost. Deprecated
 //!    neurons score ×0.5 and stay in the results.
-//! 6. `--lobe`/`--tag` are v2's filters; results are ordered by score, then
+//! 6. `--lobe`/`--tag` filter the hits; results are ordered by score, then
 //!    the substring score, `updated` (newest first), file and title, and cut
 //!    to the limit (`limit <= 0`: none).
 

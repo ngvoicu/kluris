@@ -80,7 +80,7 @@ pub fn run(brain: Option<&str>, as_json: bool, broken_only: bool) -> Result<(), 
     let today = today()?;
 
     // Every brain's kluris.yml first, so a missing one stops the run before
-    // any brain is written (v2 raises midway, after earlier brains).
+    // any brain is written, never midway.
     let mut configs = Vec::new();
     for brain in &brains {
         let root = py_path_str(&brain.entry.path);
@@ -226,7 +226,7 @@ pub fn run(brain: Option<&str>, as_json: bool, broken_only: bool) -> Result<(), 
 }
 
 /// A `/`-joined path in native form: the JSON paths are `/`-joined,
-/// the text keeps v2's native ones.
+/// the text keeps the native separators.
 fn native(rel: &str) -> String {
     rel.replace('/', std::path::MAIN_SEPARATOR_STR)
 }

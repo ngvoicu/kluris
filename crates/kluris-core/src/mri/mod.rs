@@ -1,22 +1,20 @@
-//! `kluris mri`: the brain graph and the standalone HTML page (v2's
-//! `core/mri.py`, research-03 §2.8).
+//! `kluris mri`: the brain graph and the standalone HTML page.
 //!
-//! The graph is v2's `build_graph` over the shared walker:
+//! The graph is [`build_graph`] over the shared walker:
 //! - nodes: every walked `.md` file (maps, `brain.md`, `glossary.md` and
 //!   `index.md` too) but `README.md`, then the opted-in YAML neurons, in path
 //!   order; a node's id is its index. The walker prunes dot
 //!   directories, `node_modules`, `__pycache__` and symlinks that leave the
-//!   brain, which v2's MRI walk graphs;
+//!   brain; the pruned paths are not graphed;
 //! - edges: `parent`, each `related` and `replaced_by` whose target resolves
 //!   to a node, then inline `[text](target)` links (not `http...`, anchor and
 //!   query cut, no self-link) for a pair that has no edge yet.
 //!
-//! The page is v2's shell, CSS and JS byte for byte
-//! (`assets/mri/`, taken from v2.28.11), with
-//! the brain name, the header counts and `json.dumps(graph, indent=2)`
-//! injected. Differences: the name is the registered brain name, not the
-//! directory name, and `</` and `<!--` in the graph JSON are escaped so
-//! neuron text cannot end the script.
+//! The page's shell, CSS and JS are kept byte for byte
+//! (`assets/mri/`, taken from v2.28.11), with the brain name, the header
+//! counts and `json.dumps(graph, indent=2)` injected. The name is the
+//! registered brain name, not the directory name, and `</` and `<!--` in
+//! the graph JSON are escaped so neuron text cannot end the script.
 
 mod text;
 mod uri;

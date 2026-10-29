@@ -1,9 +1,9 @@
-//! `kluris dream`'s resilience and the decided v2-bug fixes (TEST-K3-21):
-//! malformed files are skipped and reported, a BOM file keeps one block, the
-//! first body line keeps its indentation, line endings are kept, odd
-//! `related` values and a missing `kluris.yml` never crash, and link checking
-//! ignores code, other schemes and titles and reads `%20`. Each case is one
-//! where v2 crashes or writes the wrong thing.
+//! `kluris dream`'s resilience and the decided fixes: malformed files are
+//! skipped and reported, a BOM file keeps one block, the first body line
+//! keeps its indentation, line endings are kept, odd `related` values and
+//! a missing `kluris.yml` never crash, and link checking ignores code,
+//! other schemes and titles and reads `%20`. Each case guards a crash or
+//! a wrong write on such input.
 
 use std::fs;
 use std::path::{Path, PathBuf};

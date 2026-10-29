@@ -1,16 +1,14 @@
-//! The links dream checks in a body: v2's `parse_markdown_links` with the
-//! decided fixes (research-03 §5 #32, interview-01 #5):
+//! The links dream checks in a body, with the decided fixes:
 //! - links inside fenced code blocks (```` ``` ````, `~~~`) and inline code
 //!   spans are not links;
 //! - a target with a URI scheme (`mailto:`, `ftp:`, `tel:`, `file:`, ...) is
-//!   not a file (v2 skipped only `http://` and `https://`); a one-letter
-//!   "scheme" is a Windows drive and stays a path;
+//!   not a file; a one-letter "scheme" is a Windows drive and stays a path;
 //! - a link title is not part of the path: `[a](b.md "t")`, `'t'`, `(t)`;
 //! - the path may be URL-encoded: [`decoded`] gives the other reading, and a
 //!   link is fine when either names a file.
 //!
-//! As in v2, the target is cut at `#` and then at `?`, an empty one is
-//! dropped, and image links (`![x](y.png)`) are checked like any link.
+//! The target is cut at `#` and then at `?`, an empty one is dropped, and
+//! image links (`![x](y.png)`) are checked like any link.
 
 use std::sync::LazyLock;
 

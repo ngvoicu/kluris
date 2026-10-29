@@ -1,5 +1,4 @@
-//! `kluris wake-up`: v2's `kluris_runtime.wake_up.build_payload` without a
-//! snapshot (research-03 §1.6, §2.7).
+//! `kluris wake-up`: the payload, without a snapshot.
 //!
 //! - `lobes`: [`BrainStore::lobe_names`], each with its [`lobe_description`]
 //!   and its neuron counts walked from the lobe; `total_neurons` and
@@ -11,7 +10,7 @@
 //! - `glossary`: glossary.md's entries; none when it cannot be read.
 //! - `deprecation`: the store's deprecation issues, over the neurons that
 //!   read, in store order; `parse_errors` counts the markdown neurons that
-//!   do not read (v2's CLI always says 0).
+//!   do not read.
 
 use std::path::Path;
 
@@ -174,13 +173,12 @@ pub fn truncate_brain_md(body: &str) -> String {
     format!("{}\n\n[... truncated]", &body[..end])
 }
 
-/// A lobe's description, v2's `_lobe_description`: map.md's frontmatter
-/// `description` when it is a string (a top-level date counts, as its ISO
-/// text) that is not blank, stripped; else the first line after a `# `
-/// title that is not blank and does not start with `up `, `sideways `,
-/// `## ` or `- [`, stripped, in the body (in the whole text when the
-/// frontmatter does not parse). `""` without map.md, or when it is not
-/// UTF-8 (v2 raises there).
+/// A lobe's description: map.md's frontmatter `description` when it is a
+/// string (a top-level date counts, as its ISO text) that is not blank,
+/// stripped; else the first line after a `# ` title that is not blank and
+/// does not start with `up `, `sideways `, `## ` or `- [`, stripped, in
+/// the body (in the whole text when the frontmatter does not parse). `""`
+/// without map.md, or when it is not UTF-8.
 pub fn lobe_description(store: &impl BrainStore, lobe: &str) -> String {
     let rel = format!("{lobe}/map.md");
     let content = match store.structure_file(&rel) {

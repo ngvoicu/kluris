@@ -38,7 +38,7 @@ fn two_brains(home: &TempDir) {
 
 #[test]
 fn the_shipped_binary_has_no_resolve_hook() {
-    // The binary carries nothing test-only: `kluris __resolve` is v2's
+    // The binary carries nothing test-only: `kluris __resolve` is an
     // unknown command whatever KLURIS_TEST_HOOKS says.
     let home = TempDir::new().unwrap();
     two_brains(&home);

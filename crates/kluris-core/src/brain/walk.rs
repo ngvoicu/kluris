@@ -1,26 +1,22 @@
 //! The one brain walker every Kluris 3 command uses.
 //!
 //! It prunes `.git`, every directory whose name starts with `.`,
-//! `node_modules` and the rest of v2's `SKIP_DIRS` (`__pycache__`), at any
-//! depth below the root. That is exactly what v2's neuron index prunes
-//! (`neuron_index.all_neuron_files`); v2's maps and MRI walkers prune less
-//! (research-03 §5 items 1-2), and their differences are recorded where those
-//! commands are ported.
+//! `node_modules` and the rest of [`SKIP_DIRS`] (`__pycache__`), at any
+//! depth below the root. Every command walks the same set.
 //!
-//! Symlinks are taken as v2's `os.walk` plus `_escapes_brain` take them:
+//! Symlinks are taken this way:
 //! - a symlink to a file is listed when it resolves inside the brain; one
 //!   that resolves outside, a broken one that points outside, and a loop are
-//!   dropped. A broken link that points inside is listed (Python's non-strict
-//!   `resolve()` gives its target's path), and reading it then fails.
+//!   dropped. A broken link that points inside is listed (its target's path
+//!   is known even though the target does not exist), and reading it then
+//!   fails.
 //! - a symlink to a directory is never descended. One that resolves inside
 //!   the brain names a directory the walk already visits at its real path
 //!   (or prunes), so each directory is walked once and a link back to an
 //!   ancestor cannot loop; one that resolves outside is never followed.
 //!
 //! The walk is iterative and the result is sorted by the bytes of the POSIX
-//! relative path. v2 keeps `os.walk`'s directory-read order, which depends on
-//! the filesystem, so where v2's output order comes from the walk, only the
-//! set of items is v2's (research-03 §3.2).
+//! relative path, so its order is the same on every filesystem.
 
 use std::fs;
 use std::path::{Path, PathBuf};

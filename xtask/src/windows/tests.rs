@@ -1046,7 +1046,7 @@ mod scripts {
     }
 
     /// The sweep keeps the cache folders the runs use and removes every
-    /// other folder there: the rule holds for whatever a run used to keep.
+    /// other folder there, whenever it was put there.
     #[test]
     fn the_sweep_removes_every_cache_folder_no_run_uses() {
         let used: std::collections::BTreeSet<String> = every_script()

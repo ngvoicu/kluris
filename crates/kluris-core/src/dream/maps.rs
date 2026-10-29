@@ -1,10 +1,10 @@
-//! Steps 5 and 6 of dream: every `map.md` and `brain.md` (v2 `core/maps.py`).
+//! Steps 5 and 6 of dream: every `map.md` and `brain.md`.
 //!
-//! As v2, except for the directories the walker prunes (dot directories,
-//! `node_modules`, `__pycache__` and the rest of `SKIP_DIRS`): they get no
-//! `map.md` and are never listed as a sub-lobe or sibling (interview-01 #4).
-//! A lobe's neurons are its directory listing, as in v2 (a suffix
-//! compared case-insensitively, links followed), not the neuron index.
+//! The directories the walker prunes (dot directories, `node_modules`,
+//! `__pycache__` and the rest of `SKIP_DIRS`) get no `map.md` and are never
+//! listed as a sub-lobe or sibling. A lobe's neurons are its directory
+//! listing (a suffix compared case-insensitively, links followed), not the
+//! neuron index.
 
 use super::workspace::{Read, Workspace};
 use crate::brain::store::{BrainStore, DirEntry};

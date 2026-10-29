@@ -1,6 +1,5 @@
-//! The brain resolver: v2's `_resolve_brains`, `_check_brain_paths` and
-//! `_pick_brain_interactively` (research-03 §1.0, `cli.py:268-395`), with
-//! v2's exact texts.
+//! The brain resolver: `_resolve_brains`, `_check_brain_paths` and
+//! `_pick_brain_interactively`, with their exact texts.
 
 use std::fs;
 use std::io::Cursor;

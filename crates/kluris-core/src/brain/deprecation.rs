@@ -1,14 +1,14 @@
-//! Deprecation diagnostics: v2's `deprecation.detect_deprecation_issues`.
+//! Deprecation diagnostics.
 //!
-//! A neuron's status is v2's `str(meta.get("status", "active")).lower()`: no
-//! `status` key is active, a string compares lowercased, and any other value
-//! (`~`, `true`, a number, a list) is neither active nor deprecated. Then:
+//! A neuron's status is `active` when it has no `status` key, else the
+//! key's value as a string, lowercased; any other value (`~`, `true`, a
+//! number, a list) is neither active nor deprecated. Then:
 //! 1. for each deprecated neuron, in neuron order, its `replaced_by`:
 //!    missing, `~` or `""` gives `deprecated_without_replacement`; a value
-//!    that is not a string (after v2 turns a top-level date into its ISO
-//!    text) gives nothing; a target that does not exist or resolves outside
-//!    the brain gives `replaced_by_missing`; a target that is not an active
-//!    neuron gives `replaced_by_not_active`.
+//!    that is not a string (a top-level date reads as its ISO text) gives
+//!    nothing; a target that does not exist or resolves outside the brain
+//!    gives `replaced_by_missing`; a target that is not an active neuron
+//!    gives `replaced_by_not_active`.
 //! 2. for each neuron that is not deprecated, each string `related` entry
 //!    that resolves to a deprecated neuron gives `active_links_to_deprecated`
 //!    (map.md is not a neuron, so its links count for nothing).
@@ -16,12 +16,11 @@
 //! Statuses are keyed by resolved path, so a symlink and its target are one
 //! neuron, while each walked path still reports its own issues. `file` and
 //! `source` are the walked relative paths, the `active_links_to_deprecated`
-//! target is the resolved target's relative path, all `/`-joined on every OS
-//! (interview-01 #7; v2's `str(Path)` is native); `replaced_by`
-//! targets are kept as written.
+//! target is the resolved target's relative path, all `/`-joined on every OS;
+//! `replaced_by` targets are kept as written.
 //!
 //! A markdown neuron whose frontmatter cannot be read is skipped and reported
-//! in [`DeprecationReport::skipped`]; v2 raises instead.
+//! in [`DeprecationReport::skipped`]; the check does not fail on it.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};

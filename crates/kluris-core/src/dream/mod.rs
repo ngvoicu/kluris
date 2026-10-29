@@ -1,7 +1,7 @@
-//! `kluris dream` for one brain: v2's `_sync_brain_state` then its
-//! validators (research-03 §2.5), with every write in one change set.
+//! `kluris dream` for one brain: the state sync then the validators, with
+//! every write in one change set.
 //!
-//! Steps, in v2's order, each reading what the earlier ones wrote:
+//! Steps, in order, each reading what the earlier ones wrote:
 //! 1. `updated`/`created` from git ([`sync_dates`]);
 //! 2. `parent: ./map.md` where it is missing ([`linker::fix_missing_parents`]);
 //! 3. reverse `related` links ([`linker::fix_reverse_links`]);
@@ -11,14 +11,13 @@
 //!
 //! The writes are applied together; the validators (broken and one-way
 //! synapses, orphans, frontmatter issues, deprecation) then run on the brain
-//! as written. Differences from v2: dates are written in the quoted form
-//! v2's dream converges to, YAML anchors as plain copies, each file keeps
-//! its line endings and new files are LF, pruned directories get no
-//! `map.md` and are not listed, report paths are `/`-joined, and files are
-//! taken in path order. A file that cannot be read or written is skipped,
-//! reported and makes the brain unhealthy; odd `related` values never
-//! crash; link checking skips code, other schemes and titles and reads
-//! URL-encoded paths.
+//! as written. The decided rules: dates are written in the quoted form,
+//! YAML anchors as plain copies, each file keeps its line endings and new
+//! files are LF, pruned directories get no `map.md` and are not listed,
+//! report paths are `/`-joined, and files are taken in path order. A file
+//! that cannot be read or written is skipped, reported and makes the brain
+//! unhealthy; odd `related` values never crash; link checking skips code,
+//! other schemes and titles and reads URL-encoded paths.
 
 mod linker;
 mod links;
@@ -115,8 +114,7 @@ pub struct DreamReport {
 
 impl DreamReport {
     /// No broken or one-way synapses, orphans, frontmatter issues or skipped
-    /// files (v2 exits 1 on every file Kluris 3 skips); deprecation
-    /// issues are warnings only.
+    /// files; deprecation issues are warnings only.
     pub fn healthy(&self) -> bool {
         self.skipped.is_empty()
             && self.broken.is_empty()

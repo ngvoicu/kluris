@@ -1,16 +1,14 @@
-//! What v2 searches, item for item (research-03 §2.6, v2's
-//! `kluris_runtime/search.py`): every neuron that reads, each glossary entry,
-//! and `brain.md`; v2's literal substring score; its `--lobe` and `--tag`
-//! filters. A neuron (or `glossary.md`) that does not read is left out, as in
-//! v2, and reported ([`collect`]).
+//! What the search scores, item for item: every neuron that reads, each
+//! glossary entry, and `brain.md`; the literal substring score; the `--lobe`
+//! and `--tag` filters. A neuron (or `glossary.md`) that does not read is
+//! left out and reported ([`collect`]).
 //!
 //! Everything is read through the [`BrainStore`]: a neuron by its own path
 //! ([`BrainStore::read_neuron`]), the body's first line from the read.
 //!
-//! An item's `body` is v2's: for a markdown file the text after the
-//! frontmatter with line breaks read as `\n` and Python's `strip()` applied
-//! (python-frontmatter), for a YAML neuron the text after its `#---` block as
-//! is.
+//! An item's `body`: for a markdown file the text after the frontmatter
+//! with line breaks read as `\n` and Python's `strip()` applied, for a YAML
+//! neuron the text after its `#---` block as is.
 
 use crate::brain::deprecation::SkippedNeuron;
 use crate::brain::store::{BrainStore, ReadError};

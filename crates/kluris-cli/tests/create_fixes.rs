@@ -1,16 +1,15 @@
-//! The decided fixes in `kluris create` and `kluris register` (TEST-K3-25;
-//! each one a deliberate difference from v2):
-//! - `create --json` without a name is a JSON error (v2: a traceback);
+//! The decided fixes in `kluris create` and `kluris register`:
+//! - `create --json` without a name is a JSON error;
 //! - the wizard's brain type is checked like `--type`;
 //! - nothing is asked when stdin is not a terminal or `KLURIS_NO_PROMPT=1`:
 //!   a missing name (create) or path (register) is an error naming it, the
 //!   other values take their defaults;
 //! - `--from-config` refuses lobe names that are paths and nested values;
 //! - new brain names follow `^[a-z][a-z0-9]*(-[a-z0-9]+)*$` (at most 48,
-//!   not `all`), while names v2 allowed keep loading;
+//!   not `all`), while a name already in use keeps loading;
 //! - a git failure is a clean error naming the command and what is left on
 //!   disk, and the brain is not registered;
-//! - a target path that is a file is an error (v2: a traceback).
+//! - a target path that is a file is an error.
 
 use std::fs;
 use std::path::{Path, PathBuf};

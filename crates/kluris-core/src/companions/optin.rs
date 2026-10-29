@@ -79,8 +79,8 @@ pub fn add(
 }
 
 /// Opt the brains that have any of `selected` out of them (the rest of the
-/// list normalized, as v2 does); a brain without any of them is not
-/// touched (v2 rewrites every brain: research-03 §5 #25). Returns
+/// list normalized); a brain without any of them is not touched: its
+/// `kluris.yml` is rewritten only when the opt-out changes it. Returns
 /// the brains written. The runtime folders are kept.
 pub fn remove(brains: &[OptInBrain], selected: &[String]) -> Result<Vec<String>, CompanionError> {
     let mut changed = Vec::new();

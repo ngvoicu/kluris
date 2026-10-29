@@ -923,9 +923,8 @@ fn v2_install_is_migrated_and_nothing_else_is_touched() {
 
 /// The report's absolute paths are in the OS's own separators: the
 /// registry's `/`-relative folder names are joined under HOME component by
-/// component, and a collision's message names the entry that way
-/// (SPEC 2026-10-27; the JSON `path` and the `~/` labels stay
-/// `/`-joined).
+/// component, and a collision's message names the entry that way; the
+/// JSON `path` and the `~/` labels stay `/`-joined.
 #[test]
 fn destination_paths_and_failure_messages_are_os_native() {
     // A collision in the universal folder: the failed message names the

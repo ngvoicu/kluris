@@ -1,5 +1,5 @@
 #!/bin/sh
-# Fail when the release workflow is missing, or when ci.yml no longer runs
+# Fail when the release workflow is missing, or when ci.yml does not run
 # the installed life cycle (build-versions and lifecycle-smoke, Unix and
 # Windows) beside the installer smoke. See CLAUDE.md, Release.
 #

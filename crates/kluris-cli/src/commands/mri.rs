@@ -91,7 +91,7 @@ pub fn run(brain: Option<&str>, output: Option<&str>, as_json: bool) -> Result<(
             ("nodes".into(), count(stats.nodes)),
             ("edges".into(), count(stats.edges)),
         ];
-        // After v2's keys, only when the preflight skipped a file,
+        // After the keys above, only when the preflight skipped a file,
         // with dream's `{brain, file, error}` items.
         if !sync.skipped.is_empty() {
             let skipped = sync

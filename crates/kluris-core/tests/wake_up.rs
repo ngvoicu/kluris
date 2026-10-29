@@ -1,6 +1,6 @@
-//! `kluris wake-up`'s payload: v2's `kluris_runtime.wake_up.build_payload`
-//! (research-03 §1.6, §2.7). Expected values are frozen values recorded from
-//! Kluris 2.28.11 (`kluris wake-up --json` on copies of the fixture brains).
+//! `kluris wake-up`'s payload. Expected values are frozen values recorded
+//! from Kluris 2.28.11 (`kluris wake-up --json` on copies of the fixture
+//! brains).
 
 use std::fs;
 use std::path::{Path, PathBuf};

@@ -1,5 +1,4 @@
-//! `kluris doctor` (v2 `cli.py:1900-2002`, research-03 §1.13, with the
-//! interview-01 #8 changes).
+//! `kluris doctor`: the environment and install checks.
 //!
 //! Checks, in order:
 //! 1. `git`: `git --version` runs and exits 0.
@@ -12,9 +11,9 @@
 //!
 //! Then, unless `--no-refresh` (and only when the config reads):
 //! 5. `companion:<name>`: each known companion that is installed or that a
-//!    brain opts into is refreshed (v2).
+//!    brain opts into is refreshed.
 //! 6. `skills`: every brain's skill is installed
-//!    ([`install_skills`], which also migrates a v2 install).
+//!    ([`install_skills`], which also migrates the copies an older layout left).
 
 use std::ffi::OsStr;
 use std::fs;

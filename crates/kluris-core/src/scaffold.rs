@@ -1,13 +1,12 @@
-//! A new brain's files, v2's `core/brain.py` (research-03 §2.2): the brain
-//! types, the name rules, the scaffold `create` writes, the `--from-config`
-//! structure, and the identity `register` reads from `brain.md`.
+//! A new brain's files: the brain types, the name rules, the scaffold
+//! `create` writes, the `--from-config` structure, and the identity
+//! `register` reads from `brain.md`.
 //!
-//! The scaffold is v2's bytes: each lobe's `map.md`, `kluris.yml`,
+//! The scaffold writes fixed bytes: each lobe's `map.md`, `kluris.yml`,
 //! `brain.md`, `glossary.md`, `README.md` and `.gitignore`, written as one
-//! change set. Differences from v2, each decided: new brain names follow
-//! the stricter rule ([`is_valid_new_name`]), and a `--from-config` lobe name
-//! that is a path or a lobe with a nested value is refused
-//! ([`structure_from_config`]).
+//! change set. The decided rules: new brain names follow the stricter rule
+//! ([`is_valid_new_name`]), and a `--from-config` lobe name that is a path
+//! or a lobe with a nested value is refused ([`structure_from_config`]).
 
 use std::fmt;
 use std::fs;
