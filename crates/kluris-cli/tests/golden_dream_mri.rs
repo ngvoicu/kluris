@@ -7,6 +7,10 @@
 //! any, the whole work tree after it. A file dream reports in `skipped`
 //! must keep its bytes.
 //!
+//! The legacy brain, which an earlier Kluris's dream left canonical, is
+//! frozen rather than built: one dream must leave every byte and `git
+//! status` as they were, and report what the earlier Kluris reported.
+//!
 //! An MRI scenario snapshots each run, the work tree after the dream
 //! preflight with the generated pages left out, and the graph each page
 //! embeds (nodes sorted by path, edges as `source path → target path` sorted,
@@ -23,13 +27,14 @@ use std::process::Command;
 use std::sync::LazyLock;
 
 use common::dream_brains::{
-    D2, D3, Files, NO_PARENT, Neuron, healthy_brain, mri_brain, register, resilience_brain,
-    rich_brain,
+    D2, D3, Files, NO_PARENT, Neuron, healthy_brain, legacy_brain, mri_brain, register,
+    resilience_brain, rich_brain,
 };
 use common::golden::python_json;
 use common::sandbox::{Run, Sandbox, changed_files, json_dump, run_end, section, write_tree};
 use common::{
-    Tree, files_dump, native_path, native_paths, normalize, tree_dump, tree_files, windows_variant,
+    Tree, assert_unchanged, files_dump, native_path, native_paths, normalize, tree_dump,
+    tree_files, windows_variant,
 };
 use kluris_core::json;
 use regex::Regex;
@@ -243,6 +248,7 @@ const WINDOWS_VARIANTS: &[&str] = &[
     "dream_rich__3_tree",
     "dream_broken_only__1_tree",
     "dream_brain_all__1_tree",
+    "dream_legacy__1_run",
     "mri_rich__1_tree",
     "mri_rich__1_graph_rich",
     "mri_preflight_skipped__1_tree",
@@ -454,6 +460,77 @@ fn dream_writes_a_file_only_when_its_body_changed() {
     assert!(
         String::from_utf8_lossy(tree["brains/calm/projects/map.md"].file()).contains("extra: kept")
     );
+}
+
+/// The maps of the legacy brain that list a lower-case name after an
+/// upper-case one. Windows sorts a folder's names without regard to case,
+/// so dream there lists `Beta.md` after `_u.md` and `endpoints.md` before
+/// `Shout.MD`, and rewrites these two maps of the brain made on macOS.
+const LEGACY_MAPS_IN_WINDOWS_ORDER: &[&str] = &["knowledge/src/map.md", "projects/api/map.md"];
+
+/// The legacy brain, which an earlier Kluris's dream left canonical: dream
+/// changes no byte of it (on Windows none but the maps it lists in Windows
+/// order), leaves `git status` clean, and reports what the earlier Kluris's
+/// own next dream reported.
+#[test]
+fn dream_leaves_a_brain_an_earlier_kluris_left_canonical_as_it_is() {
+    let sb = Sandbox::new();
+    let (brain, earlier) = legacy_brain(&sb, "rich");
+    register(&sb, &[&brain]);
+    assert_eq!(
+        sb.porcelain(&brain),
+        "",
+        "the legacy brain is all committed"
+    );
+    let reordered: &[&str] = if cfg!(windows) {
+        LEGACY_MAPS_IN_WINDOWS_ORDER
+    } else {
+        &[]
+    };
+    let scenario = Scenario::new("dream_legacy", &sb, &[&brain]);
+    let args = ["dream", "--json"];
+    let before = tree_files(&sb.work);
+    let out = scenario.run(&args);
+    let after = tree_files(&sb.work);
+    let kept = |tree: &Tree| -> Tree {
+        let mut tree = tree.clone();
+        for map in reordered {
+            tree.remove(&format!("brains/rich/{map}"));
+        }
+        tree
+    };
+    assert_unchanged(&kept(&before), &kept(&after), "dream");
+    let porcelain: String = reordered.iter().map(|map| format!(" M {map}\n")).collect();
+    assert_eq!(sb.porcelain(&brain), porcelain, "git status --porcelain");
+    let extra = format!(
+        "{}== changed\n{}",
+        scenario.porcelain_text(),
+        changed_files(&before, &after)
+    );
+    snapshot(
+        "dream_legacy__1_run",
+        &scenario.run_text(&args, &out, &extra),
+    );
+    assert_eq!(out.code, 1, "{}{}", out.stdout, out.stderr);
+    assert_same_report(&out.stdout, &earlier);
+}
+
+/// `stdout`, a dream's JSON report, is `earlier`, another dream's: the same
+/// keys in the same order with the same values, but for `deprecation` and
+/// `broken_synapses_detail`, which hold the same entries in any order (each
+/// report lists them in the order its walk found them).
+fn assert_same_report(stdout: &str, earlier: &str) {
+    let read = |text: &str| -> String {
+        let mut doc: serde_json::Value = serde_json::from_str(text).unwrap();
+        for key in ["deprecation", "broken_synapses_detail"] {
+            doc[key]
+                .as_array_mut()
+                .unwrap()
+                .sort_by_cached_key(|entry| entry.to_string());
+        }
+        serde_json::to_string_pretty(&doc).unwrap()
+    };
+    assert_eq!(read(stdout), read(earlier), "the report");
 }
 
 #[test]
@@ -885,8 +962,9 @@ fn page_graph(page: &Path, name: &str) -> serde_json::Value {
 }
 
 /// The graph as the snapshot shows it: each node without its `id` (its
-/// index), sorted by path; each edge as its source's and target's paths
-/// and its type, sorted; `meta` as written.
+/// index), sorted by path; each edge, whose keys must be `source`, `target`
+/// and `type` in that order, as its source's and target's paths and its
+/// type, sorted; `meta` as written.
 fn sorted_graph(graph: &serde_json::Value) -> String {
     use serde_json::Value;
     let nodes = graph["nodes"].as_array().unwrap();
@@ -908,7 +986,10 @@ fn sorted_graph(graph: &serde_json::Value) -> String {
         .as_array()
         .unwrap()
         .iter()
-        .map(|e| {
+        .enumerate()
+        .map(|(i, e)| {
+            let keys: Vec<&str> = e.as_object().unwrap().keys().map(String::as_str).collect();
+            assert_eq!(keys, ["source", "target", "type"], "the keys of edge {i}");
             let end = |key: &str| paths[e[key].as_u64().unwrap() as usize].clone();
             (
                 end("source"),
@@ -927,6 +1008,31 @@ fn sorted_graph(graph: &serde_json::Value) -> String {
         "meta": graph["meta"],
     });
     json::to_string_indented(&python_json(&doc), 2) + "\n"
+}
+
+/// A graph of the nodes `a.md` and `b.md` and the one edge `edge`.
+fn graph_with_edge(edge: serde_json::Value) -> serde_json::Value {
+    serde_json::json!({
+        "nodes": [{"id": 0, "path": "a.md"}, {"id": 1, "path": "b.md"}],
+        "edges": [edge],
+        "meta": {},
+    })
+}
+
+#[test]
+#[should_panic(expected = "the keys of edge 0")]
+fn the_graph_check_refuses_an_edge_with_another_key() {
+    sorted_graph(&graph_with_edge(serde_json::json!({
+        "source": 0, "target": 1, "type": "related", "weight": 1,
+    })));
+}
+
+#[test]
+#[should_panic(expected = "the keys of edge 0")]
+fn the_graph_check_refuses_an_edge_with_its_keys_in_another_order() {
+    sorted_graph(&graph_with_edge(serde_json::json!({
+        "target": 1, "source": 0, "type": "related",
+    })));
 }
 
 // --- mri: running ------------------------------------------------------------------

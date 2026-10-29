@@ -7,11 +7,15 @@
 //! - the healthy brain has nothing to fix but its maps;
 //! - the MRI brain is the rich one plus an index, long and non-ASCII text,
 //!   HTML that must not end the page's script, anchors, a deep neuron and
-//!   inline links of every kind.
+//!   inline links of every kind;
+//! - the legacy brain is the rich one as an earlier Kluris's dream left it,
+//!   frozen with its history ([`legacy_brain`]).
 
+use std::fs;
 use std::path::{Path, PathBuf};
 
-use super::sandbox::{Sandbox, write_tree};
+use super::golden::tree_files;
+use super::sandbox::{Sandbox, fixture, unstored, write, write_tree};
 
 pub const D1: &str = "2026-01-01T12:00:00+00:00";
 pub const D2: &str = "2026-02-03T09:30:00+00:00";
@@ -345,6 +349,60 @@ pub fn mri_brain(sb: &Sandbox, name: &str) -> PathBuf {
     write_tree(&brain, mri_files());
     sb.commit(&brain, "mri files", D2);
     brain
+}
+
+/// The legacy brain, frozen under `tests/fixtures/dream-legacy/rich/`,
+/// rebuilt in `work/brains/<name>`:
+/// - `history.tsv` says how the frozen brain was made (its `#` lines), then
+///   lists its commits oldest first: the commit's number, its date, the id
+///   it must get and its message;
+/// - `commit-<n>/` holds the files commit n adds or changes (a name that
+///   starts with `.` stored as `dot-<name>`, see [`unstored`]), committed
+///   with the sandbox's identity at the commit's date, so that dream reads
+///   the dates the earlier Kluris read; each commit must get its frozen id;
+/// - `crlf-files.txt` lists the fixture's files with CRLF line endings, so
+///   that a checkout that changed line endings fails here;
+/// - `report.json` is the stdout of the earlier Kluris's own next
+///   `dream --json` on the brain, which it returns beside the brain.
+pub fn legacy_brain(sb: &Sandbox, name: &str) -> (PathBuf, String) {
+    let src = fixture("dream-legacy").join("rich");
+    assert!(src.is_dir(), "{} is missing", src.display());
+    let crlf: Vec<String> = tree_files(&src)
+        .into_iter()
+        .filter(|(rel, entry)| {
+            rel != "crlf-files.txt" && entry.file().windows(2).any(|w| w == b"\r\n")
+        })
+        .map(|(rel, _)| rel)
+        .collect();
+    let listed = fs::read_to_string(src.join("crlf-files.txt")).expect("crlf-files.txt");
+    assert_eq!(
+        crlf,
+        listed.lines().collect::<Vec<_>>(),
+        "the files with CRLF"
+    );
+    let brain = sb.work.join("brains").join(name);
+    fs::create_dir_all(&brain).expect("brain");
+    sb.init(&brain);
+    let history = fs::read_to_string(src.join("history.tsv")).expect("history.tsv");
+    for row in history.lines().filter(|l| !l.starts_with('#')) {
+        let [n, date, id, message] = row.split('\t').collect::<Vec<_>>()[..] else {
+            panic!("history.tsv: {row:?} is not four columns");
+        };
+        let files = src.join(format!("commit-{n}"));
+        assert!(files.is_dir(), "{} is missing", files.display());
+        for (rel, entry) in tree_files(&files) {
+            write(&brain.join(unstored(&rel)), entry.file());
+        }
+        sb.commit(&brain, message, date);
+        let head = sb.git(&brain, &["rev-parse", "HEAD"], date);
+        assert_eq!(
+            head.trim_end(),
+            id,
+            "commit {n} is not the one the earlier Kluris made"
+        );
+    }
+    let report = fs::read_to_string(src.join("report.json")).expect("report.json");
+    (brain, report)
 }
 
 /// Register `brains` under their folder names, description `fixture`.

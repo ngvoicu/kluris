@@ -1,0 +1,10 @@
+#---
+# parent: ./map.md
+# related:
+# - ../alpha.md
+# title: API spec
+# updated: '2026-01-01'
+#---
+openapi: 3.0.0
+info:
+  title: demo

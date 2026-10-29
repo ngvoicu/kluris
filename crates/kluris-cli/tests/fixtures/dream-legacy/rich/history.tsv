@@ -1,0 +1,18 @@
+# The rich brain of parity/test_dream.py (rich_brain) as Kluris 2.28.11's
+# dream left it: committed at D1, projects/alpha.md changed at D2,
+# uncommitted-lobe/ written, then `kluris dream --json` (exit 1) twice, each
+# followed by a commit of everything at D3, the steps of
+# test_dream_on_a_brain_v2_normalized_changes_nothing.
+# made by: parity/test_dream.py and parity/harness.py at 280ab8a (sandbox HOME
+#   and KLURIS_CONFIG, TZ=UTC, git identity Kluris Parity
+#   <parity@kluris.invalid>), kluris 2.28.11 from parity/oracle.lock on
+#   Python 3.11.14, git version 2.55.0, macOS (APFS), on 2026-10-29 (the maps' `updated`)
+# report.json: the stdout of a third `kluris dream --json` by the same
+#   Kluris 2.28.11 on the result: exit 1, empty stderr, no file changed,
+#   `git status --porcelain` empty
+# commit-<n>/: the files commit n adds or changes (no commit removes one)
+# columns: commit, author and committer date, commit id, message (tab-separated)
+1	2026-01-01T12:00:00+00:00	07d4834ca4bc05a84939331f5a7ec1a24b058804	initial
+2	2026-02-03T09:30:00+00:00	73fcecc2676fefabc91f09ccf9f0f50c8f1a698b	alpha changed
+3	2026-03-04T08:00:00+00:00	f109f0da04e0c848a89c7612259aa338cd0a35ef	v2 dream
+4	2026-03-04T08:00:00+00:00	5773a361aab6de186de57cbf5c0b6ec300f01657	v2 dream
