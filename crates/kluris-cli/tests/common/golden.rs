@@ -168,6 +168,23 @@ pub fn normalize_json(text: &str, root: &Path, version_fields: &[&str]) -> Strin
     dumps(&doc)
 }
 
+/// A `--json` stdout parsed, after checking that it is exactly one line in
+/// the layout Kluris writes every `--json` (`kluris_core::json::to_line` of
+/// its parse: `, ` and `: ` separators, keys in their order, non-ASCII as
+/// `\uXXXX`, one final newline), so a change of layout, escaping or the
+/// final newline fails even where a test then looks at parts of the
+/// document only.
+pub fn parse_json_line(stdout: &str) -> serde_json::Value {
+    let doc: serde_json::Value = serde_json::from_str(stdout)
+        .unwrap_or_else(|e| panic!("stdout is not JSON ({e}): {stdout:?}"));
+    assert_eq!(
+        stdout,
+        json::to_line(&python_json(&doc)),
+        "stdout is not one line of json.dumps of its parse"
+    );
+    doc
+}
+
 /// One entry of a folder as [`tree_files`] reads it: a file's bytes, or a
 /// symlink's target (not followed).
 #[derive(Clone, Debug, PartialEq, Eq)]

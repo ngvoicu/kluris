@@ -13,7 +13,7 @@ use kluris_core::json;
 
 use super::golden::{
     Dump, Entry, PASSTHROUGH_ENV, PINNED_ENV, Reference, Tree, byte_count, decode, file_body,
-    native_paths, normalize, python_json, slashed,
+    native_paths, normalize, parse_json_line, python_json, slashed,
 };
 
 /// The length of every sandbox root, as Kluris prints it. A table whose
@@ -421,21 +421,12 @@ pub fn assert_unchanged(before: &Tree, after: &Tree, what: &str) {
     );
 }
 
-/// A `--json` stdout as a snapshot shows it: checked to be exactly one line
-/// of `json.dumps` layout (`kluris_core::json::to_line` of its parse), then
-/// written with an indent of 2 so that each value has its own line. The
-/// root and today are normalized first.
+/// A `--json` stdout as a snapshot shows it: checked by [`parse_json_line`],
+/// then written with an indent of 2 so that each value has its own line.
+/// The root and today are normalized first.
 pub fn json_dump(stdout: &str, root: &Path) -> String {
-    let text = normalize(stdout, root);
-    let doc: serde_json::Value = serde_json::from_str(&text)
-        .unwrap_or_else(|e| panic!("stdout is not JSON ({e}): {text:?}"));
-    let value = python_json(&doc);
-    assert_eq!(
-        text,
-        json::to_line(&value),
-        "stdout is not one line of json.dumps of its parse"
-    );
-    json::to_string_indented(&value, 2) + "\n"
+    let doc = parse_json_line(&normalize(stdout, root));
+    json::to_string_indented(&python_json(&doc), 2) + "\n"
 }
 
 /// `text`, a stream of a run or what a test reads from it, as a run's

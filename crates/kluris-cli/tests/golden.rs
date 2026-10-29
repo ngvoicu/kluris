@@ -10,7 +10,8 @@ use std::process::Command;
 use common::shared::vendored_marker;
 use common::{
     Entry, PINNED_ENV, PINNED_GIT_DATE, Sandbox, Tree, changes_dump, decode, file_body, git_dump,
-    git_state, native_path, native_paths, normalize, normalize_json, slashed, tree_dump,
+    git_state, native_path, native_paths, normalize, normalize_json, parse_json_line, slashed,
+    tree_dump,
 };
 
 /// A temp root whose name has a space and a non-ASCII letter, so its
@@ -226,6 +227,44 @@ fn a_version_field_that_is_not_a_string_fails() {
 fn json_not_written_as_python_writes_it_fails() {
     let (_tmp, root) = root();
     normalize_json("{\"version\":\"3.1.1\"}\n", &root, &["/version"]);
+}
+
+#[test]
+fn a_json_line_in_the_json_layout_parses() {
+    let text = "{\"t\": \"\\u00e9\\ud83d\\ude00\\n\\\"\", \"a\": [1, 2.5, 1e-05, null, {}], \"ok\": true}\n";
+    let doc = parse_json_line(text);
+    assert_eq!(doc["t"], "é\u{1F600}\n\"");
+    assert_eq!(doc["a"][2], 1e-05);
+}
+
+/// Outputs that hold a JSON document, each laid out otherwise than the
+/// `--json` layout.
+const NOT_THE_JSON_LAYOUT: [&str; 13] = [
+    "{\"ok\":true,\"n\":1}\n",
+    "{\"ok\": true}",
+    "{\"ok\": true}\n\n",
+    " {\"ok\": true}\n",
+    "{\n  \"ok\": true\n}\n",
+    "{\"t\": \"\u{e9}\"}\n",
+    "{\"t\": \"\\u00E9\"}\n",
+    "{\"t\": \"a\\/b\"}\n",
+    "{\"t\": \"\\u0041\"}\n",
+    "{\"n\": 1e2}\n",
+    "{\"n\": 1.50}\n",
+    "{\"a\": 1, \"a\": 2}\n",
+    "[1,2]\n",
+];
+
+#[test]
+fn a_json_line_in_another_layout_fails() {
+    let passed: Vec<&str> = NOT_THE_JSON_LAYOUT
+        .into_iter()
+        .filter(|text| std::panic::catch_unwind(|| parse_json_line(text)).is_ok())
+        .collect();
+    assert!(
+        passed.is_empty(),
+        "passed as the --json layout: {passed:#?}"
+    );
 }
 
 #[test]

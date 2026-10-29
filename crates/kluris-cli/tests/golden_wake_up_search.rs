@@ -9,27 +9,26 @@
 //! chunks), so a snapshot holds what does not depend on them: the error
 //! envelopes and exit codes, `total`, and the items found at a limit that
 //! holds them all, sorted, each with its file type, `deprecated` flag and
-//! matched fields. The keys and their types are checked on every JSON
-//! output, and the substring property on every brain: each item
-//! [`substring_match`] scores above 0 and the filters keep is in the
-//! results, and the results hold only items the filters keep.
+//! matched fields. Every JSON output is checked whole against the `--json`
+//! layout before it is read, its keys and their types are checked, and a
+//! search that succeeds writes nothing to stderr. The bulk queries run
+//! through the CLI against frozen rows (`tests/fixtures/search-rows.jsonl`)
+//! from an independent literal-substring search: every item it found is in
+//! the results while they are under the limit, with its file type,
+//! `deprecated` flag and matched fields among the result's, and every
+//! result is an item the filters keep.
 
 mod common;
 
 use std::collections::BTreeMap;
-use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::LazyLock;
 
-use common::brains::{Brains, eval_fixtures};
+use common::brains::Brains;
 use common::{
-    Run, Sandbox, assert_unchanged, normalize, run_end, section, tree_files, windows_variant,
-    write, write_files,
+    Run, Sandbox, assert_unchanged, normalize, parse_json_line, run_end, section, tree_files,
+    windows_variant, write, write_files,
 };
-use kluris_core::brain::store::LocalGitStore;
-use kluris_core::config::read_brain_config;
-use kluris_core::pycase;
-use kluris_core::search::items::{Item, collect_items, passes_filters, substring_match};
-use kluris_core::search::{Hit, Language, SearchRequest, search};
 use serde_json::Value;
 
 /// A limit that holds every result.
@@ -53,10 +52,6 @@ fn render_error(run: &Run, root: &Path) -> String {
     )
 }
 
-fn parse(stdout: &str) -> Value {
-    serde_json::from_str(stdout).unwrap_or_else(|e| panic!("not JSON ({e}): {stdout:?}"))
-}
-
 // --- wake-up --------------------------------------------------------------------
 
 /// `wake-up --json` with `brain` registered; its output, normalized by the
@@ -64,7 +59,7 @@ fn parse(stdout: &str) -> Value {
 fn wake_up_json(sb: &Sandbox, brain: &Path) -> String {
     let run = sb.kluris(&["wake-up", "--json"]);
     if run.code == 0 {
-        let doc = parse(&run.stdout);
+        let doc = parse_json_line(&run.stdout);
         assert_eq!(doc["path"], brain.display().to_string(), "{}", run.stdout);
     }
     run.render(brain)
@@ -192,7 +187,7 @@ fn wake_up_reads_odd_updated_values() {
         }
         sb.register("odd", &brain, "Fixture brain");
         let out = wake_up_json(&sb, &brain);
-        let doc = parse(&sb.kluris(&["wake-up", "--json"]).stdout);
+        let doc = parse_json_line(&sb.kluris(&["wake-up", "--json"]).stdout);
         let readable = values.iter().filter(|v| **v != "2026-02-30").count();
         assert_eq!(doc["recent"].as_array().unwrap().len(), readable);
         insta::assert_snapshot!(format!("wake_up_odd_updated_{}", batch * 5), out);
@@ -498,7 +493,7 @@ fn check_shape(doc: &Value, brain: &str, query: &str, limit: i64) {
     }
 }
 
-/// A result as the snapshots and the property compare it.
+/// A result as the snapshots and the frozen rows compare it.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 struct Found {
     file: String,
@@ -524,25 +519,38 @@ impl Found {
         }
     }
 
-    fn of_hit(h: &Hit) -> Found {
+    /// A frozen row's `[file, title, file_type, deprecated, matched_fields]`;
+    /// an item the filters keep has no matched fields.
+    fn of_row(row: &Value) -> Found {
+        let s = |i: usize| row[i].as_str().unwrap().to_string();
         Found {
-            file: h.file.clone(),
-            title: h.title.clone(),
-            file_type: h.file_type.to_string(),
-            deprecated: h.deprecated,
-            matched_fields: h.matched_fields.iter().map(|f| f.to_string()).collect(),
+            file: s(0),
+            title: s(1),
+            file_type: s(2),
+            deprecated: row[3].as_bool().unwrap(),
+            matched_fields: row
+                .get(4)
+                .map_or(&[][..], |f| f.as_array().unwrap())
+                .iter()
+                .map(|f| f.as_str().unwrap().to_string())
+                .collect(),
         }
+    }
+
+    /// The results of a `search --json` document.
+    fn all_of(doc: &Value) -> Vec<Found> {
+        doc["results"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(Found::of_json)
+            .collect()
     }
 }
 
 /// `total` and the results sorted by file and title, one per line.
 fn found_list(doc: &Value) -> String {
-    let mut found: Vec<Found> = doc["results"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(Found::of_json)
-        .collect();
+    let mut found = Found::all_of(doc);
     found.sort();
     let mut out = format!("total: {}\n", doc["total"]);
     for f in found {
@@ -558,8 +566,9 @@ fn found_list(doc: &Value) -> String {
     out
 }
 
-/// `search --brain <brain> --json --limit <limit> [--lobe] [--tag] -- <q>`,
-/// shape-checked; its document.
+/// `search --brain <brain> --json --limit <limit> [--lobe] [--tag] -- <q>`:
+/// exit 0, nothing on stderr (files it skips are listed in the document),
+/// stdout in the `--json` layout and shape-checked; its document.
 fn search_json(sb: &Sandbox, brain: &str, q: &Query) -> Value {
     let limit = q.limit.to_string();
     let mut args = vec!["search", "--brain", brain, "--json", "--limit", &limit];
@@ -572,7 +581,8 @@ fn search_json(sb: &Sandbox, brain: &str, q: &Query) -> Value {
     args.extend(["--", &q.q]);
     let run = sb.kluris(&args);
     assert_eq!(run.code, 0, "{}", run.render(&sb.root));
-    let doc = parse(&run.stdout);
+    assert_eq!(run.stderr, "", "{}", run.render(&sb.root));
+    let doc = parse_json_line(&run.stdout);
     check_shape(&doc, brain, &q.q, q.limit);
     doc
 }
@@ -633,7 +643,7 @@ fn search_limits() {
     for (id, text, n) in limits {
         let run = sb.kluris(&["search", "backup", "--limit", text, "--json"]);
         assert_eq!(run.code, 0, "{}", run.render(&sb.root));
-        let doc = parse(&run.stdout);
+        let doc = parse_json_line(&run.stdout);
         check_shape(&doc, "acme-sme", "backup", n);
         if n <= 0 {
             assert_eq!(doc["results"], serde_json::json!([]));
@@ -718,17 +728,11 @@ fn search_json_on_the_eval_brain() {
         ),
         ("bangs", "!!!!"),
     ];
-    let (sb, brain) = demo();
+    let (sb, _) = demo();
     for (id, q) in queries {
         let query = Query::all(q);
         let doc = search_json(&sb, "acme-sme", &query);
-        let found: Vec<Found> = doc["results"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(Found::of_json)
-            .collect();
-        let failures = substring_property(&brain, &query, &found);
+        let failures = disagreements(FROZEN.query("eval-cli", "acme-sme", &query), &doc);
         assert!(failures.is_empty(), "{}", failures.join("\n"));
         insta::assert_snapshot!(format!("search_eval_{id}"), found_list(&doc));
     }
@@ -755,7 +759,7 @@ fn search_filters() {
         ("bangs", "!!!!"),
         ("auth", "auth"),
     ];
-    let (sb, brain) = demo();
+    let (sb, _) = demo();
     for (id, q) in queries {
         let mut out = String::new();
         for (lobe, tag) in filters {
@@ -765,13 +769,7 @@ fn search_filters() {
                 ..Query::all(q)
             };
             let doc = search_json(&sb, "acme-sme", &query);
-            let found: Vec<Found> = doc["results"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .map(Found::of_json)
-                .collect();
-            let failures = substring_property(&brain, &query, &found);
+            let failures = disagreements(FROZEN.query("filters", "acme-sme", &query), &doc);
             assert!(failures.is_empty(), "{}", failures.join("\n"));
             let lobe = lobe.map(|l| format!(" --lobe {l:?}")).unwrap_or_default();
             let tag = tag.map(|t| format!(" --tag {t:?}")).unwrap_or_default();
@@ -936,11 +934,7 @@ fn search_reads_a_file_name_with_a_backslash() {
         )],
     );
     sb.register("bs", &brain, "");
-    let failures = [Query::all("zebra"), Query::default_limit("odd")]
-        .iter()
-        .flat_map(|q| core_property(&brain, q))
-        .collect::<Vec<_>>();
-    assert!(failures.is_empty(), "{}", failures.join("\n"));
+    assert_agrees_with_frozen(&sb, "backslash", "bs");
     let doc = search_json(&sb, "bs", &Query::default_limit("zebra"));
     insta::assert_snapshot!("search_backslash_file_name", found_list(&doc));
 }
@@ -951,8 +945,9 @@ fn search_fresh_read_with_nothing_new() {
     sb.team_brain(false);
     let (files, refs) = (tree_files(&sb.work), sb.team_refs());
     let run = sb.kluris(&["search", "jwt", "--json"]);
+    assert_eq!(run.code, 0, "{}", run.render(&sb.root));
     assert_eq!(run.stderr, "");
-    let doc = parse(&run.stdout);
+    let doc = parse_json_line(&run.stdout);
     check_shape(&doc, "team", "jwt", 10);
     assert_unchanged(&files, &tree_files(&sb.work), "the fresh read");
     assert_eq!(sb.team_refs(), refs);
@@ -970,7 +965,7 @@ fn search_fresh_read_fetches_a_teammates_push() {
         let run = sb.kluris(&["search", query, "--json"]);
         assert_eq!(run.code, 0, "{}", run.render(&sb.root));
         assert_eq!(run.stderr, "");
-        let doc = parse(&run.stdout);
+        let doc = parse_json_line(&run.stdout);
         check_shape(&doc, "team", query, 10);
         assert!(sb.has_remote_main(), "the teammate's push was not fetched");
         assert_unchanged(&files, &tree_files(&sb.work), "the fresh read");
@@ -982,10 +977,10 @@ fn search_fresh_read_fetches_a_teammates_push() {
     }
 }
 
-// --- search: the substring property -------------------------------------------------
+// --- search: the frozen rows -------------------------------------------------------
 
 /// A search: the query, its filters and its limit.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct Query {
     q: String,
     lobe: Option<String>,
@@ -1013,221 +1008,152 @@ impl Query {
     }
 }
 
-/// Queries of punctuation, symbols, markup and scripts the tokenizer splits
-/// or drops, which match as literal substrings.
-const ODD_QUERIES: [&str; 32] = [
-    "`!!!! take care`",
-    "!!!!",
-    "[api](../x.md)",
-    "KLURIS_NO_PROMPT=1",
-    "/api/v1/imports/users",
-    "darwin-aarch64",
-    "kluris.yml",
-    "--json",
-    "#",
-    "## ",
-    "**",
-    "|",
-    "a",
-    "e",
-    " ",
-    "  spaced  out  ",
-    "C++",
-    "what's",
-    "100%",
-    "é",
-    "ș",
-    "prețul",
-    "pretul",
-    "日本",
-    "\u{1F600}",
-    "how do I",
-    "the",
-    "md",
-    "/",
-    ".",
-    "-",
-    "_",
-];
-
-/// The search-eval queries for `brain` in `queries.jsonl`.
-fn eval_queries(brain: &str) -> Vec<Query> {
-    let text = fs::read_to_string(eval_fixtures().join("queries.jsonl")).unwrap();
-    text.lines()
-        .filter(|l| !l.trim().is_empty())
-        .map(|l| serde_json::from_str::<Value>(l).unwrap())
-        .filter(|q| q["brain"] == brain)
-        .map(|q| Query::all(q["q"].as_str().unwrap()))
-        .collect()
+/// A frozen query: its set, the brain it searches, and what the frozen
+/// search found, sorted, with the items the query's filters keep.
+struct FrozenQuery {
+    set: String,
+    brain: String,
+    query: Query,
+    found: Vec<Found>,
+    kept: Vec<Found>,
 }
 
-/// The lines of `text` as Python's `str.splitlines` splits them.
-fn py_splitlines(text: &str) -> Vec<&str> {
-    let breaks = [
-        '\n', '\r', '\x0b', '\x0c', '\x1c', '\x1d', '\x1e', '\u{85}', '\u{2028}', '\u{2029}',
-    ];
-    let mut lines = Vec::new();
-    let mut rest = text;
-    while let Some(at) = rest.find(breaks) {
-        lines.push(&rest[..at]);
-        let width = if rest[at..].starts_with("\r\n") {
-            2
-        } else {
-            rest[at..].chars().next().map_or(1, char::len_utf8)
-        };
-        rest = &rest[at + width..];
-    }
-    if !rest.is_empty() {
-        lines.push(rest);
-    }
-    lines
+/// The frozen rows of `tests/fixtures/search-rows.jsonl`: a provenance
+/// line, then a row per query and a row per brain and filter pair (the
+/// items those filters keep, without matched fields).
+struct Frozen {
+    queries: Vec<FrozenQuery>,
 }
 
-/// Single-word queries: the 25 most common words of the brain's markdown
-/// headings (ties in the order first seen), then the 5 rarest.
-fn words_of(brain: &Path) -> Vec<String> {
-    fn markdown(dir: &Path, prefix: Vec<String>, out: &mut Vec<(Vec<String>, PathBuf)>) {
-        for entry in fs::read_dir(dir).unwrap() {
-            let entry = entry.unwrap();
-            let name = entry.file_name().to_string_lossy().into_owned();
-            if name == ".git" {
-                continue;
-            }
-            let mut parts = prefix.clone();
-            parts.push(name.clone());
-            if entry.path().is_dir() {
-                markdown(&entry.path(), parts, out);
-            } else if name.ends_with(".md") {
-                out.push((parts, entry.path()));
-            }
-        }
-    }
-    let mut files = Vec::new();
-    markdown(brain, Vec::new(), &mut files);
-    files.sort();
-    let mut counts: Vec<(String, usize)> = Vec::new();
-    let is_space = |c: char| c.is_whitespace() || ('\x1c'..='\x1f').contains(&c);
-    for (_, path) in files {
-        let Ok(text) = fs::read_to_string(&path) else {
-            continue;
+static FROZEN: LazyLock<Frozen> = LazyLock::new(Frozen::read);
+
+impl Frozen {
+    fn read() -> Frozen {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/search-rows.jsonl");
+        let text =
+            std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+        let mut rows = text
+            .lines()
+            .map(|l| serde_json::from_str::<Value>(l).unwrap());
+        let header = rows.next().unwrap();
+        assert!(
+            header["fixture"].is_string(),
+            "no provenance line: {header}"
+        );
+        let (filter_rows, query_rows): (Vec<Value>, Vec<Value>) =
+            rows.partition(|row| row.get("items").is_some());
+        let s = |row: &Value, key: &str| row[key].as_str().map(String::from);
+        let filters = |row: &Value| (s(row, "brain").unwrap(), s(row, "lobe"), s(row, "tag"));
+        let found = |row: &Value, key: &str| -> Vec<Found> {
+            row[key]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(Found::of_row)
+                .collect()
         };
-        let text = text.replace("\r\n", "\n").replace('\r', "\n");
-        for line in py_splitlines(&text)
+        let kept: BTreeMap<_, _> = filter_rows
+            .iter()
+            .map(|row| (filters(row), found(row, "items")))
+            .collect();
+        let queries = query_rows
+            .iter()
+            .map(|row| {
+                let (brain, lobe, tag) = filters(row);
+                let kept = &kept[&(brain.clone(), lobe.clone(), tag.clone())];
+                FrozenQuery {
+                    set: s(row, "set").unwrap(),
+                    query: Query {
+                        q: s(row, "q").unwrap(),
+                        lobe,
+                        tag,
+                        limit: row["limit"].as_i64().unwrap(),
+                    },
+                    found: found(row, "results"),
+                    kept: kept.clone(),
+                    brain,
+                }
+            })
+            .collect();
+        Frozen { queries }
+    }
+
+    /// The queries of `set` on `brain`, at least one.
+    fn set(&self, set: &str, brain: &str) -> Vec<&FrozenQuery> {
+        let rows: Vec<&FrozenQuery> = self
+            .queries
+            .iter()
+            .filter(|row| row.set == set && row.brain == brain)
+            .collect();
+        assert!(!rows.is_empty(), "no frozen {set} queries for {brain}");
+        rows
+    }
+
+    /// The frozen row of `query` in `set` on `brain`.
+    fn query(&self, set: &str, brain: &str, query: &Query) -> &FrozenQuery {
+        self.set(set, brain)
             .into_iter()
-            .filter(|l| l.starts_with('#'))
-        {
-            for word in line.trim_start_matches('#').split(is_space) {
-                if word.is_empty() {
-                    continue;
-                }
-                let word = pycase::lower(word.trim_matches(|c| ".,:;()`*\"'".contains(c)));
-                match counts.iter_mut().find(|(w, _)| *w == word) {
-                    Some((_, n)) => *n += 1,
-                    None => counts.push((word, 1)),
-                }
-            }
-        }
+            .find(|row| row.query == *query)
+            .unwrap_or_else(|| panic!("no frozen {set} row for {brain} {query:?}"))
     }
-    counts.sort_by_key(|(_, n)| std::cmp::Reverse(*n));
-    let words: Vec<String> = counts
-        .into_iter()
-        .map(|(w, _)| w)
-        .filter(|w| w.chars().count() >= 2)
-        .collect();
-    let mut out: Vec<String> = words.iter().take(25).cloned().collect();
-    out.extend(words[words.len().saturating_sub(5)..].iter().cloned());
-    out
 }
 
-/// The heading words, the odd queries and three common ones at the
-/// default limit.
-fn brain_queries(brain: &Path) -> Vec<Query> {
-    let mut queries: Vec<Query> = words_of(brain).iter().map(|w| Query::all(w)).collect();
-    queries.extend(ODD_QUERIES.iter().map(|q| Query::all(q)));
-    queries.extend(["a", "the", "e"].map(Query::default_limit));
-    queries
-}
-
-/// What breaks the substring property for `query` on `brain`, given what
-/// the search `found`: an item the filters keep and [`substring_match`]
-/// scores above 0 that is missing while the results are under the limit;
-/// a result the filters do not keep; a result whose file type or
-/// `deprecated` flag is not its item's, or whose matched fields lack the
-/// substring match's.
-fn substring_property(brain: &Path, query: &Query, found: &[Found]) -> Vec<String> {
-    let items = collect_items(&LocalGitStore::open(brain));
-    let kept: Vec<&Item> = items
-        .iter()
-        .filter(|i| passes_filters(i, query.lobe.as_deref(), query.tag.as_deref()))
-        .collect();
-    let lower = pycase::lower(&query.q);
-    let label = format!("{} {query:?}", brain.display());
+/// Where the results of `doc` disagree with `row`: a result that is not an
+/// item the filters keep, or has another file type or `deprecated` flag
+/// than that item; a frozen result that is missing while the results are
+/// under the limit (results are matched by file and title, each once:
+/// glossary entries share `glossary.md`); a frozen result whose file type
+/// or `deprecated` flag differs, or whose matched fields are not all among
+/// the result's.
+fn disagreements(row: &FrozenQuery, doc: &Value) -> Vec<String> {
+    let found = Found::all_of(doc);
+    let label = format!("{} {:?}", row.brain, row.query);
+    let same = |a: &Found, b: &Found| a.file == b.file && a.title == b.title;
+    let flags = |f: &Found| (f.file_type.clone(), f.deprecated);
     let mut failures = Vec::new();
-    for f in found {
-        match kept.iter().find(|i| i.file == f.file && i.title == f.title) {
+    for f in &found {
+        match row.kept.iter().find(|k| same(k, f)) {
             None => failures.push(format!("{label}: {f:?} is not an item the filters keep")),
-            Some(item)
-                if (item.file_type, item.deprecated) != (f.file_type.as_str(), f.deprecated) =>
-            {
-                failures.push(format!(
-                    "{label}: {f:?} has another type or flag than its item"
-                ))
-            }
+            Some(k) if flags(k) != flags(f) => failures.push(format!(
+                "{label}: {f:?} has another type or flag than its item {k:?}"
+            )),
             Some(_) => {}
         }
     }
     let mut unclaimed: Vec<&Found> = found.iter().collect();
-    for item in &kept {
-        let Some(m) = substring_match(item, &lower) else {
-            continue;
-        };
-        let at = unclaimed
-            .iter()
-            .position(|f| f.file == item.file && f.title == item.title);
-        let Some(at) = at else {
-            if (found.len() as i64) < query.limit {
-                failures.push(format!("{label}: misses {} {:?}", item.file, item.title));
+    for want in &row.found {
+        let Some(at) = unclaimed.iter().position(|f| same(f, want)) else {
+            if (found.len() as i64) < row.query.limit {
+                failures.push(format!("{label}: misses {want:?}"));
             }
             continue;
         };
         let f = unclaimed.remove(at);
-        if !m
-            .fields
+        if flags(f) != flags(want) {
+            failures.push(format!("{label}: {f:?} differs from {want:?}"));
+        }
+        if !want
+            .matched_fields
             .iter()
-            .all(|x| f.matched_fields.iter().any(|y| y == x))
+            .all(|x| f.matched_fields.contains(x))
         {
             failures.push(format!(
                 "{label}: {} fields {:?} lack {:?}",
-                f.file, f.matched_fields, m.fields
+                f.file, f.matched_fields, want.matched_fields
             ));
         }
     }
     failures
 }
 
-/// The property for `query` on `brain` as `kluris search` runs it: the
-/// brain's configured language, else the detected one.
-fn core_property(brain: &Path, query: &Query) -> Vec<String> {
-    let language = read_brain_config(brain)
-        .ok()
-        .and_then(|cfg| cfg.search.language)
-        .and_then(|code| Language::from_code(&code));
-    let request = SearchRequest {
-        query: query.q.clone(),
-        lobe: query.lobe.clone(),
-        tag: query.tag.clone(),
-        limit: query.limit,
-        language,
-    };
-    let hits = search(&LocalGitStore::open(brain), &request).hits;
-    let found: Vec<Found> = hits.iter().map(Found::of_hit).collect();
-    substring_property(brain, query, &found)
-}
-
-fn assert_property(brain: &Path, queries: &[Query]) {
-    let failures: Vec<String> = queries
-        .iter()
-        .flat_map(|q| core_property(brain, q))
+/// Every frozen query of `set` on `brain` through `kluris search --json`
+/// (exit, stderr, layout and shape checked by [`search_json`]), its
+/// results against the frozen row.
+fn assert_agrees_with_frozen(sb: &Sandbox, set: &str, brain: &str) {
+    let failures: Vec<String> = FROZEN
+        .set(set, brain)
+        .into_iter()
+        .flat_map(|row| disagreements(row, &search_json(sb, brain, &row.query)))
         .collect();
     assert!(
         failures.is_empty(),
@@ -1238,28 +1164,27 @@ fn assert_property(brain: &Path, queries: &[Query]) {
 }
 
 #[test]
-fn search_finds_every_substring_match_in_the_fixture_brains() {
+fn search_of_the_fixture_brains_agrees_with_the_frozen_rows() {
     for name in ["wakeup", "full", "malformed"] {
         let sb = Sandbox::new();
         let brain = sb.fixture_brain(name).unwrap();
-        assert_property(&brain, &brain_queries(&brain));
+        sb.register(name, &brain, "");
+        assert_agrees_with_frozen(&sb, "fixture", name);
     }
 }
 
 #[test]
-fn search_finds_every_substring_match_in_the_eval_brains() {
+fn search_of_the_eval_brains_agrees_with_the_frozen_rows() {
     for name in ["acme-sme", "clinica-sme"] {
         let sb = Sandbox::new();
         let brain = sb.eval_brain(name);
-        let mut queries = eval_queries(name);
-        assert!(!queries.is_empty(), "no eval queries for {name}");
-        queries.extend(brain_queries(&brain));
-        assert_property(&brain, &queries);
+        sb.register(name, &brain, "");
+        assert_agrees_with_frozen(&sb, "eval", name);
     }
 }
 
 #[test]
-fn search_finds_every_substring_match_with_another_language() {
+fn search_with_another_language_agrees_with_the_frozen_rows() {
     // `search: {language: en}` changes the stemming of a Romanian brain,
     // never what the substring match finds.
     let sb = Sandbox::new();
@@ -1271,6 +1196,6 @@ fn search_finds_every_substring_match_with_another_language() {
             "name: clinica-sme\ndescription: ''\ncompanions: []\nsearch:\n  language: en\n",
         )],
     );
-    let queries = ["pretul", "ședințe", "mailurile", "date personale"].map(Query::all);
-    assert_property(&brain, &queries);
+    sb.register("clinica-sme", &brain, "");
+    assert_agrees_with_frozen(&sb, "language", "clinica-sme");
 }
