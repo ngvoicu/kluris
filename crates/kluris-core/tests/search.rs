@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use kluris_core::brain::store::LocalGitStore;
 use kluris_core::search::bm25::{B, FIELD_WEIGHTS, Field, Index, K1, QueryTerm, Unit};
 use kluris_core::search::chunk::{WINDOW_WORDS, chunks};
-use kluris_core::search::items::{ItemKind, collect_items, py_title, v2_match};
+use kluris_core::search::items::{ItemKind, collect_items, py_title, substring_match};
 use kluris_core::search::snippet::snippet;
 use kluris_core::search::tokenize::{fold, query_terms, tokens};
 use kluris_core::search::{Hit, Language, SearchRequest, detect_language, parse_limit, search};
@@ -532,19 +532,19 @@ fn items_are_v2s_neurons_glossary_entries_and_brain_md() {
 }
 
 #[test]
-fn v2_match_counts_substrings_by_field() {
+fn substring_match_counts_substrings_by_field() {
     let b = Brain::new();
     b.file(
         "auth/oauth.md",
         "---\ntags: [oauth, OAuth2, 5]\n---\n# OAuth flow\n\noauth oauth body\n",
     );
     let items = collect_items(&b.store());
-    let m = v2_match(&items[0], "oauth").unwrap();
+    let m = substring_match(&items[0], "oauth").unwrap();
     // 10 * title + 5 * tags + 3 * path + body.
     // The body is the whole text after the frontmatter, title line included.
     assert_eq!(m.score, 10 + 5 * 2 + 3 + 3);
     assert_eq!(m.fields, ["title", "tag", "path", "body"]);
-    assert!(v2_match(&items[0], "zebra").is_none());
+    assert!(substring_match(&items[0], "zebra").is_none());
 }
 
 // --- filters and limit ------------------------------------------------------------

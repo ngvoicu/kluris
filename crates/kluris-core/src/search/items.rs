@@ -244,12 +244,12 @@ pub fn collect(store: &impl BrainStore) -> (Vec<Item>, Vec<SkippedNeuron>) {
     (items, skipped)
 }
 
-/// v2's substring match of one item.
+/// The literal substring match of one item.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct V2Match {
+pub struct SubstringMatch {
     /// `10·title + 5·tags + 3·path + body` occurrence counts.
     pub score: i64,
-    /// The fields that matched, in v2's order.
+    /// The fields that matched: title, tag, path, body, in that order.
     pub fields: Vec<&'static str>,
 }
 
@@ -257,9 +257,10 @@ fn count(haystack: &str, needle: &str) -> i64 {
     i64::try_from(crate::pycase::lower(haystack).matches(needle).count()).unwrap_or(i64::MAX)
 }
 
-/// v2's `score_hit` and `matched_fields` for a lowercased query; `None` when
-/// the score is 0.
-pub fn v2_match(item: &Item, query_lower: &str) -> Option<V2Match> {
+/// How often a lowercased query occurs in the item's lowercased title, tags
+/// (a tag counts once), path and body, weighted 10, 5, 3 and 1, and the
+/// fields it occurs in; `None` when the score is 0.
+pub fn substring_match(item: &Item, query_lower: &str) -> Option<SubstringMatch> {
     if query_lower.is_empty() {
         return None;
     }
@@ -279,7 +280,7 @@ pub fn v2_match(item: &Item, query_lower: &str) -> Option<V2Match> {
     let score = counts.iter().fold(0i64, |acc, (_, n, w)| {
         acc.saturating_add(n.saturating_mul(*w))
     });
-    (score > 0).then(|| V2Match {
+    (score > 0).then(|| SubstringMatch {
         score,
         fields: counts
             .iter()

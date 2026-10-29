@@ -19,12 +19,12 @@
 //!    words, a unit holding them in order in its title, heading or body gets
 //!    the best unit's score on top (the phrase guard). An item scores its
 //!    best unit.
-//! 5. Every item v2's substring search returns for the same query
-//!    ([`items::v2_match`]) is a candidate too, at [`FLOOR`] when BM25 gave
-//!    it nothing, so nothing v2 found is lost. Deprecated neurons score
-//!    ×0.5 and stay in the results.
+//! 5. Every item the literal substring match finds for the same query
+//!    ([`items::substring_match`]) is a candidate too, at [`FLOOR`] when
+//!    BM25 gave it nothing, so no substring hit is lost. Deprecated
+//!    neurons score ×0.5 and stay in the results.
 //! 6. `--lobe`/`--tag` are v2's filters; results are ordered by score, then
-//!    v2's substring score, `updated` (newest first), file and title, and cut
+//!    the substring score, `updated` (newest first), file and title, and cut
 //!    to the limit (`limit <= 0`: none).
 
 pub mod bm25;
@@ -38,13 +38,13 @@ use std::cmp::Ordering;
 
 use bm25::{Field, IdUnit, Index, QueryTerm};
 use chunk::Chunk;
-use items::{Item, ItemKind, V2Match};
+use items::{Item, ItemKind, SubstringMatch};
 use tokenize::Analyzer;
 
 use crate::brain::deprecation::SkippedNeuron;
 use crate::brain::store::BrainStore;
 
-/// The score of an item only v2's substring match finds.
+/// The score of an item only the substring match finds.
 pub const FLOOR: f64 = 0.001;
 
 /// How many `related` neurons a hit lists.
@@ -352,7 +352,7 @@ pub fn search(store: &impl BrainStore, request: &SearchRequest) -> SearchOutcome
         }
     }
 
-    // Items: the best unit, plus v2's substring candidates.
+    // Items: the best unit, plus the substring candidates.
     let query_lower = crate::pycase::lower(&request.query);
     let mut best: Vec<Option<(usize, f64)>> = vec![None; all.len()];
     let mut item_terms: Vec<Vec<bool>> = vec![Vec::new(); all.len()];
@@ -375,20 +375,20 @@ pub fn search(store: &impl BrainStore, request: &SearchRequest) -> SearchOutcome
         item: usize,
         unit: Option<usize>,
         score: f64,
-        v2: Option<V2Match>,
+        substring: Option<SubstringMatch>,
     }
     let mut candidates: Vec<Candidate> = Vec::new();
     for (i, item) in all.iter().enumerate() {
         if !items::passes_filters(item, request.lobe.as_deref(), request.tag.as_deref()) {
             continue;
         }
-        let v2 = items::v2_match(item, &query_lower);
+        let substring = items::substring_match(item, &query_lower);
         let (unit, bm25) = match best[i] {
             Some((u, s)) if s > 0.0 => (Some(u), s),
             Some((u, _)) => (Some(u), 0.0),
             None => (None, 0.0),
         };
-        if bm25 <= 0.0 && v2.is_none() {
+        if bm25 <= 0.0 && substring.is_none() {
             continue;
         }
         let mut score = if bm25 > 0.0 { bm25 } else { FLOOR };
@@ -404,7 +404,7 @@ pub fn search(store: &impl BrainStore, request: &SearchRequest) -> SearchOutcome
             item: i,
             unit,
             score,
-            v2,
+            substring,
         });
     }
     let updated: Vec<Option<String>> = all.iter().map(items::updated).collect();
@@ -413,8 +413,8 @@ pub fn search(store: &impl BrainStore, request: &SearchRequest) -> SearchOutcome
             .partial_cmp(&a.score)
             .unwrap_or(Ordering::Equal)
             .then_with(|| {
-                let v2 = |c: &Candidate| c.v2.as_ref().map_or(0, |m| m.score);
-                v2(b).cmp(&v2(a))
+                let substring = |c: &Candidate| c.substring.as_ref().map_or(0, |m| m.score);
+                substring(b).cmp(&substring(a))
             })
             .then_with(|| updated[b.item].cmp(&updated[a.item]))
             .then_with(|| all[a.item].file.cmp(&all[b.item].file))
@@ -434,8 +434,11 @@ pub fn search(store: &impl BrainStore, request: &SearchRequest) -> SearchOutcome
         for field in Field::ALL {
             let name = field.name();
             let by_term = field_mask & (1 << field as usize) != 0;
-            let by_v2 = c.v2.as_ref().is_some_and(|m| m.fields.contains(&name));
-            if by_term || by_v2 {
+            let by_substring = c
+                .substring
+                .as_ref()
+                .is_some_and(|m| m.fields.contains(&name));
+            if by_term || by_substring {
                 matched_fields.push(name);
             }
         }
@@ -494,7 +497,7 @@ pub fn search(store: &impl BrainStore, request: &SearchRequest) -> SearchOutcome
     outcome
 }
 
-/// For an item only v2's substring match finds: the unit whose chunk holds
+/// For an item only the substring match finds: the unit whose chunk holds
 /// the first case-insensitive occurrence of the query in the body.
 fn substring_unit(infos: &[UnitInfo], item: usize, text: &str, query_lower: &str) -> Option<usize> {
     let (at, _) = find_lowercase(text, query_lower)?;
