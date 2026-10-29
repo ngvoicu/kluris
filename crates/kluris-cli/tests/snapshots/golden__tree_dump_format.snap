@@ -2,8 +2,15 @@
 source: crates/kluris-cli/tests/golden.rs
 expression: tree_dump(dir)
 ---
+== backslashes.md
+C:\\brain \\r \\x41
 == bom.md
 \u{feff}hi
 == crlf.md
 one\r
 two\r
+== latin1.md
+caf\xe9
+== no-eol.md
+end
+<no newline at end>

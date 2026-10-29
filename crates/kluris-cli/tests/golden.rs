@@ -1,5 +1,5 @@
-//! The golden-test helpers of `common::golden`: each normalization the
-//! parity harness applies, and the tree and git dumps.
+//! The golden-test helpers of `common::golden`: each output normalization,
+//! and the tree and git dumps.
 
 mod common;
 
@@ -233,6 +233,8 @@ fn tree_dump_lists_every_file_by_path_with_its_bytes() {
         ("bom.yml", b"\xef\xbb\xbfkey: v\n"),
         ("latin1.txt", b"caf\xe9 \xff\xfe end\n"),
         ("lone-cr.txt", b"a\rb\n"),
+        ("backslash-r.txt", b"a\\rb\n"),
+        ("escapes.txt", b"\\x41 \\u{feff} C:\\Users\\\\\n"),
         ("no-eol.txt", b"last line"),
         ("empty.txt", b""),
         ("a-b/x.md", b"x\n"),
@@ -249,9 +251,11 @@ fn tree_dump_lists_every_file_by_path_with_its_bytes() {
         tree_dump(dir),
         "== a-b/x.md\nx\n\
          == a/x.md\ny\n\
+         == backslash-r.txt\na\\\\rb\n\
          == bom.yml\n\\u{feff}key: v\n\
          == crlf.md\none\\r\ntwo\\r\n\
          == empty.txt\n\
+         == escapes.txt\n\\\\x41 \\\\u{feff} C:\\\\Users\\\\\\\\\n\
          == latin1.txt\ncaf\\xe9 \\xff\\xfe end\n\
          == lone-cr.txt\na\\rb\n\
          == no-eol.txt\nlast line\n<no newline at end>\n\
@@ -325,10 +329,66 @@ fn git_dump_prints_the_head_commit_and_its_tree() {
 }
 
 #[test]
-fn a_tree_dump_snapshot_keeps_crlf_and_a_bom_visible() {
+fn a_cr_and_the_text_backslash_r_dump_differently() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let dir = tmp.path();
+    fs::write(dir.join("f"), b"a\rb\n").unwrap();
+    let cr = tree_dump(dir);
+    fs::write(dir.join("f"), b"a\\rb\n").unwrap();
+    let text = tree_dump(dir);
+    assert_ne!(cr, text);
+    assert_eq!(
+        (cr.as_str(), text.as_str()),
+        ("== f\na\\rb\n", "== f\na\\\\rb\n")
+    );
+}
+
+/// A Windows root, which need not exist here: only its text matters.
+const WINDOWS_ROOT: &str = r"C:\Users\runneradmin\AppData\Local\Temp\.tmpGx7Q2a";
+
+#[test]
+fn a_windows_root_inside_a_file_dumps_as_root() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let dir = tmp.path();
+    let root = Path::new(WINDOWS_ROOT);
+    let escaped = WINDOWS_ROOT.replace('\\', "\\\\");
+    let files = [
+        ("config.yml", format!("path: {WINDOWS_ROOT}\\brains\\b\n")),
+        (
+            "map.json",
+            format!("{{\"path\": \"{escaped}\\\\brains\"}}\n"),
+        ),
+    ];
+    for (name, text) in &files {
+        fs::write(dir.join(name), text).unwrap();
+    }
+    assert_eq!(
+        normalize(&tree_dump(dir), root),
+        "== config.yml\npath: <ROOT>\\\\brains\\\\b\n\
+         == map.json\n{\"path\": \"<ROOT>\\\\\\\\brains\"}\n"
+    );
+}
+
+#[test]
+fn a_windows_root_with_a_non_ascii_name_inside_a_file_dumps_as_root() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let dir = tmp.path();
+    let root = format!(r"{WINDOWS_ROOT}\golden ü root");
+    fs::write(dir.join("config.yml"), format!("path: {root}\\b\n")).unwrap();
+    assert_eq!(
+        normalize(&tree_dump(dir), Path::new(&root)),
+        "== config.yml\npath: <ROOT>\\\\b\n"
+    );
+}
+
+#[test]
+fn a_tree_dump_snapshot_shows_every_escape() {
     let tmp = tempfile::TempDir::new().unwrap();
     let dir = tmp.path();
     fs::write(dir.join("crlf.md"), b"one\r\ntwo\r\n").unwrap();
     fs::write(dir.join("bom.md"), b"\xef\xbb\xbfhi\n").unwrap();
-    insta::assert_snapshot!("tree_dump_crlf_and_bom", tree_dump(dir));
+    fs::write(dir.join("latin1.md"), b"caf\xe9\n").unwrap();
+    fs::write(dir.join("backslashes.md"), b"C:\\brain \\r \\x41\n").unwrap();
+    fs::write(dir.join("no-eol.md"), b"end").unwrap();
+    insta::assert_snapshot!("tree_dump_format", tree_dump(dir));
 }

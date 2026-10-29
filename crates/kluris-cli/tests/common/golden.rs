@@ -1,7 +1,9 @@
-//! Golden-test helpers: the normalizations the parity harness applies
-//! before it compares two runs, so a snapshot taken through them holds what
-//! parity proved, and dumps of a folder and of a git repository that keep
-//! every byte visible.
+//! Golden-test helpers. A snapshot must hold the same text on every machine
+//! and every day, yet show every byte Kluris chose: the normalizations
+//! replace only what the run's place and time decide (the temp root, the
+//! version of the binary, today's date, the OS's line endings in its
+//! streams) with markers, and the dumps of a folder and of a git repository
+//! write every byte so that a changed line ending, BOM or encoding shows.
 //!
 //! Program output goes through [`decode`] (stdout, stderr) and [`normalize`]
 //! or [`normalize_json`]. File bytes go through [`tree_dump`] first, never
@@ -21,7 +23,8 @@ use regex::Regex;
 /// The git date every sandboxed commit carries.
 pub const PINNED_GIT_DATE: &str = "2026-01-01T12:00:00+00:00";
 
-/// The environment every sandboxed run pins (the parity harness's), beside
+/// The environment every sandboxed run pins, so that commits, dates, colour
+/// and line wrapping are the same everywhere, beside
 /// the per-sandbox paths a test sets itself: `HOME`, `USERPROFILE`,
 /// `KLURIS_CONFIG`, `GIT_CONFIG_GLOBAL` (an empty file) and the temp
 /// folder (`TMPDIR`, `TEMP`, `TMP`). `TZ=UTC` makes Kluris's today the UTC
@@ -42,8 +45,8 @@ pub const PINNED_ENV: &[(&str, &str)] = &[
     ("COLUMNS", "120"),
 ];
 
-/// The variables a sandboxed run inherits (the harness clears the rest), so
-/// the binary and git can start.
+/// The variables a sandboxed run inherits from the test's own environment
+/// (it starts from an empty one), so the binary and git can start.
 pub const PASSTHROUGH_ENV: &[&str] = &[
     "PATH",
     "SYSTEMROOT",
@@ -83,9 +86,13 @@ pub fn decode(stream: &[u8], what: &str) -> String {
     }
 }
 
-/// Program output as a snapshot holds it: CRLF read as LF, every form of
-/// the temp `root` as `<ROOT>`, a whole `--version` stdout as
-/// `kluris <VERSION>`, and an `updated` value equal to today as `<TODAY>`.
+/// Program output as a snapshot holds it:
+/// - CRLF reads as LF (Windows' streams), a lone CR stays;
+/// - every form of the temp `root` (see [`root_forms`]) becomes `<ROOT>`;
+/// - a whole `--version` stdout, `kluris <version>` and its newline, becomes
+///   `kluris <VERSION>`; a version anywhere else may be user data and stays;
+/// - an `updated` value equal to today's UTC date (the date Kluris writes
+///   under `TZ=UTC`, see [`PINNED_ENV`]) becomes `<TODAY>`.
 pub fn normalize(text: &str, root: &Path) -> String {
     let mut text = text.replace("\r\n", "\n");
     for form in root_forms(root) {
@@ -101,10 +108,13 @@ pub fn normalize(text: &str, root: &Path) -> String {
 /// `version_fields` (JSON pointers, `/releases/0/version`) as `<VERSION>`;
 /// version text anywhere else may be user data and stays.
 ///
-/// With version fields the text must be exactly Python's `json.dumps` of its
-/// own parse (and its final newline, if any), as Kluris prints every
-/// `--json`; the marked document is written back the same way. A missing
-/// field, or one that does not hold one version, fails the test.
+/// A version field holds one version and nothing else, or `kluris` and one
+/// version; a missing field or any other value fails the test. With version
+/// fields the text must be laid out exactly as Kluris writes every `--json`
+/// (`kluris_core::json`, Python's `json.dumps` layout: one line, `, ` and
+/// `: ` separators, keys in their order, non-ASCII as `\uXXXX`, its final
+/// newline if any), so writing the marked document back the same way
+/// changes nothing but the marked values.
 pub fn normalize_json(text: &str, root: &Path, version_fields: &[&str]) -> String {
     let text = normalize(text, root);
     if version_fields.is_empty() {
@@ -137,12 +147,13 @@ pub fn normalize_json(text: &str, root: &Path, version_fields: &[&str]) -> Strin
     dumps(&doc)
 }
 
-/// Every file under `dir`, `.git` excluded (see [`git_dump`]), sorted by its
-/// `/`-joined relative path: a `== <path>` line, then its bytes. A CR is
-/// written `\r`, U+FEFF (a BOM) `\u{feff}`, a byte that is not UTF-8
-/// `\xNN`; a file that does not end in a newline gets a
-/// `<no newline at end>` line. A symlink is `<symlink> <target>` and is not
-/// followed. Folders show only through their files.
+/// Every file under `dir`, sorted by its `/`-joined relative path: a
+/// `== <path>` line, then its bytes as [`escape`] writes them (a CR, a BOM
+/// and a byte that is not UTF-8 visible; a backslash doubled), then a
+/// `<no newline at end>` line when the file does not end in a newline. A
+/// symlink is `<symlink> <target>` and is not followed. Folders show only
+/// through their files. `.git` is left out: its objects and index change
+/// with every run, and [`git_dump`] shows what they record.
 pub fn tree_dump(dir: &Path) -> String {
     let mut entries = Vec::new();
     walk(dir, "", &mut entries);
@@ -215,15 +226,16 @@ pub fn git_dump(repo: &Path) -> String {
     out
 }
 
-/// The text forms of `root` a program can print, longest first so a
-/// resolved form is not half-replaced by a shorter alias: as given and
-/// resolved (macOS `/var` is `/private/var`), each with its native and `/`
-/// separators, each also JSON-escaped.
+/// The text forms of `root` a program can print or a file can hold, longest
+/// first so a resolved form is not half-replaced by a shorter alias: as
+/// given and resolved (macOS `/var` is `/private/var`), each with its native
+/// and, on Windows, `/` separators; each of those also JSON-escaped; and
+/// each of all these as [`tree_dump`] writes it, backslashes doubled.
 fn root_forms(root: &Path) -> Vec<String> {
     let mut paths = vec![root.display().to_string()];
     if let Ok(resolved) = fs::canonicalize(root) {
         let resolved = resolved.display().to_string();
-        // Windows' verbatim prefix, which Python's resolve() does not write.
+        // Windows' verbatim prefix, which programs do not print.
         let resolved = match resolved.strip_prefix(r"\\?\") {
             Some(rest) if !rest.starts_with(r"UNC\") => rest.to_string(),
             _ => resolved,
@@ -239,8 +251,11 @@ fn root_forms(root: &Path) -> Vec<String> {
         };
         for form in [path, posix] {
             let quoted = json::to_string(&Json::Str(form.clone()));
-            forms.insert(quoted[1..quoted.len() - 1].to_string());
-            forms.insert(form);
+            let escaped = quoted[1..quoted.len() - 1].to_string();
+            for f in [form, escaped] {
+                forms.insert(f.replace('\\', "\\\\"));
+                forms.insert(f);
+            }
         }
     }
     let mut forms: Vec<String> = forms.into_iter().filter(|f| !f.is_empty()).collect();
@@ -269,8 +284,8 @@ fn mark_today(text: &str) -> String {
     text
 }
 
-/// A parsed JSON document as `kluris_core::json` writes it (Python's
-/// `json.dumps`).
+/// A parsed JSON document as `kluris_core::json` holds it, to be written in
+/// Kluris's `--json` layout.
 fn python_json(value: &serde_json::Value) -> Json {
     use serde_json::Value;
     match value {
@@ -280,7 +295,7 @@ fn python_json(value: &serde_json::Value) -> Json {
             (Some(i), _, _) => Json::Int(i),
             (None, Some(u), _) => Json::BigInt(u.to_string()),
             (None, None, Some(f)) => Json::Float(f),
-            _ => panic!("JSON number {n} has no Python form"),
+            _ => panic!("JSON number {n} is neither an integer nor a float"),
         },
         Value::String(s) => Json::Str(s.clone()),
         Value::Array(items) => Json::Array(items.iter().map(python_json).collect()),
@@ -292,13 +307,15 @@ fn python_json(value: &serde_json::Value) -> Json {
     }
 }
 
-/// Bytes as text that shows them: CR as `\r`, U+FEFF as `\u{feff}`, a byte
-/// that is not UTF-8 as `\xNN`.
+/// Bytes as text that shows them: a CR as `\r`, U+FEFF (a BOM) as
+/// `\u{feff}`, a byte that is not UTF-8 as `\xNN`, and a backslash as `\\`,
+/// so each escape can only mean what it stands for.
 fn escape(bytes: &[u8]) -> String {
     let mut out = String::with_capacity(bytes.len());
     for chunk in bytes.utf8_chunks() {
         for c in chunk.valid().chars() {
             match c {
+                '\\' => out.push_str("\\\\"),
                 '\r' => out.push_str("\\r"),
                 '\u{feff}' => out.push_str("\\u{feff}"),
                 c => out.push(c),
