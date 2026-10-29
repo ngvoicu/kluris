@@ -1,0 +1,45 @@
+---
+source: crates/kluris-core/tests/brain_walk.rs
+expression: model(&b.root)
+---
+{
+  "neurons": [
+    {
+      "path": "lobe/active.md",
+      "kind": "markdown"
+    },
+    {
+      "path": "lobe/bad-utf8.md",
+      "kind": "markdown"
+    },
+    {
+      "path": "lobe/bad-yaml.md",
+      "kind": "markdown"
+    },
+    {
+      "path": "lobe/to-bad.md",
+      "kind": "markdown"
+    },
+    {
+      "path": "lobe/bad-block.yml",
+      "kind": "yaml"
+    }
+  ],
+  "glossary": null,
+  "deprecation": [
+    {
+      "kind": "replaced_by_not_active",
+      "file": "lobe/to-bad.md",
+      "target": "./bad-yaml.md"
+    },
+    {
+      "kind": "active_links_to_deprecated",
+      "source": "lobe/active.md",
+      "target": "lobe/to-bad.md"
+    }
+  ],
+  "skipped": [
+    "lobe/bad-utf8.md",
+    "lobe/bad-yaml.md"
+  ]
+}

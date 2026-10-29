@@ -999,3 +999,64 @@ fn the_sync_auto_fetch_key_is_read_and_kept_on_rewrite() {
         assert!(!brain_config_to_yaml(&cfg).contains("sync"), "{text}");
     }
 }
+
+// --- YAML 1.1 syntax corners, as `kluris list` reads them --------------------
+
+/// Configs in flow style and configs that do not read, as rows: the scenarios
+/// of `parity/test_config_yaml_syntax.py`, by its ids.
+const YAML_SYNTAX: &[(&str, &str)] = &[
+    // `alpha:{` is a key and a flow mapping (a `:` followed by a flow
+    // indicator ends a plain scalar in a flow collection).
+    ("glued-flow-mapping", "brains: {alpha:{path: /missing}}\n"),
+    (
+        "two-flow-brains",
+        "brains: {alpha:{path: /missing, description: d}, beta: {path: /b}}\n",
+    ),
+    (
+        "flow-in-block",
+        "brains:\n  alpha: {path: /missing, description: [a,b]}\n",
+    ),
+    ("anchor-before-question-mark", "brains: {}\nextra: [&a?x]\n"),
+    ("block-scalar-in-flow", "brains: {}\nextra: {!!str &a: |}\n"),
+    ("non-printable", "brains: {}\nextra: \"a\x07\"\n"),
+    // An int or float refuses U+001C..U+001F around the number, and an int
+    // refuses more than 4,300 decimal digits.
+    ("int-x1c", "brains: {}\nextra: !!int \"\\x1c1\"\n"),
+    ("float-x1f", "brains: {}\nextra: !!float \"1\\x1f\"\n"),
+];
+
+/// The 4,301-digit integer row, built rather than written out.
+fn yaml_syntax_rows() -> Vec<(String, String)> {
+    let mut rows: Vec<(String, String)> = YAML_SYNTAX
+        .iter()
+        .map(|(id, text)| (id.to_string(), text.to_string()))
+        .collect();
+    rows.push((
+        "4301-digits".into(),
+        format!("brains: {{}}\nextra: {}\n", "1".repeat(4301)),
+    ));
+    rows
+}
+
+/// What `kluris list` reads from the config: the brains (`list --json`'s
+/// rows), or the kind of error that makes it exit 1.
+#[derive(Debug)]
+#[allow(dead_code)] // read through Debug, in the snapshots
+enum Listed {
+    Brains(Vec<kluris_core::list::BrainListing>),
+    Error(ConfigErrorKind),
+}
+
+#[test]
+fn yaml_syntax_rows_list_as_their_snapshots() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("config.yml");
+    for (id, text) in yaml_syntax_rows() {
+        fs::write(&path, &text).unwrap();
+        let listed = match kluris_core::list::list_brains(&path) {
+            Ok(brains) => Listed::Brains(brains),
+            Err(e) => Listed::Error(e.kind),
+        };
+        insta::assert_debug_snapshot!(format!("yaml_syntax_{id}"), listed);
+    }
+}

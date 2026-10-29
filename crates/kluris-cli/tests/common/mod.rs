@@ -11,7 +11,9 @@ pub use golden::{
     PASSTHROUGH_ENV, PINNED_ENV, PINNED_GIT_DATE, decode, file_body, git_dump, normalize,
     normalize_json, tree_dump, tree_files,
 };
-pub use sandbox::{Run, Sandbox, command_line, printed_paths, write, write_files};
+pub use sandbox::{
+    Run, Sandbox, command_line, copy_tree, fixture, printed_paths, write, write_files,
+};
 
 use std::path::{Path, PathBuf};
 

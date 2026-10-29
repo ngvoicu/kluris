@@ -1,0 +1,17 @@
+name: beta
+description: "\xC9quipe donn\xE9es \u2014 connaissances partag\xE9es \xFCber alles,\
+  \ na\xEFve caf\xE9 fa\xE7ade \u65E5\u672C\u8A9E and a long tail to fold"
+agents:
+  commands_for:
+  - claude
+  - cursor
+  - windsurf
+  - copilot
+  - codex
+  - gemini
+  - hermes
+  - kilocode
+  - junie
+companions:
+- specmint-core
+- specmint-tdd-html

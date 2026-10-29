@@ -779,3 +779,76 @@ fn deprecation_issue_kinds_are_v2_names() {
     assert_eq!(missing("a", "b").kind(), "replaced_by_missing");
     assert_eq!(not_active("a", "b").kind(), "replaced_by_not_active");
 }
+
+// --- the whole model of each fixture brain -------------------------------------
+
+/// A brain's model as one document: its neurons in order with their kind,
+/// its glossary entries (`null` when `glossary.md` cannot be read), its
+/// deprecation issues and the neurons that check skipped. Paths are the
+/// brain-relative `/`-joined ones Kluris prints on every OS. Pretty JSON, as
+/// `cargo xtask brain-dump` prints it.
+fn model(brain: &Path) -> String {
+    use serde_json::json;
+    let store = LocalGitStore::open(brain);
+    let neurons: Vec<_> = store
+        .neurons()
+        .iter()
+        .map(|n| json!({"path": n.rel, "kind": n.kind.as_str()}))
+        .collect();
+    let glossary = match store.glossary() {
+        Ok(entries) => json!(
+            entries
+                .iter()
+                .map(|e| json!([e.term, e.definition]))
+                .collect::<Vec<_>>()
+        ),
+        Err(_) => serde_json::Value::Null,
+    };
+    let report = detect_deprecation_issues(&store);
+    let issues: Vec<_> = report
+        .issues
+        .iter()
+        .map(|issue| {
+            let kind = issue.kind();
+            match issue {
+                DeprecationIssue::ActiveLinksToDeprecated { source, target } => {
+                    json!({"kind": kind, "source": source, "target": target})
+                }
+                DeprecationIssue::DeprecatedWithoutReplacement { file } => {
+                    json!({"kind": kind, "file": file})
+                }
+                DeprecationIssue::ReplacedByMissing { file, target }
+                | DeprecationIssue::ReplacedByNotActive { file, target } => {
+                    json!({"kind": kind, "file": file, "target": target})
+                }
+            }
+        })
+        .collect();
+    let skipped: Vec<_> = report.skipped.iter().map(|s| s.rel.as_str()).collect();
+    let model = json!({
+        "neurons": neurons,
+        "glossary": glossary,
+        "deprecation": issues,
+        "skipped": skipped,
+    });
+    serde_json::to_string_pretty(&model).unwrap()
+}
+
+/// The fixture cases of `parity/test_brain_model.py`.
+#[test]
+fn brain_model_of_the_full_brain() {
+    let b = brain("full");
+    insta::assert_snapshot!("brain_model_full", model(&b.root));
+}
+
+#[test]
+fn brain_model_of_the_malformed_brain() {
+    let b = brain("malformed");
+    insta::assert_snapshot!("brain_model_malformed", model(&b.root));
+}
+
+#[test]
+fn brain_model_of_the_links_brain() {
+    let Some(b) = links_brain() else { return };
+    insta::assert_snapshot!("brain_model_links", model(&b.root));
+}

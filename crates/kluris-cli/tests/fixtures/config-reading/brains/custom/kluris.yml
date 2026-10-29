@@ -1,0 +1,12 @@
+name: custom
+description: d
+agents:
+  commands_for:
+  - claude
+  - devin
+  - antigravity
+  - windsurf
+  - bogus-agent
+companions:
+- specmint-tdd
+- bogus

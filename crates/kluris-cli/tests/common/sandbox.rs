@@ -155,6 +155,28 @@ pub fn printed_paths(check: impl FnOnce()) {
     settings.bind(check);
 }
 
+/// `tests/fixtures/<name>` of this crate.
+pub fn fixture(name: &str) -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures")
+        .join(name)
+}
+
+/// Copies the folder `from` to `to`, byte for byte, creating folders.
+pub fn copy_tree(from: &Path, to: &Path) {
+    fs::create_dir_all(to).unwrap_or_else(|e| panic!("{}: {e}", to.display()));
+    for entry in fs::read_dir(from).unwrap_or_else(|e| panic!("{}: {e}", from.display())) {
+        let entry = entry.unwrap();
+        let dest = to.join(entry.file_name());
+        if entry.file_type().unwrap().is_dir() {
+            copy_tree(&entry.path(), &dest);
+        } else {
+            fs::copy(entry.path(), &dest)
+                .unwrap_or_else(|e| panic!("{}: {e}", entry.path().display()));
+        }
+    }
+}
+
 /// How a run ended: its exit code and its decoded streams.
 #[derive(Debug)]
 pub struct Run {

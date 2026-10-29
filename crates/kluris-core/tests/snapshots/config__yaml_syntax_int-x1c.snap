@@ -1,0 +1,7 @@
+---
+source: crates/kluris-core/tests/config.rs
+expression: listed
+---
+Error(
+    Invalid,
+)

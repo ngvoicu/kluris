@@ -1,0 +1,78 @@
+---
+source: crates/kluris-core/tests/brain_walk.rs
+expression: model(&b.root)
+---
+{
+  "neurons": [
+    {
+      "path": "lobe/a.md",
+      "kind": "markdown"
+    },
+    {
+      "path": "lobe/broken.md",
+      "kind": "markdown"
+    },
+    {
+      "path": "lobe/good.md",
+      "kind": "markdown"
+    },
+    {
+      "path": "lobe/inlink.md",
+      "kind": "markdown"
+    },
+    {
+      "path": "lobe/real/r.md",
+      "kind": "markdown"
+    },
+    {
+      "path": "lobe/via-dir.md",
+      "kind": "markdown"
+    },
+    {
+      "path": "to-broken.md",
+      "kind": "markdown"
+    },
+    {
+      "path": "to-escape.md",
+      "kind": "markdown"
+    },
+    {
+      "path": "to-inlink.md",
+      "kind": "markdown"
+    }
+  ],
+  "glossary": [],
+  "deprecation": [
+    {
+      "kind": "deprecated_without_replacement",
+      "file": "lobe/a.md"
+    },
+    {
+      "kind": "deprecated_without_replacement",
+      "file": "lobe/inlink.md"
+    },
+    {
+      "kind": "replaced_by_missing",
+      "file": "to-broken.md",
+      "target": "./lobe/broken.md"
+    },
+    {
+      "kind": "replaced_by_missing",
+      "file": "to-escape.md",
+      "target": "./lobe/escape.md"
+    },
+    {
+      "kind": "replaced_by_not_active",
+      "file": "to-inlink.md",
+      "target": "./lobe/inlink.md"
+    },
+    {
+      "kind": "active_links_to_deprecated",
+      "source": "lobe/good.md",
+      "target": "lobe/a.md"
+    }
+  ],
+  "skipped": [
+    "lobe/broken.md"
+  ]
+}

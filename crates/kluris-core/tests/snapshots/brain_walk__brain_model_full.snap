@@ -1,0 +1,370 @@
+---
+source: crates/kluris-core/tests/brain_walk.rs
+expression: model(&b.root)
+---
+{
+  "neurons": [
+    {
+      "path": ".md",
+      "kind": "markdown"
+    },
+    {
+      "path": "knowledge-extra/extra.md",
+      "kind": "markdown"
+    },
+    {
+      "path": "knowledge.md",
+      "kind": "markdown"
+    },
+    {
+      "path": "knowledge/bool-status.md",
+      "kind": "markdown"
+    },
+    {
+      "path": "knowledge/date-replacement.md",
+      "kind": "markdown"
+    },
+    {
+      "path": "knowledge/deprecated-linker.md",
+      "kind": "markdown"
+    },
+    {
+      "path": "knowledge/empty-replacement.md",
+      "kind": "markdown"
+    },
+    {
+      "path": "knowledge/good.md",
+      "kind": "markdown"
+    },
+    {
+      "path": "knowledge/linker.md",
+      "kind": "markdown"
+    },
+    {
+      "path": "knowledge/list-replacement.md",
+      "kind": "markdown"
+    },
+    {
+      "path": "knowledge/missing.md",
+      "kind": "markdown"
+    },
+    {
+      "path": "knowledge/null-replacement.md",
+      "kind": "markdown"
+    },
+    {
+      "path": "knowledge/null-status-linker.md",
+      "kind": "markdown"
+    },
+    {
+      "path": "knowledge/null-status.md",
+      "kind": "markdown"
+    },
+    {
+      "path": "knowledge/numeric-replacement.md",
+      "kind": "markdown"
+    },
+    {
+      "path": "knowledge/outside.md",
+      "kind": "markdown"
+    },
+    {
+      "path": "knowledge/string-related.md",
+      "kind": "markdown"
+    },
+    {
+      "path": "knowledge/sub-lobe/nested.md",
+      "kind": "markdown"
+    },
+    {
+      "path": "knowledge/to-bad-block.md",
+      "kind": "markdown"
+    },
+    {
+      "path": "knowledge/to-bool-status.md",
+      "kind": "markdown"
+    },
+    {
+      "path": "knowledge/to-deprecated.md",
+      "kind": "markdown"
+    },
+    {
+      "path": "knowledge/to-dir.md",
+      "kind": "markdown"
+    },
+    {
+      "path": "knowledge/to-glossary.md",
+      "kind": "markdown"
+    },
+    {
+      "path": "knowledge/to-good-dotted.md",
+      "kind": "markdown"
+    },
+    {
+      "path": "knowledge/to-good.md",
+      "kind": "markdown"
+    },
+    {
+      "path": "knowledge/to-map.md",
+      "kind": "markdown"
+    },
+    {
+      "path": "knowledge/to-null-status.md",
+      "kind": "markdown"
+    },
+    {
+      "path": "knowledge/to-root.md",
+      "kind": "markdown"
+    },
+    {
+      "path": "knowledge/to-yaml.md",
+      "kind": "markdown"
+    },
+    {
+      "path": "knowledge/without.md",
+      "kind": "markdown"
+    },
+    {
+      "path": "projects/alpha.md",
+      "kind": "markdown"
+    },
+    {
+      "path": "projects/api/deep/deeper/deepest.md",
+      "kind": "markdown"
+    },
+    {
+      "path": "projects/api/endpoints.md",
+      "kind": "markdown"
+    },
+    {
+      "path": "projects/readme.md",
+      "kind": "markdown"
+    },
+    {
+      "path": "root-note.md",
+      "kind": "markdown"
+    },
+    {
+      "path": "knowledge/bad-block.yml",
+      "kind": "yaml"
+    },
+    {
+      "path": "knowledge/legacy-config.yml",
+      "kind": "yaml"
+    },
+    {
+      "path": "projects/api/bom.yaml",
+      "kind": "yaml"
+    },
+    {
+      "path": "projects/api/early-block.yml",
+      "kind": "yaml"
+    },
+    {
+      "path": "projects/api/indented.yaml",
+      "kind": "yaml"
+    },
+    {
+      "path": "projects/api/map.yml",
+      "kind": "yaml"
+    },
+    {
+      "path": "projects/api/openapi.yml",
+      "kind": "yaml"
+    },
+    {
+      "path": "root-spec.yml",
+      "kind": "yaml"
+    }
+  ],
+  "glossary": [
+    [
+      "API",
+      "Application programming interface"
+    ],
+    [
+      "SLA",
+      "service level agreement (en dash)"
+    ],
+    [
+      "SLO",
+      "service level objective (em dash)"
+    ],
+    [
+      "RPO",
+      "recovery point objective, three dashes"
+    ],
+    [
+      "RTO",
+      "no spaces around the em dash"
+    ],
+    [
+      "a**b",
+      "term closes at the first double star"
+    ],
+    [
+      "x",
+      "-"
+    ],
+    [
+      "API",
+      "duplicate term, kept"
+    ],
+    [
+      "Indented",
+      "leading whitespace is stripped"
+    ],
+    [
+      "NBSP",
+      "non-breaking spaces around the dash"
+    ],
+    [
+      "US",
+      "definition after unit separators"
+    ],
+    [
+      "Bold with *emphasis*",
+      "it"
+    ],
+    [
+      "Cut",
+      "bold line rejected | not | a table"
+    ],
+    [
+      "GA",
+      "General availability"
+    ],
+    [
+      "QA",
+      "Quality assurance"
+    ],
+    [
+      "dash def",
+      "----"
+    ],
+    [
+      "GA",
+      "duplicate table term"
+    ],
+    [
+      "café",
+      "unicode term 日本"
+    ],
+    [
+      "CRLF",
+      "line ends with CRLF"
+    ],
+    [
+      "LS",
+      "a line separator"
+    ],
+    [
+      "Next",
+      "splits the line"
+    ]
+  ],
+  "deprecation": [
+    {
+      "kind": "replaced_by_missing",
+      "file": "knowledge/date-replacement.md",
+      "target": "2026-01-01"
+    },
+    {
+      "kind": "deprecated_without_replacement",
+      "file": "knowledge/empty-replacement.md"
+    },
+    {
+      "kind": "replaced_by_missing",
+      "file": "knowledge/missing.md",
+      "target": "./nope.md"
+    },
+    {
+      "kind": "deprecated_without_replacement",
+      "file": "knowledge/null-replacement.md"
+    },
+    {
+      "kind": "replaced_by_missing",
+      "file": "knowledge/outside.md",
+      "target": "../../outside-the-brain.md"
+    },
+    {
+      "kind": "replaced_by_not_active",
+      "file": "knowledge/to-bool-status.md",
+      "target": "bool-status.md"
+    },
+    {
+      "kind": "replaced_by_not_active",
+      "file": "knowledge/to-deprecated.md",
+      "target": "./without.md"
+    },
+    {
+      "kind": "replaced_by_not_active",
+      "file": "knowledge/to-dir.md",
+      "target": "../projects"
+    },
+    {
+      "kind": "replaced_by_not_active",
+      "file": "knowledge/to-glossary.md",
+      "target": "../glossary.md"
+    },
+    {
+      "kind": "replaced_by_not_active",
+      "file": "knowledge/to-map.md",
+      "target": "./map.md"
+    },
+    {
+      "kind": "replaced_by_not_active",
+      "file": "knowledge/to-null-status.md",
+      "target": "./null-status.md"
+    },
+    {
+      "kind": "replaced_by_not_active",
+      "file": "knowledge/to-yaml.md",
+      "target": "./legacy-config.yml"
+    },
+    {
+      "kind": "deprecated_without_replacement",
+      "file": "knowledge/without.md"
+    },
+    {
+      "kind": "deprecated_without_replacement",
+      "file": "knowledge/legacy-config.yml"
+    },
+    {
+      "kind": "active_links_to_deprecated",
+      "source": "knowledge-extra/extra.md",
+      "target": "knowledge/to-good.md"
+    },
+    {
+      "kind": "active_links_to_deprecated",
+      "source": "knowledge.md",
+      "target": "knowledge/without.md"
+    },
+    {
+      "kind": "active_links_to_deprecated",
+      "source": "knowledge/linker.md",
+      "target": "knowledge/without.md"
+    },
+    {
+      "kind": "active_links_to_deprecated",
+      "source": "knowledge/linker.md",
+      "target": "knowledge/missing.md"
+    },
+    {
+      "kind": "active_links_to_deprecated",
+      "source": "knowledge/linker.md",
+      "target": "knowledge/to-map.md"
+    },
+    {
+      "kind": "active_links_to_deprecated",
+      "source": "knowledge/linker.md",
+      "target": "knowledge/legacy-config.yml"
+    },
+    {
+      "kind": "active_links_to_deprecated",
+      "source": "knowledge/null-status-linker.md",
+      "target": "knowledge/without.md"
+    }
+  ],
+  "skipped": []
+}
