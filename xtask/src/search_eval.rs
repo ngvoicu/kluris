@@ -1,7 +1,7 @@
 //! `search-eval`: the search-quality eval of research-05 §5 with the method
 //! of research-06 §5, run through the real `kluris search` process.
 //!
-//! - Default: the public fixture `parity/fixtures/search-eval/` (its brains
+//! - Default: the public fixture `xtask/fixtures/search-eval/` (its brains
 //!   registered in a temporary home, so the developer's config is never
 //!   read) and its graded queries. Fails below hit@5 [`MIN_HIT5`] or MRR
 //!   [`MIN_MRR`].
@@ -44,6 +44,13 @@ const LIMIT: &str = "20";
 fn workspace_root() -> PathBuf {
     let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
     manifest.parent().unwrap_or(manifest).to_path_buf()
+}
+
+/// The public fixture: its brains and graded queries.
+fn fixture_dir() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("fixtures")
+        .join("search-eval")
 }
 
 struct Options {
@@ -400,7 +407,7 @@ fn registered_brains() -> Vec<String> {
 pub fn main(args: &[String]) -> Result<(), String> {
     let o = parse(args)?;
     let root = workspace_root();
-    let fixture = root.join("parity").join("fixtures").join("search-eval");
+    let fixture = fixture_dir();
     let scope = if o.local { "local" } else { "fixture" };
     let queries_path = o.queries.clone().unwrap_or_else(|| {
         if o.local {
@@ -538,4 +545,21 @@ pub fn main(args: &[String]) -> Result<(), String> {
         ));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_fixture_lives_in_xtask() {
+        let dir = fixture_dir();
+        assert!(
+            dir.ends_with(Path::new("xtask").join("fixtures").join("search-eval")),
+            "{}",
+            dir.display()
+        );
+        assert!(dir.join("queries.jsonl").is_file(), "{}", dir.display());
+        assert!(dir.join("brains").is_dir(), "{}", dir.display());
+    }
 }

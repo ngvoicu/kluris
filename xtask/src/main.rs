@@ -34,7 +34,7 @@ Tasks:
       string of its POSIX form, as SKILL.md writes brain paths.
   search-eval [--local] [--queries FILE] [--bin KLURIS] [--seed N] [--repeat N] [--report FILE]
       The search-quality eval through the real `kluris search`: the public
-      fixture (parity/fixtures/search-eval/, gated at hit@5 0.90 and MRR
+      fixture (xtask/fixtures/search-eval/, gated at hit@5 0.90 and MRR
       0.74) or, with --local, the tuning queries against the registered
       brains. Writes a text-free JSON report under target/search-eval/.
   skills-install --home <dir>

@@ -1,0 +1,9 @@
+---
+source: crates/kluris-cli/tests/golden.rs
+expression: tree_dump(dir)
+---
+== bom.md
+\u{feff}hi
+== crlf.md
+one\r
+two\r

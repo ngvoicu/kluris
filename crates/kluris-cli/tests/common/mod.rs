@@ -1,19 +1,28 @@
-//! A release's new binary for the self-update tests: it answers
-//! `--version` with `version_line` (exit `version_code`); started any other
-//! way it writes how it was started (the program as given, then the
-//! arguments, one per line) to `args_file`, prints `out` and exits `code`.
-//!
-//! Unix: a shell script. Windows: the `fake_kluris` example (an exe must be
-//! one) with its settings appended as a trailer. `cargo test --workspace`
-//! (and `cargo xtask windows`) builds the examples; a filtered `cargo test
-//! -p kluris --test self_update` does not, and `--examples` does not help
-//! (it builds a test-harness copy, `fake_kluris-<hash>`), so on Windows run
-//! `cargo build -p kluris --examples` first.
+//! Helpers shared by the CLI tests: the golden-snapshot normalizations
+//! ([`golden`]) and a fake release binary for the self-update tests.
 
-#![allow(dead_code)]
+#![allow(dead_code, unused_imports)]
+
+pub mod golden;
+
+pub use golden::{
+    PASSTHROUGH_ENV, PINNED_ENV, PINNED_GIT_DATE, decode, git_dump, normalize, normalize_json,
+    tree_dump,
+};
 
 use std::path::{Path, PathBuf};
 
+/// A release's new binary for the self-update tests: it answers
+/// `--version` with `version_line` (exit `version_code`); started any other
+/// way it writes how it was started (the program as given, then the
+/// arguments, one per line) to `args_file`, prints `out` and exits `code`.
+///
+/// Unix: a shell script. Windows: the `fake_kluris` example (an exe must be
+/// one) with its settings appended as a trailer. `cargo test --workspace`
+/// (and `cargo xtask windows`) builds the examples; a filtered `cargo test
+/// -p kluris --test self_update` does not, and `--examples` does not help
+/// (it builds a test-harness copy, `fake_kluris-<hash>`), so on Windows run
+/// `cargo build -p kluris --examples` first.
 pub struct Fake<'a> {
     pub version_line: &'a str,
     pub version_code: i32,

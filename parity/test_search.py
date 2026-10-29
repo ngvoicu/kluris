@@ -19,7 +19,7 @@ own ``search_brain`` in one oracle process: the CLI is that call plus
 of both is compared on the fixture brains and the error cases.
 
 Brains: the fixture brains of ``crates/kluris-core/tests/fixtures/brains/``,
-the search-eval brains of ``parity/fixtures/search-eval/brains/``, brains
+the search-eval brains of ``xtask/fixtures/search-eval/brains/``, brains
 written here for single rules, and read-only copies (without ``.git``) of the
 brains registered on this machine, with the 74 tuning queries of
 ``KLURIS_SEARCH_EVAL_QUERIES`` (default: the spec's
@@ -43,8 +43,8 @@ from runs import brain_refs, clear_runs, fetched_teammates_push, parse_exact, te
 
 WORKSPACE = PARITY_DIR.parent
 FIXTURES = WORKSPACE / "crates" / "kluris-core" / "tests" / "fixtures" / "brains"
-EVAL_BRAINS = PARITY_DIR / "fixtures" / "search-eval" / "brains"
-EVAL_QUERIES = PARITY_DIR / "fixtures" / "search-eval" / "queries.jsonl"
+EVAL_BRAINS = WORKSPACE / "xtask" / "fixtures" / "search-eval" / "brains"
+EVAL_QUERIES = WORKSPACE / "xtask" / "fixtures" / "search-eval" / "queries.jsonl"
 ORACLE_TOOL = PARITY_DIR / "tools" / "search_oracle.py"
 TUNING_QUERIES = Path(
     os.environ.get("KLURIS_SEARCH_EVAL_QUERIES")
