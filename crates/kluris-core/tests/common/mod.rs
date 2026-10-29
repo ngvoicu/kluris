@@ -1,7 +1,10 @@
 //! A bare remote and two clones in temp dirs, "ours" (the brain being
-//! synced) and "theirs" (a teammate), for the sync and resolve tests.
+//! synced) and "theirs" (a teammate), for the sync and resolve tests; the
+//! frozen format corpora in [`corpus`].
 
 #![allow(dead_code)]
+
+pub mod corpus;
 
 use std::collections::BTreeMap;
 use std::fs;

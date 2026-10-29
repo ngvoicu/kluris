@@ -10,6 +10,7 @@ mod parser;
 mod reader;
 mod resolve;
 mod scanner;
+pub mod tagged_json;
 mod value;
 
 pub use emit::{Profile, emit};
