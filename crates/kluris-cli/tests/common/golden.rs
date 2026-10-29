@@ -703,93 +703,269 @@ fn escape(bytes: &[u8]) -> String {
     out
 }
 
+/// `text` as [`escape`] and [`escape_line`] write bytes, back as the bytes.
+fn unescape(text: &str) -> Vec<u8> {
+    let mut out = Vec::with_capacity(text.len());
+    let mut chars = text.chars();
+    while let Some(c) = chars.next() {
+        if c != '\\' {
+            let mut buf = [0; 4];
+            out.extend_from_slice(c.encode_utf8(&mut buf).as_bytes());
+            continue;
+        }
+        match chars.next() {
+            Some('\\') => out.push(b'\\'),
+            Some('r') => out.push(b'\r'),
+            Some('n') => out.push(b'\n'),
+            Some('x') => {
+                let hex: String = chars.by_ref().take(2).collect();
+                let byte = u8::from_str_radix(&hex, 16)
+                    .unwrap_or_else(|e| panic!("\\x{hex} in {text:?}: {e}"));
+                out.push(byte);
+            }
+            Some('u') => {
+                let rest: String = chars.by_ref().take(6).collect();
+                assert_eq!(rest, "{feff}", "an unknown escape in {text:?}");
+                out.extend_from_slice("\u{feff}".as_bytes());
+            }
+            other => panic!("an unknown escape \\{other:?} in {text:?}"),
+        }
+    }
+    out
+}
+
+/// `s` as a [`Dump`] writes it: each backslash doubled.
+fn dumped(s: &str) -> String {
+    s.replace('\\', "\\\\")
+}
+
 /// Bytes as [`escape`] writes them, with a newline as `\n`: one line.
 fn escape_line(bytes: &[u8]) -> String {
     escape(bytes).replace('\n', "\\n")
 }
 
-/// A path written in the OS's own form (`\` on Windows) shown as `shown`,
-/// in each form text can hold it: raw, JSON-escaped, and each of those as
-/// a dump writes it (backslashes doubled). The snapshot then holds on every
-/// OS, and the path written any other way than the OS writes it fails the
-/// test (see [`NativePaths`]).
+/// How a text holds the paths it prints. Each form has one spelling of a
+/// path, and a path is checked only in its text's form, so a spelling one
+/// form escapes (a doubled backslash) never passes for another form's.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Form {
+    /// Text a program prints: a path as the OS writes it.
+    Text,
+    /// A JSON document: a path in its parsed strings, keys and values.
+    Json,
+    /// A file's body as a [`Dump`] writes it, its backslashes doubled: a
+    /// YAML or JSON file's paths in its parsed strings, any other file's in
+    /// its text.
+    Dumped,
+}
+
+impl Form {
+    /// The form of `stream`, a program's stdout or stderr: [`Form::Json`]
+    /// when it is one JSON object or array, else [`Form::Text`]. Neither
+    /// pick lets a wrong spelling through: a JSON stream read as text holds
+    /// its paths' backslashes doubled, which text refuses.
+    pub fn of_stream(stream: &str) -> Form {
+        let json = stream.trim_start().starts_with(['{', '['])
+            && serde_json::from_str::<serde_json::Value>(stream).is_ok();
+        if json { Form::Json } else { Form::Text }
+    }
+}
+
+/// `native`, a path written in the OS's own form (`\` on Windows), checked
+/// and shown as `shown` in `text`, a program's stream, read in its
+/// [`Form::of_stream`] (see [`NativePaths`]).
 pub fn native_path(text: &str, native: &Path, shown: &str) -> String {
     native_paths(text, &[(native, shown)])
 }
 
-/// [`native_path`] for several paths at once (see [`NativePaths`]).
+/// [`native_path`] for several paths at once.
 pub fn native_paths(text: &str, paths: &[(&Path, &str)]) -> String {
-    NativePaths::new(paths).show(text)
+    NativePaths::new(paths).show(text, Form::of_stream(text))
 }
 
-/// Paths written in the OS's own form, each shown as given. Every path is
-/// checked on the text as it came, whole: where the OS writes `\`, each
-/// spelling of the path's parts joined by `\`, `\\` or `/` must be one of
-/// the path's own forms, and none of those forms may go on with `/` (a
-/// path below it written half in the OS's form). Then each form is
-/// replaced, longest first, so a path inside another (a brain and its
-/// `kluris.yml`) is neither half-replaced nor taken for one written with
-/// `/`.
+/// Paths written in the OS's own form, each shown as given. A text is read
+/// in the one [`Form`] its caller names, and every path is checked in it,
+/// whole, before anything is replaced: where the OS writes `\`, each
+/// spelling of the path's parts joined by `\`s or `/` that the form's
+/// strings hold must be the path exactly, and the path may not go on with
+/// `/` (a path below it written half in the OS's form). Then the path is
+/// replaced in the form's own spelling only, longest path first, so a path
+/// inside another (a brain and its `kluris.yml`) is neither half-replaced
+/// nor taken for one written with `/`.
 pub struct NativePaths {
-    replacements: Vec<(String, String)>,
-    checks: Vec<(String, Vec<String>, Vec<Regex>)>,
+    paths: Vec<NativePath>,
+}
+
+struct NativePath {
+    raw: String,
+    shown: String,
+    /// The path's parts joined by any run of `\` or a `/`; none where the
+    /// OS writes `/`.
+    spelling: Option<Regex>,
+    /// [`NativePath::spelling`] with each part raw or JSON-escaped, as a
+    /// YAML or JSON file's text can hold it.
+    file_spelling: Option<Regex>,
 }
 
 impl NativePaths {
     pub fn new(paths: &[(&Path, &str)]) -> Self {
-        let mut replacements = Vec::new();
-        let mut checks = Vec::new();
-        for (native, shown) in paths {
-            let raw = native.display().to_string();
-            replacements.extend(path_forms(&raw).into_iter().zip(path_forms(shown)));
-            if raw.contains('\\') {
+        let paths = paths
+            .iter()
+            .map(|(native, shown)| {
+                let raw = native.display().to_string();
                 let parts: Vec<&str> = raw.split(['\\', '/']).collect();
-                let spellings: BTreeSet<String> = [
-                    |p: &str| p.to_string(),
-                    |p: &str| json_escaped(p),
-                    |p: &str| json_escaped(p).replace('\\', "\\\\"),
-                ]
-                .iter()
-                .map(|form| {
-                    parts
-                        .iter()
-                        .map(|part| regex::escape(&form(part)))
-                        .collect::<Vec<_>>()
-                        .join(r"(?:\\+|/)")
-                })
-                .collect();
-                let forms = path_forms(&raw).into_iter().collect();
-                checks.push((raw, forms, spellings.iter().map(|p| re(p)).collect()));
-            }
-        }
-        replacements.sort_by_key(|(from, _)| std::cmp::Reverse(from.len()));
-        NativePaths {
-            replacements,
-            checks,
-        }
+                let joined = |part: &dyn Fn(&str) -> String| {
+                    let parts: Vec<String> = parts.iter().map(|p| part(p)).collect();
+                    re(&parts.join(r"(?:\\+|/)"))
+                };
+                let native = raw.contains('\\');
+                NativePath {
+                    spelling: native.then(|| joined(&|p| regex::escape(p))),
+                    file_spelling: native.then(|| {
+                        joined(&|p| {
+                            let escaped = json_escaped(p);
+                            format!("(?:{}|{})", regex::escape(p), regex::escape(&escaped))
+                        })
+                    }),
+                    raw,
+                    shown: shown.to_string(),
+                }
+            })
+            .collect();
+        NativePaths { paths }
     }
 
-    /// `text` with every path checked, then shown as given.
-    pub fn show(&self, text: &str) -> String {
-        for (raw, forms, spellings) in &self.checks {
-            for found in spellings.iter().flat_map(|s| s.find_iter(text)) {
-                assert!(
-                    forms.iter().any(|form| form == found.as_str()),
-                    "{} is {raw} written with other separators than the OS writes, in {text:?}",
-                    found.as_str()
-                );
+    /// `text`, read as `form`, with every path checked, then shown.
+    pub fn show(&self, text: &str, form: Form) -> String {
+        let spellings: &[fn(&str) -> String] = match form {
+            Form::Text => {
+                self.check(text, text);
+                &[str::to_string]
             }
-            for form in forms {
-                assert!(
-                    !text.contains(&format!("{form}/")),
-                    "{form} goes on with `/`, not as the OS writes a path ({raw}), in {text:?}"
-                );
+            Form::Json => {
+                let doc: serde_json::Value = serde_json::from_str(text)
+                    .unwrap_or_else(|e| panic!("not JSON ({e}): {text:?}"));
+                for s in json_strings(&doc) {
+                    self.check(s, text);
+                }
+                &[json_escaped]
             }
-        }
-        self.replacements
+            Form::Dumped => {
+                let file = String::from_utf8_lossy(&unescape(text)).into_owned();
+                match file_strings(&file) {
+                    Some(strings) => {
+                        for s in &strings {
+                            self.check(s, text);
+                        }
+                        self.check_all_parsed(&file, &strings, text);
+                        &[dumped, |s| dumped(&json_escaped(s))]
+                    }
+                    None => {
+                        self.check(&file, text);
+                        &[dumped]
+                    }
+                }
+            }
+        };
+        let mut replacements: Vec<(String, String)> = self
+            .paths
+            .iter()
+            .flat_map(|p| spellings.iter().map(|f| (f(&p.raw), f(&p.shown))))
+            .collect();
+        replacements.sort_by_key(|(from, _)| std::cmp::Reverse(from.len()));
+        replacements
             .iter()
             .fold(text.to_string(), |text, (from, to)| text.replace(from, to))
     }
+
+    /// Fails the test unless every spelling of a path in `s`, one string
+    /// of `text`, is the path exactly and none goes on with `/`.
+    fn check(&self, s: &str, text: &str) {
+        for path in &self.paths {
+            let Some(spelling) = &path.spelling else {
+                continue;
+            };
+            for found in spelling.find_iter(s) {
+                assert!(
+                    found.as_str() == path.raw,
+                    "{} is {} written another way than the OS writes it, in {text:?}",
+                    found.as_str(),
+                    path.raw
+                );
+            }
+            assert!(
+                !s.contains(&format!("{}/", path.raw)),
+                "{} goes on with `/`, not as the OS writes a path, in {text:?}",
+                path.raw
+            );
+        }
+    }
+
+    /// Fails the test when `file`'s text spells a path more often than its
+    /// parsed `strings` hold it: a spelling outside them (a comment) is
+    /// not checked by [`NativePaths::check`].
+    fn check_all_parsed(&self, file: &str, strings: &[String], text: &str) {
+        for path in &self.paths {
+            let (Some(spelling), Some(file_spelling)) = (&path.spelling, &path.file_spelling)
+            else {
+                continue;
+            };
+            let parsed: usize = strings.iter().map(|s| spelling.find_iter(s).count()).sum();
+            let written = file_spelling.find_iter(file).count();
+            assert!(
+                written <= parsed,
+                "{} is spelled {written} times in the file but {parsed} times in its values, in {text:?}",
+                path.raw
+            );
+        }
+    }
+}
+
+/// Every string of a JSON document, keys and values.
+fn json_strings(doc: &serde_json::Value) -> Vec<&str> {
+    let mut out = Vec::new();
+    let mut stack = vec![doc];
+    while let Some(value) = stack.pop() {
+        match value {
+            serde_json::Value::String(s) => out.push(s.as_str()),
+            serde_json::Value::Array(items) => stack.extend(items),
+            serde_json::Value::Object(map) => {
+                out.extend(map.keys().map(String::as_str));
+                stack.extend(map.values());
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+/// Every string of `file` when it is a JSON or YAML mapping or sequence,
+/// keys and values; `None` for any other file.
+fn file_strings(file: &str) -> Option<Vec<String>> {
+    if let Ok(doc) = serde_json::from_str::<serde_json::Value>(file)
+        && (doc.is_object() || doc.is_array())
+    {
+        return Some(json_strings(&doc).into_iter().map(str::to_string).collect());
+    }
+    use kluris_core::yaml::Value;
+    let doc = kluris_core::yaml::load(file).ok()?;
+    if !matches!(doc, Value::Map(_) | Value::Seq(_)) {
+        return None;
+    }
+    let mut out = Vec::new();
+    let mut stack = vec![&doc];
+    while let Some(value) = stack.pop() {
+        match value {
+            Value::Str(s) => out.push(s.clone()),
+            Value::Seq(items) => stack.extend(items),
+            Value::Map(map) => {
+                out.extend(map.keys().cloned());
+                stack.extend(map.values());
+            }
+            _ => {}
+        }
+    }
+    Some(out)
 }
 
 /// Fails the test unless each place `rendered` (`printed` as a snapshot
@@ -807,8 +983,7 @@ pub fn assert_shown_from_native(printed: &str, rendered: &str, native: &Path, sh
             .sum()
     };
     let raw = native.display().to_string();
-    let forms = path_forms(&raw);
-    let natives = count(printed, &forms[1..]);
+    let natives = count(printed, &[json_escaped(&raw), raw.clone()]);
     let shown_forms = [json_escaped(shown), shown.to_string()];
     let shown_count = count(rendered, &shown_forms);
     assert_eq!(
@@ -820,7 +995,6 @@ pub fn assert_shown_from_native(printed: &str, rendered: &str, native: &Path, sh
 /// The forms text can hold the path `raw` in: JSON-escaped and as a dump
 /// writes it (backslashes doubled), each of the two, and raw; longest first.
 fn path_forms(raw: &str) -> Vec<String> {
-    let dumped = |s: &str| s.replace('\\', "\\\\");
     vec![
         dumped(&json_escaped(raw)),
         json_escaped(raw),

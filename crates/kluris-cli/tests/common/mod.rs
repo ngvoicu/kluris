@@ -18,8 +18,8 @@ pub mod shared;
 pub mod upgrade;
 
 pub use golden::{
-    Body, Dump, Entry, NativePaths, PASSTHROUGH_ENV, PINNED_ENV, PINNED_GIT_DATE, Reference, Tree,
-    decode, file_body, files_dump, git_dump, git_state, native_path, native_paths, normalize,
+    Body, Dump, Entry, Form, NativePaths, PASSTHROUGH_ENV, PINNED_ENV, PINNED_GIT_DATE, Reference,
+    Tree, decode, file_body, files_dump, git_dump, git_state, native_path, native_paths, normalize,
     normalize_json, parse_json_line, slashed, tree_dump, tree_files, windows_variant,
 };
 pub use sandbox::{

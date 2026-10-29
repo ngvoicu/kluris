@@ -9,9 +9,9 @@ use std::process::Command;
 
 use common::shared::vendored_marker;
 use common::{
-    Entry, PINNED_ENV, PINNED_GIT_DATE, Sandbox, Tree, changes_dump, decode, file_body, git_dump,
-    git_state, native_path, native_paths, normalize, normalize_json, parse_json_line, slashed,
-    tree_dump,
+    Entry, Form, NativePaths, PINNED_ENV, PINNED_GIT_DATE, Sandbox, Tree, changes_dump, decode,
+    file_body, git_dump, git_state, native_path, native_paths, normalize, normalize_json,
+    parse_json_line, slashed, tree_dump,
 };
 
 /// A temp root whose name has a space and a non-ASCII letter, so its
@@ -506,14 +506,21 @@ fn native_path_refuses_a_path_written_with_slashes() {
 }
 
 /// A path inside another (a brain and its `kluris.yml`) is shown whole,
-/// raw and JSON-escaped, in whichever order the paths are given.
+/// in JSON and in text, in whichever order the paths are given.
 #[test]
 fn native_paths_shows_a_path_inside_another() {
     let brain = Path::new(r"C:\Users\me\work\brains\a");
     let yml = Path::new(r"C:\Users\me\work\brains\a\kluris.yml");
-    let text =
-        r#"{"path": "C:\\Users\\me\\work\\brains\\a"} at C:\Users\me\work\brains\a\kluris.yml"#;
-    let shown = r#"{"path": "C:/Users/me/work/brains/a"} at C:/Users/me/work/brains/a/kluris.yml"#;
+    let texts = [
+        (
+            r#"{"path": "C:\\Users\\me\\work\\brains\\a", "yml": "C:\\Users\\me\\work\\brains\\a\\kluris.yml"}"#,
+            r#"{"path": "C:/Users/me/work/brains/a", "yml": "C:/Users/me/work/brains/a/kluris.yml"}"#,
+        ),
+        (
+            r"C:\Users\me\work\brains\a: no C:\Users\me\work\brains\a\kluris.yml",
+            r"C:/Users/me/work/brains/a: no C:/Users/me/work/brains/a/kluris.yml",
+        ),
+    ];
     for paths in [[brain, yml], [yml, brain]] {
         let shown_paths = paths.map(slashed);
         let pairs: Vec<(&Path, &str)> = paths
@@ -521,7 +528,9 @@ fn native_paths_shows_a_path_inside_another() {
             .zip(&shown_paths)
             .map(|(path, shown)| (*path, shown.as_str()))
             .collect();
-        assert_eq!(native_paths(text, &pairs), shown);
+        for (text, shown) in texts {
+            assert_eq!(native_paths(text, &pairs), shown);
+        }
     }
 }
 
@@ -690,16 +699,28 @@ fn a_json_escaped_path_written_partly_with_slashes_is_refused() {
     }
 }
 
+/// `bytes`, a file's, dumped with the brain [`MIXED_BRAIN`] checked and
+/// shown in each body ([`Form::Dumped`]); `None` when it is refused.
+fn dumped_shown(name: &str, bytes: &[u8]) -> Option<String> {
+    let tmp = tempfile::TempDir::new().unwrap();
+    common::write(&tmp.path().join(name), bytes);
+    let native = NativePaths::new(&[(Path::new(MIXED_BRAIN), "<ROOT>/work/brains/alpha")]);
+    std::panic::catch_unwind(|| tree_dump(tmp.path(), |text| native.show(text, Form::Dumped))).ok()
+}
+
 #[test]
 fn a_dumped_path_written_partly_with_slashes_is_refused() {
-    let dump = dump_of(&[
+    let files: [(&str, &[u8]); 2] = [
         ("config.yml", b"path: C:\\Temp\\run/work/brains/alpha\n"),
         (
             "map.json",
             b"{\"path\": \"C:\\\\Temp\\\\run/work/brains/alpha\"}\n",
         ),
-    ]);
-    assert!(refused(&dump), "{dump} was not refused");
+    ];
+    for (name, bytes) in files {
+        let dump = dumped_shown(name, bytes);
+        assert!(dump.is_none(), "{name} was not refused: {dump:?}");
+    }
 }
 
 #[test]
@@ -721,6 +742,103 @@ fn a_root_continued_with_slashes_is_refused() {
         let refused = std::panic::catch_unwind(|| normalize(text, Path::new(MIXED_ROOT))).is_err();
         assert!(refused, "{text} was not refused");
     }
+}
+
+/// `path` as a JSON line holds it: one string, quoted and escaped.
+fn json_line(path: &str) -> String {
+    kluris_core::json::to_line(&kluris_core::json::Json::Str(path.to_string()))
+}
+
+/// A run whose stdout is `stdout` and stderr `stderr`, its brain path
+/// [`MIXED_BRAIN`] checked and shown; `None` when it is refused.
+fn run_shown(stdout: &str, stderr: &str) -> Option<common::Run> {
+    let run = common::Run {
+        code: 0,
+        stdout: stdout.to_string(),
+        stderr: stderr.to_string(),
+    };
+    std::panic::catch_unwind(|| run.native_paths(&[Path::new(MIXED_BRAIN)])).ok()
+}
+
+/// A JSON path field whose parsed value doubles every backslash is not the
+/// brain's path, though its JSON text is the brain's path as a dump writes
+/// a JSON file.
+#[test]
+fn a_json_path_with_doubled_backslashes_is_refused() {
+    let good = format!("{{\"path\": {}}}\n", json_line(MIXED_BRAIN).trim_end());
+    let doubled = MIXED_BRAIN.replace('\\', r"\\");
+    let wrong = format!("{{\"path\": {}}}\n", json_line(&doubled).trim_end());
+    assert_ne!(parse_json_line(&good), parse_json_line(&wrong));
+    let shown = run_shown(&good, "").expect("the brain's own path is refused");
+    assert_eq!(
+        shown.stdout,
+        "{\"path\": \"C:/Temp/run/work/brains/alpha\"}\n"
+    );
+    assert!(run_shown(&wrong, "").is_none(), "{wrong} was not refused");
+}
+
+/// A path printed as text with every backslash doubled is not the brain's
+/// path, though it is the brain's path as JSON or a dump writes it.
+#[test]
+fn a_text_path_with_doubled_backslashes_is_refused() {
+    let good = format!("Error: {MIXED_BRAIN} is not a brain\n");
+    let wrong = good.replace('\\', r"\\");
+    let shown = run_shown("", &good).expect("the brain's own path is refused");
+    assert_eq!(
+        shown.stderr,
+        "Error: C:/Temp/run/work/brains/alpha is not a brain\n"
+    );
+    assert!(run_shown("", &wrong).is_none(), "{wrong} was not refused");
+    assert!(
+        run_shown(&wrong, "").is_none(),
+        "{wrong} on stdout was not refused"
+    );
+}
+
+/// A YAML file in a dump: the brain's path as a plain scalar or a quoted
+/// one is shown, a plain scalar with every backslash doubled (whose dumped
+/// text is the quoted scalar's) is refused.
+#[test]
+fn a_dumped_yaml_path_with_doubled_backslashes_is_refused() {
+    let dump = |yaml: &str| dumped_shown("config.yml", yaml.as_bytes());
+    let plain = format!("path: {MIXED_BRAIN}\n");
+    let quoted = format!("path: {}", json_line(MIXED_BRAIN));
+    let doubled = format!("path: {}\n", MIXED_BRAIN.replace('\\', r"\\"));
+    for yaml in [&plain, &quoted] {
+        let shown = dump(yaml).unwrap_or_else(|| panic!("{yaml} was refused"));
+        assert!(shown.contains("<ROOT>/work/brains/alpha"), "{shown}");
+    }
+    assert!(dump(&doubled).is_none(), "{doubled} was not refused");
+}
+
+/// A JSON file in a dump: its path field is checked on its parsed value,
+/// so one with every backslash doubled is refused.
+#[test]
+fn a_dumped_json_path_with_doubled_backslashes_is_refused() {
+    let good = format!("{{\"path\": {}}}\n", json_line(MIXED_BRAIN).trim_end());
+    let doubled = MIXED_BRAIN.replace('\\', r"\\");
+    let wrong = format!("{{\"path\": {}}}\n", json_line(&doubled).trim_end());
+    let shown = dumped_shown("map.json", good.as_bytes()).expect("the brain's own path is refused");
+    assert!(
+        shown.contains("{\"path\": \"<ROOT>/work/brains/alpha\"}"),
+        "{shown}"
+    );
+    assert!(
+        dumped_shown("map.json", wrong.as_bytes()).is_none(),
+        "{wrong} was not refused"
+    );
+}
+
+/// A YAML file's text that spells a path outside its values (a comment)
+/// is refused: only the values are checked one by one.
+#[test]
+fn a_dumped_path_outside_the_parsed_values_is_refused() {
+    let doubled = MIXED_BRAIN.replace('\\', r"\\");
+    let yaml = format!("# was {doubled}\npath: {MIXED_BRAIN}\n");
+    assert!(
+        dumped_shown("config.yml", yaml.as_bytes()).is_none(),
+        "{yaml} was not refused"
+    );
 }
 
 // --- the run and the version fields ----------------------------------------

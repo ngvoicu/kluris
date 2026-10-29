@@ -447,12 +447,15 @@ run's snapshot is framed the same way: each stream a `== stdout (N bytes)` /
 exit N` and an `<end of run>` line, so no stream reads as another stream,
 the exit or a marker. A test that asserts nothing changed compares the byte
 maps (`tree_files`). A path Kluris prints or writes in the OS's own form (a
-brain's, the config's) is checked whole in that form on the raw output (a
-path or the root written partly with `/` fails) and shown `/`-joined
-(`native_paths`), so one snapshot holds on every OS and a separator change
-still fails on Windows. A snapshot has an `@windows` (or `@wsl`) variant
-only for a real difference of the OS: Windows lists a folder without regard
-to case, a test makes no symlinks there, the OS words its own errors.
+brain's, the config's) is checked whole in that form on the raw output, read
+in the one form the text has (printed text as is, a JSON document's parsed
+strings, a dumped YAML or JSON file's parsed values), and shown `/`-joined
+(`native_paths`): such a path written partly with `/` or with doubled
+backslashes fails, and so does the root written with `\` and continued with
+`/`. One snapshot then holds on every OS and a separator change still fails
+on Windows. A snapshot has an `@windows` (or `@wsl`) variant only for a real
+difference of the OS: Windows lists a folder without regard to case, a test
+makes no symlinks there, the OS words its own errors.
 
 - **Checking.** `INSTA_UPDATE=no cargo test --workspace` fails on a missing
   or changed snapshot and writes nothing; CI runs the tests the same way

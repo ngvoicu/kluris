@@ -12,8 +12,8 @@ use std::process::{Command, Stdio};
 use kluris_core::json;
 
 use super::golden::{
-    Dump, Entry, PASSTHROUGH_ENV, PINNED_ENV, Reference, Tree, byte_count, decode, file_body,
-    native_paths, normalize, parse_json_line, python_json, slashed,
+    Dump, Entry, Form, NativePaths, PASSTHROUGH_ENV, PINNED_ENV, Reference, Tree, byte_count,
+    decode, file_body, normalize, parse_json_line, python_json, slashed,
 };
 
 /// The length of every sandbox root, as Kluris prints it. A table whose
@@ -288,8 +288,9 @@ impl Run {
     }
 
     /// The run with `paths`, which Kluris prints as the OS writes them,
-    /// checked to be in that form and shown `/`-joined in both streams
-    /// ([`native_paths`]), so that one snapshot holds on every OS.
+    /// checked to be in that form and shown `/`-joined ([`NativePaths`]):
+    /// stdout read in its [`Form::of_stream`], stderr as text. One snapshot
+    /// then holds on every OS.
     pub fn native_paths(&self, paths: &[&Path]) -> Run {
         let shown: Vec<String> = paths.iter().map(|path| slashed(path)).collect();
         let pairs: Vec<(&Path, &str)> = paths
@@ -297,10 +298,11 @@ impl Run {
             .zip(&shown)
             .map(|(path, shown)| (*path, shown.as_str()))
             .collect();
+        let native = NativePaths::new(&pairs);
         Run {
             code: self.code,
-            stdout: native_paths(&self.stdout, &pairs),
-            stderr: native_paths(&self.stderr, &pairs),
+            stdout: native.show(&self.stdout, Form::of_stream(&self.stdout)),
+            stderr: native.show(&self.stderr, Form::Text),
         }
     }
 

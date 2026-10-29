@@ -29,7 +29,7 @@ use std::sync::LazyLock;
 use common::sandbox::GITCONFIG;
 use common::shared::{skill_brain, skill_reference, vendored_marker};
 use common::{
-    Dump, Entry, NativePaths, PINNED_GIT_DATE, Run, Sandbox, fixture, git_state, normalize,
+    Dump, Entry, Form, NativePaths, PINNED_GIT_DATE, Run, Sandbox, fixture, git_state, normalize,
     slashed, tree_dump, tree_files, windows_variant, write_files,
 };
 use proptest::collection::vec;
@@ -121,17 +121,18 @@ fn native(sb: &Sandbox, named: &[PathBuf]) -> NativePaths {
     NativePaths::new(&pairs)
 }
 
-/// `text`, a run's stream, with the paths of [`native`] checked and shown.
-fn shown(sb: &Sandbox, text: &str, named: &[PathBuf]) -> String {
-    native(sb, named).show(text)
+/// `text`, a run's stream read as `form`, with the paths of [`native`]
+/// checked and shown.
+fn shown(sb: &Sandbox, text: &str, form: Form, named: &[PathBuf]) -> String {
+    native(sb, named).show(text, form)
 }
 
 /// `run` as its snapshot holds it, its streams [`shown`].
 fn run_text(sb: &Sandbox, run: &Run, named: &[PathBuf]) -> String {
     Run {
         code: run.code,
-        stdout: shown(sb, &run.stdout, named),
-        stderr: shown(sb, &run.stderr, named),
+        stdout: shown(sb, &run.stdout, Form::of_stream(&run.stdout), named),
+        stderr: shown(sb, &run.stderr, Form::Text, named),
     }
     .render(&sb.root)
 }
@@ -164,7 +165,7 @@ fn tree(sb: &Sandbox) -> String {
         }
     }
     let native = native(sb, &[]);
-    let mut dump = Dump::new(|text: &str| normalize(&native.show(text), &sb.root));
+    let mut dump = Dump::new(|text: &str| normalize(&native.show(text, Form::Dumped), &sb.root));
     for (path, entry) in &files {
         match vendored_marker(path, entry)
             .or_else(|| skill_reference(path, entry, &sb.root, skill_variant))

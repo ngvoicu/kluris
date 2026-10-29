@@ -35,8 +35,8 @@ use common::sandbox::{
     Run, Sandbox, changed_files, fixture, json_dump, run_end, section, write_tree,
 };
 use common::{
-    Entry, Tree, assert_unchanged, files_dump, native_path, native_paths, normalize, tree_dump,
-    tree_files, windows_variant,
+    Entry, Form, NativePaths, Tree, assert_unchanged, files_dump, native_path, normalize,
+    tree_dump, tree_files, windows_variant,
 };
 use kluris_core::json;
 use regex::Regex;
@@ -114,42 +114,45 @@ impl<'a> Scenario<'a> {
     /// [`json_dump`]) and stderr as [`section`]s, the [`run_end`], then
     /// `extra`.
     fn run_text(&self, args: &[&str], out: &Run, extra: &str) -> String {
-        let stdout = self.paths(&out.stdout);
-        let stdout = if stdout.trim_start().starts_with('{') {
-            json_dump(&stdout, &self.sb.root)
+        let stdout = if out.stdout.trim_start().starts_with('{') {
+            json_dump(&self.paths(&out.stdout, Form::Json), &self.sb.root)
         } else {
-            self.shown(&self.brain_paths(&stdout))
+            let text = self.paths(&out.stdout, Form::Text);
+            self.shown(&self.brain_paths(&text), Form::Text)
         };
         format!(
             "$ kluris {}\n{}{}{}{extra}",
             args.join(" "),
             section("stdout", &stdout),
-            section("stderr", &self.shown(&out.stderr)),
+            section("stderr", &self.shown(&out.stderr, Form::Text)),
             run_end(out.code),
         )
     }
 
-    /// `text` with each brain's folder and default page, which Kluris and
-    /// the config hold in the OS's own form, shown `/`-joined after
-    /// `<ROOT>` (see [`native_path`]); a page before its folder.
-    fn paths(&self, text: &str) -> String {
-        let mut text = text.to_string();
-        for brain in &self.brains {
-            let page = brain.join("brain-mri.html");
-            let shown = format!(
-                "<ROOT>/work/{}",
-                slashed(page.strip_prefix(&self.sb.work).unwrap())
-            );
-            text = native_path(&text, &page, &shown);
-        }
-        for brain in &self.brains {
-            let shown = format!(
-                "<ROOT>/work/{}",
-                slashed(brain.strip_prefix(&self.sb.work).unwrap())
-            );
-            text = native_path(&text, brain, &shown);
-        }
-        text
+    /// `text`, read as `form`, with each brain's folder and default page,
+    /// which Kluris and the config hold in the OS's own form, shown
+    /// `/`-joined after `<ROOT>` ([`NativePaths`]).
+    fn paths(&self, text: &str, form: Form) -> String {
+        let native: Vec<PathBuf> = self
+            .brains
+            .iter()
+            .flat_map(|brain| [brain.join("brain-mri.html"), brain.clone()])
+            .collect();
+        let shown: Vec<String> = native
+            .iter()
+            .map(|path| {
+                format!(
+                    "<ROOT>/work/{}",
+                    slashed(path.strip_prefix(&self.sb.work).unwrap())
+                )
+            })
+            .collect();
+        let pairs: Vec<(&Path, &str)> = native
+            .iter()
+            .zip(&shown)
+            .map(|(path, shown)| (path.as_path(), shown.as_str()))
+            .collect();
+        NativePaths::new(&pairs).show(text, form)
     }
 
     /// `text`, a text report, with each folder and file of each brain,
@@ -177,12 +180,12 @@ impl<'a> Scenario<'a> {
             .zip(&rels)
             .map(|(path, rel)| (path.as_path(), rel.as_str()))
             .collect();
-        native_paths(text, &pairs)
+        NativePaths::new(&pairs).show(text, Form::Text)
     }
 
     /// [`Self::paths`], then the root and today normalized.
-    fn shown(&self, text: &str) -> String {
-        normalize(&self.paths(text), &self.sb.root)
+    fn shown(&self, text: &str, form: Form) -> String {
+        normalize(&self.paths(text, form), &self.sb.root)
     }
 
     fn porcelain_text(&self) -> String {
@@ -208,7 +211,7 @@ impl<'a> Scenario<'a> {
     fn dream(&self, steps: &[Step]) -> Vec<(Run, Tree)> {
         snapshot(
             &format!("{}__0_before", self.name),
-            &tree_dump(&self.sb.work, |t| self.shown(t)),
+            &tree_dump(&self.sb.work, |t| self.shown(t, Form::Dumped)),
         );
         let mut outcomes = Vec::new();
         for (i, step) in steps.iter().enumerate() {
@@ -232,7 +235,7 @@ impl<'a> Scenario<'a> {
             if before != after {
                 snapshot(
                     &format!("{}__{}_tree", self.name, i + 1),
-                    &tree_dump(&self.sb.work, |t| self.shown(t)),
+                    &tree_dump(&self.sb.work, |t| self.shown(t, Form::Dumped)),
                 );
             }
             outcomes.push((out, after));
@@ -395,7 +398,7 @@ fn dream_dates_near_midnight_in_the_author_time_zone() {
     }
     snapshot(
         "dream_near_midnight__0_before",
-        &tree_dump(&sb.work, |t| scenario.shown(t)),
+        &tree_dump(&sb.work, |t| scenario.shown(t, Form::Dumped)),
     );
     let out = scenario.run(&["dream", "--json"]);
     let after = tree_files(&sb.work);
@@ -421,7 +424,7 @@ fn dream_dates_near_midnight_in_the_author_time_zone() {
     );
     snapshot(
         "dream_near_midnight__1_tree",
-        &tree_dump(&sb.work, |t| local_today(&scenario.shown(t))),
+        &tree_dump(&sb.work, |t| local_today(&scenario.shown(t, Form::Dumped))),
     );
 }
 
@@ -867,7 +870,7 @@ fn dream_on_a_brain_without_kluris_yml() {
     let scenario = Scenario::new("dream_no_kluris_yml", &sb, &[&brain]);
     snapshot(
         "dream_no_kluris_yml__0_before",
-        &tree_dump(&sb.work, |t| scenario.shown(t)),
+        &tree_dump(&sb.work, |t| scenario.shown(t, Form::Dumped)),
     );
     let before = tree_files(&sb.work);
     for (i, args) in [&["dream"][..], &["dream", "--json"]].iter().enumerate() {
@@ -1301,7 +1304,7 @@ impl Scenario<'_> {
             if after != tree {
                 snapshot(
                     &format!("{}__{n}_tree", self.name),
-                    &files_dump(&after, |t| self.shown(t)),
+                    &files_dump(&after, |t| self.shown(t, Form::Dumped)),
                 );
             }
             tree = after;
@@ -1457,7 +1460,7 @@ fn mri_output_relative_to_the_working_directory() {
     );
     snapshot(
         "mri_output_relative__1_tree",
-        &files_dump(&after, |t| scenario.shown(t)),
+        &files_dump(&after, |t| scenario.shown(t, Form::Dumped)),
     );
     assert!(!sb.work.join("brains/calm/brain-mri.html").exists());
     tree = after;
