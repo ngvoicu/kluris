@@ -1355,6 +1355,7 @@ dependencies = [
  "kluris-core",
  "libc",
  "predicates",
+ "proptest",
  "regex",
  "rustix",
  "self-replace",

@@ -32,6 +32,10 @@ use common::{
     Dump, Entry, NativePaths, PINNED_GIT_DATE, Run, Sandbox, fixture, git_state, normalize,
     slashed, tree_dump, tree_files, windows_variant, write_files,
 };
+use proptest::collection::vec;
+use proptest::prelude::*;
+use proptest::string::string_regex;
+use proptest::test_runner::{Config as ProptestConfig, TestCaseError, TestRunner};
 use regex::Regex;
 
 #[cfg(unix)]
@@ -1008,6 +1012,96 @@ fn new_names_follow_the_stricter_rule() {
             &run,
         );
     }
+}
+
+/// How many names [`create_answers_every_name_by_the_rule`] tries: enough
+/// that valid names, names past the limit of 48 and names that break only
+/// the hyphen rules each come up many times over, in about ten seconds of
+/// `create` runs on a Mac and a few minutes at most where starting a
+/// process costs more (Windows). `all` is checked by the validation
+/// goldens.
+const NAME_CASES: u32 = 2000;
+
+/// The rule a new name follows, as a pattern: lowercase letters and
+/// digits, a letter first, single hyphens between them.
+static NEW_NAME: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\A[a-z][a-z0-9]*(?:-[a-z0-9]+)*\z").unwrap());
+
+/// The looser rule names were checked by before the hyphens were: a letter,
+/// then lowercase letters, digits and hyphens, and the one newline a
+/// pattern's `$` lets through at the end.
+static OLDER_NAME: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\A[a-z][a-z0-9-]*\n?\z").unwrap());
+
+/// Names of three kinds: short ones over letters, digits and the
+/// characters a name gets wrong (`-`, `.`, `_`, `A`, `/`, a space, a
+/// newline); ones that match the looser rule, up to 51 characters, past
+/// the limit of 48; and up to six characters of any kind but NUL, which no
+/// command line can hold.
+fn names() -> impl Strategy<Value = String> {
+    prop_oneof![
+        string_regex("[az09._A/ \n-]{1,12}").unwrap(),
+        string_regex("[a-z][a-z0-9-]{0,50}").unwrap(),
+        vec(any::<char>(), 1..=6)
+            .prop_map(String::from_iter)
+            .prop_filter("a command line holds no NUL", |name| !name.contains('\0')),
+    ]
+}
+
+/// What `create` answers for `name` when nothing else is wrong but its
+/// `--path`, the file `afile`: the first rule the name breaks, in the order
+/// `create` checks them, or, for a valid name, the path.
+fn expected_error(name: &str) -> String {
+    let length = name.chars().count();
+    let older = OLDER_NAME.is_match(name) && !name.contains("..") && !name.starts_with('.');
+    let new = NEW_NAME.is_match(name) && length <= 48 && name != "all";
+    assert!(!new || older, "{name:?} is new but not older");
+    if name == "all" {
+        "'all' is a reserved brain name (used by --brain all). Pick a different name.".to_string()
+    } else if length > 48 {
+        format!("Brain name '{name}' is too long ({length} chars). Maximum is 48.")
+    } else if !older {
+        format!("Brain name '{name}' is invalid. Use lowercase letters, numbers, and hyphens only.")
+    } else if !new {
+        format!(
+            "Brain name '{name}' is invalid. Use lowercase letters and numbers, with single \
+             hyphens between them (no '--', no '-' at the end)."
+        )
+    } else {
+        "--path 'afile' is not a directory.".to_string()
+    }
+}
+
+/// `create` accepts exactly the names [`NEW_NAME`] matches, at most 48
+/// characters and not `all`, each also one the looser rule accepts, and
+/// refuses every other with the message of the first rule it breaks.
+/// `--path` is a file, so a valid name stops there and nothing is written;
+/// the name comes after `--`, so one that starts with `-` is still a name.
+#[test]
+fn create_answers_every_name_by_the_rule() {
+    let sb = &Sandbox::new();
+    write(sb, "afile", "x");
+    let before = tree_files(&sb.work);
+    let config = ProptestConfig {
+        cases: NAME_CASES,
+        failure_persistence: None,
+        ..ProptestConfig::default()
+    };
+    let result = TestRunner::new(config).run(&names(), |name| {
+        let run = sb.kluris(&["create", "--path", "afile", "--json", "--", &name]);
+        let stdout: serde_json::Value = serde_json::from_str(&run.stdout)
+            .map_err(|e| TestCaseError::fail(format!("{name:?}: {e}: {run:?}")))?;
+        let expected = serde_json::json!({"ok": false, "error": expected_error(&name)});
+        prop_assert_eq!(&stdout, &expected, "{:?}", name);
+        prop_assert_eq!((run.code, run.stderr.as_str()), (1, ""), "{:?}", name);
+        prop_assert!(
+            tree_files(&sb.work) == before,
+            "{:?} changed the files",
+            name
+        );
+        Ok(())
+    });
+    result.unwrap_or_else(|e| panic!("{e}"));
 }
 
 /// A registered `a--b`, a name `create` refuses, keeps working.
