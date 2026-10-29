@@ -11,6 +11,11 @@
 #   Kluris 2.28.11 on the result: exit 1, empty stderr, no file changed,
 #   `git status --porcelain` empty
 # commit-<n>/: the files commit n adds or changes (no commit removes one)
+# windows/: the two maps that list a lower-case name after an upper-case
+#   one, as dream must write them on Windows, which lists a folder's names
+#   without regard to case: commit-3's map with its Contents in that order
+#   (ties by the name's bytes) and `updated: '<TODAY>'`; built by that rule
+#   by hand, not by Kluris
 # columns: commit, author and committer date, commit id, message (tab-separated)
 1	2026-01-01T12:00:00+00:00	07d4834ca4bc05a84939331f5a7ec1a24b058804	initial
 2	2026-02-03T09:30:00+00:00	73fcecc2676fefabc91f09ccf9f0f50c8f1a698b	alpha changed

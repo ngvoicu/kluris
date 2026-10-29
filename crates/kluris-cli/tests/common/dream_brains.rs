@@ -363,7 +363,9 @@ pub fn mri_brain(sb: &Sandbox, name: &str) -> PathBuf {
 /// - `crlf-files.txt` lists the fixture's files with CRLF line endings, so
 ///   that a checkout that changed line endings fails here;
 /// - `report.json` is the stdout of the earlier Kluris's own next
-///   `dream --json` on the brain, which it returns beside the brain.
+///   `dream --json` on the brain, which it returns beside the brain;
+/// - `windows/` holds the maps dream must rewrite on Windows, as it must
+///   write them there (`<TODAY>` their date); the test reads them.
 pub fn legacy_brain(sb: &Sandbox, name: &str) -> (PathBuf, String) {
     let src = fixture("dream-legacy").join("rich");
     assert!(src.is_dir(), "{} is missing", src.display());

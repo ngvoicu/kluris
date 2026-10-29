@@ -31,9 +31,11 @@ use common::dream_brains::{
     resilience_brain, rich_brain,
 };
 use common::golden::python_json;
-use common::sandbox::{Run, Sandbox, changed_files, json_dump, run_end, section, write_tree};
+use common::sandbox::{
+    Run, Sandbox, changed_files, fixture, json_dump, run_end, section, write_tree,
+};
 use common::{
-    Tree, assert_unchanged, files_dump, native_path, native_paths, normalize, tree_dump,
+    Entry, Tree, assert_unchanged, files_dump, native_path, native_paths, normalize, tree_dump,
     tree_files, windows_variant,
 };
 use kluris_core::json;
@@ -470,7 +472,8 @@ const LEGACY_MAPS_IN_WINDOWS_ORDER: &[&str] = &["knowledge/src/map.md", "project
 
 /// The legacy brain, which an earlier Kluris's dream left canonical: dream
 /// changes no byte of it (on Windows none but the maps it lists in Windows
-/// order), leaves `git status` clean, and reports what the earlier Kluris's
+/// order, which must then hold their frozen Windows bytes), leaves `git
+/// status` clean but for those maps, and reports what the earlier Kluris's
 /// own next dream reported.
 #[test]
 fn dream_leaves_a_brain_an_earlier_kluris_left_canonical_as_it_is() {
@@ -482,25 +485,16 @@ fn dream_leaves_a_brain_an_earlier_kluris_left_canonical_as_it_is() {
         "",
         "the legacy brain is all committed"
     );
-    let reordered: &[&str] = if cfg!(windows) {
-        LEGACY_MAPS_IN_WINDOWS_ORDER
-    } else {
-        &[]
-    };
     let scenario = Scenario::new("dream_legacy", &sb, &[&brain]);
     let args = ["dream", "--json"];
     let before = tree_files(&sb.work);
     let out = scenario.run(&args);
     let after = tree_files(&sb.work);
-    let kept = |tree: &Tree| -> Tree {
-        let mut tree = tree.clone();
-        for map in reordered {
-            tree.remove(&format!("brains/rich/{map}"));
-        }
-        tree
-    };
-    assert_unchanged(&kept(&before), &kept(&after), "dream");
-    let porcelain: String = reordered.iter().map(|map| format!(" M {map}\n")).collect();
+    assert_legacy_kept(&before, &after, cfg!(windows));
+    let porcelain: String = reordered(cfg!(windows))
+        .iter()
+        .map(|map| format!(" M {map}\n"))
+        .collect();
     assert_eq!(sb.porcelain(&brain), porcelain, "git status --porcelain");
     let extra = format!(
         "{}== changed\n{}",
@@ -513,6 +507,158 @@ fn dream_leaves_a_brain_an_earlier_kluris_left_canonical_as_it_is() {
     );
     assert_eq!(out.code, 1, "{}{}", out.stdout, out.stderr);
     assert_same_report(&out.stdout, &earlier);
+}
+
+/// The maps dream rewrites in the legacy brain: on Windows
+/// [`LEGACY_MAPS_IN_WINDOWS_ORDER`], elsewhere none.
+fn reordered(windows: bool) -> &'static [&'static str] {
+    if windows {
+        LEGACY_MAPS_IN_WINDOWS_ORDER
+    } else {
+        &[]
+    }
+}
+
+/// `after`, the work tree after dream on the legacy brain, is `before`, byte
+/// for byte; with `windows`, but for the maps dream lists in Windows order,
+/// which must be their frozen Windows bytes ([`legacy_windows_map`]) dated
+/// today (in UTC or in the machine's own zone).
+fn assert_legacy_kept(before: &Tree, after: &Tree, windows: bool) {
+    let expected = |today: &str| -> Tree {
+        let mut tree = before.clone();
+        for map in reordered(windows) {
+            let bytes = legacy_windows_map(map, today);
+            tree.insert(format!("brains/rich/{map}"), Entry::File(bytes));
+        }
+        tree
+    };
+    let todays = [utc_today(), local_today()];
+    if !todays.iter().any(|today| expected(today) == *after) {
+        assert_unchanged(&expected(&todays[0]), after, "dream");
+    }
+}
+
+/// The legacy map `map` as dream must write it on Windows, dated `today`:
+/// `tests/fixtures/dream-legacy/rich/windows/<map>`, `<TODAY>` its date.
+fn legacy_windows_map(map: &str, today: &str) -> Vec<u8> {
+    let frozen = fixture("dream-legacy").join("rich/windows").join(map);
+    let text = fs::read_to_string(&frozen).unwrap();
+    text.replace("'<TODAY>'", &format!("'{today}'"))
+        .into_bytes()
+}
+
+/// The frozen Windows maps of the legacy brain are its maps as the earlier
+/// Kluris wrote them on macOS, but for their date and the order of their
+/// Contents: names compared without regard to case, as Windows lists a
+/// folder (ties by the name's bytes).
+#[test]
+fn the_legacy_windows_maps_are_the_maps_in_windows_order() {
+    let rich = fixture("dream-legacy").join("rich");
+    for map in LEGACY_MAPS_IN_WINDOWS_ORDER {
+        let mac = fs::read_to_string(rich.join("commit-3").join(map)).unwrap();
+        let windows = fs::read_to_string(rich.join("windows").join(map)).unwrap();
+        let mut lines: Vec<String> = mac
+            .split('\n')
+            .map(|line| match line.strip_prefix("updated: '") {
+                Some(_) => "updated: '<TODAY>'".to_string(),
+                None => line.to_string(),
+            })
+            .collect();
+        let start = lines.iter().position(|l| l == "## Contents").unwrap() + 2;
+        let end = start
+            + lines[start..]
+                .iter()
+                .take_while(|l| l.starts_with("- ["))
+                .count();
+        let name = |line: &String| line[3..line.find(']').unwrap()].to_string();
+        lines[start..end].sort_by_key(|line| (name(line).to_lowercase(), name(line)));
+        assert_ne!(
+            mac, windows,
+            "{map} lists its names in another order on Windows"
+        );
+        assert_eq!(lines.join("\n"), windows, "{map}");
+    }
+}
+
+/// The Windows check of the legacy brain refuses each map that is not the
+/// map in Windows order: two unrelated texts (one with a NUL and a byte
+/// that is not UTF-8), and the Windows-order map with one byte changed;
+/// it takes the maps in Windows order.
+#[test]
+fn the_windows_legacy_check_refuses_any_other_map_bytes() {
+    let sb = Sandbox::new();
+    legacy_brain(&sb, "rich");
+    let before = tree_files(&sb.work);
+    let windows_map = |map: &str| legacy_windows_map(map, &utc_today());
+    let one_byte_changed = |map: &str| -> Vec<u8> {
+        let mut bytes = windows_map(map);
+        let at = bytes.len() - 2;
+        bytes[at] ^= 0x20;
+        bytes
+    };
+    let cases: Vec<(String, [Vec<u8>; 2])> = vec![
+        (
+            "a text".into(),
+            [
+                b"# deliberately wrong map A\n".to_vec(),
+                b"# deliberately wrong map A\n".to_vec(),
+            ],
+        ),
+        (
+            "a NUL and a byte that is not UTF-8".into(),
+            [
+                b"# completely different map B\n\0\xff".to_vec(),
+                b"# completely different map B\n\0\xff".to_vec(),
+            ],
+        ),
+        (
+            format!("one byte of {} changed", LEGACY_MAPS_IN_WINDOWS_ORDER[0]),
+            [
+                one_byte_changed(LEGACY_MAPS_IN_WINDOWS_ORDER[0]),
+                windows_map(LEGACY_MAPS_IN_WINDOWS_ORDER[1]),
+            ],
+        ),
+        (
+            format!("one byte of {} changed", LEGACY_MAPS_IN_WINDOWS_ORDER[1]),
+            [
+                windows_map(LEGACY_MAPS_IN_WINDOWS_ORDER[0]),
+                one_byte_changed(LEGACY_MAPS_IN_WINDOWS_ORDER[1]),
+            ],
+        ),
+    ];
+    let accepted: Vec<&str> = cases
+        .iter()
+        .filter(|(_, maps)| {
+            let mut after = before.clone();
+            for (map, bytes) in LEGACY_MAPS_IN_WINDOWS_ORDER.iter().zip(maps) {
+                after.insert(format!("brains/rich/{map}"), Entry::File(bytes.clone()));
+            }
+            std::panic::catch_unwind(|| assert_legacy_kept(&before, &after, true)).is_ok()
+        })
+        .map(|(name, _)| name.as_str())
+        .collect();
+    assert!(
+        accepted.is_empty(),
+        "the Windows check accepted maps with {accepted:?}"
+    );
+    let mut after = before.clone();
+    for map in LEGACY_MAPS_IN_WINDOWS_ORDER {
+        after.insert(format!("brains/rich/{map}"), Entry::File(windows_map(map)));
+    }
+    assert_legacy_kept(&before, &after, true);
+}
+
+/// Today's date in UTC.
+fn utc_today() -> String {
+    jiff::Timestamp::now()
+        .to_zoned(jiff::tz::TimeZone::UTC)
+        .date()
+        .to_string()
+}
+
+/// Today's date in the machine's own time zone.
+fn local_today() -> String {
+    jiff::Zoned::now().date().to_string()
 }
 
 /// `stdout`, a dream's JSON report, is `earlier`, another dream's: the same
