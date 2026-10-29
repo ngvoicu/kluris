@@ -16,7 +16,7 @@
 
 mod common;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -28,7 +28,7 @@ use common::dream_brains::{
 };
 use common::golden::python_json;
 use common::sandbox::{Run, Sandbox, changed_files, json_dump, stream, write_tree};
-use common::{native_path, normalize, tree_dump, tree_files};
+use common::{native_path, native_paths, normalize, tree_dump, tree_files, windows_variant};
 use kluris_core::json;
 use regex::Regex;
 
@@ -107,7 +107,7 @@ impl<'a> Scenario<'a> {
         let stdout = if stdout.trim_start().starts_with('{') {
             json_dump(&stdout, &self.sb.root)
         } else {
-            stream(&self.shown(&stdout))
+            stream(&self.shown(&self.brain_paths(&stdout)))
         };
         format!(
             "$ kluris {}\n== exit {}\n== stdout\n{stdout}== stderr\n{}{extra}",
@@ -138,6 +138,34 @@ impl<'a> Scenario<'a> {
             text = native_path(&text, brain, &shown);
         }
         text
+    }
+
+    /// `text`, a text report, with each folder and file of each brain,
+    /// relative to the brain, which the report prints in the OS's own form
+    /// (`knowledge\deep` on Windows), checked in that form and shown
+    /// `/`-joined ([`native_paths`]).
+    fn brain_paths(&self, text: &str) -> String {
+        let mut rels = BTreeSet::new();
+        for brain in &self.brains {
+            for file in tree_files(brain).into_keys() {
+                let mut rel = file.as_str();
+                rels.insert(rel.to_string());
+                while let Some((parent, _)) = rel.rsplit_once('/') {
+                    rels.insert(parent.to_string());
+                    rel = parent;
+                }
+            }
+        }
+        let native: Vec<PathBuf> = rels
+            .iter()
+            .map(|rel| rel.split('/').collect::<PathBuf>())
+            .collect();
+        let pairs: Vec<(&Path, &str)> = native
+            .iter()
+            .zip(&rels)
+            .map(|(path, rel)| (path.as_path(), rel.as_str()))
+            .collect();
+        native_paths(text, &pairs)
     }
 
     /// [`Self::paths`], then the root and today normalized.
@@ -201,8 +229,35 @@ impl<'a> Scenario<'a> {
     }
 }
 
+/// The snapshots with a Windows variant, for reasons of the OS's own.
+const WINDOWS_VARIANTS: &[&str] = &[
+    // Windows lists a folder without regard to case, so the rich brain's
+    // regenerated `knowledge/src/map.md` lists `Beta.md` after `_u.md`, and
+    // `projects/api/map.md` `endpoints.md` before `Shout.MD`.
+    "dream_rich__1_tree",
+    "dream_rich__3_tree",
+    "dream_broken_only__1_tree",
+    "dream_brain_all__1_tree",
+    "mri_rich__1_tree",
+    "mri_rich__1_graph_rich",
+    "mri_preflight_skipped__1_tree",
+    "mri_brain_all__1_tree",
+    "mri_brain_all__1_graph_rich",
+    // The test makes no symlinks on Windows, so nothing is pruned for them.
+    "mri_pruned__1_tree",
+    "mri_pruned__1_run",
+    "mri_pruned__1_graph_calm",
+];
+
+/// `text` as the snapshot `name` (its Windows variant when
+/// [`WINDOWS_VARIANTS`] names it).
 fn snapshot(name: &str, text: &str) {
-    insta::assert_snapshot!(name, text);
+    let check = || insta::assert_snapshot!(name, text);
+    if WINDOWS_VARIANTS.contains(&name) {
+        windows_variant(check);
+    } else {
+        check();
+    }
 }
 
 fn slashed(path: &Path) -> String {
@@ -1322,17 +1377,10 @@ fn mri_leaves_out_pruned_directories_and_escaping_symlinks() {
     }
     sb.commit(&brain, "pruned", D2);
     register(&sb, &[&brain]);
-    let run = || {
-        Scenario::new("mri_pruned", &sb, &[&brain]).mri(&[MriRun {
-            args: &["mri", "--json"],
-            pages: CALM_PAGE,
-        }])
-    };
-    if cfg!(windows) {
-        insta::with_settings!({snapshot_suffix => "windows"}, { run(); });
-    } else {
-        run();
-    }
+    Scenario::new("mri_pruned", &sb, &[&brain]).mri(&[MriRun {
+        args: &["mri", "--json"],
+        pages: CALM_PAGE,
+    }]);
 }
 
 /// Under WSL (`WSL_DISTRO_NAME`) the link is the `file://wsl.localhost/...`

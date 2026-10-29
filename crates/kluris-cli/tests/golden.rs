@@ -8,8 +8,8 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use common::{
-    PINNED_ENV, PINNED_GIT_DATE, Sandbox, decode, git_dump, native_path, normalize, normalize_json,
-    tree_dump,
+    PINNED_ENV, PINNED_GIT_DATE, Sandbox, decode, git_dump, native_path, native_paths, normalize,
+    normalize_json, slashed, tree_dump,
 };
 
 /// A temp root whose name has a space and a non-ASCII letter, so its
@@ -412,6 +412,26 @@ fn native_path_refuses_a_path_written_with_slashes() {
     ] {
         let refused = std::panic::catch_unwind(|| native_path(text, native, shown));
         assert!(refused.is_err(), "{text} was not refused");
+    }
+}
+
+/// A path inside another (a brain and its `kluris.yml`) is shown whole,
+/// raw and JSON-escaped, in whichever order the paths are given.
+#[test]
+fn native_paths_shows_a_path_inside_another() {
+    let brain = Path::new(r"C:\Users\me\work\brains\a");
+    let yml = Path::new(r"C:\Users\me\work\brains\a\kluris.yml");
+    let text =
+        r#"{"path": "C:\\Users\\me\\work\\brains\\a"} at C:\Users\me\work\brains\a\kluris.yml"#;
+    let shown = r#"{"path": "C:/Users/me/work/brains/a"} at C:/Users/me/work/brains/a/kluris.yml"#;
+    for paths in [[brain, yml], [yml, brain]] {
+        let shown_paths = paths.map(slashed);
+        let pairs: Vec<(&Path, &str)> = paths
+            .iter()
+            .zip(&shown_paths)
+            .map(|(path, shown)| (*path, shown.as_str()))
+            .collect();
+        assert_eq!(native_paths(text, &pairs), shown);
     }
 }
 

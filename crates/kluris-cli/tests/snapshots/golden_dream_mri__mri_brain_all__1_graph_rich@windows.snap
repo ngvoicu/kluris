@@ -1,0 +1,1706 @@
+---
+source: crates/kluris-cli/tests/golden_dream_mri.rs
+expression: text
+---
+{
+  "nodes": [
+    {
+      "label": "rich",
+      "path": "brain.md",
+      "lobe": "root",
+      "sublobe": "root",
+      "type": "brain",
+      "file_type": "markdown",
+      "file_name": "brain.md",
+      "title": "rich",
+      "authored_title": "",
+      "excerpt": "The rich fixture brain",
+      "content_preview": "The rich fixture brain\n\n## Lobes\n\n- [knowledge/](./knowledge/map.md) \u2014\n- [my-lobe/](./my-lobe/map.md) \u2014\n- [projects/](./projects/map.md) \u2014\n- [uncommitted-lobe/](./uncommitted-lobe/map.md) \u2014\n\n## Reference\n\n- [glossary.md](./glossary.md) \u2014 Domain-specific terms, acronyms, and conventions",
+      "content_preview_truncated": false,
+      "content_full": "The rich fixture brain\n\n## Lobes\n\n- [knowledge/](./knowledge/map.md) \u2014\n- [my-lobe/](./my-lobe/map.md) \u2014\n- [projects/](./projects/map.md) \u2014\n- [uncommitted-lobe/](./uncommitted-lobe/map.md) \u2014\n\n## Reference\n\n- [glossary.md](./glossary.md) \u2014 Domain-specific terms, acronyms, and conventions",
+      "tags": [],
+      "created": "",
+      "updated": "<TODAY>",
+      "parent": "",
+      "related": [],
+      "status": "",
+      "replaced_by": "",
+      "degree": 5
+    },
+    {
+      "label": "Glossary",
+      "path": "glossary.md",
+      "lobe": "root",
+      "sublobe": "root",
+      "type": "glossary",
+      "file_type": "markdown",
+      "file_name": "glossary.md",
+      "title": "Glossary",
+      "authored_title": "",
+      "excerpt": "**JWT** -- JSON Web Token.",
+      "content_preview": "**JWT** -- JSON Web Token.",
+      "content_preview_truncated": false,
+      "content_full": "**JWT** -- JSON Web Token.",
+      "tags": [],
+      "created": "",
+      "updated": "2026-01-01",
+      "parent": "",
+      "related": [],
+      "status": "",
+      "replaced_by": "",
+      "degree": 2
+    },
+    {
+      "label": "Index",
+      "path": "index.md",
+      "lobe": "root",
+      "sublobe": "root",
+      "type": "index",
+      "file_type": "markdown",
+      "file_name": "index.md",
+      "title": "Index",
+      "authored_title": "",
+      "excerpt": "See [projects](./projects/map.md).",
+      "content_preview": "See [projects](./projects/map.md).",
+      "content_preview_truncated": false,
+      "content_full": "See [projects](./projects/map.md).",
+      "tags": [],
+      "created": "",
+      "updated": "",
+      "parent": "",
+      "related": [],
+      "status": "",
+      "replaced_by": "",
+      "degree": 2
+    },
+    {
+      "label": "Beta",
+      "path": "knowledge/beta.md",
+      "lobe": "knowledge",
+      "sublobe": "knowledge",
+      "type": "neuron",
+      "file_type": "markdown",
+      "file_name": "beta.md",
+      "title": "Beta",
+      "authored_title": "",
+      "excerpt": "Body of Beta.",
+      "content_preview": "Body of Beta.",
+      "content_preview_truncated": false,
+      "content_full": "Body of Beta.",
+      "tags": [],
+      "created": "2026-01-01",
+      "updated": "2026-01-01",
+      "parent": "./map.md",
+      "related": [
+        "broken.md",
+        "../projects/alpha.md"
+      ],
+      "status": "",
+      "replaced_by": "",
+      "degree": 3
+    },
+    {
+      "label": "Broken",
+      "path": "knowledge/broken.md",
+      "lobe": "knowledge",
+      "sublobe": "knowledge",
+      "type": "neuron",
+      "file_type": "markdown",
+      "file_name": "broken.md",
+      "title": "Broken",
+      "authored_title": "",
+      "excerpt": "See [x](./missing.md#top) and [web](https://x.io).",
+      "content_preview": "See [x](./missing.md#top) and [web](https://x.io).",
+      "content_preview_truncated": false,
+      "content_full": "See [x](./missing.md#top) and [web](https://x.io).",
+      "tags": [],
+      "created": "2026-01-01",
+      "updated": "2026-01-01",
+      "parent": "./map.md",
+      "related": [
+        "./gone.md",
+        "./beta.md"
+      ],
+      "status": "",
+      "replaced_by": "",
+      "degree": 2
+    },
+    {
+      "label": "Crlf",
+      "path": "knowledge/crlf.md",
+      "lobe": "knowledge",
+      "sublobe": "knowledge",
+      "type": "neuron",
+      "file_type": "markdown",
+      "file_name": "crlf.md",
+      "title": "Crlf",
+      "authored_title": "",
+      "excerpt": "Body of Crlf.",
+      "content_preview": "Body of Crlf.",
+      "content_preview_truncated": false,
+      "content_full": "Body of Crlf.",
+      "tags": [],
+      "created": "2026-01-01",
+      "updated": "2026-01-01",
+      "parent": "./map.md",
+      "related": [],
+      "status": "",
+      "replaced_by": "",
+      "degree": 1
+    },
+    {
+      "label": "Leaf",
+      "path": "knowledge/deep/deeper/leaf.md",
+      "lobe": "knowledge",
+      "sublobe": "knowledge/deep/deeper",
+      "type": "neuron",
+      "file_type": "markdown",
+      "file_name": "leaf.md",
+      "title": "Leaf",
+      "authored_title": "",
+      "excerpt": "Body of Leaf.",
+      "content_preview": "Body of Leaf.",
+      "content_preview_truncated": false,
+      "content_full": "Body of Leaf.",
+      "tags": [],
+      "created": "2026-01-01",
+      "updated": "2026-01-01",
+      "parent": "./map.md",
+      "related": [],
+      "status": "",
+      "replaced_by": "",
+      "degree": 1
+    },
+    {
+      "label": "Deeper",
+      "path": "knowledge/deep/deeper/map.md",
+      "lobe": "knowledge",
+      "sublobe": "knowledge/deep/deeper",
+      "type": "map",
+      "file_type": "markdown",
+      "file_name": "map.md",
+      "title": "Deeper",
+      "authored_title": "",
+      "excerpt": "",
+      "content_preview": "up [deep](../map.md)\n\n## Contents\n\n- [leaf.md](./leaf.md) \u2014 Leaf",
+      "content_preview_truncated": false,
+      "content_full": "up [deep](../map.md)\n\n## Contents\n\n- [leaf.md](./leaf.md) \u2014 Leaf",
+      "tags": [],
+      "created": "",
+      "updated": "<TODAY>",
+      "parent": "../map.md",
+      "related": [],
+      "status": "",
+      "replaced_by": "",
+      "degree": 2
+    },
+    {
+      "label": "Deep",
+      "path": "knowledge/deep/map.md",
+      "lobe": "knowledge",
+      "sublobe": "knowledge/deep",
+      "type": "map",
+      "file_type": "markdown",
+      "file_name": "map.md",
+      "title": "Deep",
+      "authored_title": "",
+      "excerpt": "",
+      "content_preview": "up [knowledge](../map.md)\nsideways [src](../src/map.md)\n\n## Contents\n\n- [deeper/](./deeper/map.md)",
+      "content_preview_truncated": false,
+      "content_full": "up [knowledge](../map.md)\nsideways [src](../src/map.md)\n\n## Contents\n\n- [deeper/](./deeper/map.md)",
+      "tags": [],
+      "created": "",
+      "updated": "<TODAY>",
+      "parent": "../map.md",
+      "related": [],
+      "status": "",
+      "replaced_by": "",
+      "degree": 3
+    },
+    {
+      "label": "Knowledge",
+      "path": "knowledge/map.md",
+      "lobe": "knowledge",
+      "sublobe": "knowledge",
+      "type": "map",
+      "file_type": "markdown",
+      "file_name": "map.md",
+      "title": "Knowledge",
+      "authored_title": "",
+      "excerpt": "",
+      "content_preview": "up [brain.md](../brain.md)\nsideways [my-lobe](../my-lobe/map.md) | [projects](../projects/map.md) | [uncommitted-lobe](../uncommitted-lobe/map.md)\n\n## Contents\n\n- [deep/](./deep/map.md)\n- [src/](./src/map.md)\n- [beta.md](./beta.md) \u2014 Beta\n- [broken.md](./broken.md) \u2014 Broken\n- [crlf.md](./crlf.md) \u2014 Crlf\n- [newer.md](./newer.md) \u2014 Newer\n- [old.md](./old.md) \u2014 Old\n- [older.md](./older.md) \u2014 Older\n- [target.md](./target.md) \u2014 Target\n- [user.md](./user.md) \u2014 User",
+      "content_preview_truncated": false,
+      "content_full": "up [brain.md](../brain.md)\nsideways [my-lobe](../my-lobe/map.md) | [projects](../projects/map.md) | [uncommitted-lobe](../uncommitted-lobe/map.md)\n\n## Contents\n\n- [deep/](./deep/map.md)\n- [src/](./src/map.md)\n- [beta.md](./beta.md) \u2014 Beta\n- [broken.md](./broken.md) \u2014 Broken\n- [crlf.md](./crlf.md) \u2014 Crlf\n- [newer.md](./newer.md) \u2014 Newer\n- [old.md](./old.md) \u2014 Old\n- [older.md](./older.md) \u2014 Older\n- [target.md](./target.md) \u2014 Target\n- [user.md](./user.md) \u2014 User",
+      "tags": [],
+      "created": "",
+      "updated": "<TODAY>",
+      "parent": "../brain.md",
+      "related": [],
+      "status": "",
+      "replaced_by": "",
+      "degree": 14
+    },
+    {
+      "label": "Newer",
+      "path": "knowledge/newer.md",
+      "lobe": "knowledge",
+      "sublobe": "knowledge",
+      "type": "neuron",
+      "file_type": "markdown",
+      "file_name": "newer.md",
+      "title": "Newer",
+      "authored_title": "",
+      "excerpt": "Body of Newer.",
+      "content_preview": "Body of Newer.",
+      "content_preview_truncated": false,
+      "content_full": "Body of Newer.",
+      "tags": [],
+      "created": "2026-01-01",
+      "updated": "2026-01-01",
+      "parent": "./map.md",
+      "related": [],
+      "status": "deprecated",
+      "replaced_by": "./old.md",
+      "degree": 2
+    },
+    {
+      "label": "Old",
+      "path": "knowledge/old.md",
+      "lobe": "knowledge",
+      "sublobe": "knowledge",
+      "type": "neuron",
+      "file_type": "markdown",
+      "file_name": "old.md",
+      "title": "Old",
+      "authored_title": "",
+      "excerpt": "Body of Old.",
+      "content_preview": "Body of Old.",
+      "content_preview_truncated": false,
+      "content_full": "Body of Old.",
+      "tags": [],
+      "created": "2026-01-01",
+      "updated": "2026-01-01",
+      "parent": "./map.md",
+      "related": [
+        "user.md"
+      ],
+      "status": "deprecated",
+      "replaced_by": "",
+      "degree": 3
+    },
+    {
+      "label": "Older",
+      "path": "knowledge/older.md",
+      "lobe": "knowledge",
+      "sublobe": "knowledge",
+      "type": "neuron",
+      "file_type": "markdown",
+      "file_name": "older.md",
+      "title": "Older",
+      "authored_title": "",
+      "excerpt": "Body of Older.",
+      "content_preview": "Body of Older.",
+      "content_preview_truncated": false,
+      "content_full": "Body of Older.",
+      "tags": [],
+      "created": "2026-01-01",
+      "updated": "2026-01-01",
+      "parent": "./map.md",
+      "related": [],
+      "status": "deprecated",
+      "replaced_by": "./gone.md",
+      "degree": 1
+    },
+    {
+      "label": "Beta",
+      "path": "knowledge/src/Beta.md",
+      "lobe": "knowledge",
+      "sublobe": "knowledge/src",
+      "type": "neuron",
+      "file_type": "markdown",
+      "file_name": "Beta.md",
+      "title": "Beta",
+      "authored_title": "",
+      "excerpt": "Body of Beta.",
+      "content_preview": "Body of Beta.",
+      "content_preview_truncated": false,
+      "content_full": "Body of Beta.",
+      "tags": [],
+      "created": "2026-01-01",
+      "updated": "2026-01-01",
+      "parent": "./map.md",
+      "related": [
+        "../target.md"
+      ],
+      "status": "",
+      "replaced_by": "",
+      "degree": 2
+    },
+    {
+      "label": "_U",
+      "path": "knowledge/src/_u.md",
+      "lobe": "knowledge",
+      "sublobe": "knowledge/src",
+      "type": "neuron",
+      "file_type": "markdown",
+      "file_name": "_u.md",
+      "title": "_U",
+      "authored_title": "_u",
+      "excerpt": "Body of _u.",
+      "content_preview": "Body of _u.",
+      "content_preview_truncated": false,
+      "content_full": "Body of _u.",
+      "tags": [],
+      "created": "2026-01-01",
+      "updated": "2026-01-01",
+      "parent": "./map.md",
+      "related": [
+        "../target.md"
+      ],
+      "status": "",
+      "replaced_by": "",
+      "degree": 2
+    },
+    {
+      "label": "A B",
+      "path": "knowledge/src/a-b.md",
+      "lobe": "knowledge",
+      "sublobe": "knowledge/src",
+      "type": "neuron",
+      "file_type": "markdown",
+      "file_name": "a-b.md",
+      "title": "A B",
+      "authored_title": "a-b",
+      "excerpt": "Body of a-b.",
+      "content_preview": "Body of a-b.",
+      "content_preview_truncated": false,
+      "content_full": "Body of a-b.",
+      "tags": [],
+      "created": "2026-01-01",
+      "updated": "2026-01-01",
+      "parent": "./map.md",
+      "related": [
+        "../target.md"
+      ],
+      "status": "",
+      "replaced_by": "",
+      "degree": 2
+    },
+    {
+      "label": "A.B",
+      "path": "knowledge/src/a.b.md",
+      "lobe": "knowledge",
+      "sublobe": "knowledge/src",
+      "type": "neuron",
+      "file_type": "markdown",
+      "file_name": "a.b.md",
+      "title": "A.B",
+      "authored_title": "a.b",
+      "excerpt": "Body of a.b.",
+      "content_preview": "Body of a.b.",
+      "content_preview_truncated": false,
+      "content_full": "Body of a.b.",
+      "tags": [],
+      "created": "2026-01-01",
+      "updated": "2026-01-01",
+      "parent": "./map.md",
+      "related": [
+        "../target.md"
+      ],
+      "status": "",
+      "replaced_by": "",
+      "degree": 2
+    },
+    {
+      "label": "Alpha 2",
+      "path": "knowledge/src/alpha-2.md",
+      "lobe": "knowledge",
+      "sublobe": "knowledge/src",
+      "type": "neuron",
+      "file_type": "markdown",
+      "file_name": "alpha-2.md",
+      "title": "Alpha 2",
+      "authored_title": "alpha-2",
+      "excerpt": "Body of alpha-2.",
+      "content_preview": "Body of alpha-2.",
+      "content_preview_truncated": false,
+      "content_full": "Body of alpha-2.",
+      "tags": [],
+      "created": "2026-01-01",
+      "updated": "2026-01-01",
+      "parent": "./map.md",
+      "related": [
+        "../target.md"
+      ],
+      "status": "",
+      "replaced_by": "",
+      "degree": 2
+    },
+    {
+      "label": "Src",
+      "path": "knowledge/src/map.md",
+      "lobe": "knowledge",
+      "sublobe": "knowledge/src",
+      "type": "map",
+      "file_type": "markdown",
+      "file_name": "map.md",
+      "title": "Src",
+      "authored_title": "",
+      "excerpt": "",
+      "content_preview": "up [knowledge](../map.md)\nsideways [deep](../deep/map.md)\n\n## Contents\n\n- [_u.md](./_u.md) \u2014 _u\n- [a-b.md](./a-b.md) \u2014 a-b\n- [a.b.md](./a.b.md) \u2014 a.b\n- [alpha-2.md](./alpha-2.md) \u2014 alpha-2\n- [Beta.md](./Beta.md) \u2014 Beta\n- [mid.md](./mid.md) \u2014 mid\n- [zeta.md](./zeta.md) \u2014 zeta",
+      "content_preview_truncated": false,
+      "content_full": "up [knowledge](../map.md)\nsideways [deep](../deep/map.md)\n\n## Contents\n\n- [_u.md](./_u.md) \u2014 _u\n- [a-b.md](./a-b.md) \u2014 a-b\n- [a.b.md](./a.b.md) \u2014 a.b\n- [alpha-2.md](./alpha-2.md) \u2014 alpha-2\n- [Beta.md](./Beta.md) \u2014 Beta\n- [mid.md](./mid.md) \u2014 mid\n- [zeta.md](./zeta.md) \u2014 zeta",
+      "tags": [],
+      "created": "",
+      "updated": "<TODAY>",
+      "parent": "../map.md",
+      "related": [],
+      "status": "",
+      "replaced_by": "",
+      "degree": 9
+    },
+    {
+      "label": "Mid",
+      "path": "knowledge/src/mid.md",
+      "lobe": "knowledge",
+      "sublobe": "knowledge/src",
+      "type": "neuron",
+      "file_type": "markdown",
+      "file_name": "mid.md",
+      "title": "Mid",
+      "authored_title": "mid",
+      "excerpt": "Body of mid.",
+      "content_preview": "Body of mid.",
+      "content_preview_truncated": false,
+      "content_full": "Body of mid.",
+      "tags": [],
+      "created": "2026-01-01",
+      "updated": "2026-01-01",
+      "parent": "./map.md",
+      "related": [
+        "../target.md"
+      ],
+      "status": "",
+      "replaced_by": "",
+      "degree": 2
+    },
+    {
+      "label": "Zeta",
+      "path": "knowledge/src/zeta.md",
+      "lobe": "knowledge",
+      "sublobe": "knowledge/src",
+      "type": "neuron",
+      "file_type": "markdown",
+      "file_name": "zeta.md",
+      "title": "Zeta",
+      "authored_title": "zeta",
+      "excerpt": "Body of zeta.",
+      "content_preview": "Body of zeta.",
+      "content_preview_truncated": false,
+      "content_full": "Body of zeta.",
+      "tags": [],
+      "created": "2026-01-01",
+      "updated": "2026-01-01",
+      "parent": "./map.md",
+      "related": [
+        "../target.md"
+      ],
+      "status": "",
+      "replaced_by": "",
+      "degree": 2
+    },
+    {
+      "label": "Target",
+      "path": "knowledge/target.md",
+      "lobe": "knowledge",
+      "sublobe": "knowledge",
+      "type": "neuron",
+      "file_type": "markdown",
+      "file_name": "target.md",
+      "title": "Target",
+      "authored_title": "",
+      "excerpt": "Body of Target.",
+      "content_preview": "Body of Target.",
+      "content_preview_truncated": false,
+      "content_full": "Body of Target.",
+      "tags": [],
+      "created": "2026-01-01",
+      "updated": "2026-01-01",
+      "parent": "./map.md",
+      "related": [
+        "src/Beta.md",
+        "src/_u.md",
+        "src/a-b.md",
+        "src/a.b.md",
+        "src/alpha-2.md",
+        "src/mid.md",
+        "src/zeta.md",
+        "user.md"
+      ],
+      "status": "",
+      "replaced_by": "",
+      "degree": 9
+    },
+    {
+      "label": "User",
+      "path": "knowledge/user.md",
+      "lobe": "knowledge",
+      "sublobe": "knowledge",
+      "type": "neuron",
+      "file_type": "markdown",
+      "file_name": "user.md",
+      "title": "User",
+      "authored_title": "",
+      "excerpt": "Body of User.",
+      "content_preview": "Body of User.",
+      "content_preview_truncated": false,
+      "content_full": "Body of User.",
+      "tags": [],
+      "created": "2026-01-01",
+      "updated": "2026-01-01",
+      "parent": "./map.md",
+      "related": [
+        "./old.md",
+        "./target.md"
+      ],
+      "status": "",
+      "replaced_by": "",
+      "degree": 3
+    },
+    {
+      "label": "My Lobe",
+      "path": "my-lobe/map.md",
+      "lobe": "my-lobe",
+      "sublobe": "my-lobe",
+      "type": "map",
+      "file_type": "markdown",
+      "file_name": "map.md",
+      "title": "My Lobe",
+      "authored_title": "",
+      "excerpt": "",
+      "content_preview": "up [brain.md](../brain.md)\nsideways [knowledge](../knowledge/map.md) | [projects](../projects/map.md) | [uncommitted-lobe](../uncommitted-lobe/map.md)\n\n## Contents\n\n- [thing.md](./thing.md) \u2014 Thing",
+      "content_preview_truncated": false,
+      "content_full": "up [brain.md](../brain.md)\nsideways [knowledge](../knowledge/map.md) | [projects](../projects/map.md) | [uncommitted-lobe](../uncommitted-lobe/map.md)\n\n## Contents\n\n- [thing.md](./thing.md) \u2014 Thing",
+      "tags": [],
+      "created": "",
+      "updated": "<TODAY>",
+      "parent": "../brain.md",
+      "related": [],
+      "status": "",
+      "replaced_by": "",
+      "degree": 5
+    },
+    {
+      "label": "Thing",
+      "path": "my-lobe/thing.md",
+      "lobe": "my-lobe",
+      "sublobe": "my-lobe",
+      "type": "neuron",
+      "file_type": "markdown",
+      "file_name": "thing.md",
+      "title": "Thing",
+      "authored_title": "",
+      "excerpt": "Body of Thing.",
+      "content_preview": "Body of Thing.",
+      "content_preview_truncated": false,
+      "content_full": "Body of Thing.",
+      "tags": [],
+      "created": "2026-01-01",
+      "updated": "2026-01-01",
+      "parent": "./map.md",
+      "related": [],
+      "status": "",
+      "replaced_by": "",
+      "degree": 1
+    },
+    {
+      "label": "Agent",
+      "path": "projects/agent.md",
+      "lobe": "projects",
+      "sublobe": "projects",
+      "type": "neuron",
+      "file_type": "markdown",
+      "file_name": "agent.md",
+      "title": "Agent",
+      "authored_title": "Agent written",
+      "excerpt": "Text with [alpha](./alpha.md).",
+      "content_preview": "Text with [alpha](./alpha.md).",
+      "content_preview_truncated": false,
+      "content_full": "Text with [alpha](./alpha.md).",
+      "tags": [
+        "auth",
+        "jwt",
+        true,
+        false,
+        2026,
+        1.1
+      ],
+      "created": "2026-01-01",
+      "updated": "2026-01-01",
+      "parent": "./map.md",
+      "related": [
+        "./alpha.md"
+      ],
+      "status": "",
+      "replaced_by": "",
+      "degree": 2
+    },
+    {
+      "label": "Alpha",
+      "path": "projects/alpha.md",
+      "lobe": "projects",
+      "sublobe": "projects",
+      "type": "neuron",
+      "file_type": "markdown",
+      "file_name": "alpha.md",
+      "title": "Alpha",
+      "authored_title": "",
+      "excerpt": "Changed.",
+      "content_preview": "Changed.",
+      "content_preview_truncated": false,
+      "content_full": "Changed.",
+      "tags": [],
+      "created": "2026-01-01",
+      "updated": "2026-02-03",
+      "parent": "./map.md",
+      "related": [
+        "../knowledge/beta.md",
+        "agent.md",
+        "api/spec.yml"
+      ],
+      "status": "",
+      "replaced_by": "",
+      "degree": 4
+    },
+    {
+      "label": "Anchors",
+      "path": "projects/anchors.md",
+      "lobe": "projects",
+      "sublobe": "projects",
+      "type": "neuron",
+      "file_type": "markdown",
+      "file_name": "anchors.md",
+      "title": "Anchors",
+      "authored_title": "",
+      "excerpt": "First <A ID='b'> </a>line.",
+      "content_preview": "First line.\n\n## Sub\n\n<a name=\"n\"></a>Kept.",
+      "content_preview_truncated": false,
+      "content_full": "First line.\n\n## Sub\n\n<a name=\"n\"></a>Kept.",
+      "tags": [],
+      "created": "2026-01-01",
+      "updated": "2026-02-03",
+      "parent": "./map.md",
+      "related": [],
+      "status": "",
+      "replaced_by": "",
+      "degree": 2
+    },
+    {
+      "label": "Leaf",
+      "path": "projects/api/deeper/leaf.md",
+      "lobe": "projects",
+      "sublobe": "projects/api/deeper",
+      "type": "neuron",
+      "file_type": "markdown",
+      "file_name": "leaf.md",
+      "title": "Leaf",
+      "authored_title": "",
+      "excerpt": "Body of Leaf.",
+      "content_preview": "Body of Leaf.",
+      "content_preview_truncated": false,
+      "content_full": "Body of Leaf.",
+      "tags": [],
+      "created": "2026-01-01",
+      "updated": "2026-02-03",
+      "parent": "../map.md",
+      "related": [],
+      "status": "",
+      "replaced_by": "",
+      "degree": 2
+    },
+    {
+      "label": "Deeper",
+      "path": "projects/api/deeper/map.md",
+      "lobe": "projects",
+      "sublobe": "projects/api/deeper",
+      "type": "map",
+      "file_type": "markdown",
+      "file_name": "map.md",
+      "title": "Deeper",
+      "authored_title": "",
+      "excerpt": "",
+      "content_preview": "up [api](../map.md)\n\n## Contents\n\n- [leaf.md](./leaf.md) \u2014 Leaf",
+      "content_preview_truncated": false,
+      "content_full": "up [api](../map.md)\n\n## Contents\n\n- [leaf.md](./leaf.md) \u2014 Leaf",
+      "tags": [],
+      "created": "",
+      "updated": "<TODAY>",
+      "parent": "../map.md",
+      "related": [],
+      "status": "",
+      "replaced_by": "",
+      "degree": 2
+    },
+    {
+      "label": "Endpoints",
+      "path": "projects/api/endpoints.md",
+      "lobe": "projects",
+      "sublobe": "projects/api",
+      "type": "neuron",
+      "file_type": "markdown",
+      "file_name": "endpoints.md",
+      "title": "Endpoints",
+      "authored_title": "",
+      "excerpt": "Body of Endpoints.",
+      "content_preview": "Body of Endpoints.",
+      "content_preview_truncated": false,
+      "content_full": "Body of Endpoints.",
+      "tags": [
+        "api"
+      ],
+      "created": "2026-01-01",
+      "updated": "2026-01-01",
+      "parent": "./map.md",
+      "related": [],
+      "status": "",
+      "replaced_by": "",
+      "degree": 1
+    },
+    {
+      "label": "Api",
+      "path": "projects/api/map.md",
+      "lobe": "projects",
+      "sublobe": "projects/api",
+      "type": "map",
+      "file_type": "markdown",
+      "file_name": "map.md",
+      "title": "Api",
+      "authored_title": "",
+      "excerpt": "",
+      "content_preview": "up [projects](../map.md)\n\n## Contents\n\n- [deeper/](./deeper/map.md)\n- [endpoints.md](./endpoints.md) \u2014 Endpoints\n- [Shout.MD](./Shout.MD) \u2014 Shouted\n- [spec.yml](./spec.yml) \u2014 API spec",
+      "content_preview_truncated": false,
+      "content_full": "up [projects](../map.md)\n\n## Contents\n\n- [deeper/](./deeper/map.md)\n- [endpoints.md](./endpoints.md) \u2014 Endpoints\n- [Shout.MD](./Shout.MD) \u2014 Shouted\n- [spec.yml](./spec.yml) \u2014 API spec",
+      "tags": [],
+      "created": "",
+      "updated": "<TODAY>",
+      "parent": "../map.md",
+      "related": [],
+      "status": "",
+      "replaced_by": "",
+      "degree": 5
+    },
+    {
+      "label": "API spec",
+      "path": "projects/api/spec.yml",
+      "lobe": "projects",
+      "sublobe": "projects/api",
+      "type": "neuron",
+      "file_type": "yaml",
+      "file_name": "spec.yml",
+      "title": "API spec",
+      "authored_title": "",
+      "excerpt": "openapi: 3.0.0",
+      "content_preview": "openapi: 3.0.0\ninfo:\n  title: demo",
+      "content_preview_truncated": false,
+      "content_full": "openapi: 3.0.0\ninfo:\n  title: demo",
+      "tags": [],
+      "created": "",
+      "updated": "2026-01-01",
+      "parent": "./map.md",
+      "related": [
+        "../alpha.md"
+      ],
+      "status": "",
+      "replaced_by": "",
+      "degree": 2
+    },
+    {
+      "label": "Links",
+      "path": "projects/links.md",
+      "lobe": "projects",
+      "sublobe": "projects",
+      "type": "neuron",
+      "file_type": "markdown",
+      "file_name": "links.md",
+      "title": "Links",
+      "authored_title": "",
+      "excerpt": "[s](./script.md) [l](./long-one.md#part) [q](long-one.md?x=1) [self](./links.md) [web](https://example.com) [g](../glossary.md#jwt) [up](../index.md)",
+      "content_preview": "[s](./script.md) [l](./long-one.md#part) [q](long-one.md?x=1) [self](./links.md) [web](https://example.com) [g](../glossary.md#jwt) [up](../index.md)",
+      "content_preview_truncated": false,
+      "content_full": "[s](./script.md) [l](./long-one.md#part) [q](long-one.md?x=1) [self](./links.md) [web](https://example.com) [g](../glossary.md#jwt) [up](../index.md)",
+      "tags": [],
+      "created": "2026-01-01",
+      "updated": "2026-02-03",
+      "parent": "./map.md",
+      "related": [
+        "./script.md",
+        "./script.md",
+        "../nowhere.md"
+      ],
+      "status": "",
+      "replaced_by": "./anchors.md",
+      "degree": 6
+    },
+    {
+      "label": "Long One",
+      "path": "projects/long-one.md",
+      "lobe": "projects",
+      "sublobe": "projects",
+      "type": "neuron",
+      "file_type": "markdown",
+      "file_name": "long-one.md",
+      "title": "Long One",
+      "authored_title": "Long one",
+      "excerpt": "Line 1 of a long neuron.",
+      "content_preview": "Line 1 of a long neuron.\nLine 2 of a long neuron.\nLine 3 of a long neuron.\nLine 4 of a long neuron.\nLine 5 of a long neuron.\nLine 6 of a long neuron.\nLine 7 of a long neuron.\nLine 8 of a long neuron.\nLine 9 of a long neuron.\nLine 10 of a long neuron.\nLine 11 of a long neuron.\nLine 12 of a long neuron.\nLine 13 of a long neuron.\nLine 14 of a long neuron.\nLine 15 of a long neuron.\nLine 16 of a long neuron.\nLine 17 of a long neuron.\nLine 18 of a long neuron.\nLine 19 of a long neuron.\nLine 20 of a long neuron.\nLine 21 of a long neuron.\nLine 22 of a long neuron.\nLine 23 of a long neuron.\nLine 24 of a long neuron.\nLine 25 of a long neuron.\nLine 26 of a long neuron.\nLine 27 of a long neuron.\nLine 28 of a long neuron.\nLine 29 of a long neuron.\nLine 30 of a long neuron.\nLine 31 of a long neuron.\nLine 32 of a long neuron.\nLine 33 of a long neuron.\nLine 34 of a long neuron.\nLine 35 of a long neuron.\nLine 36 of a long neuron.\nLine 37 of a long neuron.\nLine 38 of a long neuron.\nLine 39 of a long neuron.\nLine 40 of a long neuron.\nLine 41 of a long neuron.\nLine 42 of a long neuron.\nLine 43 of a long neuron.\nLine 44 of a long neuron.\nLine 45 of a long neuron.\nLine 46 of a long neuron.\nLine 47 of a long neuron.\nLine 48 of a long neuron.\n\n...",
+      "content_preview_truncated": true,
+      "content_full": "Line 1 of a long neuron.\nLine 2 of a long neuron.\nLine 3 of a long neuron.\nLine 4 of a long neuron.\nLine 5 of a long neuron.\nLine 6 of a long neuron.\nLine 7 of a long neuron.\nLine 8 of a long neuron.\nLine 9 of a long neuron.\nLine 10 of a long neuron.\nLine 11 of a long neuron.\nLine 12 of a long neuron.\nLine 13 of a long neuron.\nLine 14 of a long neuron.\nLine 15 of a long neuron.\nLine 16 of a long neuron.\nLine 17 of a long neuron.\nLine 18 of a long neuron.\nLine 19 of a long neuron.\nLine 20 of a long neuron.\nLine 21 of a long neuron.\nLine 22 of a long neuron.\nLine 23 of a long neuron.\nLine 24 of a long neuron.\nLine 25 of a long neuron.\nLine 26 of a long neuron.\nLine 27 of a long neuron.\nLine 28 of a long neuron.\nLine 29 of a long neuron.\nLine 30 of a long neuron.\nLine 31 of a long neuron.\nLine 32 of a long neuron.\nLine 33 of a long neuron.\nLine 34 of a long neuron.\nLine 35 of a long neuron.\nLine 36 of a long neuron.\nLine 37 of a long neuron.\nLine 38 of a long neuron.\nLine 39 of a long neuron.\nLine 40 of a long neuron.\nLine 41 of a long neuron.\nLine 42 of a long neuron.\nLine 43 of a long neuron.\nLine 44 of a long neuron.\nLine 45 of a long neuron.\nLine 46 of a long neuron.\nLine 47 of a long neuron.\nLine 48 of a long neuron.\nLine 49 of a long neuron.\nLine 50 of a long neuron.\nLine 51 of a long neuron.\nLine 52 of a long neuron.\nLine 53 of a long neuron.\nLine 54 of a long neuron.\nLine 55 of a long neuron.\nLine 56 of a long neuron.\nLine 57 of a long neuron.\nLine 58 of a long neuron.\nLine 59 of a long neuron.\nLine 60 of a long neuron.\nLine 61 of a long neuron.\nLine 62 of a long neuron.\nLine 63 of a long neuron.\nLine 64 of a long neuron.\nLine 65 of a long neuron.\nLine 66 of a long neuron.\nLine 67 of a long neuron.\nLine 68 of a long neuron.\nLine 69 of a long neuron.\n\nxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      "tags": [],
+      "created": "2026-01-01",
+      "updated": "2026-02-03",
+      "parent": "./map.md",
+      "related": [],
+      "status": "",
+      "replaced_by": "",
+      "degree": 2
+    },
+    {
+      "label": "Projects",
+      "path": "projects/map.md",
+      "lobe": "projects",
+      "sublobe": "projects",
+      "type": "map",
+      "file_type": "markdown",
+      "file_name": "map.md",
+      "title": "Projects",
+      "authored_title": "",
+      "excerpt": "",
+      "content_preview": "up [brain.md](../brain.md)\nsideways [knowledge](../knowledge/map.md) | [my-lobe](../my-lobe/map.md) | [uncommitted-lobe](../uncommitted-lobe/map.md)\n\n## Contents\n\n- [api/](./api/map.md)\n- [agent.md](./agent.md) \u2014 Agent written\n- [alpha.md](./alpha.md) \u2014 Alpha\n- [anchors.md](./anchors.md) \u2014 Anchors\n- [links.md](./links.md) \u2014 Links\n- [long-one.md](./long-one.md) \u2014 Long one\n- [no-frontmatter.md](./no-frontmatter.md) \u2014 No frontmatter\n- [no-parent.md](./no-parent.md) \u2014 Linker written\n- [script.md](./script.md) \u2014 Script\n- [unicode-\u0103\u00ee\u0219.md](./unicode-\u0103\u00ee\u0219.md) \u2014 \u0218ir de caractere \u2014 \u00fcn\u00efc\u00f8d\u00e9 \ud83d\ude80",
+      "content_preview_truncated": false,
+      "content_full": "up [brain.md](../brain.md)\nsideways [knowledge](../knowledge/map.md) | [my-lobe](../my-lobe/map.md) | [uncommitted-lobe](../uncommitted-lobe/map.md)\n\n## Contents\n\n- [api/](./api/map.md)\n- [agent.md](./agent.md) \u2014 Agent written\n- [alpha.md](./alpha.md) \u2014 Alpha\n- [anchors.md](./anchors.md) \u2014 Anchors\n- [links.md](./links.md) \u2014 Links\n- [long-one.md](./long-one.md) \u2014 Long one\n- [no-frontmatter.md](./no-frontmatter.md) \u2014 No frontmatter\n- [no-parent.md](./no-parent.md) \u2014 Linker written\n- [script.md](./script.md) \u2014 Script\n- [unicode-\u0103\u00ee\u0219.md](./unicode-\u0103\u00ee\u0219.md) \u2014 \u0218ir de caractere \u2014 \u00fcn\u00efc\u00f8d\u00e9 \ud83d\ude80",
+      "tags": [],
+      "created": "",
+      "updated": "<TODAY>",
+      "parent": "../brain.md",
+      "related": [],
+      "status": "",
+      "replaced_by": "",
+      "degree": 15
+    },
+    {
+      "label": "No Frontmatter",
+      "path": "projects/no-frontmatter.md",
+      "lobe": "projects",
+      "sublobe": "projects",
+      "type": "neuron",
+      "file_type": "markdown",
+      "file_name": "no-frontmatter.md",
+      "title": "No Frontmatter",
+      "authored_title": "No frontmatter",
+      "excerpt": "Just text.",
+      "content_preview": "Just text.",
+      "content_preview_truncated": false,
+      "content_full": "Just text.",
+      "tags": [],
+      "created": "2026-01-01",
+      "updated": "2026-01-01",
+      "parent": "./map.md",
+      "related": [],
+      "status": "",
+      "replaced_by": "",
+      "degree": 1
+    },
+    {
+      "label": "No Parent",
+      "path": "projects/no-parent.md",
+      "lobe": "projects",
+      "sublobe": "projects",
+      "type": "neuron",
+      "file_type": "markdown",
+      "file_name": "no-parent.md",
+      "title": "No Parent",
+      "authored_title": "Linker written",
+      "excerpt": "",
+      "content_preview": "",
+      "content_preview_truncated": false,
+      "content_full": "",
+      "tags": [
+        "linker"
+      ],
+      "created": "2026-01-01",
+      "updated": "2026-01-01",
+      "parent": "./map.md",
+      "related": [],
+      "status": "",
+      "replaced_by": "",
+      "degree": 1
+    },
+    {
+      "label": "Script",
+      "path": "projects/script.md",
+      "lobe": "projects",
+      "sublobe": "projects",
+      "type": "neuron",
+      "file_type": "markdown",
+      "file_name": "script.md",
+      "title": "Script",
+      "authored_title": "",
+      "excerpt": "Inline </script><script>alert(1)</script> and <!--<script> and </style> here.",
+      "content_preview": "Inline </script><script>alert(1)</script> and <!--<script> and </style> here.",
+      "content_preview_truncated": false,
+      "content_full": "Inline </script><script>alert(1)</script> and <!--<script> and </style> here.",
+      "tags": [],
+      "created": "2026-01-01",
+      "updated": "2026-02-03",
+      "parent": "./map.md",
+      "related": [
+        "links.md"
+      ],
+      "status": "",
+      "replaced_by": "",
+      "degree": 2
+    },
+    {
+      "label": "Unicode \u0102\u00ee\u0219",
+      "path": "projects/unicode-\u0103\u00ee\u0219.md",
+      "lobe": "projects",
+      "sublobe": "projects",
+      "type": "neuron",
+      "file_type": "markdown",
+      "file_name": "unicode-\u0103\u00ee\u0219.md",
+      "title": "Unicode \u0102\u00ee\u0219",
+      "authored_title": "\u0218ir de caractere \u2014 \u00fcn\u00efc\u00f8d\u00e9 \ud83d\ude80",
+      "excerpt": "\u0102la e un text cu diacritice.",
+      "content_preview": "\u0102la e un text cu diacritice.",
+      "content_preview_truncated": false,
+      "content_full": "\u0102la e un text cu diacritice.",
+      "tags": [],
+      "created": "2026-01-01",
+      "updated": "2026-02-03",
+      "parent": "./map.md",
+      "related": [],
+      "status": "",
+      "replaced_by": "",
+      "degree": 1
+    },
+    {
+      "label": "Root Note",
+      "path": "root-note.md",
+      "lobe": "root",
+      "sublobe": "root",
+      "type": "neuron",
+      "file_type": "markdown",
+      "file_name": "root-note.md",
+      "title": "Root Note",
+      "authored_title": "Root note",
+      "excerpt": "Body of Root note.",
+      "content_preview": "Body of Root note.",
+      "content_preview_truncated": false,
+      "content_full": "Body of Root note.",
+      "tags": [],
+      "created": "2026-01-01",
+      "updated": "2026-01-01",
+      "parent": "./map.md",
+      "related": [],
+      "status": "",
+      "replaced_by": "",
+      "degree": 0
+    },
+    {
+      "label": "Later",
+      "path": "uncommitted-lobe/later.md",
+      "lobe": "uncommitted-lobe",
+      "sublobe": "uncommitted-lobe",
+      "type": "neuron",
+      "file_type": "markdown",
+      "file_name": "later.md",
+      "title": "Later",
+      "authored_title": "",
+      "excerpt": "Body of Later.",
+      "content_preview": "Body of Later.",
+      "content_preview_truncated": false,
+      "content_full": "Body of Later.",
+      "tags": [],
+      "created": "2026-01-01",
+      "updated": "2026-02-03",
+      "parent": "./map.md",
+      "related": [],
+      "status": "",
+      "replaced_by": "",
+      "degree": 1
+    },
+    {
+      "label": "Uncommitted Lobe",
+      "path": "uncommitted-lobe/map.md",
+      "lobe": "uncommitted-lobe",
+      "sublobe": "uncommitted-lobe",
+      "type": "map",
+      "file_type": "markdown",
+      "file_name": "map.md",
+      "title": "Uncommitted Lobe",
+      "authored_title": "",
+      "excerpt": "",
+      "content_preview": "up [brain.md](../brain.md)\nsideways [knowledge](../knowledge/map.md) | [my-lobe](../my-lobe/map.md) | [projects](../projects/map.md)\n\n## Contents\n\n- [later.md](./later.md) \u2014 Later",
+      "content_preview_truncated": false,
+      "content_full": "up [brain.md](../brain.md)\nsideways [knowledge](../knowledge/map.md) | [my-lobe](../my-lobe/map.md) | [projects](../projects/map.md)\n\n## Contents\n\n- [later.md](./later.md) \u2014 Later",
+      "tags": [],
+      "created": "",
+      "updated": "<TODAY>",
+      "parent": "../brain.md",
+      "related": [],
+      "status": "",
+      "replaced_by": "",
+      "degree": 5
+    }
+  ],
+  "edges": [
+    {
+      "source": "brain.md",
+      "target": "glossary.md",
+      "type": "inline"
+    },
+    {
+      "source": "brain.md",
+      "target": "knowledge/map.md",
+      "type": "inline"
+    },
+    {
+      "source": "brain.md",
+      "target": "my-lobe/map.md",
+      "type": "inline"
+    },
+    {
+      "source": "brain.md",
+      "target": "projects/map.md",
+      "type": "inline"
+    },
+    {
+      "source": "brain.md",
+      "target": "uncommitted-lobe/map.md",
+      "type": "inline"
+    },
+    {
+      "source": "index.md",
+      "target": "projects/map.md",
+      "type": "inline"
+    },
+    {
+      "source": "knowledge/beta.md",
+      "target": "knowledge/broken.md",
+      "type": "related"
+    },
+    {
+      "source": "knowledge/beta.md",
+      "target": "knowledge/map.md",
+      "type": "parent"
+    },
+    {
+      "source": "knowledge/beta.md",
+      "target": "projects/alpha.md",
+      "type": "related"
+    },
+    {
+      "source": "knowledge/broken.md",
+      "target": "knowledge/beta.md",
+      "type": "related"
+    },
+    {
+      "source": "knowledge/broken.md",
+      "target": "knowledge/map.md",
+      "type": "parent"
+    },
+    {
+      "source": "knowledge/crlf.md",
+      "target": "knowledge/map.md",
+      "type": "parent"
+    },
+    {
+      "source": "knowledge/deep/deeper/leaf.md",
+      "target": "knowledge/deep/deeper/map.md",
+      "type": "parent"
+    },
+    {
+      "source": "knowledge/deep/deeper/map.md",
+      "target": "knowledge/deep/deeper/leaf.md",
+      "type": "inline"
+    },
+    {
+      "source": "knowledge/deep/deeper/map.md",
+      "target": "knowledge/deep/map.md",
+      "type": "parent"
+    },
+    {
+      "source": "knowledge/deep/map.md",
+      "target": "knowledge/deep/deeper/map.md",
+      "type": "inline"
+    },
+    {
+      "source": "knowledge/deep/map.md",
+      "target": "knowledge/map.md",
+      "type": "parent"
+    },
+    {
+      "source": "knowledge/deep/map.md",
+      "target": "knowledge/src/map.md",
+      "type": "inline"
+    },
+    {
+      "source": "knowledge/map.md",
+      "target": "brain.md",
+      "type": "parent"
+    },
+    {
+      "source": "knowledge/map.md",
+      "target": "knowledge/beta.md",
+      "type": "inline"
+    },
+    {
+      "source": "knowledge/map.md",
+      "target": "knowledge/broken.md",
+      "type": "inline"
+    },
+    {
+      "source": "knowledge/map.md",
+      "target": "knowledge/crlf.md",
+      "type": "inline"
+    },
+    {
+      "source": "knowledge/map.md",
+      "target": "knowledge/deep/map.md",
+      "type": "inline"
+    },
+    {
+      "source": "knowledge/map.md",
+      "target": "knowledge/newer.md",
+      "type": "inline"
+    },
+    {
+      "source": "knowledge/map.md",
+      "target": "knowledge/old.md",
+      "type": "inline"
+    },
+    {
+      "source": "knowledge/map.md",
+      "target": "knowledge/older.md",
+      "type": "inline"
+    },
+    {
+      "source": "knowledge/map.md",
+      "target": "knowledge/src/map.md",
+      "type": "inline"
+    },
+    {
+      "source": "knowledge/map.md",
+      "target": "knowledge/target.md",
+      "type": "inline"
+    },
+    {
+      "source": "knowledge/map.md",
+      "target": "knowledge/user.md",
+      "type": "inline"
+    },
+    {
+      "source": "knowledge/map.md",
+      "target": "my-lobe/map.md",
+      "type": "inline"
+    },
+    {
+      "source": "knowledge/map.md",
+      "target": "projects/map.md",
+      "type": "inline"
+    },
+    {
+      "source": "knowledge/map.md",
+      "target": "uncommitted-lobe/map.md",
+      "type": "inline"
+    },
+    {
+      "source": "knowledge/newer.md",
+      "target": "knowledge/map.md",
+      "type": "parent"
+    },
+    {
+      "source": "knowledge/newer.md",
+      "target": "knowledge/old.md",
+      "type": "replaced_by"
+    },
+    {
+      "source": "knowledge/old.md",
+      "target": "knowledge/map.md",
+      "type": "parent"
+    },
+    {
+      "source": "knowledge/old.md",
+      "target": "knowledge/user.md",
+      "type": "related"
+    },
+    {
+      "source": "knowledge/older.md",
+      "target": "knowledge/map.md",
+      "type": "parent"
+    },
+    {
+      "source": "knowledge/src/Beta.md",
+      "target": "knowledge/src/map.md",
+      "type": "parent"
+    },
+    {
+      "source": "knowledge/src/Beta.md",
+      "target": "knowledge/target.md",
+      "type": "related"
+    },
+    {
+      "source": "knowledge/src/_u.md",
+      "target": "knowledge/src/map.md",
+      "type": "parent"
+    },
+    {
+      "source": "knowledge/src/_u.md",
+      "target": "knowledge/target.md",
+      "type": "related"
+    },
+    {
+      "source": "knowledge/src/a-b.md",
+      "target": "knowledge/src/map.md",
+      "type": "parent"
+    },
+    {
+      "source": "knowledge/src/a-b.md",
+      "target": "knowledge/target.md",
+      "type": "related"
+    },
+    {
+      "source": "knowledge/src/a.b.md",
+      "target": "knowledge/src/map.md",
+      "type": "parent"
+    },
+    {
+      "source": "knowledge/src/a.b.md",
+      "target": "knowledge/target.md",
+      "type": "related"
+    },
+    {
+      "source": "knowledge/src/alpha-2.md",
+      "target": "knowledge/src/map.md",
+      "type": "parent"
+    },
+    {
+      "source": "knowledge/src/alpha-2.md",
+      "target": "knowledge/target.md",
+      "type": "related"
+    },
+    {
+      "source": "knowledge/src/map.md",
+      "target": "knowledge/deep/map.md",
+      "type": "inline"
+    },
+    {
+      "source": "knowledge/src/map.md",
+      "target": "knowledge/map.md",
+      "type": "parent"
+    },
+    {
+      "source": "knowledge/src/map.md",
+      "target": "knowledge/src/Beta.md",
+      "type": "inline"
+    },
+    {
+      "source": "knowledge/src/map.md",
+      "target": "knowledge/src/_u.md",
+      "type": "inline"
+    },
+    {
+      "source": "knowledge/src/map.md",
+      "target": "knowledge/src/a-b.md",
+      "type": "inline"
+    },
+    {
+      "source": "knowledge/src/map.md",
+      "target": "knowledge/src/a.b.md",
+      "type": "inline"
+    },
+    {
+      "source": "knowledge/src/map.md",
+      "target": "knowledge/src/alpha-2.md",
+      "type": "inline"
+    },
+    {
+      "source": "knowledge/src/map.md",
+      "target": "knowledge/src/mid.md",
+      "type": "inline"
+    },
+    {
+      "source": "knowledge/src/map.md",
+      "target": "knowledge/src/zeta.md",
+      "type": "inline"
+    },
+    {
+      "source": "knowledge/src/mid.md",
+      "target": "knowledge/src/map.md",
+      "type": "parent"
+    },
+    {
+      "source": "knowledge/src/mid.md",
+      "target": "knowledge/target.md",
+      "type": "related"
+    },
+    {
+      "source": "knowledge/src/zeta.md",
+      "target": "knowledge/src/map.md",
+      "type": "parent"
+    },
+    {
+      "source": "knowledge/src/zeta.md",
+      "target": "knowledge/target.md",
+      "type": "related"
+    },
+    {
+      "source": "knowledge/target.md",
+      "target": "knowledge/map.md",
+      "type": "parent"
+    },
+    {
+      "source": "knowledge/target.md",
+      "target": "knowledge/src/Beta.md",
+      "type": "related"
+    },
+    {
+      "source": "knowledge/target.md",
+      "target": "knowledge/src/_u.md",
+      "type": "related"
+    },
+    {
+      "source": "knowledge/target.md",
+      "target": "knowledge/src/a-b.md",
+      "type": "related"
+    },
+    {
+      "source": "knowledge/target.md",
+      "target": "knowledge/src/a.b.md",
+      "type": "related"
+    },
+    {
+      "source": "knowledge/target.md",
+      "target": "knowledge/src/alpha-2.md",
+      "type": "related"
+    },
+    {
+      "source": "knowledge/target.md",
+      "target": "knowledge/src/mid.md",
+      "type": "related"
+    },
+    {
+      "source": "knowledge/target.md",
+      "target": "knowledge/src/zeta.md",
+      "type": "related"
+    },
+    {
+      "source": "knowledge/target.md",
+      "target": "knowledge/user.md",
+      "type": "related"
+    },
+    {
+      "source": "knowledge/user.md",
+      "target": "knowledge/map.md",
+      "type": "parent"
+    },
+    {
+      "source": "knowledge/user.md",
+      "target": "knowledge/old.md",
+      "type": "related"
+    },
+    {
+      "source": "knowledge/user.md",
+      "target": "knowledge/target.md",
+      "type": "related"
+    },
+    {
+      "source": "my-lobe/map.md",
+      "target": "brain.md",
+      "type": "parent"
+    },
+    {
+      "source": "my-lobe/map.md",
+      "target": "knowledge/map.md",
+      "type": "inline"
+    },
+    {
+      "source": "my-lobe/map.md",
+      "target": "my-lobe/thing.md",
+      "type": "inline"
+    },
+    {
+      "source": "my-lobe/map.md",
+      "target": "projects/map.md",
+      "type": "inline"
+    },
+    {
+      "source": "my-lobe/map.md",
+      "target": "uncommitted-lobe/map.md",
+      "type": "inline"
+    },
+    {
+      "source": "my-lobe/thing.md",
+      "target": "my-lobe/map.md",
+      "type": "parent"
+    },
+    {
+      "source": "projects/agent.md",
+      "target": "projects/alpha.md",
+      "type": "related"
+    },
+    {
+      "source": "projects/agent.md",
+      "target": "projects/map.md",
+      "type": "parent"
+    },
+    {
+      "source": "projects/alpha.md",
+      "target": "knowledge/beta.md",
+      "type": "related"
+    },
+    {
+      "source": "projects/alpha.md",
+      "target": "projects/agent.md",
+      "type": "related"
+    },
+    {
+      "source": "projects/alpha.md",
+      "target": "projects/api/spec.yml",
+      "type": "related"
+    },
+    {
+      "source": "projects/alpha.md",
+      "target": "projects/map.md",
+      "type": "parent"
+    },
+    {
+      "source": "projects/anchors.md",
+      "target": "projects/map.md",
+      "type": "parent"
+    },
+    {
+      "source": "projects/api/deeper/leaf.md",
+      "target": "projects/api/map.md",
+      "type": "parent"
+    },
+    {
+      "source": "projects/api/deeper/map.md",
+      "target": "projects/api/deeper/leaf.md",
+      "type": "inline"
+    },
+    {
+      "source": "projects/api/deeper/map.md",
+      "target": "projects/api/map.md",
+      "type": "parent"
+    },
+    {
+      "source": "projects/api/endpoints.md",
+      "target": "projects/api/map.md",
+      "type": "parent"
+    },
+    {
+      "source": "projects/api/map.md",
+      "target": "projects/api/deeper/map.md",
+      "type": "inline"
+    },
+    {
+      "source": "projects/api/map.md",
+      "target": "projects/api/endpoints.md",
+      "type": "inline"
+    },
+    {
+      "source": "projects/api/map.md",
+      "target": "projects/api/spec.yml",
+      "type": "inline"
+    },
+    {
+      "source": "projects/api/map.md",
+      "target": "projects/map.md",
+      "type": "parent"
+    },
+    {
+      "source": "projects/api/spec.yml",
+      "target": "projects/alpha.md",
+      "type": "related"
+    },
+    {
+      "source": "projects/api/spec.yml",
+      "target": "projects/api/map.md",
+      "type": "parent"
+    },
+    {
+      "source": "projects/links.md",
+      "target": "glossary.md",
+      "type": "inline"
+    },
+    {
+      "source": "projects/links.md",
+      "target": "index.md",
+      "type": "inline"
+    },
+    {
+      "source": "projects/links.md",
+      "target": "projects/anchors.md",
+      "type": "replaced_by"
+    },
+    {
+      "source": "projects/links.md",
+      "target": "projects/long-one.md",
+      "type": "inline"
+    },
+    {
+      "source": "projects/links.md",
+      "target": "projects/map.md",
+      "type": "parent"
+    },
+    {
+      "source": "projects/links.md",
+      "target": "projects/script.md",
+      "type": "related"
+    },
+    {
+      "source": "projects/links.md",
+      "target": "projects/script.md",
+      "type": "related"
+    },
+    {
+      "source": "projects/long-one.md",
+      "target": "projects/map.md",
+      "type": "parent"
+    },
+    {
+      "source": "projects/map.md",
+      "target": "brain.md",
+      "type": "parent"
+    },
+    {
+      "source": "projects/map.md",
+      "target": "knowledge/map.md",
+      "type": "inline"
+    },
+    {
+      "source": "projects/map.md",
+      "target": "my-lobe/map.md",
+      "type": "inline"
+    },
+    {
+      "source": "projects/map.md",
+      "target": "projects/agent.md",
+      "type": "inline"
+    },
+    {
+      "source": "projects/map.md",
+      "target": "projects/alpha.md",
+      "type": "inline"
+    },
+    {
+      "source": "projects/map.md",
+      "target": "projects/anchors.md",
+      "type": "inline"
+    },
+    {
+      "source": "projects/map.md",
+      "target": "projects/api/map.md",
+      "type": "inline"
+    },
+    {
+      "source": "projects/map.md",
+      "target": "projects/links.md",
+      "type": "inline"
+    },
+    {
+      "source": "projects/map.md",
+      "target": "projects/long-one.md",
+      "type": "inline"
+    },
+    {
+      "source": "projects/map.md",
+      "target": "projects/no-frontmatter.md",
+      "type": "inline"
+    },
+    {
+      "source": "projects/map.md",
+      "target": "projects/no-parent.md",
+      "type": "inline"
+    },
+    {
+      "source": "projects/map.md",
+      "target": "projects/script.md",
+      "type": "inline"
+    },
+    {
+      "source": "projects/map.md",
+      "target": "projects/unicode-\u0103\u00ee\u0219.md",
+      "type": "inline"
+    },
+    {
+      "source": "projects/map.md",
+      "target": "uncommitted-lobe/map.md",
+      "type": "inline"
+    },
+    {
+      "source": "projects/no-frontmatter.md",
+      "target": "projects/map.md",
+      "type": "parent"
+    },
+    {
+      "source": "projects/no-parent.md",
+      "target": "projects/map.md",
+      "type": "parent"
+    },
+    {
+      "source": "projects/script.md",
+      "target": "projects/links.md",
+      "type": "related"
+    },
+    {
+      "source": "projects/script.md",
+      "target": "projects/map.md",
+      "type": "parent"
+    },
+    {
+      "source": "projects/unicode-\u0103\u00ee\u0219.md",
+      "target": "projects/map.md",
+      "type": "parent"
+    },
+    {
+      "source": "uncommitted-lobe/later.md",
+      "target": "uncommitted-lobe/map.md",
+      "type": "parent"
+    },
+    {
+      "source": "uncommitted-lobe/map.md",
+      "target": "brain.md",
+      "type": "parent"
+    },
+    {
+      "source": "uncommitted-lobe/map.md",
+      "target": "knowledge/map.md",
+      "type": "inline"
+    },
+    {
+      "source": "uncommitted-lobe/map.md",
+      "target": "my-lobe/map.md",
+      "type": "inline"
+    },
+    {
+      "source": "uncommitted-lobe/map.md",
+      "target": "projects/map.md",
+      "type": "inline"
+    },
+    {
+      "source": "uncommitted-lobe/map.md",
+      "target": "uncommitted-lobe/later.md",
+      "type": "inline"
+    }
+  ],
+  "meta": {
+    "edge_counts": {
+      "parent": 39,
+      "related": 29,
+      "inline": 58,
+      "replaced_by": 2
+    }
+  }
+}

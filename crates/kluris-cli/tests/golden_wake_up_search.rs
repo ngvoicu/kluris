@@ -22,7 +22,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use common::brains::{Brains, eval_fixtures};
-use common::{Run, Sandbox, normalize, tree_dump, write, write_files};
+use common::{Run, Sandbox, normalize, tree_dump, windows_variant, write, write_files};
 use kluris_core::brain::store::LocalGitStore;
 use kluris_core::config::read_brain_config;
 use kluris_core::pycase;
@@ -98,6 +98,25 @@ fn registered_fixture(sb: &Sandbox, name: &str, description: &str) -> Option<Pat
     Some(brain)
 }
 
+/// The snapshots with a Windows variant: Windows lists the `wakeup` brain's
+/// lobes without regard to case, so `Zebra` comes after `legacy` there.
+const WINDOWS_VARIANTS: &[&str] = &[
+    "wake_up_json_wakeup",
+    "wake_up_text_wakeup",
+    "wake_up_renamed",
+];
+
+/// `text` as the snapshot `name` (its Windows variant when
+/// [`WINDOWS_VARIANTS`] names it).
+fn snapshot(name: &str, text: &str) {
+    let check = || insta::assert_snapshot!(name, text);
+    if WINDOWS_VARIANTS.contains(&name) {
+        windows_variant(check);
+    } else {
+        check();
+    }
+}
+
 #[test]
 fn wake_up_json_of_the_fixture_brains() {
     for name in ["wakeup", "full", "links", "malformed"] {
@@ -105,7 +124,7 @@ fn wake_up_json_of_the_fixture_brains() {
         let Some(brain) = registered_fixture(&sb, name, "Fixture brain") else {
             continue;
         };
-        insta::assert_snapshot!(format!("wake_up_json_{name}"), wake_up_json(&sb, &brain));
+        snapshot(&format!("wake_up_json_{name}"), &wake_up_json(&sb, &brain));
     }
 }
 
@@ -114,7 +133,7 @@ fn wake_up_text_of_the_fixture_brains() {
     for name in ["wakeup", "full"] {
         let sb = Sandbox::new();
         let brain = registered_fixture(&sb, name, "A described brain").unwrap();
-        insta::assert_snapshot!(format!("wake_up_text_{name}"), wake_up_text(&sb, &brain));
+        snapshot(&format!("wake_up_text_{name}"), &wake_up_text(&sb, &brain));
     }
 }
 
@@ -267,7 +286,7 @@ fn wake_up_takes_name_and_description_from_the_config() {
     let sb = Sandbox::new();
     let brain = sb.fixture_brain("wakeup").unwrap();
     sb.register("renamed", &brain, "déjà vu — ok");
-    insta::assert_snapshot!("wake_up_renamed", wake_up_json(&sb, &brain));
+    snapshot("wake_up_renamed", &wake_up_json(&sb, &brain));
 }
 
 #[test]

@@ -1,0 +1,8 @@
+---
+source: crates/kluris-cli/tests/golden_companions_resolver.rs
+expression: run.render(&sb.root)
+---
+== stdout
+== stderr
+Error: Cannot access config file <ROOT>/work/brains/b/kluris.yml: The system cannot find the file specified. (os error 2)
+== exit 1

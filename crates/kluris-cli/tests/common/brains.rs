@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use super::golden::PINNED_GIT_DATE;
-use super::sandbox::{Sandbox, write_files};
+use super::sandbox::{Sandbox, copy_tree, write_files};
 
 pub trait Brains {
     /// `brain` registered alone as `name` with `description`.
@@ -157,24 +157,6 @@ pub fn core_fixtures() -> PathBuf {
 /// The search-eval fixture: its brains and `queries.jsonl`.
 pub fn eval_fixtures() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../xtask/fixtures/search-eval")
-}
-
-/// `from` copied to a new `to`, `.git` left out.
-pub fn copy_tree(from: &Path, to: &Path) {
-    fs::create_dir_all(to).unwrap_or_else(|e| panic!("{}: {e}", to.display()));
-    for entry in fs::read_dir(from).unwrap_or_else(|e| panic!("{}: {e}", from.display())) {
-        let entry = entry.unwrap();
-        if entry.file_name() == ".git" {
-            continue;
-        }
-        let dest = to.join(entry.file_name());
-        if entry.file_type().unwrap().is_dir() {
-            copy_tree(&entry.path(), &dest);
-        } else {
-            fs::copy(entry.path(), &dest)
-                .unwrap_or_else(|e| panic!("{}: {e}", entry.path().display()));
-        }
-    }
 }
 
 #[cfg(unix)]

@@ -1,0 +1,291 @@
+---
+source: crates/kluris-cli/tests/golden_dream_mri.rs
+expression: text
+---
+{
+  "nodes": [
+    {
+      "label": "calm",
+      "path": "brain.md",
+      "lobe": "root",
+      "sublobe": "root",
+      "type": "brain",
+      "file_type": "markdown",
+      "file_name": "brain.md",
+      "title": "calm",
+      "authored_title": "",
+      "excerpt": "A healthy brain",
+      "content_preview": "A healthy brain\n\n## Lobes\n\n- [knowledge/](./knowledge/map.md) \u2014\n- [projects/](./projects/map.md) \u2014\n\n## Reference\n\n- [glossary.md](./glossary.md) \u2014 Domain-specific terms, acronyms, and conventions",
+      "content_preview_truncated": false,
+      "content_full": "A healthy brain\n\n## Lobes\n\n- [knowledge/](./knowledge/map.md) \u2014\n- [projects/](./projects/map.md) \u2014\n\n## Reference\n\n- [glossary.md](./glossary.md) \u2014 Domain-specific terms, acronyms, and conventions",
+      "tags": [],
+      "created": "",
+      "updated": "<TODAY>",
+      "parent": "",
+      "related": [],
+      "status": "",
+      "replaced_by": "",
+      "degree": 3
+    },
+    {
+      "label": "Glossary",
+      "path": "glossary.md",
+      "lobe": "root",
+      "sublobe": "root",
+      "type": "glossary",
+      "file_type": "markdown",
+      "file_name": "glossary.md",
+      "title": "Glossary",
+      "authored_title": "",
+      "excerpt": "**JWT** -- JSON Web Token.",
+      "content_preview": "**JWT** -- JSON Web Token.",
+      "content_preview_truncated": false,
+      "content_full": "**JWT** -- JSON Web Token.",
+      "tags": [],
+      "created": "",
+      "updated": "2026-01-01",
+      "parent": "",
+      "related": [],
+      "status": "",
+      "replaced_by": "",
+      "degree": 1
+    },
+    {
+      "label": "Gamma",
+      "path": "knowledge/gamma.md",
+      "lobe": "knowledge",
+      "sublobe": "knowledge",
+      "type": "neuron",
+      "file_type": "markdown",
+      "file_name": "gamma.md",
+      "title": "Gamma",
+      "authored_title": "",
+      "excerpt": "Body of Gamma.",
+      "content_preview": "Body of Gamma.",
+      "content_preview_truncated": false,
+      "content_full": "Body of Gamma.",
+      "tags": [],
+      "created": "2026-01-01",
+      "updated": "2026-01-01",
+      "parent": "./map.md",
+      "related": [],
+      "status": "",
+      "replaced_by": "",
+      "degree": 1
+    },
+    {
+      "label": "Knowledge",
+      "path": "knowledge/map.md",
+      "lobe": "knowledge",
+      "sublobe": "knowledge",
+      "type": "map",
+      "file_type": "markdown",
+      "file_name": "map.md",
+      "title": "Knowledge",
+      "authored_title": "",
+      "excerpt": "",
+      "content_preview": "up [brain.md](../brain.md)\nsideways [projects](../projects/map.md)\n\n## Contents\n\n- [gamma.md](./gamma.md) \u2014 Gamma",
+      "content_preview_truncated": false,
+      "content_full": "up [brain.md](../brain.md)\nsideways [projects](../projects/map.md)\n\n## Contents\n\n- [gamma.md](./gamma.md) \u2014 Gamma",
+      "tags": [],
+      "created": "",
+      "updated": "<TODAY>",
+      "parent": "../brain.md",
+      "related": [],
+      "status": "",
+      "replaced_by": "",
+      "degree": 3
+    },
+    {
+      "label": "Alpha",
+      "path": "projects/alpha.md",
+      "lobe": "projects",
+      "sublobe": "projects",
+      "type": "neuron",
+      "file_type": "markdown",
+      "file_name": "alpha.md",
+      "title": "Alpha",
+      "authored_title": "",
+      "excerpt": "Body of Alpha.",
+      "content_preview": "Body of Alpha.",
+      "content_preview_truncated": false,
+      "content_full": "Body of Alpha.",
+      "tags": [],
+      "created": "2026-01-01",
+      "updated": "2026-01-01",
+      "parent": "./map.md",
+      "related": [
+        "./beta.md"
+      ],
+      "status": "",
+      "replaced_by": "",
+      "degree": 2
+    },
+    {
+      "label": "Beta",
+      "path": "projects/beta.md",
+      "lobe": "projects",
+      "sublobe": "projects",
+      "type": "neuron",
+      "file_type": "markdown",
+      "file_name": "beta.md",
+      "title": "Beta",
+      "authored_title": "",
+      "excerpt": "Body of Beta.",
+      "content_preview": "Body of Beta.",
+      "content_preview_truncated": false,
+      "content_full": "Body of Beta.",
+      "tags": [],
+      "created": "2026-01-01",
+      "updated": "2026-01-01",
+      "parent": "./map.md",
+      "related": [
+        "./alpha.md"
+      ],
+      "status": "",
+      "replaced_by": "",
+      "degree": 2
+    },
+    {
+      "label": "Linked",
+      "path": "projects/linked.md",
+      "lobe": "projects",
+      "sublobe": "projects",
+      "type": "neuron",
+      "file_type": "markdown",
+      "file_name": "linked.md",
+      "title": "Linked",
+      "authored_title": "",
+      "excerpt": "[archived](../.archive/old.md)",
+      "content_preview": "[archived](../.archive/old.md)",
+      "content_preview_truncated": false,
+      "content_full": "[archived](../.archive/old.md)",
+      "tags": [],
+      "created": "2026-01-01",
+      "updated": "2026-02-03",
+      "parent": "./map.md",
+      "related": [],
+      "status": "",
+      "replaced_by": "",
+      "degree": 1
+    },
+    {
+      "label": "Projects",
+      "path": "projects/map.md",
+      "lobe": "projects",
+      "sublobe": "projects",
+      "type": "map",
+      "file_type": "markdown",
+      "file_name": "map.md",
+      "title": "Projects",
+      "authored_title": "",
+      "excerpt": "",
+      "content_preview": "up [brain.md](../brain.md)\nsideways [knowledge](../knowledge/map.md)\n\n## Contents\n\n- [alpha.md](./alpha.md) \u2014 Alpha\n- [beta.md](./beta.md) \u2014 Beta\n- [linked.md](./linked.md) \u2014 Linked",
+      "content_preview_truncated": false,
+      "content_full": "up [brain.md](../brain.md)\nsideways [knowledge](../knowledge/map.md)\n\n## Contents\n\n- [alpha.md](./alpha.md) \u2014 Alpha\n- [beta.md](./beta.md) \u2014 Beta\n- [linked.md](./linked.md) \u2014 Linked",
+      "tags": [],
+      "created": "",
+      "updated": "<TODAY>",
+      "parent": "../brain.md",
+      "related": [],
+      "status": "",
+      "replaced_by": "",
+      "degree": 5
+    }
+  ],
+  "edges": [
+    {
+      "source": "brain.md",
+      "target": "glossary.md",
+      "type": "inline"
+    },
+    {
+      "source": "brain.md",
+      "target": "knowledge/map.md",
+      "type": "inline"
+    },
+    {
+      "source": "brain.md",
+      "target": "projects/map.md",
+      "type": "inline"
+    },
+    {
+      "source": "knowledge/gamma.md",
+      "target": "knowledge/map.md",
+      "type": "parent"
+    },
+    {
+      "source": "knowledge/map.md",
+      "target": "brain.md",
+      "type": "parent"
+    },
+    {
+      "source": "knowledge/map.md",
+      "target": "knowledge/gamma.md",
+      "type": "inline"
+    },
+    {
+      "source": "knowledge/map.md",
+      "target": "projects/map.md",
+      "type": "inline"
+    },
+    {
+      "source": "projects/alpha.md",
+      "target": "projects/beta.md",
+      "type": "related"
+    },
+    {
+      "source": "projects/alpha.md",
+      "target": "projects/map.md",
+      "type": "parent"
+    },
+    {
+      "source": "projects/beta.md",
+      "target": "projects/alpha.md",
+      "type": "related"
+    },
+    {
+      "source": "projects/beta.md",
+      "target": "projects/map.md",
+      "type": "parent"
+    },
+    {
+      "source": "projects/linked.md",
+      "target": "projects/map.md",
+      "type": "parent"
+    },
+    {
+      "source": "projects/map.md",
+      "target": "brain.md",
+      "type": "parent"
+    },
+    {
+      "source": "projects/map.md",
+      "target": "knowledge/map.md",
+      "type": "inline"
+    },
+    {
+      "source": "projects/map.md",
+      "target": "projects/alpha.md",
+      "type": "inline"
+    },
+    {
+      "source": "projects/map.md",
+      "target": "projects/beta.md",
+      "type": "inline"
+    },
+    {
+      "source": "projects/map.md",
+      "target": "projects/linked.md",
+      "type": "inline"
+    }
+  ],
+  "meta": {
+    "edge_counts": {
+      "parent": 6,
+      "related": 2,
+      "inline": 9,
+      "replaced_by": 0
+    }
+  }
+}

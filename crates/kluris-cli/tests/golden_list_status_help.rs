@@ -4,22 +4,22 @@
 //! order Kluris decides them in, repeated options).
 //!
 //! A test with one run snapshots it alone; a table snapshots all its rows in
-//! one file, each run in a fresh sandbox under its `$ kluris …` line.
+//! one file, each run in a fresh sandbox under its `$ kluris …` line. The
+//! paths Kluris prints as the OS writes them (a brain's, the config's) are
+//! checked in that form and shown `/`-joined ([`Sandbox::kluris_shown`]).
 
 mod common;
 
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use common::{
-    PINNED_GIT_DATE, Run, Sandbox, command_line, normalize, printed_paths, tree_dump, write_files,
-};
+use common::{PINNED_GIT_DATE, Run, Sandbox, command_line, normalize, tree_dump, write_files};
 
 // --- snapshots -----------------------------------------------------------------
 
 /// Runs `kluris args` in `sb` and checks the run against the snapshot `name`.
 fn golden(sb: &Sandbox, name: &str, args: &[&str]) {
-    let run = sb.kluris(args);
+    let run = sb.kluris_shown(args);
     insta::with_settings!({ description => command_line(args), omit_expression => true }, {
         insta::assert_snapshot!(name, run.render(&sb.root));
     });
@@ -37,7 +37,7 @@ fn golden_table(
     let mut out = String::new();
     for args in rows {
         let sb = setup();
-        let run = sb.kluris(args);
+        let run = sb.kluris_shown(args);
         out.push_str(&format!(
             "$ {}\n{}",
             command_line(args),
@@ -448,7 +448,7 @@ fn list_and_status_print_user_text_literally() {
         DATE,
     );
     register_described(&sb, &[("demo", &brain)], "see [red]docs[/red]");
-    printed_paths(|| golden(&sb, "list_text_markup_in_description", &["list"]));
+    golden(&sb, "list_text_markup_in_description", &["list"]);
     golden(&sb, "status_text_markup_in_subject", &["status"]);
 }
 
@@ -458,7 +458,7 @@ fn list_with_a_closing_tag_in_the_description() {
     let brain = sb.work.join("brains").join("demo");
     fs::create_dir_all(&brain).unwrap();
     register_described(&sb, &[("demo", &brain)], "ends [/oops]");
-    printed_paths(|| golden(&sb, "list_text_closing_tag_in_description", &["list"]));
+    golden(&sb, "list_text_closing_tag_in_description", &["list"]);
 }
 
 // --- list ------------------------------------------------------------------------
@@ -487,8 +487,8 @@ fn list_of_three_brains() {
             ("gamma", &brains.join("gamma")),
         ],
     );
-    printed_paths(|| golden(&sb, "list_text_three_brains", &["list"]));
-    printed_paths(|| golden(&sb, "list_json_three_brains", &["list", "--json"]));
+    golden(&sb, "list_text_three_brains", &["list"]);
+    golden(&sb, "list_json_three_brains", &["list", "--json"]);
 }
 
 #[test]
@@ -535,7 +535,7 @@ fn list_json_of_two_brains_writes_nothing() {
         ],
     );
     let before = tree_dump(&sb.work);
-    printed_paths(|| golden(&sb, "list_json_two_brains", &["list", "--json"]));
+    golden(&sb, "list_json_two_brains", &["list", "--json"]);
     assert_eq!(tree_dump(&sb.work), before, "list must not write anything");
 }
 
@@ -572,7 +572,7 @@ fn help_text_with_two_brains() {
         ("a", &sb.work.join("a"), "x"),
         ("b", &sb.work.join("b"), "y"),
     ]);
-    printed_paths(|| golden(&sb, "help_text", &["help"]));
+    golden(&sb, "help_text", &["help"]);
 }
 
 #[test]
@@ -626,7 +626,7 @@ fn help_with_a_corrupt_config() {
     let sb = Sandbox::new();
     fs::create_dir_all(sb.config.parent().unwrap()).unwrap();
     fs::write(&sb.config, "brains: [\n").unwrap();
-    printed_paths(|| golden(&sb, "help_text_corrupt_config", &["help"]));
+    golden(&sb, "help_text_corrupt_config", &["help"]);
 }
 
 // --- the --help flag -------------------------------------------------------------
@@ -721,7 +721,7 @@ const REPEATED: &[&[&str]] = &[
 
 #[test]
 fn a_repeated_option_takes_its_last_value() {
-    printed_paths(|| golden_table("repeated_options", REPEATED, two_brains, whole));
+    golden_table("repeated_options", REPEATED, two_brains, whole);
 }
 
 /// Every token is parsed first (an unknown option, an option without its
@@ -821,7 +821,7 @@ const REPEATED_VALUES: &[&[&str]] = &[
 
 #[test]
 fn only_the_winning_value_is_converted() {
-    printed_paths(|| golden_table("repeated_values", REPEATED_VALUES, two_brains, whole));
+    golden_table("repeated_values", REPEATED_VALUES, two_brains, whole);
 }
 
 #[test]

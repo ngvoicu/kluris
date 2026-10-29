@@ -1,0 +1,629 @@
+---
+source: crates/kluris-cli/tests/golden_dream_mri.rs
+expression: text
+---
+== brains/calm/brain.md
+---
+auto_generated: true
+updated: '<TODAY>'
+---
+
+# calm
+
+A healthy brain
+
+## Lobes
+
+- [knowledge/](./knowledge/map.md) — 
+- [projects/](./projects/map.md) — 
+
+## Reference
+
+- [glossary.md](./glossary.md) — Domain-specific terms, acronyms, and conventions
+== brains/calm/glossary.md
+---
+updated: '2026-01-01'
+---
+
+# Glossary
+
+**JWT** -- JSON Web Token.
+== brains/calm/kluris.yml
+name: calm
+description: A healthy brain
+== brains/calm/knowledge/gamma.md
+---
+created: '2026-01-01'
+parent: ./map.md
+updated: '2026-01-01'
+---
+
+# Gamma
+
+Body of Gamma.
+== brains/calm/knowledge/map.md
+---
+auto_generated: true
+parent: ../brain.md
+siblings:
+- ../projects/map.md
+updated: '<TODAY>'
+---
+
+# Knowledge
+
+up [brain.md](../brain.md)
+sideways [projects](../projects/map.md)
+
+## Contents
+
+- [gamma.md](./gamma.md) — Gamma
+== brains/calm/projects/alpha.md
+---
+created: '2026-01-01'
+related:
+- ./beta.md
+parent: ./map.md
+updated: '2026-01-01'
+---
+
+# Alpha
+
+Body of Alpha.
+== brains/calm/projects/beta.md
+---
+created: '2026-01-01'
+related:
+- ./alpha.md
+parent: ./map.md
+updated: '2026-01-01'
+---
+
+# Beta
+
+Body of Beta.
+== brains/calm/projects/map.md
+---
+auto_generated: true
+parent: ../brain.md
+siblings:
+- ../knowledge/map.md
+updated: '<TODAY>'
+---
+
+# Projects
+
+up [brain.md](../brain.md)
+sideways [knowledge](../knowledge/map.md)
+
+## Contents
+
+- [alpha.md](./alpha.md) — Alpha
+- [beta.md](./beta.md) — Beta
+== brains/rich/README.md
+# Rich
+
+A [link that is not checked](./nowhere.md).
+== brains/rich/brain.md
+---
+auto_generated: true
+updated: '<TODAY>'
+---
+
+# rich
+
+The rich fixture brain
+
+## Lobes
+
+- [knowledge/](./knowledge/map.md) — 
+- [my-lobe/](./my-lobe/map.md) — 
+- [projects/](./projects/map.md) — 
+- [uncommitted-lobe/](./uncommitted-lobe/map.md) — 
+
+## Reference
+
+- [glossary.md](./glossary.md) — Domain-specific terms, acronyms, and conventions
+== brains/rich/glossary.md
+---
+updated: '2026-01-01'
+---
+
+# Glossary
+
+**JWT** -- JSON Web Token.
+== brains/rich/kluris.yml
+name: rich
+description: The rich fixture brain
+== brains/rich/knowledge/beta.md
+---
+created: '2026-01-01'
+parent: ./map.md
+related:
+- broken.md
+- ../projects/alpha.md
+updated: '2026-01-01'
+---
+
+# Beta
+
+Body of Beta.
+== brains/rich/knowledge/broken.md
+---
+created: '2026-01-01'
+related:
+- ./gone.md
+- ./beta.md
+parent: ./map.md
+updated: '2026-01-01'
+---
+
+# Broken
+
+See [x](./missing.md#top) and [web](https://x.io).
+== brains/rich/knowledge/crlf.md
+---\r
+created: '2026-01-01'\r
+parent: ./map.md\r
+updated: '2026-01-01'\r
+---\r
+\r
+# Crlf\r
+\r
+Body of Crlf.\r
+== brains/rich/knowledge/deep/deeper/leaf.md
+---
+created: '2026-01-01'
+parent: ./map.md
+updated: '2026-01-01'
+---
+
+# Leaf
+
+Body of Leaf.
+== brains/rich/knowledge/deep/deeper/map.md
+---
+auto_generated: true
+parent: ../map.md
+siblings: []
+updated: '<TODAY>'
+---
+
+# Deeper
+
+up [deep](../map.md)
+
+## Contents
+
+- [leaf.md](./leaf.md) — Leaf
+== brains/rich/knowledge/deep/map.md
+---
+auto_generated: true
+parent: ../map.md
+siblings:
+- ../src/map.md
+updated: '<TODAY>'
+---
+
+# Deep
+
+up [knowledge](../map.md)
+sideways [src](../src/map.md)
+
+## Contents
+
+- [deeper/](./deeper/map.md)
+== brains/rich/knowledge/map.md
+---
+auto_generated: true
+parent: ../brain.md
+siblings:
+- ../my-lobe/map.md
+- ../projects/map.md
+- ../uncommitted-lobe/map.md
+updated: '<TODAY>'
+---
+
+# Knowledge
+
+up [brain.md](../brain.md)
+sideways [my-lobe](../my-lobe/map.md) | [projects](../projects/map.md) | [uncommitted-lobe](../uncommitted-lobe/map.md)
+
+## Contents
+
+- [deep/](./deep/map.md)
+- [src/](./src/map.md)
+- [beta.md](./beta.md) — Beta
+- [broken.md](./broken.md) — Broken
+- [crlf.md](./crlf.md) — Crlf
+- [newer.md](./newer.md) — Newer
+- [old.md](./old.md) — Old
+- [older.md](./older.md) — Older
+- [target.md](./target.md) — Target
+- [user.md](./user.md) — User
+== brains/rich/knowledge/newer.md
+---
+created: '2026-01-01'
+replaced_by: ./old.md
+status: deprecated
+parent: ./map.md
+updated: '2026-01-01'
+---
+
+# Newer
+
+Body of Newer.
+== brains/rich/knowledge/old.md
+---
+created: '2026-01-01'
+parent: ./map.md
+related:
+- user.md
+status: deprecated
+updated: '2026-01-01'
+---
+
+# Old
+
+Body of Old.
+== brains/rich/knowledge/older.md
+---
+created: '2026-01-01'
+replaced_by: ./gone.md
+status: deprecated
+parent: ./map.md
+updated: '2026-01-01'
+---
+
+# Older
+
+Body of Older.
+== brains/rich/knowledge/src/Beta.md
+---
+created: '2026-01-01'
+related:
+- ../target.md
+parent: ./map.md
+updated: '2026-01-01'
+---
+
+# Beta
+
+Body of Beta.
+== brains/rich/knowledge/src/_u.md
+---
+created: '2026-01-01'
+related:
+- ../target.md
+parent: ./map.md
+updated: '2026-01-01'
+---
+
+# _u
+
+Body of _u.
+== brains/rich/knowledge/src/a-b.md
+---
+created: '2026-01-01'
+related:
+- ../target.md
+parent: ./map.md
+updated: '2026-01-01'
+---
+
+# a-b
+
+Body of a-b.
+== brains/rich/knowledge/src/a.b.md
+---
+created: '2026-01-01'
+related:
+- ../target.md
+parent: ./map.md
+updated: '2026-01-01'
+---
+
+# a.b
+
+Body of a.b.
+== brains/rich/knowledge/src/alpha-2.md
+---
+created: '2026-01-01'
+related:
+- ../target.md
+parent: ./map.md
+updated: '2026-01-01'
+---
+
+# alpha-2
+
+Body of alpha-2.
+== brains/rich/knowledge/src/map.md
+---
+auto_generated: true
+parent: ../map.md
+siblings:
+- ../deep/map.md
+updated: '<TODAY>'
+---
+
+# Src
+
+up [knowledge](../map.md)
+sideways [deep](../deep/map.md)
+
+## Contents
+
+- [_u.md](./_u.md) — _u
+- [a-b.md](./a-b.md) — a-b
+- [a.b.md](./a.b.md) — a.b
+- [alpha-2.md](./alpha-2.md) — alpha-2
+- [Beta.md](./Beta.md) — Beta
+- [mid.md](./mid.md) — mid
+- [zeta.md](./zeta.md) — zeta
+== brains/rich/knowledge/src/mid.md
+---
+created: '2026-01-01'
+related:
+- ../target.md
+parent: ./map.md
+updated: '2026-01-01'
+---
+
+# mid
+
+Body of mid.
+== brains/rich/knowledge/src/zeta.md
+---
+created: '2026-01-01'
+related:
+- ../target.md
+parent: ./map.md
+updated: '2026-01-01'
+---
+
+# zeta
+
+Body of zeta.
+== brains/rich/knowledge/target.md
+---
+created: '2026-01-01'
+parent: ./map.md
+related:
+- src/Beta.md
+- src/_u.md
+- src/a-b.md
+- src/a.b.md
+- src/alpha-2.md
+- src/mid.md
+- src/zeta.md
+- user.md
+updated: '2026-01-01'
+---
+
+# Target
+
+Body of Target.
+== brains/rich/knowledge/user.md
+---
+created: '2026-01-01'
+related:
+- ./old.md
+- ./target.md
+parent: ./map.md
+updated: '2026-01-01'
+---
+
+# User
+
+Body of User.
+== brains/rich/my-lobe/map.md
+---
+auto_generated: true
+parent: ../brain.md
+siblings:
+- ../knowledge/map.md
+- ../projects/map.md
+- ../uncommitted-lobe/map.md
+updated: '<TODAY>'
+---
+
+# My Lobe
+
+up [brain.md](../brain.md)
+sideways [knowledge](../knowledge/map.md) | [projects](../projects/map.md) | [uncommitted-lobe](../uncommitted-lobe/map.md)
+
+## Contents
+
+- [thing.md](./thing.md) — Thing
+== brains/rich/my-lobe/thing.md
+---
+created: '2026-01-01'
+parent: ./map.md
+updated: '2026-01-01'
+---
+
+# Thing
+
+Body of Thing.
+== brains/rich/projects/agent.md
+---
+base:
+- x
+- y
+copy:
+- x
+- y
+created: '2026-01-01'
+emoji: "\\U0001F680 launch"
+long: a long line that goes past the eighty column limit so that the writer folds
+  it onto two lines
+nested:
+- 2026-01-03
+parent: ./map.md
+related:
+- ./alpha.md
+tags:
+- auth
+- jwt
+- true
+- false
+- 2026
+- 1.1
+title: Agent written
+updated: '2026-01-01'
+when: '2026-01-02T10:00:00+00:00'
+---
+
+# Agent written
+
+Text with [alpha](./alpha.md).
+== brains/rich/projects/alpha.md
+---
+created: '2026-01-01'
+parent: ./map.md
+related:
+- ../knowledge/beta.md
+- agent.md
+- api/spec.yml
+updated: '2026-02-03'
+---
+
+# Alpha
+
+Changed.
+== brains/rich/projects/api/Shout.MD
+# Shouted
+== brains/rich/projects/api/endpoints.md
+---
+created: '2026-01-01'
+tags:
+- api
+parent: ./map.md
+updated: '2026-01-01'
+---
+
+# Endpoints
+
+Body of Endpoints.
+== brains/rich/projects/api/map.md
+---
+auto_generated: true
+parent: ../map.md
+siblings: []
+updated: '<TODAY>'
+---
+
+# Api
+
+up [projects](../map.md)
+
+## Contents
+
+- [endpoints.md](./endpoints.md) — Endpoints
+- [Shout.MD](./Shout.MD) — Shouted
+- [spec.yml](./spec.yml) — API spec
+== brains/rich/projects/api/raw.yaml
+not: a neuron
+== brains/rich/projects/api/spec.yml
+#---
+# parent: ./map.md
+# related:
+# - ../alpha.md
+# title: API spec
+# updated: '2026-01-01'
+#---
+openapi: 3.0.0
+info:
+  title: demo
+== brains/rich/projects/map.md
+---
+auto_generated: true
+parent: ../brain.md
+siblings:
+- ../knowledge/map.md
+- ../my-lobe/map.md
+- ../uncommitted-lobe/map.md
+updated: '<TODAY>'
+---
+
+# Projects
+
+up [brain.md](../brain.md)
+sideways [knowledge](../knowledge/map.md) | [my-lobe](../my-lobe/map.md) | [uncommitted-lobe](../uncommitted-lobe/map.md)
+
+## Contents
+
+- [api/](./api/map.md)
+- [agent.md](./agent.md) — Agent written
+- [alpha.md](./alpha.md) — Alpha
+- [no-frontmatter.md](./no-frontmatter.md) — No frontmatter
+- [no-parent.md](./no-parent.md) — Linker written
+== brains/rich/projects/no-frontmatter.md
+---
+created: '2026-01-01'
+parent: ./map.md
+updated: '2026-01-01'
+---
+
+# No frontmatter
+
+Just text.
+== brains/rich/projects/no-parent.md
+---
+created: '2026-01-01'
+parent: ./map.md
+tags:
+- linker
+updated: '2026-01-01'
+when: '2026-01-02T10:00:00+00:00'
+---
+
+# Linker written
+== brains/rich/root-note.md
+---
+created: '2026-01-01'
+parent: ./map.md
+updated: '2026-01-01'
+---
+
+# Root note
+
+Body of Root note.
+== brains/rich/uncommitted-lobe/later.md
+---
+created: '2026-01-01'
+parent: ./map.md
+updated: '2025-05-05'
+---
+
+# Later
+
+Body of Later.
+== brains/rich/uncommitted-lobe/map.md
+---
+auto_generated: true
+parent: ../brain.md
+siblings:
+- ../knowledge/map.md
+- ../my-lobe/map.md
+- ../projects/map.md
+updated: '<TODAY>'
+---
+
+# Uncommitted Lobe
+
+up [brain.md](../brain.md)
+sideways [knowledge](../knowledge/map.md) | [my-lobe](../my-lobe/map.md) | [projects](../projects/map.md)
+
+## Contents
+
+- [later.md](./later.md) — Later
+== home/.kluris/config.yml
+brains:
+  "rich":
+    path: "<ROOT>/work/brains/rich"
+    description: "fixture"
+  "calm":
+    path: "<ROOT>/work/brains/calm"
+    description: "fixture"

@@ -46,8 +46,7 @@ pub fn skill_brain(path: &str) -> Option<&str> {
 /// to `work/`), after asserting that the shared snapshot `LABEL` holds its
 /// text, normalized against `root`; `None` for any other file. `variant`
 /// gets that text and names what tells it from the other texts of the same
-/// brain and companions (empty when nothing does). On Windows a text that
-/// holds a path under the root (`<ROOT>\`) is the `windows` variant.
+/// brain and companions (empty when nothing does).
 pub fn skill_reference(
     path: &str,
     bytes: &[u8],
@@ -76,9 +75,6 @@ pub fn skill_reference(
     let mut settings = insta::Settings::clone_current();
     settings.set_prepend_module_to_snapshot(false);
     settings.set_snapshot_path(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/snapshots"));
-    if cfg!(windows) && text.contains("<ROOT>\\") {
-        settings.set_snapshot_suffix("windows");
-    }
     let held = format!("{text}<end of file>\n");
     settings.bind(|| insta::assert_snapshot!(label.as_str(), held.as_str()));
     Some(format!("<snapshot {label}>\n"))

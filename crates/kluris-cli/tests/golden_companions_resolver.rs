@@ -25,8 +25,8 @@ use std::path::Path;
 
 use common::shared::{COMPANIONS, skill_reference, vendored, vendored_marker};
 use common::{
-    PINNED_GIT_DATE, Run, Sandbox, changes_dump, file_body, normalize, printed_paths, tree_files,
-    unstored, write,
+    PINNED_GIT_DATE, Run, Sandbox, changes_dump, file_body, normalize, tree_files, unstored,
+    windows_variant, write,
 };
 
 /// The fixture states: `base`, or `base` with the overlay of that name, and
@@ -112,9 +112,27 @@ fn read(path: &Path) -> Vec<u8> {
     fs::read(path).unwrap_or_else(|e| panic!("{}: {e}", path.display()))
 }
 
-/// Snapshot `run` as `name`.
+/// The snapshots with a Windows variant: a missing `kluris.yml` is
+/// reported with the OS's own error text ("The system cannot find the file
+/// specified." on Windows).
+const WINDOWS_VARIANTS: &[&str] = &[
+    "add_kluris_yml_missing_json",
+    "add_kluris_yml_missing_text",
+    "remove_kluris_yml_missing_json",
+    "remove_kluris_yml_missing_text",
+];
+
+/// Snapshot `run` as `name` (its Windows variant when [`WINDOWS_VARIANTS`]
+/// names it), the configured paths it prints checked in the OS's form and
+/// shown `/`-joined ([`Sandbox::shown`]).
 fn check(sb: &Sandbox, name: &str, run: &Run) {
-    insta::assert_snapshot!(name, run.render(&sb.root));
+    let text = sb.shown(run).render(&sb.root);
+    let check = || insta::assert_snapshot!(name, text);
+    if WINDOWS_VARIANTS.contains(&name) {
+        windows_variant(check);
+    } else {
+        check();
+    }
 }
 
 /// Snapshot what a run changed under `work/` as `name`: each added or
@@ -203,7 +221,7 @@ fn companion_list_json() {
         ("list_json_c", &["--brain", "c"]),
     ] {
         let args = [&["companion", "list"][..], brain, &["--json"]].concat();
-        printed_paths(|| check(&sb, name, &sb.kluris(&args)));
+        check(&sb, name, &sb.kluris(&args));
         assert_unchanged(&sb, &before);
     }
 }
@@ -449,9 +467,7 @@ fn companion_a_brain_whose_kluris_yml_does_not_read() {
                 ]
                 .concat();
                 let run = sb.kluris(&args);
-                printed_paths(|| {
-                    check(&sb, &format!("{command}_kluris_yml_{damage}_{flag}"), &run)
-                });
+                check(&sb, &format!("{command}_kluris_yml_{damage}_{flag}"), &run);
                 assert_unchanged(&sb, &before);
             }
         }
@@ -501,8 +517,6 @@ struct Case {
     args: Vec<&'static str>,
     env: Env,
     out: Out,
-    /// Whether the run prints a configured path (see [`printed_paths`]).
-    prints_paths: bool,
 }
 
 impl Case {
@@ -513,13 +527,7 @@ impl Case {
             args: args.to_vec(),
             env: &[],
             out: Out::Whole,
-            prints_paths: false,
         }
-    }
-
-    fn prints_paths(mut self) -> Self {
-        self.prints_paths = true;
-        self
     }
 
     fn env(mut self, env: Env) -> Self {
@@ -576,22 +584,16 @@ fn resolver_cases() -> Vec<Case> {
         ),
     ];
     const BAD_PATHS: Brains = Brains::Registered(&[("ok", Dir), ("gone", Missing), ("file", File)]);
-    cases.push(
-        Case::new(
-            "all_with_bad_paths_json",
-            BAD_PATHS,
-            &[FAN, "--brain", "all", "--json"],
-        )
-        .prints_paths(),
-    );
-    cases.push(
-        Case::new(
-            "all_with_bad_paths_text",
-            BAD_PATHS,
-            &[FAN, "--brain", "all"],
-        )
-        .prints_paths(),
-    );
+    cases.push(Case::new(
+        "all_with_bad_paths_json",
+        BAD_PATHS,
+        &[FAN, "--brain", "all", "--json"],
+    ));
+    cases.push(Case::new(
+        "all_with_bad_paths_text",
+        BAD_PATHS,
+        &[FAN, "--brain", "all"],
+    ));
 
     const COUNTS: [(&str, Brains); 3] = [("0", NONE), ("1", A), ("2", AB)];
     for (count, brains) in COUNTS {
@@ -681,7 +683,7 @@ fn resolver_cases() -> Vec<Case> {
             ("single_text", &[SINGLE]),
             ("fan_named_json", &[FAN, "--brain", "solo", "--json"]),
         ] {
-            cases.push(Case::new(format!("one_brain_{kind}_{how}"), brains, args).prints_paths());
+            cases.push(Case::new(format!("one_brain_{kind}_{how}"), brains, args));
         }
     }
 
@@ -706,14 +708,11 @@ fn resolver_cases() -> Vec<Case> {
         Brains::Unicode,
         &[SINGLE, "--json"],
     ));
-    cases.push(
-        Case::new(
-            "unicode_named",
-            Brains::Unicode,
-            &[SINGLE, "--brain", "café", "--json"],
-        )
-        .prints_paths(),
-    );
+    cases.push(Case::new(
+        "unicode_named",
+        Brains::Unicode,
+        &[SINGLE, "--brain", "café", "--json"],
+    ));
     cases
 }
 
@@ -763,7 +762,7 @@ fn resolver_table() {
         }
         let run = Run::of(cmd);
         let name = format!("resolver_{}", case.name);
-        let snapshot = || match case.out {
+        match case.out {
             Out::Whole => check(&sb, &name, &run),
             Out::Name => {
                 let doc: serde_json::Value = serde_json::from_str(&run.stdout)
@@ -774,11 +773,6 @@ fn resolver_table() {
                     format!("== name\n{brain}\n== exit {}\n", run.code)
                 );
             }
-        };
-        if case.prints_paths {
-            printed_paths(snapshot);
-        } else {
-            snapshot();
         }
     }
 }

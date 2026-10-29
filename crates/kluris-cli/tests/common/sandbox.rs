@@ -11,7 +11,9 @@ use std::process::{Command, Stdio};
 
 use kluris_core::json;
 
-use super::golden::{PASSTHROUGH_ENV, PINNED_ENV, decode, normalize, python_json};
+use super::golden::{
+    PASSTHROUGH_ENV, PINNED_ENV, decode, native_paths, normalize, python_json, slashed,
+};
 
 /// The length of every sandbox root, as Kluris prints it. A table whose
 /// column widths follow a path's length (`list`) is then laid out the same
@@ -62,6 +64,38 @@ impl Sandbox {
             home,
             config,
         }
+    }
+
+    /// The paths Kluris prints as the OS writes them, built from the config
+    /// it reads: the config's own path, then each registered brain's path,
+    /// as the config holds it, and its `kluris.yml`. Only the config's path
+    /// when there is no config or it does not read.
+    pub fn configured_paths(&self) -> Vec<PathBuf> {
+        let mut paths = vec![self.config.clone()];
+        if let Ok(config) = kluris_core::config::read_global_config(&self.config) {
+            for entry in config.brains.values() {
+                let brain = PathBuf::from(&entry.path);
+                paths.push(brain.join("kluris.yml"));
+                paths.push(brain);
+            }
+        }
+        paths
+    }
+
+    /// `kluris args` as [`Sandbox::kluris`] runs it, with the paths of
+    /// [`Sandbox::configured_paths`] checked in the OS's form and shown
+    /// `/`-joined ([`Run::native_paths`]).
+    pub fn kluris_shown(&self, args: &[&str]) -> Run {
+        self.shown(&self.kluris(args))
+    }
+
+    /// `run`, a run in this sandbox, with the paths of
+    /// [`Sandbox::configured_paths`] checked in the OS's form and shown
+    /// `/`-joined ([`Run::native_paths`]).
+    pub fn shown(&self, run: &Run) -> Run {
+        let paths = self.configured_paths();
+        let paths: Vec<&Path> = paths.iter().map(PathBuf::as_path).collect();
+        run.native_paths(&paths)
     }
 
     /// The global git config every git of the sandbox reads.
@@ -186,18 +220,6 @@ pub fn write(path: &Path, bytes: &[u8]) {
     fs::write(path, bytes).unwrap();
 }
 
-/// Runs `check` with its snapshots named for the paths this OS prints: a
-/// configured path is printed as written, with native separators, so on
-/// Windows (`\`) such a snapshot is the `windows` variant of the one macOS
-/// and Linux share.
-pub fn printed_paths(check: impl FnOnce()) {
-    #[allow(unused_mut)]
-    let mut settings = insta::Settings::clone_current();
-    #[cfg(windows)]
-    settings.set_snapshot_suffix("windows");
-    settings.bind(check);
-}
-
 /// `tests/fixtures/<name>` of this crate.
 pub fn fixture(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -220,7 +242,9 @@ pub fn unstored(rel: &str) -> String {
         .join("/")
 }
 
-/// Copies the folder `from` to `to`, byte for byte, creating folders.
+/// Copies the folder `from` to `to`, byte for byte, creating folders. Every
+/// caller copies a fixture this repository tracks, so there is no `.git`
+/// to leave out.
 pub fn copy_tree(from: &Path, to: &Path) {
     fs::create_dir_all(to).unwrap_or_else(|e| panic!("{}: {e}", to.display()));
     for entry in fs::read_dir(from).unwrap_or_else(|e| panic!("{}: {e}", from.display())) {
@@ -259,6 +283,23 @@ impl Run {
             code: out.status.code().unwrap_or(-1),
             stdout: decode(&out.stdout, &format!("stdout of `{what}`")),
             stderr: decode(&out.stderr, &format!("stderr of `{what}`")),
+        }
+    }
+
+    /// The run with `paths`, which Kluris prints as the OS writes them,
+    /// checked to be in that form and shown `/`-joined in both streams
+    /// ([`native_paths`]), so that one snapshot holds on every OS.
+    pub fn native_paths(&self, paths: &[&Path]) -> Run {
+        let shown: Vec<String> = paths.iter().map(|path| slashed(path)).collect();
+        let pairs: Vec<(&Path, &str)> = paths
+            .iter()
+            .zip(&shown)
+            .map(|(path, shown)| (*path, shown.as_str()))
+            .collect();
+        Run {
+            code: self.code,
+            stdout: native_paths(&self.stdout, &pairs),
+            stderr: native_paths(&self.stderr, &pairs),
         }
     }
 

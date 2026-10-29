@@ -12,20 +12,32 @@ mod common;
 
 use std::fs;
 
-use common::{Sandbox, copy_tree, fixture, printed_paths, tree_dump, write};
+use common::{Sandbox, copy_tree, fixture, tree_dump, write};
+
+/// The brains `config.yml` registers, each at `/kf/brains/<name>`.
+const BRAINS: [&str; 6] = ["alpha", "beta", "custom", "legacy", "minimal", "broken"];
 
 #[test]
 fn list_json_reads_written_and_stale_configs() {
     let sb = Sandbox::new();
     let brains = sb.work.join("brains");
     copy_tree(&fixture("config-reading/brains"), &brains);
-    let config = fs::read_to_string(fixture("config-reading/config.yml")).unwrap();
-    let config = config.replace("/kf/brains", &brains.display().to_string());
+    // Each brain's path as the OS writes it, as `create --path` stores it.
+    let mut config = fs::read_to_string(fixture("config-reading/config.yml")).unwrap();
+    for name in BRAINS {
+        let placeholder = format!("/kf/brains/{name}\n");
+        assert!(
+            config.contains(&placeholder),
+            "no {placeholder:?} in config.yml"
+        );
+        let path = brains.join(name);
+        config = config.replace(&placeholder, &format!("{}\n", path.display()));
+    }
     write(&sb.config, config.as_bytes());
     let before = tree_dump(&sb.work);
 
-    let run = sb.kluris(&["list", "--json"]);
+    let run = sb.kluris_shown(&["list", "--json"]);
 
-    printed_paths(|| insta::assert_snapshot!("list_json", run.render(&sb.root)));
+    insta::assert_snapshot!("list_json", run.render(&sb.root));
     assert_eq!(tree_dump(&sb.work), before, "list must not write anything");
 }

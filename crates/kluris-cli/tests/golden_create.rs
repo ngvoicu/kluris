@@ -8,9 +8,9 @@
 //! companion file and each brain's skill shown by reference, see [`tree`])
 //! and, for a new brain,
 //! `<name>__git` (its first commit, branch, remote and status). A run that
-//! must write nothing is checked against the tree from before it. On
-//! Windows a snapshot holding a path under the root has its own `windows`
-//! variant (see [`snapshot`]).
+//! must write nothing is checked against the tree from before it. The paths
+//! Kluris prints and writes as the OS writes them are checked in that form
+//! and shown `/`-joined, so one snapshot holds on every OS (see [`shown`]).
 //!
 //! Scenarios that start from brains made earlier build them from
 //! `tests/fixtures/create`: a brain's files and the skill it had in every
@@ -29,8 +29,8 @@ use std::sync::LazyLock;
 use common::sandbox::GITCONFIG;
 use common::shared::{skill_brain, skill_reference, vendored_marker};
 use common::{
-    PINNED_GIT_DATE, Run, Sandbox, file_body, fixture, git_state, normalize, printed_paths,
-    tree_dump, tree_files, write_files,
+    PINNED_GIT_DATE, Run, Sandbox, file_body, fixture, git_state, native_paths, normalize, slashed,
+    tree_dump, tree_files, windows_variant, write_files,
 };
 use regex::Regex;
 
@@ -57,17 +57,75 @@ const IDENTITY: &[&str] = &[
 
 // --- snapshots -------------------------------------------------------------------
 
-/// `text` as the snapshot `name`. A path under the root is printed and
-/// written with native separators, so a snapshot holding one (`<ROOT>\` on
-/// Windows) is named for the paths this OS prints ([`printed_paths`]).
+/// The snapshots with a Windows variant: `register_by_home`'s tree has no
+/// `link`, as the test makes no symlink on Windows.
+const WINDOWS_VARIANTS: &[&str] = &["register_by_home__tree"];
+
+/// `text` as the snapshot `name` (its Windows variant when
+/// [`WINDOWS_VARIANTS`] names it).
 fn snapshot(name: &str, text: impl AsRef<str>) {
-    let text = text.as_ref();
-    let check = || insta::assert_snapshot!(name, text);
-    if text.contains("<ROOT>\\") {
-        printed_paths(check);
+    let check = || insta::assert_snapshot!(name, text.as_ref());
+    if WINDOWS_VARIANTS.contains(&name) {
+        windows_variant(check);
     } else {
         check();
     }
+}
+
+/// The paths a run in `sb` prints and `config.yml` holds as the OS writes
+/// them: the config's own and each registered brain's
+/// ([`Sandbox::configured_paths`]), `work/` and every folder under it whose
+/// name does not start with `.` (where brains are made and registered;
+/// Kluris's and the agents' own folders under HOME are dot-named) with the
+/// `kluris.yml` in it, then `named`, paths a case names that do not exist.
+/// `config.yml` folds a long value at a space, so each part of a folder's
+/// path before a space is one of these paths too.
+fn paths_in_os_form(sb: &Sandbox, named: &[PathBuf]) -> Vec<PathBuf> {
+    fn folders(dir: &Path, out: &mut Vec<PathBuf>) {
+        out.push(dir.to_path_buf());
+        out.push(dir.join("kluris.yml"));
+        let text = dir.display().to_string();
+        out.extend(
+            text.match_indices(' ')
+                .map(|(at, _)| PathBuf::from(&text[..at])),
+        );
+        let entries = fs::read_dir(dir).unwrap_or_else(|e| panic!("{}: {e}", dir.display()));
+        for entry in entries {
+            let entry = entry.unwrap_or_else(|e| panic!("{e}"));
+            let dot = entry.file_name().to_string_lossy().starts_with('.');
+            if !dot && entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+                folders(&entry.path(), out);
+            }
+        }
+    }
+    let mut paths = sb.configured_paths();
+    folders(&sb.work, &mut paths);
+    paths.extend(named.iter().cloned());
+    paths
+}
+
+/// `text` (a run's stream or a dump of `work/`) with the paths of
+/// [`paths_in_os_form`] checked in the OS's form and shown `/`-joined
+/// ([`native_paths`]).
+fn shown(sb: &Sandbox, text: &str, named: &[PathBuf]) -> String {
+    let paths = paths_in_os_form(sb, named);
+    let shown: Vec<String> = paths.iter().map(|path| slashed(path)).collect();
+    let pairs: Vec<(&Path, &str)> = paths
+        .iter()
+        .zip(&shown)
+        .map(|(path, shown)| (path.as_path(), shown.as_str()))
+        .collect();
+    native_paths(text, &pairs)
+}
+
+/// `run` as its snapshot holds it, its streams [`shown`].
+fn run_text(sb: &Sandbox, run: &Run, named: &[PathBuf]) -> String {
+    Run {
+        code: run.code,
+        stdout: shown(sb, &run.stdout, named),
+        stderr: shown(sb, &run.stderr, named),
+    }
+    .render(&sb.root)
 }
 
 /// `kluris args` with stdin a pseudo-terminal and `KLURIS_NO_PROMPT` unset:
@@ -104,7 +162,7 @@ fn tree(sb: &Sandbox) -> String {
             .unwrap_or_else(|| file_body(bytes));
         out.push_str(&format!("== {path}\n{body}"));
     }
-    normalize(&out, &sb.root)
+    normalize(&shown(sb, &out, &[]), &sb.root)
 }
 
 /// What tells a brain's skill text from the others of the same brain and
@@ -149,6 +207,23 @@ fn repo_state(sb: &Sandbox, rel: &str) -> String {
     normalize(&git_state(&sb.work.join(rel)), &sb.root)
 }
 
+/// `rel`, a `/`-joined path, under `base` as the OS writes it.
+fn under(base: &Path, rel: &str) -> PathBuf {
+    rel.split('/')
+        .fold(base.to_path_buf(), |path, part| path.join(part))
+}
+
+/// The folder `create` makes from its `given` arguments (`NAME [--path
+/// PATH]`, PATH under `work/`, `work/` itself when none is given), which its
+/// errors print and which does not exist.
+fn create_target(sb: &Sandbox, given: &[&str]) -> PathBuf {
+    let base = match given.iter().position(|arg| *arg == "--path") {
+        Some(at) => under(&sb.work, given[at + 1]),
+        None => sb.work.clone(),
+    };
+    base.join(given[0])
+}
+
 fn write(sb: &Sandbox, rel: &str, text: &str) {
     write_files(&sb.work, &[(rel, text)]);
 }
@@ -164,7 +239,7 @@ fn git(sb: &Sandbox, rel: &str, args: &[&str]) {
 /// The run, the tree it leaves and, with `repo` (relative to `work/`), the
 /// repository there.
 fn assert_golden(name: &str, sb: &Sandbox, run: &Run, repo: Option<&str>) {
-    snapshot(&format!("{name}__run"), run.render(&sb.root));
+    snapshot(&format!("{name}__run"), run_text(sb, run, &[]));
     snapshot(&format!("{name}__tree"), tree(sb));
     if let Some(repo) = repo {
         snapshot(&format!("{name}__git"), repo_state(sb, repo));
@@ -174,8 +249,20 @@ fn assert_golden(name: &str, sb: &Sandbox, run: &Run, repo: Option<&str>) {
 /// The run of a command that writes nothing: `before` is the tree from
 /// before it.
 fn assert_golden_unchanged(name: &str, sb: &Sandbox, before: &str, run: &Run) {
+    assert_golden_unchanged_naming(name, sb, before, run, &[]);
+}
+
+/// [`assert_golden_unchanged`] for a run that also prints `named`, paths
+/// that do not exist.
+fn assert_golden_unchanged_naming(
+    name: &str,
+    sb: &Sandbox,
+    before: &str,
+    run: &Run,
+    named: &[PathBuf],
+) {
     assert_eq!(files(sb), before, "{name}: the run changed the tree");
-    snapshot(&format!("{name}__run"), run.render(&sb.root));
+    snapshot(&format!("{name}__run"), run_text(sb, run, named));
 }
 
 // --- brains made earlier -----------------------------------------------------------
@@ -586,11 +673,12 @@ fn create_validation_json() {
         args.extend(*given);
         args.push("--json");
         let run = sb.kluris(&args);
-        assert_golden_unchanged(
+        assert_golden_unchanged_naming(
             &format!("create_validation_json__{case}"),
             sb,
             &before,
             &run,
+            &[create_target(sb, given)],
         );
     }
 }
@@ -609,11 +697,12 @@ fn create_validation_text() {
             args.extend(["--path", "brains"]);
         }
         let run = sb.kluris(&args);
-        assert_golden_unchanged(
+        assert_golden_unchanged_naming(
             &format!("create_validation_text__{case}"),
             sb,
             &before,
             &run,
+            &[create_target(sb, &args[1..])],
         );
     }
 }
@@ -929,7 +1018,7 @@ fn a_registered_name_create_refuses_still_loads() {
         let run = sb.kluris(args);
         snapshot(
             &format!("a_registered_name_create_refuses_still_loads__{case}__run"),
-            run.render(&sb.root),
+            run_text(sb, &run, &[]),
         );
     }
 }
@@ -1079,17 +1168,24 @@ fn register_path_errors() {
     mkdir(sb, "empty");
     let before = files(sb);
     for (case, source) in REGISTER_PATH_ERRORS {
+        // The paths these errors print, which do not exist.
+        let named = match *case {
+            "missing-home" => vec![sb.home.join("nope")],
+            "missing-deeper" => vec![Path::new("nope").join("deeper")],
+            _ => vec![],
+        };
         for (mode, json) in [("json", true), ("text", false)] {
             let mut args = vec!["register", source];
             if json {
                 args.push("--json");
             }
             let run = sb.kluris(&args);
-            assert_golden_unchanged(
+            assert_golden_unchanged_naming(
                 &format!("register_path_errors__{case}__{mode}"),
                 sb,
                 &before,
                 &run,
+                &named,
             );
         }
     }
@@ -1281,7 +1377,7 @@ fn help_of_the_commands() {
         ("remove", &["remove", "--help"][..]),
     ] {
         let run = sb.kluris(args);
-        snapshot(&format!("help__{case}__run"), run.render(&sb.root));
+        snapshot(&format!("help__{case}__run"), run_text(sb, &run, &[]));
     }
 }
 
