@@ -1,8 +1,7 @@
 //! `kluris dream` in the core (`kluris_core::dream`): v2's `_sync_brain_state`
 //! and validators (research-03 §2.5) with the decided differences (quoted
 //! dates, the file's own line endings, no map.md in pruned directories, paths
-//! `/`-joined). Expected bytes follow v2.28.11's writers; `parity/test_dream.py`
-//! checks the same rules against the live oracle.
+//! `/`-joined). Expected bytes follow v2.28.11's writers.
 
 use std::collections::BTreeMap;
 use std::fs;

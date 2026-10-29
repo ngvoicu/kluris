@@ -39,13 +39,11 @@ fn decoded(line: &str) -> String {
     String::from_utf16(&units).expect("UTF-16")
 }
 
-fn spec<'a>(parity: bool, cargo_args: &'a [String]) -> Spec<'a> {
+fn spec(cargo_args: &[String]) -> Spec<'_> {
     Spec {
         id: "kluris-0000abcd-12345678",
         channel: "1.99.0",
         jobs: 2,
-        parity,
-        parity_files: &[],
         cargo_args,
         installer_smoke: false,
         wrapper: false,
@@ -60,7 +58,7 @@ fn smoke_spec(wrapper: bool) -> Spec<'static> {
     Spec {
         installer_smoke: true,
         wrapper,
-        ..spec(false, &[])
+        ..spec(&[])
     }
 }
 
@@ -69,7 +67,7 @@ fn published_spec(version: &'static str) -> Spec<'static> {
     Spec {
         installer_smoke: true,
         published: Some(version),
-        ..spec(false, &[])
+        ..spec(&[])
     }
 }
 
@@ -95,13 +93,11 @@ mod words_of_the_command {
     }
 
     #[test]
-    fn no_words_is_the_default_machine_without_parity() {
+    fn no_words_is_the_default_machine() {
         assert_eq!(
             run_of(""),
             Options {
                 machine: None,
-                parity: false,
-                parity_files: vec![],
                 cargo_args: vec![],
                 installer_smoke: false,
                 wrapper: None,
@@ -116,7 +112,7 @@ mod words_of_the_command {
     #[test]
     fn the_installer_smoke_and_its_wrapper() {
         let options = run_of("--installer-smoke");
-        assert!(options.installer_smoke && !options.parity, "{options:?}");
+        assert!(options.installer_smoke, "{options:?}");
         assert_eq!(options.wrapper, None);
         let options = run_of("--machine zeewin --installer-smoke --wrapper ../site/install.ps1");
         assert_eq!(options.machine, Some(Name::Zeewin));
@@ -130,7 +126,6 @@ mod words_of_the_command {
         );
         for (line, says) in [
             ("--wrapper x.ps1", "--wrapper goes with --installer-smoke"),
-            ("--installer-smoke --parity", "not with --parity"),
             ("--installer-smoke -- -p kluris-core", "runs no cargo test"),
             ("--installer-smoke --wrapper", "--wrapper takes"),
             (
@@ -171,7 +166,7 @@ mod words_of_the_command {
     fn the_published_smoke_names_a_release_and_takes_no_wrapper_file() {
         let options = run_of("--machine zeewin --installer-smoke --published 3.0.0-rc.1");
         assert_eq!(options.machine, Some(Name::Zeewin));
-        assert!(options.installer_smoke && !options.parity, "{options:?}");
+        assert!(options.installer_smoke, "{options:?}");
         assert_eq!(options.published.as_deref(), Some("3.0.0-rc.1"));
         assert_eq!(options.wrapper, None);
         assert_eq!(
@@ -215,10 +210,9 @@ mod words_of_the_command {
     #[test]
     fn the_clippy_run() {
         let options = run_of("--machine zeewin --clippy");
-        assert!(options.clippy && !options.parity && !options.installer_smoke);
+        assert!(options.clippy && !options.installer_smoke);
         assert!(!run_of("").clippy);
         for (line, says) in [
-            ("--clippy --parity", "--clippy"),
             ("--clippy --installer-smoke", "--clippy"),
             ("--clippy -- -p kluris-core", "--clippy"),
             ("--clippy=yes", "--clippy takes no value"),
@@ -255,21 +249,19 @@ mod words_of_the_command {
     }
 
     #[test]
-    fn machine_and_parity_in_both_spellings() {
-        let options = run_of("--machine zeewin --parity");
-        assert_eq!(options.machine, Some(Name::Zeewin));
-        assert!(options.parity);
+    fn the_machine_in_both_spellings() {
+        assert_eq!(run_of("--machine zeewin").machine, Some(Name::Zeewin));
         assert_eq!(run_of("--machine=zeewin2").machine, Some(Name::Zeewin2));
     }
 
     #[test]
     fn words_after_the_dashes_go_to_cargo_test_as_they_are() {
-        let options = run_of("--machine zeewin -- -p kluris-core -- --nocapture --parity");
+        let options = run_of("--machine zeewin -- -p kluris-core -- --nocapture --clippy");
         assert_eq!(
             options.cargo_args,
-            words("-p kluris-core -- --nocapture --parity")
+            words("-p kluris-core -- --nocapture --clippy")
         );
-        assert!(!options.parity, "--parity after -- is cargo's");
+        assert!(!options.clippy, "--clippy after -- is cargo's");
     }
 
     #[test]
@@ -308,85 +300,38 @@ mod words_of_the_command {
         assert_eq!(options::parse(&words("-h")), Ok(Parsed::Help));
     }
 
+    /// The tests are Kluris's own: there is no other harness to ask for.
+    #[test]
+    fn parity_and_parity_files_are_usage_errors() {
+        for (line, says) in [
+            ("--parity", "unknown option: --parity"),
+            ("--machine zeewin --parity", "unknown option: --parity"),
+            (
+                "--parity-files parity/test_smoke.py",
+                "unknown option: --parity-files",
+            ),
+            (
+                "--parity-files=parity/test_smoke.py",
+                "unknown option: --parity-files",
+            ),
+        ] {
+            let refused = options::parse(&words(line)).expect_err(line);
+            assert!(refused.contains(says), "{line:?}: {refused}");
+        }
+    }
+
     #[test]
     fn refusals() {
         for (line, says) in [
             ("--machine zeewin3", "zeewin, zeewin2"),
             ("--machine", "--machine takes"),
-            ("--machine --parity", "--machine takes"),
+            ("--machine --clippy", "--machine takes"),
             ("--bogus", "unknown option: --bogus"),
-            ("--parity=yes", "--parity takes no value"),
             ("test", "after --"),
             ("--machine zeewin --machine zeewin2", "once"),
         ] {
             let refused = options::parse(&words(line)).expect_err(line);
             assert!(refused.contains(says), "{line:?}: {refused}");
-        }
-    }
-
-    #[test]
-    fn parity_files_need_parity_and_take_paths() {
-        let options = run_of("--parity --parity-files parity/test_smoke.py");
-        assert_eq!(options.parity_files, words("parity/test_smoke.py"));
-        let options =
-            run_of("--parity-files parity/a.py,parity/b.py --parity --parity-files parity/c.py");
-        assert_eq!(
-            options.parity_files,
-            words("parity/a.py parity/b.py parity/c.py"),
-            "repeated and comma-separated both collect, in the order given"
-        );
-        assert_eq!(
-            run_of("--parity --parity-files=parity/test_dream.py").parity_files,
-            words("parity/test_dream.py"),
-            "the = spelling too"
-        );
-        let options = run_of("--parity --parity-files parity/a.py -- -p kluris-core");
-        assert_eq!(options.parity_files, words("parity/a.py"));
-        assert_eq!(options.cargo_args, words("-p kluris-core"));
-        for (line, says) in [
-            ("--parity-files parity/test_smoke.py", "--parity"),
-            ("--parity --parity-files", "takes"),
-            ("--parity --parity-files --machine zeewin", "takes"),
-            ("--parity --parity-files=", "takes"),
-            ("--parity --parity-files parity/a.py,", "takes"),
-        ] {
-            let refused = options::parse(&words(line)).expect_err(line);
-            assert!(refused.contains(says), "{line:?}: {refused}");
-        }
-    }
-
-    #[test]
-    fn parity_files_are_checked_against_the_tree() {
-        let dir = tempfile::tempdir().unwrap();
-        let root = dir.path();
-        fs::create_dir_all(root.join("parity").join("sub")).unwrap();
-        fs::write(root.join("parity").join("test_x.py"), "x").unwrap();
-        fs::write(root.join("parity").join("sub").join("test_y.py"), "y").unwrap();
-        fs::write(root.join("parity").join("notes.txt"), "n").unwrap();
-        let given = |files: &str| -> Vec<String> { files.split(' ').map(str::to_owned).collect() };
-        assert_eq!(
-            options::checked_parity_files(root, &given("parity/test_x.py parity/sub/test_y.py"))
-                .unwrap(),
-            words("parity/test_x.py parity/sub/test_y.py"),
-            "files under parity/ in subfolders count too"
-        );
-        assert!(
-            options::checked_parity_files(root, &[]).unwrap().is_empty(),
-            "no --parity-files is no check"
-        );
-        for (file, says) in [
-            ("test_x.py", "under parity/"),
-            ("src/test_x.py", "under parity/"),
-            ("parity/../outside.py", "under parity/"),
-            ("parity/", "under parity/"),
-            ("/parity/test_x.py", "under parity/"),
-            ("parity/notes.txt", ".py"),
-            ("parity/missing.py", "not in this tree"),
-            ("parity", "under parity/"),
-        ] {
-            let refused = options::checked_parity_files(root, &given(file)).expect_err(file);
-            assert!(refused.contains(says), "{file}: {refused}");
-            assert!(refused.contains("--parity-files"), "{file}: {refused}");
         }
     }
 }
@@ -646,8 +591,8 @@ mod scripts {
         let extra = words("-p kluris-core");
         vec![
             ("bootstrap", script::bootstrap("kluris-0000abcd-12345678")),
-            ("run", script::run_script(&spec(false, &[]))),
-            ("run --parity", script::run_script(&spec(true, &extra))),
+            ("run", script::run_script(&spec(&[]))),
+            ("run -- -p kluris-core", script::run_script(&spec(&extra))),
             (
                 "run --installer-smoke",
                 script::run_script(&smoke_spec(true)),
@@ -775,7 +720,7 @@ mod scripts {
 
     #[test]
     fn the_run_is_bounded_in_processes_and_time() {
-        let text = script::run_script(&spec(true, &[]));
+        let text = script::run_script(&spec(&[]));
         assert!(text.contains(&format!("[KlurisJob]::Enter({})", script::PROCESS_LIMIT)));
         const { assert!(script::PROCESS_LIMIT <= 64) };
         assert!(
@@ -785,34 +730,20 @@ mod scripts {
         assert!(text.contains("Exit-Run 1"), "no run without its job");
         assert!(text.contains("WaitForExit($minutes * 60000)"), "{text}");
         assert!(text.contains("taskkill /PID $process.Id /T /F"), "{text}");
-        for step in script::steps(&spec(true, &[])) {
+        for step in script::steps(&spec(&[])) {
             assert!(step.minutes > 0 && step.minutes <= 120, "{step:?}");
             assert!(
                 text.contains(&format!("Invoke-Step '{}' {} ", step.name, step.minutes)),
                 "{step:?} is not run with its bound"
             );
         }
-        let all: u32 = script::steps(&spec(true, &[]))
-            .iter()
-            .map(|s| s.minutes)
-            .sum();
-        assert!(script::bound(&spec(true, &[])) > Duration::from_secs(u64::from(all) * 60));
-        assert!(script::bound(&spec(true, &[])) < Duration::from_secs(8 * 3600));
+        let all: u32 = script::steps(&spec(&[])).iter().map(|s| s.minutes).sum();
+        assert!(script::bound(&spec(&[])) > Duration::from_secs(u64::from(all) * 60));
+        assert!(script::bound(&spec(&[])) < Duration::from_secs(8 * 3600));
     }
 
     #[test]
     fn the_steps_of_a_run() {
-        let names = |parity| {
-            script::steps(&spec(parity, &[]))
-                .iter()
-                .map(|step| step.name)
-                .collect::<Vec<_>>()
-        };
-        assert_eq!(names(false), ["toolchain", "cargo-test"]);
-        assert_eq!(
-            names(true),
-            ["toolchain", "cargo-test", "release-build", "parity"]
-        );
         let smoke: Vec<_> = script::steps(&smoke_spec(false))
             .iter()
             .map(|step| step.name)
@@ -843,11 +774,7 @@ mod scripts {
         }
         let all: u32 = script::steps(&spec).iter().map(|s| s.minutes).sum();
         assert!(script::bound(&spec) > Duration::from_secs(u64::from(all) * 60));
-        assert!(script::bound(&spec) < script::bound(&spec_with_parity()));
-    }
-
-    fn spec_with_parity() -> Spec<'static> {
-        spec(true, &[])
+        assert!(script::bound(&spec) < Duration::from_secs(8 * 3600));
     }
 
     #[test]
@@ -985,7 +912,7 @@ mod scripts {
     fn clippy_spec() -> Spec<'static> {
         Spec {
             clippy: true,
-            ..spec(false, &[])
+            ..spec(&[])
         }
     }
 
@@ -1005,7 +932,7 @@ mod scripts {
             !text.contains("Invoke-Step 'cargo-test'") && !text.contains("pytest"),
             "{text}"
         );
-        assert!(script::bound(&spec) < script::bound(&spec_with_parity()));
+        assert!(script::bound(&spec) < script::bound(&super::spec(&[])));
         for step in script::steps(&spec) {
             assert!(
                 text.contains(&format!("Invoke-Step '{}' {} ", step.name, step.minutes)),
@@ -1030,24 +957,27 @@ mod scripts {
 
     #[test]
     fn tools_and_caches_stay_in_klurises_own_folder() {
-        let text = script::run_script(&spec(true, &[]));
+        let text = script::run_script(&spec(&[]));
         for line in [
             "$ci = Join-Path $env:USERPROFILE '.kluris-ci'",
             "$env:RUSTUP_HOME = Join-Path $tools 'rustup'",
             "$env:CARGO_HOME = Join-Path $tools 'cargo'",
             "$env:CARGO_TARGET_DIR = Join-Path $cache 'target'",
             "$env:CARGO_BUILD_JOBS = '2'",
-            "$env:UV_CACHE_DIR = Join-Path $cache 'uv'",
-            "$env:UV_PYTHON_INSTALL_DIR = Join-Path $tools 'python'",
-            "$env:UV_PYTHON_PREFERENCE = 'only-managed'",
-            "$env:UV_PROJECT_ENVIRONMENT = Join-Path $cache 'parity-venv'",
-            "$env:KLURIS_PARITY_ORACLE_DIR = Join-Path $cache 'oracle'",
-            r"$env:KLURIS_V3_BIN = Join-Path $env:CARGO_TARGET_DIR 'release\kluris.exe'",
         ] {
             assert!(text.contains(line), "no {line:?} in\n{text}");
         }
-        assert!(text.contains(script::UV_SHA256) && text.contains(script::UV_VERSION));
-        assert!(text.contains("Get-FileHash -Algorithm SHA256"));
+        // uv, its cache and its Python, for the installer smoke's server.
+        let smoke = script::run_script(&smoke_spec(false));
+        for line in [
+            "$env:UV_CACHE_DIR = Join-Path $cache 'uv'",
+            "$env:UV_PYTHON_INSTALL_DIR = Join-Path $tools 'python'",
+            "$env:UV_PYTHON_PREFERENCE = 'only-managed'",
+        ] {
+            assert!(smoke.contains(line), "no {line:?} in\n{smoke}");
+        }
+        assert!(smoke.contains(script::UV_SHA256) && smoke.contains(script::UV_VERSION));
+        assert!(smoke.contains("Get-FileHash -Algorithm SHA256"));
         assert!(
             text.contains("Missing on"),
             "a machine without rustup is told, not fixed"
@@ -1056,7 +986,7 @@ mod scripts {
 
     #[test]
     fn each_step_end_line_carries_the_run_id() {
-        let text = script::run_script(&spec(true, &[]));
+        let text = script::run_script(&smoke_spec(false));
         for line in [
             "Write-Output \"== step $name exit $code $([int]((Get-Date) - $started).TotalSeconds)s kluris-0000abcd-12345678\"",
             "Write-Output \"== step uv exit $code $([int]((Get-Date) - $started).TotalSeconds)s kluris-0000abcd-12345678\"",
@@ -1068,19 +998,14 @@ mod scripts {
     #[test]
     fn the_commands_of_a_run() {
         let extra = words("-p kluris-core --test list -- --nocapture \"two words\"");
-        let text = script::run_script(&spec(true, &extra));
+        let text = script::run_script(&spec(&extra));
         assert!(text.contains(
             "Invoke-Step 'toolchain' 30 $rustup 'toolchain install 1.99.0 --profile minimal --component clippy --component rustfmt --no-self-update'"
         ), "{text}");
         assert!(text.contains(
             "$cargo 'test --workspace --no-fail-fast -p kluris-core --test list -- --nocapture \"\\\"two\" \"words\\\"\"'"
         ), "{text}");
-        assert!(
-            text.contains("$cargo 'build --release --package kluris'"),
-            "{text}"
-        );
-        assert!(text.contains("$uv 'run --project parity --locked pytest parity -q'"));
-        let plain = script::run_script(&spec(false, &[]));
+        let plain = script::run_script(&spec(&[]));
         assert!(
             plain.contains("$cargo 'test --workspace --no-fail-fast'"),
             "{plain}"
@@ -1088,36 +1013,69 @@ mod scripts {
         assert!(!plain.contains("pytest") && !plain.contains("uv.exe"));
     }
 
+    /// A tests run is the toolchain, then cargo test: nothing is built for
+    /// release, no uv is fetched and no other harness runs.
     #[test]
-    fn the_parity_step_runs_the_files_parity_files_named() {
-        let files = words("parity/test_smoke.py parity/test_dream.py");
-        let text = script::run_script(&Spec {
-            parity_files: &files,
-            ..spec(true, &[])
-        });
-        assert!(
-            text.contains(
-                "Invoke-Step 'parity' 90 $uv 'run --project parity --locked pytest parity/test_smoke.py parity/test_dream.py -q'"
-            ),
-            "{text}"
+    fn a_tests_run_is_the_toolchain_then_cargo_test() {
+        for extra in [vec![], words("-p kluris-core")] {
+            let spec = spec(&extra);
+            let names: Vec<_> = script::steps(&spec).iter().map(|step| step.name).collect();
+            assert_eq!(names, ["toolchain", "cargo-test"], "{extra:?}");
+            let text = script::run_script(&spec);
+            assert_eq!(text.matches("Invoke-Step '").count(), 2, "{text}");
+            for word in [
+                "release-build",
+                "parity",
+                "oracle",
+                "pytest",
+                "KLURIS_V3_BIN",
+                "$uv",
+            ] {
+                assert!(!text.contains(word), "{word:?} in\n{text}");
+            }
+        }
+    }
+
+    /// The cache folders a script points a tool at (`Join-Path $cache '<name>'`).
+    fn cache_folders(text: &str) -> std::collections::BTreeSet<String> {
+        regex::Regex::new(r"Join-Path \$cache '([^']+)'")
+            .unwrap()
+            .captures_iter(text)
+            .map(|caps| caps[1].to_owned())
+            .collect()
+    }
+
+    /// The sweep keeps the cache folders the runs use and removes every
+    /// other folder there: the rule holds for whatever a run used to keep.
+    #[test]
+    fn the_sweep_removes_every_cache_folder_no_run_uses() {
+        let used: std::collections::BTreeSet<String> = every_script()
+            .iter()
+            .flat_map(|(_, text)| cache_folders(text))
+            .collect();
+        assert_eq!(
+            used.iter().map(String::as_str).collect::<Vec<_>>(),
+            ["target", "uv"]
         );
-        assert!(
-            !text.contains("pytest parity -q"),
-            "the named files replace the whole-suite argument: {text}"
-        );
-        // With none named the whole suite runs, as before.
-        let text = script::run_script(&spec(true, &[]));
-        assert!(
-            text.contains(
-                "Invoke-Step 'parity' 90 $uv 'run --project parity --locked pytest parity -q'"
-            ),
-            "{text}"
-        );
+        let text = script::run_script(&spec(&[]));
+        for line in [
+            "foreach ($stale in @(Get-ChildItem -LiteralPath $cache -Directory | Where-Object { $_.Name -notin @('target', 'uv') })) {",
+            "Remove-Item -LiteralPath $stale.FullName -Recurse -Force -ErrorAction SilentlyContinue",
+            r#"Write-Output "== sweep: removed cache\$($stale.Name)""#,
+            r#"Write-Output "== sweep: could not remove cache\$($stale.Name)""#,
+        ] {
+            assert!(text.contains(line), "no {line:?} in\n{text}");
+        }
+        let sweep = text.find("Get-ChildItem -LiteralPath $cache").unwrap();
+        let made = text
+            .find("foreach ($folder in @($tools, $cache, $tmp))")
+            .unwrap();
+        assert!(made < sweep, "the cache folder is made before it is swept");
     }
 
     #[test]
     fn old_runs_are_swept_under_the_lock() {
-        let text = script::run_script(&spec(false, &[]));
+        let text = script::run_script(&spec(&[]));
         assert!(text.contains("(Get-Date).AddDays(-1)"), "{text}");
         assert!(
             text.contains("$_.Name -ne 'kluris-0000abcd-12345678'"),
@@ -1260,7 +1218,6 @@ mod runs {
         err: String,
         fake: Fake,
         packed: Vec<PathBuf>,
-        run_script: String,
         /// The run's queues, a folder of the test's own.
         queues: tempfile::TempDir,
         pauses: Vec<u64>,
@@ -1271,12 +1228,8 @@ mod runs {
 
     fn ran(options: Options, answers: Vec<Answer>) -> Ran {
         let dir = tempfile::tempdir().unwrap();
-        ran_rooted(dir.path(), options, answers)
-    }
-
-    fn ran_rooted(root: &Path, options: Options, answers: Vec<Answer>) -> Ran {
         ran_queued(
-            root,
+            dir.path(),
             options,
             answers,
             tempfile::tempdir().unwrap(),
@@ -1296,13 +1249,11 @@ mod runs {
         let mut out = Vec::new();
         let mut err = Vec::new();
         let mut packed = Vec::new();
-        let mut run_script = String::new();
         let mut held = Vec::new();
         let folder = queues.path().to_path_buf();
         let code = {
             let mut pack = |tarball: &Path, script: &str| -> Result<String, String> {
                 assert!(script.contains("Invoke-Step 'cargo-test'"));
-                run_script = script.to_owned();
                 packed.push(tarball.to_path_buf());
                 held.push([tickets(&folder, "zeewin"), tickets(&folder, "zeewin2")].concat());
                 fs::write(tarball, b"tarball").map_err(|e| e.to_string())?;
@@ -1329,18 +1280,15 @@ mod runs {
             err: String::from_utf8(err).unwrap(),
             fake,
             packed,
-            run_script,
             queues,
             pauses: clock.pauses,
             held,
         }
     }
 
-    fn on(name: Name, parity: bool) -> Options {
+    fn on(name: Name) -> Options {
         Options {
             machine: Some(name),
-            parity,
-            parity_files: vec![],
             cargo_args: vec![],
             installer_smoke: false,
             wrapper: None,
@@ -1369,7 +1317,7 @@ mod runs {
             == step cargo-test exit 0 412s kluris-0000abcd-12345678\r\n\
             \r\n== exit 0\r\n";
         let ran = ran(
-            on(Name::Zeewin, false),
+            on(Name::Zeewin),
             vec![
                 said(0, ""),
                 Answer::Stream(vec![(Stream::Out, out)], Ok(Streamed::Exited(Some(1)))),
@@ -1385,7 +1333,7 @@ mod runs {
     #[test]
     fn a_run_on_zeewin_sends_the_tree_and_streams_the_answer() {
         let ran = ran(
-            on(Name::Zeewin, false),
+            on(Name::Zeewin),
             vec![
                 said(0, ""),
                 Answer::Stream(
@@ -1418,7 +1366,7 @@ mod runs {
             .trim_start_matches("zeewin:")
             .trim_end_matches(".tgz");
         assert_eq!(bootstrap, script::bootstrap(id));
-        assert!(calls[1].bound >= script::bound(&spec(false, &[])));
+        assert!(calls[1].bound >= script::bound(&spec(&[])));
         let summary = ran.err.lines().last().unwrap();
         assert!(
             summary.starts_with(&format!("windows: zeewin run {id} tree 5f54983aaaaa")),
@@ -1452,7 +1400,7 @@ mod runs {
         let options = Options {
             installer_smoke: true,
             wrapper: Some("site/install.ps1".into()),
-            ..on(Name::Zeewin, false)
+            ..on(Name::Zeewin)
         };
         let code = {
             let mut pack = |tarball: &Path, script: &str| -> Result<String, String> {
@@ -1490,16 +1438,7 @@ mod runs {
             "{run_script}"
         );
         let ssh = &fake.calls[1];
-        assert!(
-            ssh.bound >= script::bound(&smoke_spec(true)),
-            "{:?}",
-            ssh.bound
-        );
-        assert!(
-            ssh.bound < script::bound(&spec(true, &[])),
-            "{:?}",
-            ssh.bound
-        );
+        assert_eq!(ssh.bound, script::bound(&smoke_spec(true)));
         let summary = err.lines().last().unwrap();
         assert!(
             summary.contains("release-dist 0 (300s), installer-smoke 0 (40s)"),
@@ -1510,7 +1449,7 @@ mod runs {
     #[test]
     fn a_held_lock_is_75_with_the_holder_named() {
         let ran = ran(
-            on(Name::Zeewin, true),
+            on(Name::Zeewin),
             vec![
                 said(0, ""),
                 Answer::Stream(
@@ -1530,7 +1469,7 @@ mod runs {
 
     #[test]
     fn zeewin2_refused_sends_nothing_and_is_75() {
-        let ran = ran(on(Name::Zeewin2, true), vec![said(0, "held\n")]);
+        let ran = ran(on(Name::Zeewin2), vec![said(0, "held\n")]);
         assert_eq!(ran.code, 75);
         assert!(ran.err.contains("poker-lab"), "{}", ran.err);
         assert_eq!(ran.fake.calls.len(), 1);
@@ -1543,73 +1482,9 @@ mod runs {
 
     fn ran_low_disk() -> Ran {
         ran(
-            on(Name::Zeewin2, false),
+            on(Name::Zeewin2),
             vec![said(0, "free\n"), said(0, "free 12\n")],
         )
-    }
-
-    #[test]
-    fn a_refused_parity_file_sends_nothing() {
-        let ran = ran(
-            Options {
-                machine: Some(Name::Zeewin),
-                parity: true,
-                parity_files: words("parity/not_there.py"),
-                cargo_args: vec![],
-                installer_smoke: false,
-                wrapper: None,
-                clippy: false,
-                published: None,
-                unpinned: false,
-                wait: 0,
-            },
-            vec![],
-        );
-        assert_eq!(ran.code, 1);
-        assert!(
-            ran.err.contains("--parity-files") && ran.err.contains("parity/not_there.py"),
-            "{}",
-            ran.err
-        );
-        assert!(
-            ran.fake.calls.is_empty() && ran.packed.is_empty(),
-            "refused before the machine is even asked: {:?}",
-            ran.fake.called()
-        );
-    }
-
-    #[test]
-    fn the_parity_files_reach_the_remote_pytest_line() {
-        let dir = tempfile::tempdir().unwrap();
-        let root = dir.path();
-        fs::create_dir_all(root.join("parity")).unwrap();
-        fs::write(root.join("parity").join("test_smoke.py"), "x").unwrap();
-        let ran = ran_rooted(
-            root,
-            Options {
-                machine: Some(Name::Zeewin),
-                parity: true,
-                parity_files: words("parity/test_smoke.py"),
-                cargo_args: vec![],
-                installer_smoke: false,
-                wrapper: None,
-                clippy: false,
-                published: None,
-                unpinned: false,
-                wait: 0,
-            },
-            vec![
-                said(0, ""),
-                Answer::Stream(vec![(Stream::Out, PASSED)], Ok(Streamed::Exited(Some(0)))),
-            ],
-        );
-        assert_eq!(ran.code, 0, "{}", ran.err);
-        assert!(
-            ran.run_script
-                .contains("$uv 'run --project parity --locked pytest parity/test_smoke.py -q'"),
-            "{}",
-            ran.run_script
-        );
     }
 
     #[test]
@@ -1617,8 +1492,6 @@ mod runs {
         let ran = ran(
             Options {
                 machine: None,
-                parity: false,
-                parity_files: vec![],
                 cargo_args: vec![],
                 installer_smoke: false,
                 wrapper: None,
@@ -1651,10 +1524,7 @@ mod runs {
 
     #[test]
     fn a_failed_upload_runs_nothing_and_removes_its_tarball() {
-        let ran = ran(
-            on(Name::Zeewin, false),
-            vec![said(1, ""), said(0, "removed\r\n")],
-        );
+        let ran = ran(on(Name::Zeewin), vec![said(1, ""), said(0, "removed\r\n")]);
         assert_eq!(ran.code, 1);
         assert!(ran.err.contains("scp"), "{}", ran.err);
         let calls = &ran.fake.calls;
@@ -1692,10 +1562,7 @@ mod runs {
 
     #[test]
     fn an_upload_cleanup_that_finds_nothing_says_so() {
-        let ran = ran(
-            on(Name::Zeewin, false),
-            vec![said(1, ""), said(0, "absent\n")],
-        );
+        let ran = ran(on(Name::Zeewin), vec![said(1, ""), said(0, "absent\n")]);
         assert_eq!(ran.code, 1);
         assert!(ran.err.contains("was not there"), "{}", ran.err);
     }
@@ -1704,7 +1571,7 @@ mod runs {
     fn an_upload_cleanup_that_cannot_reach_the_machine_says_so() {
         for cleanup in [said(255, ""), timed_out()] {
             let ran = ran(
-                on(Name::Zeewin2, false),
+                on(Name::Zeewin2),
                 vec![
                     said(0, "free\n"),
                     said(0, "free 600\n"),
@@ -1723,7 +1590,7 @@ mod runs {
     #[test]
     fn an_upload_cleanup_that_fails_there_says_why() {
         let ran = ran(
-            on(Name::Zeewin, false),
+            on(Name::Zeewin),
             vec![said(1, ""), said(0, "failed: access denied\n")],
         );
         assert_eq!(ran.code, 1);
@@ -1744,7 +1611,7 @@ mod runs {
     #[test]
     fn a_stopped_run_is_ended_there_and_is_130() {
         let ran = ran(
-            on(Name::Zeewin, false),
+            on(Name::Zeewin),
             vec![
                 said(0, ""),
                 Answer::Stream(vec![(Stream::Out, "== tree x\n")], Ok(Streamed::Stopped)),
@@ -1765,7 +1632,7 @@ mod runs {
     #[test]
     fn a_run_past_its_bound_is_ended_there_and_is_124() {
         let ran = ran(
-            on(Name::Zeewin, false),
+            on(Name::Zeewin),
             vec![
                 said(0, ""),
                 Answer::Stream(vec![], Ok(Streamed::TimedOut)),
@@ -1780,7 +1647,7 @@ mod runs {
     #[test]
     fn a_lost_connection_ends_the_run_there_too() {
         let ran = ran(
-            on(Name::Zeewin, false),
+            on(Name::Zeewin),
             vec![
                 said(0, ""),
                 Answer::Stream(
@@ -1801,7 +1668,7 @@ mod runs {
         Options {
             machine,
             wait: 60,
-            ..on(Name::Zeewin, false)
+            ..on(Name::Zeewin)
         }
     }
 
@@ -1928,7 +1795,7 @@ mod runs {
         let root = tempfile::tempdir().unwrap();
         let ran = ran_queued(
             root.path(),
-            on(Name::Zeewin2, false),
+            on(Name::Zeewin2),
             vec![],
             queues,
             Clock::default(),
@@ -2101,10 +1968,10 @@ mod tarball {
     fn repo() -> tempfile::TempDir {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
-        fs::write(root.join(".gitignore"), "target/\nparity/.oracle/\n").unwrap();
+        fs::write(root.join(".gitignore"), "target/\n").unwrap();
         fs::write(root.join("kept.txt"), "committed\n").unwrap();
-        fs::create_dir_all(root.join("parity")).unwrap();
-        fs::write(root.join("parity").join("harness.py"), "old\n").unwrap();
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::write(root.join("src").join("lib.rs"), "old\n").unwrap();
         git(root, &["init", "-q"]);
         git(root, &["add", "-A"]);
         git(root, &["commit", "-q", "-m", "one"]);
@@ -2151,30 +2018,24 @@ mod tarball {
     fn uncommitted_tracked_changes_go_and_nothing_else() {
         let dir = repo();
         let root = dir.path();
-        fs::write(root.join("parity").join("harness.py"), "changed\n").unwrap();
+        fs::write(root.join("src").join("lib.rs"), "changed\n").unwrap();
         fs::write(root.join("untracked.txt"), "new\n").unwrap();
         fs::create_dir_all(root.join("target")).unwrap();
         fs::write(root.join("target").join("big"), "x").unwrap();
-        fs::create_dir_all(root.join("parity").join(".oracle")).unwrap();
-        fs::write(root.join("parity").join(".oracle").join("v"), "x").unwrap();
         let head = git(root, &["rev-parse", "HEAD"]);
         let status_before = git(root, &["status", "--porcelain"]);
 
         let tarball = dir.path().join("target").join("out.tgz");
         let commit = super::super::pack::pack(root, &tarball, "s").unwrap();
         assert_ne!(commit, head, "the tree with its changes is another commit");
-        assert_eq!(
-            member(&tarball, "parity/harness.py").as_deref(),
-            Some("changed\n")
-        );
+        assert_eq!(member(&tarball, "src/lib.rs").as_deref(), Some("changed\n"));
         assert_eq!(member(&tarball, "untracked.txt"), None);
         assert_eq!(member(&tarball, "target/big"), None);
-        assert_eq!(member(&tarball, "parity/.oracle/v"), None);
         // The checkout is left as it was: no stash, no change.
         assert_eq!(git(root, &["status", "--porcelain"]), status_before);
         assert_eq!(git(root, &["stash", "list"]), "");
         assert_eq!(
-            fs::read_to_string(root.join("parity").join("harness.py")).unwrap(),
+            fs::read_to_string(root.join("src").join("lib.rs")).unwrap(),
             "changed\n"
         );
     }
@@ -2183,13 +2044,13 @@ mod tarball {
     fn tracked_files_under_excluded_folders_do_not_go() {
         let dir = repo();
         let root = dir.path();
-        fs::create_dir_all(root.join("parity").join(".venv")).unwrap();
-        fs::write(root.join("parity").join(".venv").join("pyvenv.cfg"), "x").unwrap();
-        git(root, &["add", "-f", "parity/.venv/pyvenv.cfg"]);
-        git(root, &["commit", "-q", "-m", "a venv by mistake"]);
+        fs::create_dir_all(root.join("target")).unwrap();
+        fs::write(root.join("target").join("stale"), "x").unwrap();
+        git(root, &["add", "-f", "target/stale"]);
+        git(root, &["commit", "-q", "-m", "a build output by mistake"]);
         let tarball = dir.path().join("out.tgz");
         super::super::pack::pack(root, &tarball, "s").unwrap();
-        assert_eq!(member(&tarball, "parity/.venv/pyvenv.cfg"), None);
+        assert_eq!(member(&tarball, "target/stale"), None);
         assert_eq!(member(&tarball, "kept.txt").as_deref(), Some("committed\n"));
     }
 
@@ -2200,14 +2061,11 @@ mod tarball {
         let dir = repo();
         let root = dir.path();
         git(root, &["config", "core.autocrlf", "true"]);
-        fs::write(root.join("parity").join("harness.py"), "changed\n").unwrap();
+        fs::write(root.join("src").join("lib.rs"), "changed\n").unwrap();
         let tarball = dir.path().join("out.tgz");
         super::super::pack::pack(root, &tarball, "s\n").unwrap();
         assert_eq!(member(&tarball, "kept.txt").as_deref(), Some("committed\n"));
-        assert_eq!(
-            member(&tarball, "parity/harness.py").as_deref(),
-            Some("changed\n")
-        );
+        assert_eq!(member(&tarball, "src/lib.rs").as_deref(), Some("changed\n"));
     }
 
     #[test]

@@ -38,9 +38,8 @@ fn two_brains(home: &TempDir) {
 
 #[test]
 fn the_shipped_binary_has_no_resolve_hook() {
-    // `kluris __resolve` was a parity-only command behind KLURIS_TEST_HOOKS=1;
-    // the binary now carries nothing test-only, so it is v2's unknown command
-    // whatever the environment says.
+    // The binary carries nothing test-only: `kluris __resolve` is v2's
+    // unknown command whatever KLURIS_TEST_HOOKS says.
     let home = TempDir::new().unwrap();
     two_brains(&home);
     for json in [false, true] {
@@ -66,7 +65,7 @@ fn the_shipped_binary_has_no_resolve_hook() {
 #[test]
 fn a_null_stdin_is_not_a_terminal() {
     // `Stdio::null()` is /dev/null, or NUL on Windows, where v2's `isatty()`
-    // is true and it shows the picker, then aborts on end of input (PAR-022).
+    // is true and it shows the picker, then aborts on end of input.
     // v3 asks whether stdin is a console: NUL is not one, so this is the
     // non-interactive error on every OS, exit 1 as in v2.
     let home = TempDir::new().unwrap();

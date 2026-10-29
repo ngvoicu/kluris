@@ -1,7 +1,7 @@
 //! SKILL.md rendering: v3 writes v2.28.11's bytes with exactly the decided
 //! changes. Every `fixtures/skills/v2/*.md` file is v2's own
 //! `kluris.core.agents.render_skill` output for the inputs in
-//! `fixtures/skills/cases.json` (`parity/tools/gen_skill_fixtures.py`); the
+//! `fixtures/skills/cases.json`; the
 //! expected v3 text is that file run through [`v2_to_v3`], which applies the
 //! decided changes and nothing else:
 //!
@@ -547,8 +547,8 @@ fn v3_and_v2_skills_are_recognised() {
 }
 
 /// Every SKILL.md and Windsurf workflow v1.0.0 to v2.28.11 wrote, as each
-/// release's own `agents.py` renders it (`fixtures/skills/legacy/`, from
-/// `parity/tools/gen_legacy_skills.py`): `<first release>.md` is
+/// release's own `agents.py` renders it (`fixtures/skills/legacy/`):
+/// `<first release>.md` is
 /// `kluris-acme` (v2) or `kluris` (v1), `-bare` is v2.0's single-brain
 /// `kluris`.
 fn legacy_renderings() -> Vec<(String, String, String)> {

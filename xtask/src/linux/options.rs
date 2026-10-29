@@ -1,21 +1,18 @@
 //! The words of `cargo xtask linux` ([`crate::ssh_ci::words`]): `--wait
-//! MINUTES`, `--parity`,
-//! `--parity-files`, `--installer-smoke`, `--wrapper`, `--published`,
-//! `--unpinned`, `--help`, and after `--` the extra arguments of `cargo test`. There is one machine, so no
-//! `--machine`.
+//! MINUTES`, `--installer-smoke`, `--wrapper`, `--published`, `--unpinned`,
+//! `--clippy`, `--help`, and after `--` the extra arguments of `cargo test`.
+//! There is one machine, so no `--machine`.
 
 use crate::ssh_ci::words;
 
-pub const USAGE: &str = "usage: cargo xtask linux [--wait MINUTES] [--parity [--parity-files parity/test.py[,...]]] [-- <cargo test args>]
+pub const USAGE: &str = "usage: cargo xtask linux [--wait MINUTES] [-- <cargo test args>]
        cargo xtask linux [--wait MINUTES] --installer-smoke [--wrapper <site install.sh>]
        cargo xtask linux [--wait MINUTES] --installer-smoke --published <version> [--unpinned]
        cargo xtask linux [--wait MINUTES] --clippy
 
-Runs `cargo test --workspace` (and with --parity the parity harness against a
-release kluris) on zeelin, the household laptop's Ubuntu (WSL2), over ssh, on
-this worktree as it is now (HEAD plus uncommitted tracked changes).
---parity-files narrows the parity step to the parity/*.py files it names; each
-must be in this tree.
+Runs `cargo test --workspace --no-fail-fast` on zeelin, the household
+laptop's Ubuntu (WSL2), over ssh, on this worktree as it is now (HEAD plus
+uncommitted tracked changes).
 
 zeelin is the laptop zeewin2 is, so a run waits for its turn in zeewin2's
 queue, first come first served with every runner on this Mac (ConsensFlow's
@@ -43,9 +40,6 @@ latest release, which must be <version>.";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Options {
-    pub parity: bool,
-    /// The `parity/*.py` files `--parity-files` names; empty: the whole suite.
-    pub parity_files: Vec<String>,
     /// Appended to `cargo test --workspace`.
     pub cargo_args: Vec<String>,
     /// The release installer smoke instead of the tests.
@@ -76,8 +70,6 @@ pub fn parse(args: &[String]) -> Result<Parsed, String> {
         return Ok(Parsed::Help);
     };
     Ok(Parsed::Run(Options {
-        parity: words.parity,
-        parity_files: words.parity_files,
         cargo_args: words.cargo_args,
         installer_smoke: words.installer_smoke,
         wrapper: words.wrapper,

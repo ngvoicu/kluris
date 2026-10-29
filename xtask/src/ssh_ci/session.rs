@@ -40,8 +40,7 @@ pub struct Ctx<'a> {
     pub channel: String,
     /// Writes the tarball (with the run script in it) and answers the commit.
     pub pack: &'a mut dyn FnMut(&Path, &str) -> Result<String, String>,
-    /// The worktree, for the `--parity-files` check before anything is sent,
-    /// and its folder's name for the run's ticket.
+    /// The worktree, whose folder's name goes on the run's ticket.
     pub root: &'a Path,
     /// The machines' queues ([`super::queue`]): none where no folder is known.
     pub queues: Option<Queues>,

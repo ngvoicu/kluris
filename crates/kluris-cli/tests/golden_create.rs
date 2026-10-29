@@ -1,6 +1,5 @@
-//! Golden tests of `kluris create`, `register` and `remove`: every scenario
-//! of `parity/test_create_register_remove.py`, with the same inputs, as
-//! snapshots of Kluris's own output.
+//! Golden tests of `kluris create`, `register` and `remove`, as snapshots
+//! of Kluris's own output.
 //!
 //! Each run is snapshotted as `<name>__run` (stdout, stderr, exit code).
 //! A run that writes adds `<name>__tree` (every file under `work/`: the

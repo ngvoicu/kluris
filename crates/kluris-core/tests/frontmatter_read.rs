@@ -181,7 +181,7 @@ fn parse_without_frontmatter_returns_the_whole_text() {
 #[test]
 fn parse_json_and_toml_frontmatter_are_not_frontmatter() {
     // v2 reads `{` ... `}` as JSON frontmatter (python-frontmatter); v3 does
-    // not (parity/allowlist.md). TOML was never read (no `toml` package).
+    // not. TOML was never read (no `toml` package).
     for text in ["{\n\"a\": 1\n}\nbody\n", "+++\na = 1\n+++\nbody\n"] {
         let fm = parse(text).unwrap();
         assert!(fm.meta.is_empty(), "{text:?}");

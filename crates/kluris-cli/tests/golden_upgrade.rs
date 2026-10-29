@@ -9,12 +9,11 @@
 //! - `skill-install`: the brains `acme` (git, a companion) and `beta` (no
 //!   git), a Hermes profile, the skills of every agent the earlier Kluris
 //!   wrote and its Windsurf workflows, then the user's own `kluris-notes`
-//!   skills and workflow (the parity scenarios of `test_skill_install.py`
-//!   and `test_doctor.py`);
+//!   skills and workflow, for the skill install and `doctor`;
 //! - `migration`: the brains `prod` (product) and `team` (blank) with
 //!   neurons an agent wrote, dreamed and committed, one neuron written after
 //!   the last commit, two Hermes profiles, a companion, and the user's own
-//!   skill files (the parity scenario of `test_migration.py`).
+//!   skill files, for the first commands after the upgrade.
 //!
 //! Every scenario runs on both forms of its world, on every OS: reading the
 //! earlier files must not depend on the OS Kluris runs on. An output of the

@@ -100,7 +100,7 @@ fn strings(items: &[String]) -> Json {
 }
 
 /// v2's keys (`cli.py:1101-1107`, `rt/search.py:296-304`), then Kluris 3's.
-/// `skipped` (PAR-024) is added only when files were left out.
+/// `skipped` is added only when files were left out.
 fn to_json(brain: &str, query: &str, hits: &[Hit], skipped: &[SkippedNeuron]) -> Json {
     let results = hits
         .iter()

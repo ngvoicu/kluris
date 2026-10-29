@@ -3,9 +3,7 @@
 //! decisions 2026-10-24 / 2026-10-25), stage-then-rename per destination,
 //! removal of deselected and stale copies, and the v2 migration. The v2
 //! copies laid out here are v2's own renderings
-//! (`fixtures/skills/v2/*.md`, `parity/tools/gen_skill_fixtures.py`);
-//! `parity/test_skill_install.py` runs the same migration on a HOME the v2
-//! oracle wrote itself.
+//! (`fixtures/skills/v2/*.md`).
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -160,8 +158,7 @@ fn v2_skill(name: &str) -> String {
     fixture("basic.md").replace("acme", name)
 }
 
-/// A real v1/v2 rendering (`fixtures/skills/legacy/`,
-/// `parity/tools/gen_legacy_skills.py`).
+/// A real v1/v2 rendering (`fixtures/skills/legacy/`).
 fn legacy(file: &str) -> String {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/skills/legacy")
@@ -927,7 +924,7 @@ fn v2_install_is_migrated_and_nothing_else_is_touched() {
 /// The report's absolute paths are in the OS's own separators: the
 /// registry's `/`-relative folder names are joined under HOME component by
 /// component, and a collision's message names the entry that way
-/// (SPEC 2026-10-27; PAR-054's JSON `path` and the `~/` labels stay
+/// (SPEC 2026-10-27; the JSON `path` and the `~/` labels stay
 /// `/`-joined).
 #[test]
 fn destination_paths_and_failure_messages_are_os_native() {

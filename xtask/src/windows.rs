@@ -1,9 +1,9 @@
-//! `cargo xtask windows`: the workspace's tests, and with `--parity` the
-//! parity harness, on the household Windows machines `zeewin` and `zeewin2`,
-//! over ssh, the way ConsensFlow's `cargo xtask windows` runs its own.
+//! `cargo xtask windows`: the workspace's tests on the household Windows
+//! machines `zeewin` and `zeewin2`, over ssh, the way ConsensFlow's `cargo
+//! xtask windows` runs its own.
 //!
 //! ```text
-//! cargo xtask windows [--machine zeewin|zeewin2] [--wait MINUTES] [--parity [--parity-files f.py[,...]]] [-- <extra cargo test args>]
+//! cargo xtask windows [--machine zeewin|zeewin2] [--wait MINUTES] [-- <extra cargo test args>]
 //! cargo xtask windows [--machine zeewin|zeewin2] [--wait MINUTES] --installer-smoke [--wrapper <site install.ps1>]
 //! ```
 //!
@@ -33,8 +33,7 @@
 //!    The run holds its ticket until it ends, however it ends.
 //! 3. The tarball ([`pack`]): `git archive` of HEAD, or of a `git stash create`
 //!    commit when tracked files have uncommitted changes, without `target/`,
-//!    `parity/.oracle/` and `parity/.venv/`, with the run script beside the
-//!    files. It is sent by scp to `%USERPROFILE%\<run id>.tgz`; when the upload
+//!    with the run script beside the files. It is sent by scp to `%USERPROFILE%\<run id>.tgz`; when the upload
 //!    fails, that one file is removed there at once (a bounded ssh that takes
 //!    no lock, the name being the run's own), and the command says whether it
 //!    was removed, was not there, or the machine could not be reached.
@@ -50,16 +49,12 @@
 //!    the run script. Its `finally` removes the tarball and its lock records and
 //!    closes the lock, however the run ends.
 //! 5. The run script: the run in a job (at most 64 processes, all ended with the
-//!    run), run folders older than a day swept, then each step with its own
-//!    bound: the tree's Rust toolchain into Kluris's own `RUSTUP_HOME`,
-//!    `cargo test --workspace --no-fail-fast`, and with `--parity` uv (fetched once, its hash
-//!    checked), a release `kluris.exe` and the parity harness with
-//!    `KLURIS_V3_BIN` pointing at it (`--parity-files` narrows the harness to
-//!    those `parity/*.py` files, checked against the worktree before anything
-//!    is sent). Tools and caches live under
-//!    `%USERPROFILE%\.kluris-ci\` (`tools\`, `cache\target` as
-//!    `CARGO_TARGET_DIR`, `cache\oracle`, ...); PATH changes for the run's own
-//!    process only.
+//!    run), run folders older than a day and every folder in `cache\` that no
+//!    run uses swept, then each step with its own bound: the tree's Rust
+//!    toolchain into Kluris's own `RUSTUP_HOME`, then `cargo test --workspace
+//!    --no-fail-fast`. Tools and caches live under `%USERPROFILE%\.kluris-ci\`
+//!    (`tools\`, `cache\target` as `CARGO_TARGET_DIR`, `cache\uv`); PATH
+//!    changes for the run's own process only.
 //! 6. The output streams back as it comes. The status is the machine's last
 //!    line (`== exit N`, [`run::answer`]), a summary line says each step's, and a
 //!    run stopped here (Ctrl-C: 130), past its bound (124) or whose connection

@@ -2,7 +2,7 @@
 //! `kluris_runtime/search.py`): every neuron that reads, each glossary entry,
 //! and `brain.md`; v2's literal substring score; its `--lobe` and `--tag`
 //! filters. A neuron (or `glossary.md`) that does not read is left out, as in
-//! v2, and reported ([`collect`], PAR-024).
+//! v2, and reported ([`collect`]).
 //!
 //! Everything is read through the [`BrainStore`]: a neuron by its own path
 //! ([`BrainStore::read_neuron`]), the body's first line from the read.

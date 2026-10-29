@@ -26,7 +26,7 @@ pub fn run(brain: Option<&str>, as_json: bool) -> Result<(), CliError> {
         let root = py_path_str(&brain.entry.path);
         let store = LocalGitStore::open(Path::new(&root));
         let status = brain_status(&store, &git).map_err(|e| CliError::new(e.to_string()))?;
-        // An open sync conflict (PAR-076); nothing when none is open.
+        // An open sync conflict; nothing when none is open.
         let open = open_conflicts(Path::new(&root), &git);
         if !as_json {
             // Printed brain by brain, as v2 does.

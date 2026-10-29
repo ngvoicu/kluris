@@ -1,12 +1,15 @@
 //! v2.28.11's `tests/test_sync_specmint.py`, ported, plus the Python texts
-//! the port must reproduce (generated with v2's script under the oracle's
-//! Python 3.11), the frozen corpus of reports and path mentions that script
+//! the port must reproduce (generated with v2's script under Python 3.11),
+//! the frozen corpus of reports and path mentions that script
 //! gave (`fixtures/sync-specmint/corpus.jsonl`), and a real `--check`
 //! against the Specmint repos beside the workspace.
 
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD as BASE64;
+use serde_json::{Value, json};
 use tempfile::TempDir;
 
 use super::*;

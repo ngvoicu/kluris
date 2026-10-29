@@ -16,7 +16,6 @@ use crate::ssh_ci::queue::{Look, Place, Turn, Waited, Who};
 use crate::ssh_ci::runner::{Call, Runner};
 pub use crate::ssh_ci::session::Ctx;
 use crate::ssh_ci::session::{self, Remote, Run};
-use crate::ssh_ci::words::checked_parity_files;
 
 /// The queue a Linux run waits in: zeewin2's, the same laptop.
 const PLACE: Place<'static> = Place {
@@ -40,7 +39,6 @@ pub fn linux(options: &Options, ctx: &mut Ctx) -> i32 {
 }
 
 fn go(options: &Options, ctx: &mut Ctx) -> Result<i32, String> {
-    let parity_files = checked_parity_files(ctx.root, &options.parity_files)?;
     let layout = Layout::zeelin();
     // zeelin is the laptop zeewin2 is: a Linux run waits in zeewin2's queue,
     // and ConsensFlow's and Kluris's zeewin2 runs wait behind it. The ticket
@@ -65,8 +63,6 @@ fn go(options: &Options, ctx: &mut Ctx) -> Result<i32, String> {
         channel: &channel,
         jobs: JOBS,
         tasks: TASK_LIMIT,
-        parity: options.parity,
-        parity_files: &parity_files,
         cargo_args: &options.cargo_args,
         installer_smoke: options.installer_smoke,
         wrapper: options.wrapper.is_some(),

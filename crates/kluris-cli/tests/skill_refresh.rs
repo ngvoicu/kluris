@@ -3,8 +3,7 @@
 //! not write a skill (T-106: the report used to be dropped). The clean case
 //! keeps v2's output; a blocked destination is named on stderr with how to
 //! fix it, `--json` gains a `skills` object, and the exit code stays 0
-//! (`parity/allowlist.md`, SPEC Decision Log 2026-10-26 "Skill ownership
-//! (T-105)").
+//! (SPEC Decision Log 2026-10-26 "Skill ownership (T-105)").
 
 use std::fs;
 use std::path::{Path, PathBuf};

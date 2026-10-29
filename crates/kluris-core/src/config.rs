@@ -7,9 +7,9 @@
 //! the [`Profile::Config`] emitter, in the models' field order.
 //!
 //! Two exceptions: a brain's `search: {language: ...}`, which v2 ignores, is
-//! read for `kluris search` and written back after `companions` (PAR-021);
+//! read for `kluris search` and written back after `companions`;
 //! its `sync: {auto_fetch: ...}`, also ignored by v2, is read for the fresh
-//! reads of `wake-up` and `search` and written back after `search` (PAR-072).
+//! reads of `wake-up` and `search` and written back after `search`.
 
 use std::collections::BTreeSet;
 use std::ffi::OsStr;

@@ -2,8 +2,7 @@
 //! title/excerpt/preview rules and `_render_mri_html` (research-03 §2.8) over
 //! the shared walker, with the decided differences (pruned directories and
 //! escaping symlinks are not graphed, `</` cannot end the script, the page is
-//! named after the registered brain). `parity/test_mri.py` checks the same
-//! rules against the live oracle.
+//! named after the registered brain).
 
 use std::fs;
 use std::path::Path;

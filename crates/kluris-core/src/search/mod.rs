@@ -1,11 +1,10 @@
 //! `kluris search`: BM25F over heading chunks, computed in memory on every
-//! call, nothing written (research-05 §6 rung 1; research-06 §6). How this
-//! differs from v2 is PAR-020.
+//! call, nothing written (research-05 §6 rung 1; research-06 §6).
 //!
 //! 1. The items are v2's ([`items::collect`]): neurons, glossary
 //!    entries (each its own result, `file: "glossary.md"`), `brain.md`. A
 //!    neuron or `glossary.md` that does not read is left out and listed in
-//!    [`SearchOutcome::skipped`] (PAR-024).
+//!    [`SearchOutcome::skipped`].
 //! 2. Each item becomes search units: a neuron or `brain.md` one per heading
 //!    chunk ([`chunk::chunks`]), with its title, tags and path repeated in
 //!    every unit; a glossary entry one unit (term as title, definition as

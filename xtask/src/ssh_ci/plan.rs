@@ -33,14 +33,6 @@ pub const CARGO_TEST: Step = Step {
     name: "cargo-test",
     minutes: 90,
 };
-pub const RELEASE_BUILD: Step = Step {
-    name: "release-build",
-    minutes: 60,
-};
-pub const PARITY: Step = Step {
-    name: "parity",
-    minutes: 90,
-};
 /// uv's Python for the installer smoke's local server.
 pub const PYTHON: Step = Step {
     name: "python",
@@ -86,12 +78,9 @@ pub const LIFECYCLE_NEW: &str = "3.0.1";
 /// What the unpack, the sweep and uv's download may take besides the steps.
 const MARGIN_MINUTES: u32 = 20;
 
-pub fn steps(parity: bool) -> Vec<Step> {
-    let mut steps = vec![TOOLCHAIN, CARGO_TEST];
-    if parity {
-        steps.extend([RELEASE_BUILD, PARITY]);
-    }
-    steps
+/// The steps of a tests run: the toolchain, then `cargo test`.
+pub fn steps() -> Vec<Step> {
+    vec![TOOLCHAIN, CARGO_TEST]
 }
 
 /// The steps of an installer smoke, which runs no tests.
@@ -145,9 +134,9 @@ pub fn clippy_args() -> Vec<String> {
     .to_vec()
 }
 
-/// How long the whole run may take, as this side waits for it.
-pub fn bound(parity: bool) -> Duration {
-    bound_of(&steps(parity))
+/// How long a tests run may take, as this side waits for it.
+pub fn bound() -> Duration {
+    bound_of(&steps())
 }
 
 /// How long an installer smoke may take.
@@ -175,21 +164,6 @@ pub fn run_id() -> String {
 /// The tarball's name there.
 pub fn tarball_name(id: &str) -> String {
     format!("{id}.tgz")
-}
-
-/// The `uv` arguments of the parity step: pytest on the whole suite, or on
-/// the files `--parity-files` named (already checked).
-pub fn pytest_args(parity_files: &[String]) -> Vec<String> {
-    let mut args: Vec<String> = ["run", "--project", "parity", "--locked", "pytest"]
-        .map(str::to_owned)
-        .to_vec();
-    if parity_files.is_empty() {
-        args.push("parity".to_owned());
-    } else {
-        args.extend(parity_files.iter().cloned());
-    }
-    args.push("-q".to_owned());
-    args
 }
 
 /// `template` with each `«name»` replaced by its part, in one pass, so that a

@@ -1,11 +1,9 @@
 //! The brain model: the one walker, the neuron index, glossary parsing,
 //! deprecation detection, the path sandbox and the `BrainStore` read side.
 //!
-//! Expected values come from the v2.28.11 oracle (`parity/tools/
-//! brain_model_oracle.py` on the fixture brains under
-//! `tests/fixtures/brains/`, symlinks made from `links.symlinks`), with the
-//! oracle's deprecation run in v3's neuron order. `parity/test_brain_model.py`
-//! re-checks them against the live oracle.
+//! Expected values are frozen values recorded from Kluris 2.28.11 on the
+//! fixture brains under `tests/fixtures/brains/` (symlinks made from
+//! `links.symlinks`), with its deprecation run in v3's neuron order.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -834,7 +832,7 @@ fn model(brain: &Path) -> String {
     serde_json::to_string_pretty(&model).unwrap()
 }
 
-/// The fixture cases of `parity/test_brain_model.py`.
+/// The brain model of each fixture brain.
 #[test]
 fn brain_model_of_the_full_brain() {
     let b = brain("full");

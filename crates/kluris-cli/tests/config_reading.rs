@@ -1,5 +1,4 @@
-//! Written and hand-edited configs as `kluris list --json` reads them: the
-//! reading scenario of `parity/test_config_roundtrip.py`.
+//! Written and hand-edited configs as `kluris list --json` reads them.
 //!
 //! `fixtures/config-reading/` holds the files `list` reads: `config.yml`
 //! (stale keys on `alpha` and at the top level; the brains folder written

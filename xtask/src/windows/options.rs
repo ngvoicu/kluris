@@ -1,22 +1,19 @@
 //! The words of `cargo xtask windows` ([`crate::ssh_ci::words`]): `--machine
-//! zeewin|zeewin2`, `--wait MINUTES`, `--parity`, `--parity-files`, `--installer-smoke`,
+//! zeewin|zeewin2`, `--wait MINUTES`, `--installer-smoke`,
 //! `--wrapper`, `--published`, `--unpinned`, `--help`, and after `--` the
 //! extra arguments of `cargo test`.
 
 use crate::ssh_ci::words;
-pub use crate::ssh_ci::words::checked_parity_files;
 
 pub const USAGE: &str =
-    "usage: cargo xtask windows [--machine zeewin|zeewin2] [--wait MINUTES] [--parity [--parity-files parity/test.py[,...]]] [-- <cargo test args>]
+    "usage: cargo xtask windows [--machine zeewin|zeewin2] [--wait MINUTES] [-- <cargo test args>]
        cargo xtask windows [--machine zeewin|zeewin2] [--wait MINUTES] --installer-smoke [--wrapper <site install.ps1>]
        cargo xtask windows [--machine zeewin|zeewin2] [--wait MINUTES] --installer-smoke --published <version> [--unpinned]
        cargo xtask windows [--machine zeewin|zeewin2] [--wait MINUTES] --clippy
 
-Runs `cargo test --workspace` (and with --parity the parity harness against a
-release kluris.exe) on a household Windows machine over ssh, on this worktree
-as it is now (HEAD plus uncommitted tracked changes). --parity-files narrows
-the parity step to the parity/*.py files it names; each must be in this tree.
-With no --machine the run goes to zeewin2 while no run is queued for it and
+Runs `cargo test --workspace --no-fail-fast` on a household Windows machine
+over ssh, on this worktree as it is now (HEAD plus uncommitted tracked
+changes). With no --machine the run goes to zeewin2 while no run is queued for it and
 it is free and allowed, else to zeewin.
 
 A busy machine is waited for, first come first served, in the queue every
@@ -57,9 +54,6 @@ pub enum Name {
 pub struct Options {
     /// None: the default machine, chosen when the run goes.
     pub machine: Option<Name>,
-    pub parity: bool,
-    /// The `parity/*.py` files `--parity-files` names; empty: the whole suite.
-    pub parity_files: Vec<String>,
     /// Appended to `cargo test --workspace`.
     pub cargo_args: Vec<String>,
     /// The release installer smoke instead of the tests.
@@ -96,8 +90,6 @@ pub fn parse(args: &[String]) -> Result<Parsed, String> {
     };
     Ok(Parsed::Run(Options {
         machine,
-        parity: words.parity,
-        parity_files: words.parity_files,
         cargo_args: words.cargo_args,
         installer_smoke: words.installer_smoke,
         wrapper: words.wrapper,

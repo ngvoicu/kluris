@@ -1,8 +1,8 @@
 //! The worktree as it is now, as one tarball: `git archive` of HEAD, or of the
 //! commit `git stash create` makes of the uncommitted tracked changes (which
 //! touches neither the stash nor the worktree), with the run script and the
-//! commit beside the files. Untracked files do not go, nor the build and parity
-//! folders. The same for every machine: only the run script's name differs.
+//! commit beside the files. Untracked files do not go, nor the build folder.
+//! The same for every machine: only the run script's name differs.
 
 use std::fs;
 use std::path::Path;
@@ -11,7 +11,7 @@ use std::process::Command;
 use super::plan::TREE_FILE;
 
 /// Never sent, tracked or not.
-pub const EXCLUDED: [&str; 3] = ["target", "parity/.oracle", "parity/.venv"];
+pub const EXCLUDED: [&str; 1] = ["target"];
 
 /// Writes the tarball of the worktree at `root` to `tarball`, with `run_script`
 /// in it as `run_file`, and answers the commit it was made from.

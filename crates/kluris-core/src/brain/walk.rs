@@ -19,8 +19,8 @@
 //!
 //! The walk is iterative and the result is sorted by the bytes of the POSIX
 //! relative path. v2 keeps `os.walk`'s directory-read order, which depends on
-//! the filesystem, so where v2's output order comes from the walk, parity
-//! compares it as a set (research-03 §3.2).
+//! the filesystem, so where v2's output order comes from the walk, only the
+//! set of items is v2's (research-03 §3.2).
 
 use std::fs;
 use std::path::{Path, PathBuf};

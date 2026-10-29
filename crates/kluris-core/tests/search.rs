@@ -1,6 +1,5 @@
 //! `kluris search`: BM25F over heading chunks (research-05 §3, §6 rung 1),
 //! with v2's substring hits always kept (research-03 §2.6).
-//! `parity/test_search.py` checks the v2 side against the v2.28.11 oracle.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -769,9 +768,9 @@ fn malformed_neurons_are_skipped_and_reported() {
 }
 
 /// `str.title()` of every code point Python 3.11 changes, and of strings that
-/// exercise its context, from `parity/tools/gen_pycase.py` (the oracle).
+/// exercise its context, as recorded from Python 3.11.
 #[test]
-fn python_title_matches_the_oracle_for_every_code_point() {
+fn python_title_matches_the_recorded_table_for_every_code_point() {
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/py_title.tsv");
     let text = fs::read_to_string(path).unwrap();
     let decode = |hexes: &str| -> String {

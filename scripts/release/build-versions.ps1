@@ -40,7 +40,7 @@ foreach ($version in @($Versions -split ',' | ForEach-Object { $_.Trim() } | Whe
     $null = New-Item -ItemType Directory -Force -Path $copy
     $archive = Join-Path $work 'tree.tar'
     Push-Location -LiteralPath $root
-    & $tar -cf $archive --exclude=./target --exclude=./tmp --exclude=./.git --exclude=./parity/.oracle --exclude=./parity/.venv .
+    & $tar -cf $archive --exclude=./target --exclude=./tmp --exclude=./.git .
     $code = $LASTEXITCODE
     Pop-Location
     if ($code -ne 0) { throw "tar of the tree failed ($code)" }

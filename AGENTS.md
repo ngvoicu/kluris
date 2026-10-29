@@ -28,11 +28,10 @@ crates/kluris-core/   # library: every operation, typed inputs and outputs, no p
 crates/kluris-cli/    # package `kluris`, binary `kluris`: parses arguments, calls core, prints
 xtask/                # dev tasks (cargo xtask; windows and linux runners share ssh_ci/)
 vendored/             # the four Specmint companion folders (unchanged from v2)
-parity/               # uv project: the v2.28.11 oracle vs the v3 binary
 dist-workspace.toml   # dist 0.33.1: targets, installers, archives (see Release)
 about.toml, about.hbs # cargo-about config and template of THIRD_PARTY_LICENSES.md
 scripts/release/      # release tooling: pinned tools, licence report, local build, installer smoke, release notes
-.github/workflows/    # ci.yml, parity.yml, release.yml (dist's own), release-notes.yml
+.github/workflows/    # ci.yml, release.yml (dist's own), release-notes.yml
 ```
 
 Rules: synchronous code, no async runtime; no `unwrap()`/`expect()` on user
@@ -43,32 +42,27 @@ data, errors are values; cross-platform (`std::path`, Unix-only APIs behind
 
 ```bash
 cargo build --release
-cargo test --workspace
+INSTA_UPDATE=no cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --check
-KLURIS_V3_BIN=target/release/kluris uv run --project parity pytest parity -q
 ```
 
-The parity harness builds the oracle venv (Python 3.11, `parity/oracle.lock`,
-hash-pinned) once into `parity/.oracle/` and reuses it while the lock is
-unchanged. Without `KLURIS_V3_BIN` every parity test fails (it never skips).
+`INSTA_UPDATE=no` makes a missing or changed golden snapshot fail and
+writes nothing (see "Golden tests").
 
 ## Windows machines (`cargo xtask windows`)
 
-Kluris 3's tests and parity harness run on the two household Windows
-machines over ssh, the way ConsensFlow's runner does (`xtask/src/windows.rs`
+Kluris 3's tests run on the two household Windows machines over ssh, the way ConsensFlow's runner does (`xtask/src/windows.rs`
 has the whole design):
 
 ```bash
-cargo xtask windows --machine zeewin --parity     # cargo test --workspace --no-fail-fast, then parity
+cargo xtask windows --machine zeewin2             # cargo test --workspace --no-fail-fast
 cargo xtask windows --machine zeewin2 -- -p kluris-core   # extra cargo test args after --
-cargo xtask windows --parity                      # zeewin2 if none queued, free and allowed, else zeewin
 cargo xtask windows --machine zeewin2 --wait 0 --clippy   # ask once: 75 at once if busy or a run is queued
-cargo xtask windows --parity --parity-files parity/test_smoke.py   # only that parity file
-cargo xtask windows --machine zeewin --installer-smoke --wrapper ../sites/kluris-site/install.ps1
-cargo xtask windows --machine zeewin --installer-smoke --published 3.0.0-rc.1   # a GitHub release, live wrapper
-cargo xtask windows --machine zeewin --installer-smoke --published 3.0.0 --unpinned   # GitHub's latest, which must be 3.0.0
-cargo xtask windows --clippy                      # cargo clippy --workspace --all-targets -- -D warnings, no tests
+cargo xtask windows --machine zeewin2 --installer-smoke --wrapper ../sites/kluris-site/install.ps1
+cargo xtask windows --machine zeewin2 --installer-smoke --published 3.0.0-rc.1   # a GitHub release, live wrapper
+cargo xtask windows --machine zeewin2 --installer-smoke --published 3.0.0 --unpinned   # GitHub's latest, which must be 3.0.0
+cargo xtask windows --machine zeewin2 --clippy    # cargo clippy --workspace --all-targets -- -D warnings, no tests
 ```
 
 - **Machines.** `zeewin` (AGV-COMPUTE1, `ssh zeewin`, short of memory: builds
@@ -77,7 +71,7 @@ cargo xtask windows --clippy                      # cargo clippy --workspace --a
   `devices/agvlaptop.md`) and consensflow-sme (`operations/test-machines.md`).
 - **What goes.** `git archive` of HEAD, or of a `git stash create` commit when
   tracked files have uncommitted changes (untracked files do not go), without
-  `target/`, `parity/.oracle/`, `parity/.venv/`.
+  `target/`.
 - **The queue, shared with ConsensFlow.** A busy machine is waited for, first
   come first served, in the queue every runner on this Mac keeps: a folder
   per machine in `~/.cf-windows-queues/` (or `CF_WINDOWS_QUEUES`), a ticket
@@ -123,11 +117,12 @@ cargo xtask windows --clippy                      # cargo clippy --workspace --a
   installs. Everything Kluris adds lives in `%USERPROFILE%\.kluris-ci\`:
   `tools\rustup` (`RUSTUP_HOME`: the tree's pinned toolchain, installed by the
   machine's own `~\.cargo\bin\rustup.exe` called by full path), `tools\cargo`
-  (`CARGO_HOME`), `tools\uv-0.12.8\uv.exe` (fetched once, SHA-256 checked),
-  `tools\python` (uv's managed CPython), `cache\target` (`CARGO_TARGET_DIR`:
-  registry deps stay built; the workspace crates rebuild in each run's new
-  folder), `cache\oracle` (`KLURIS_PARITY_ORACLE_DIR`), `cache\parity-venv`,
-  `cache\uv`, and `runs\<run id>\` (the unpacked tree, its `tmp\`). PATH is
+  (`CARGO_HOME`), `cache\target` (`CARGO_TARGET_DIR`: registry deps stay
+  built; the workspace crates rebuild in each run's new folder), for
+  `--installer-smoke` `tools\uv-0.12.8\uv.exe` (fetched once, SHA-256
+  checked), `tools\python` (uv's managed CPython, which runs
+  `scripts\release\serve.py`) and `cache\uv`, and `runs\<run id>\` (the
+  unpacked tree, its `tmp\`). PATH is
   prepended for the run's own process only. A machine without rustup (or the
   VS Build Tools linker) is reported, not fixed. The one exception is
   `--installer-smoke`, whose test is the installer's user PATH edit: the
@@ -138,13 +133,13 @@ cargo xtask windows --clippy                      # cargo clippy --workspace --a
   PATH is only read. kluris.exe and the receipt go to a sandbox profile.
 - **Bounds and cleanup.** The run is in a job object: at most 64 processes,
   all ended when the run ends. Each step has its own bound (toolchain 30 min,
-  cargo-test 90, release-build 60, parity 90; a step past it is ended, status
-  124), the whole run one more (this side kills ssh and sends the stop), and
+  cargo-test 90; a step past it is ended, status 124), the whole run one more (this side kills ssh and sends the stop), and
   every probe a few seconds. The bootstrap's `finally` always removes the
   run's tarball and its lock records and closes the lock (after a failed
   upload, a 30-second ssh with no lock removes that run's own tarball and says
-  whether it could); run folders older
-  than a day and stray `kluris-*.tgz` are swept by the next run, under the lock.
+  whether it could); run folders older than a day, stray `kluris-*.tgz` and
+  every folder in `cache\` that no run uses (all but `target` and `uv`) are
+  swept by the next run, under the lock, each said in a `== sweep:` line.
   Ctrl-C ends the run there too (130).
 - **The answer.** The output streams back; the status is the machine's last
   line `== exit N` (ssh to PowerShell answers 1 for every failure), then a
@@ -152,25 +147,20 @@ cargo xtask windows --clippy                      # cargo clippy --workspace --a
   `== step NAME exit CODE SECONDSs <run id>`, and the summary counts only the
   lines that end with this run's id, so step lines inside a step's output (a
   failing test printing what it captured) never reach it.
-- **Parity on Windows.** v2.28.11 runs there as the oracle (the hash-pinned
-  `parity/oracle.lock` has the `win_amd64` wheels) against the release
-  `kluris.exe` (`KLURIS_V3_BIN`). The harness reads CRLF in stdout/stderr as
-  LF (PAR-004). `--parity-files parity/test_x.py[,parity/test_y.py]`
-  (repeatable, needs `--parity`) runs `pytest` on those files alone instead
-  of the whole suite: each must be a `parity/*.py` file in this worktree,
-  checked before anything is sent.
+- **Goldens on Windows.** The run cannot set `INSTA_UPDATE` or bring files
+  back, so a Windows variant is taken from insta's output in the log (see
+  "Golden tests").
 
 ## Linux machine (`cargo xtask linux`)
 
-The same tests and parity harness run on `zeelin`, the household laptop's
+The same tests run on `zeelin`, the household laptop's
 Ubuntu 26.04 under WSL2 (the same laptop as zeewin2), over ssh
 (`xtask/src/linux.rs` has the whole design; the upload, the streamed run and
 the stop are shared with `windows` in `xtask/src/ssh_ci/`):
 
 ```bash
-cargo xtask linux --parity                        # cargo test --workspace --no-fail-fast, then parity
+cargo xtask linux                                 # cargo test --workspace --no-fail-fast
 cargo xtask linux -- -p kluris-core               # extra cargo test args after --
-cargo xtask linux --parity --parity-files parity/test_smoke.py   # only that parity file
 cargo xtask linux --installer-smoke --wrapper ../sites/kluris-site/install.sh
 cargo xtask linux --installer-smoke --published 3.0.0-rc.1   # a GitHub release, live wrapper
 cargo xtask linux --installer-smoke --published 3.0.0 --unpinned   # GitHub's latest, which must be 3.0.0
@@ -208,18 +198,19 @@ cargo xtask linux --wait 0 --clippy               # ask once: 75 at once if busy
   waited on but through the queue. They are checked when the run starts: a
   poker-lab job that starts later runs beside it.
 - **What goes.** The same tarball as for Windows (HEAD, or a `git stash
-  create` commit with the uncommitted tracked changes; not `target/`,
-  `parity/.oracle/`, `parity/.venv/`), by scp to
+  create` commit with the uncommitted tracked changes; not `target/`), by
+  scp to
   `~/.kluris-ci/incoming/<run id>.tgz`.
 - **Nothing outside `~/.kluris-ci/` changes.** No `sudo`, no system packages,
   no shell profiles, nothing of poker-lab's. `tools/rustup` (`RUSTUP_HOME`:
   the tree's pinned toolchain, installed by the user's own
   `~/.cargo/bin/rustup` called by full path; `~/.cargo/env` is never read),
-  `tools/cargo` (`CARGO_HOME`), `tools/uv-0.12.8/uv` (fetched once, SHA-256
-  checked), `tools/python` (uv's managed CPython), `cache/target`
-  (`CARGO_TARGET_DIR`), `cache/oracle` (`KLURIS_PARITY_ORACLE_DIR`),
-  `cache/parity-venv`, `cache/uv`, `cache/xdg`, and `runs/<run id>/` (the
-  unpacked tree, its `tmp/` as `TMPDIR`). PATH changes for the run's own
+  `tools/cargo` (`CARGO_HOME`), `cache/target` (`CARGO_TARGET_DIR`),
+  `cache/xdg` (`XDG_CACHE_HOME`), for the smokes `tools/uv-0.12.8/uv`
+  (fetched once, SHA-256 checked), `tools/python` (uv's managed CPython, which
+  runs `scripts/release/serve.py` and the smokes' JSON checks) and
+  `cache/uv`, and `runs/<run id>/` (the unpacked tree, its `tmp/` as
+  `TMPDIR`). PATH changes for the run's own
   process only. A zeelin without rustup is reported, not fixed.
 - **Bounds and cleanup.** The bootstrap runs in a session of its own
   (`setsid`) under `set -euo pipefail`; its `trap` ends every other process of
@@ -227,22 +218,21 @@ cargo xtask linux --wait 0 --clippy               # ask once: 75 at once if busy
   and the lock goes with its descriptor. `ulimit -u 1024` caps the user's
   tasks while the run goes (Linux counts threads and every process of `zee`,
   so it is a ceiling against runaway forks, not the Windows job's 64). Each
-  step has the Windows bounds (toolchain 30 min, cargo-test 90, release-build
-  60, parity 90) under `timeout` (TERM, then KILL 30 s later; status 124), and
+  step has the Windows bounds (toolchain 30 min, cargo-test 90) under
+  `timeout` (TERM, then KILL 30 s later; status 124), and
   the whole run one more. Ctrl-C (130), the bound (124) and a lost
   connection send the stop, which ends the run's session only if the record
-  names that run. Run folders and tarballs older than a day are swept by the
-  next run, under the lock.
+  names that run. Run folders and tarballs older than a day and every folder
+  in `cache/` that no run uses (all but `target`, `uv` and `xdg`) are swept
+  by the next run, under the lock, each said in a `== sweep:` line.
 - **The answer.** As on Windows: the output streams back, the status is the
   run's last line `== exit N`, then a summary line `linux: zeelin run <id>
   tree <commit>: <step> <status> (<time>), ...; exit N`, from the step lines
   that end with the run's id.
-- **Parity on Linux.** v2.28.11 runs there as the oracle (the hash-pinned
-  universal `parity/oracle.lock`) against the release `kluris`
-  (`KLURIS_V3_BIN`); `--parity-files` as for Windows.
 - **zeelin is WSL2, not native Linux.** v2's and v3's WSL code paths run
   there (`mri` prints `file://wsl.localhost/<distro>/...` links, built with
-  `wslpath -w`; `parity/test_mri.py` expects that form on a WSL host), so
+  `wslpath -w`; `golden_dream_mri.rs` expects that form on a WSL host, its
+  `@wsl` snapshot), so
   behaviour only native Linux shows is first covered by GitHub's Ubuntu
   runners at release.
 
@@ -324,8 +314,6 @@ package, hence the package `kluris`.
   workflows of the tagged commit: this tree has no publish.yml, so a v3 tag
   can never reach PyPI; a v2 tag pushed onto a v3 commit makes `dist plan`
   fail ("nothing to release"), never a release.
-  `scripts/release/check_workflows.sh` (ci.yml) fails if publish.yml, or any
-  workflow publishing to PyPI, comes back.
 - **Tools** (`scripts/release/tool.sh dist|cargo-about|actionlint`): the
   pinned prebuilt binary, its SHA-256 checked, in `target/tools/`; nothing is
   installed globally.
@@ -443,13 +431,40 @@ package, hence the package `kluris`.
   `releases/download/v$KLURIS_VERSION/` (`install.ps1` checks the archive
   before the installer runs, see "Checksums"); a push there deploys the site.
 
-## Parity rule
+## Golden tests
 
-Byte parity with v2.28.11 for `--json` output, exit codes, files written into
-brains, `~/.kluris/config.yml`, brain `kluris.yml` and SKILL.md files.
-Human-readable (non-JSON) output keeps v2's wording, not its exact layout.
-Every deliberate difference goes into `parity/allowlist.md` with the decision
-it comes from; an unlisted difference is a bug.
+Kluris's own output is pinned by golden tests: `insta` snapshots
+(`crates/*/tests/snapshots/`) of `--json` output, exit codes, both streams,
+files written into brains, `~/.kluris/config.yml`, brain `kluris.yml` and
+SKILL.md files, beside frozen corpora read row by row
+(`crates/kluris-core/tests/fixtures/corpus/` for the YAML and float formats,
+`xtask/fixtures/sync-specmint/`). A snapshot holds the same bytes on every
+machine and every day: the helpers in `crates/kluris-cli/tests/common/`
+replace only the temp root (`<ROOT>`), the binary's version and today's date
+with markers, and dump files so that every byte shows (a CR, a BOM, a byte
+that is not UTF-8). A path Kluris prints or writes in the OS's own form (a
+brain's, the config's) is checked in that form on the raw output and shown
+`/`-joined (`native_paths`), so one snapshot holds on every OS and a
+separator change still fails on Windows. A snapshot has an `@windows` (or
+`@wsl`) variant only for a real difference of the OS: Windows lists a folder
+without regard to case, a test makes no symlinks there, the OS words its own
+errors.
+
+- **Checking.** `INSTA_UPDATE=no cargo test --workspace` fails on a missing
+  or changed snapshot and writes nothing; CI runs the tests the same way
+  (insta writes nothing where `CI` is set). A normalization is never widened
+  to make a snapshot pass.
+- **Changing output.** A change to what Kluris prints or writes is a change
+  to its snapshots, made on purpose: write them with `INSTA_UPDATE=always
+  cargo test -p <crate> --test <file>` (cargo-insta is not used), read every
+  changed `.snap` before committing, and say in the commit what changed and
+  why. The review reads the `.snap` diff as the behaviour change; a snapshot
+  that changed without a reason in the commit is a bug.
+- **On Windows and Linux.** `cargo xtask windows|linux` runs the goldens
+  there with `INSTA_UPDATE` unset (insta writes only `.snap.new` files, which
+  stay on the machine) and brings back only the log: a Windows variant is the
+  new snapshot insta prints there, written as the `@windows` file, then run
+  again until every golden passes on that machine.
 
 ## Design decisions
 

@@ -80,7 +80,7 @@ pub fn run(brain: Option<&str>, as_json: bool, broken_only: bool) -> Result<(), 
     let today = today()?;
 
     // Every brain's kluris.yml first, so a missing one stops the run before
-    // any brain is written (v2 raises midway, after earlier brains, PAR-048).
+    // any brain is written (v2 raises midway, after earlier brains).
     let mut configs = Vec::new();
     for brain in &brains {
         let root = py_path_str(&brain.entry.path);
@@ -190,7 +190,7 @@ pub fn run(brain: Option<&str>, as_json: bool, broken_only: bool) -> Result<(), 
             ]
         };
         // After v2's keys, each only when it has an item: the temp files an
-        // interrupted write left (PAR-069), then the skipped files (PAR-038).
+        // interrupted write left, then the skipped files.
         if !removed_temp_files.is_empty() {
             doc.push(("removed_temp_files".into(), Json::Array(removed_temp_files)));
         }
@@ -225,8 +225,8 @@ pub fn run(brain: Option<&str>, as_json: bool, broken_only: bool) -> Result<(), 
     }
 }
 
-/// A `/`-joined path in native form: the JSON paths are `/`-joined
-/// (PAR-037), the text keeps v2's native ones.
+/// A `/`-joined path in native form: the JSON paths are `/`-joined,
+/// the text keeps v2's native ones.
 fn native(rel: &str) -> String {
     rel.replace('/', std::path::MAIN_SEPARATOR_STR)
 }

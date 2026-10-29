@@ -10,8 +10,8 @@
 //! - `brain_md`: brain.md's body, stripped, cut by [`truncate_brain_md`].
 //! - `glossary`: glossary.md's entries; none when it cannot be read.
 //! - `deprecation`: the store's deprecation issues, over the neurons that
-//!   read (PAR-007), in store order (PAR-008); `parse_errors` counts the
-//!   markdown neurons that do not read (PAR-009; v2's CLI always says 0).
+//!   read, in store order; `parse_errors` counts the markdown neurons that
+//!   do not read (v2's CLI always says 0).
 
 use std::path::Path;
 
@@ -180,7 +180,7 @@ pub fn truncate_brain_md(body: &str) -> String {
 /// title that is not blank and does not start with `up `, `sideways `,
 /// `## ` or `- [`, stripped, in the body (in the whole text when the
 /// frontmatter does not parse). `""` without map.md, or when it is not
-/// UTF-8 (v2 raises there, PAR-011).
+/// UTF-8 (v2 raises there).
 pub fn lobe_description(store: &impl BrainStore, lobe: &str) -> String {
     let rel = format!("{lobe}/map.md");
     let content = match store.structure_file(&rel) {

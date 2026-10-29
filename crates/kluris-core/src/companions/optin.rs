@@ -4,7 +4,7 @@
 //! Every resolved brain's `kluris.yml` is read before anything is written,
 //! so a brain whose file is missing or does not read stops the command
 //! with an error and no change (v2 rewrote the brains before it, then
-//! ended in a traceback; PAR-040).
+//! ended in a traceback).
 
 use std::path::{Path, PathBuf};
 
@@ -80,7 +80,7 @@ pub fn add(
 
 /// Opt the brains that have any of `selected` out of them (the rest of the
 /// list normalized, as v2 does); a brain without any of them is not
-/// touched (v2 rewrites every brain: research-03 §5 #25, PAR-039). Returns
+/// touched (v2 rewrites every brain: research-03 §5 #25). Returns
 /// the brains written. The runtime folders are kept.
 pub fn remove(brains: &[OptInBrain], selected: &[String]) -> Result<Vec<String>, CompanionError> {
     let mut changed = Vec::new();

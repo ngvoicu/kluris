@@ -25,10 +25,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::{fs, mem};
 
-use base64::Engine;
-use base64::engine::general_purpose::STANDARD as BASE64;
 use regex::Regex;
-use serde_json::{Value, json};
 
 /// The companions, in v2's order, with their source flags.
 pub const NAMES: [&str; 4] = [
@@ -645,56 +642,6 @@ pub fn main(args: &[String]) -> ExitCode {
             eprintln!("{message}");
             ExitCode::from(if message.starts_with("usage:") { 2 } else { 1 })
         }
-    }
-}
-
-/// `sync-specmint-oracle`: answer `tools/sync_specmint_oracle.py`'s
-/// requests (one JSON line each) with this port: `{"report": {"name",
-/// "old", "new", "full_diff"}}` (trees as `{path: base64}`) gets
-/// `{"changed", "out"}`, `{"mentions": text}` the list of mentions.
-pub fn oracle(args: &[String]) -> Result<(), String> {
-    if !args.is_empty() {
-        return Err("usage: sync-specmint-oracle".into());
-    }
-    let tree = |value: &Value| -> Result<Tree, String> {
-        let Some(map) = value.as_object() else {
-            return Err("a tree is a JSON object".into());
-        };
-        map.iter()
-            .map(|(k, v)| {
-                let data = BASE64
-                    .decode(v.as_str().unwrap_or_default())
-                    .map_err(|e| e.to_string())?;
-                Ok((k.clone(), data))
-            })
-            .collect()
-    };
-    let stdin = io::stdin();
-    let mut stdout = io::stdout().lock();
-    let mut line = String::new();
-    loop {
-        line.clear();
-        if io::BufRead::read_line(&mut stdin.lock(), &mut line).map_err(|e| e.to_string())? == 0 {
-            return Ok(());
-        }
-        let request: Value = serde_json::from_str(&line).map_err(|e| e.to_string())?;
-        let answer = if let Some(r) = request.get("report") {
-            let mut printed = Vec::new();
-            let changed = report(
-                r["name"].as_str().unwrap_or_default(),
-                &tree(&r["old"])?,
-                &tree(&r["new"])?,
-                r["full_diff"].as_bool().unwrap_or(false),
-                &mut printed,
-            );
-            json!({"changed": changed, "out": String::from_utf8_lossy(&printed)})
-        } else {
-            json!(path_mentions(
-                request["mentions"].as_str().unwrap_or_default()
-            ))
-        };
-        writeln!(stdout, "{answer}").map_err(|e| e.to_string())?;
-        stdout.flush().map_err(|e| e.to_string())?;
     }
 }
 

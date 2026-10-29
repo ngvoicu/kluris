@@ -12,14 +12,13 @@
 //! The writes are applied together; the validators (broken and one-way
 //! synapses, orphans, frontmatter issues, deprecation) then run on the brain
 //! as written. Differences from v2: dates are written in the quoted form
-//! v2's dream converges to (PAR-033), YAML anchors as plain copies
-//! (PAR-034), each file keeps its line endings and new files are LF
-//! (PAR-035), pruned directories get no `map.md` and are not listed
-//! (PAR-036), report paths are `/`-joined (PAR-037), and files are taken in
-//! path order (PAR-008). A file that cannot be read or written is skipped,
-//! reported and makes the brain unhealthy (PAR-038); odd `related` values
-//! never crash (PAR-047); link checking skips code, other schemes and titles
-//! and reads URL-encoded paths (PAR-049).
+//! v2's dream converges to, YAML anchors as plain copies, each file keeps
+//! its line endings and new files are LF, pruned directories get no
+//! `map.md` and are not listed, report paths are `/`-joined, and files are
+//! taken in path order. A file that cannot be read or written is skipped,
+//! reported and makes the brain unhealthy; odd `related` values never
+//! crash; link checking skips code, other schemes and titles and reads
+//! URL-encoded paths.
 
 mod linker;
 mod links;
@@ -116,7 +115,7 @@ pub struct DreamReport {
 
 impl DreamReport {
     /// No broken or one-way synapses, orphans, frontmatter issues or skipped
-    /// files (v2 exits 1 on every file Kluris 3 skips, PAR-038); deprecation
+    /// files (v2 exits 1 on every file Kluris 3 skips); deprecation
     /// issues are warnings only.
     pub fn healthy(&self) -> bool {
         self.skipped.is_empty()
@@ -314,8 +313,8 @@ pub(crate) fn map_changes<S: BrainStore>(
     ws.into_change_set()
 }
 
-/// Run dream on a brain: remove the temp files an interrupted write left
-/// (PAR-069), compute every write, apply them as one change set, and
+/// Run dream on a brain: remove the temp files an interrupted write left,
+/// compute every write, apply them as one change set, and
 /// validate the result.
 pub fn dream<S: BrainStore>(store: &mut S, git: &impl Git, options: &DreamOptions) -> DreamReport {
     // First, so `git add -A` after a dream never commits one.

@@ -1,5 +1,5 @@
 //! Each brain's SKILL.md, rendered as v2.28.11's `agents.render_skill` does
-//! with the decided changes (`parity/allowlist.md`): the `{brain, file,
+//! with the decided changes: the `{brain, file,
 //! target}` braces no longer leak, values are substituted in one pass, a
 //! marker comment follows the frontmatter, and the search advice is
 //! research-05's "Search" paragraph.

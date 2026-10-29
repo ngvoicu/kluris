@@ -4,7 +4,7 @@
 //!
 //! The scaffold is v2's bytes: each lobe's `map.md`, `kluris.yml`,
 //! `brain.md`, `glossary.md`, `README.md` and `.gitignore`, written as one
-//! change set. Differences from v2, each allowlisted: new brain names follow
+//! change set. Differences from v2, each decided: new brain names follow
 //! the stricter rule ([`is_valid_new_name`]), and a `--from-config` lobe name
 //! that is a path or a lobe with a nested value is refused
 //! ([`structure_from_config`]).

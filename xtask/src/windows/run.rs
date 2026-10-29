@@ -8,7 +8,7 @@
 //! session started.
 
 use super::machine::{self, Machine};
-use super::options::{self, Options};
+use super::options::Options;
 use super::script::{self, Spec};
 #[cfg(test)]
 pub use crate::ssh_ci::outcome::answer;
@@ -29,7 +29,6 @@ pub fn windows(options: &Options, ctx: &mut Ctx) -> i32 {
 }
 
 fn go(options: &Options, ctx: &mut Ctx) -> Result<i32, String> {
-    let parity_files = options::checked_parity_files(ctx.root, &options.parity_files)?;
     let machine = match options.machine {
         Some(name) => Machine::named(name),
         None => {
@@ -61,8 +60,6 @@ fn go(options: &Options, ctx: &mut Ctx) -> Result<i32, String> {
         id: &id,
         channel: &channel,
         jobs: machine.jobs,
-        parity: options.parity,
-        parity_files: &parity_files,
         cargo_args: &options.cargo_args,
         installer_smoke: options.installer_smoke,
         wrapper: options.wrapper.is_some(),

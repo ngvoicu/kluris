@@ -8,7 +8,8 @@
 //!   and closes the lock, however the run ends.
 //! - The run script ([`run_script`]) rides in the tarball: the run put in a job
 //!   (at most [`PROCESS_LIMIT`] processes, every one ended when the run ends),
-//!   old runs swept, then each [`Step`] run with its own bound in minutes.
+//!   old runs and every cache folder no run uses ([`CACHE_FOLDERS`]) swept,
+//!   then each [`Step`] run with its own bound in minutes.
 //! - The stop ([`stop_script`]) ends a run that was stopped on this side, which
 //!   Windows' SSH server does not pass on.
 //! - The state ([`state_script`]) is what zeewin2 is asked before a run: C:'s
@@ -29,9 +30,9 @@ pub use crate::ssh_ci::outcome::{EXIT_MARK, STEP_MARK, TREE_MARK};
 #[cfg(test)]
 pub use crate::ssh_ci::plan::run_id;
 use crate::ssh_ci::plan::{
-    self, CARGO_TEST, CLIPPY, INSTALLER_SMOKE, LIFECYCLE, LIFECYCLE_NEW, LIFECYCLE_OLD, PARITY,
-    PUBLISHED_SMOKE, PYTHON, RELEASE_BUILD, RELEASE_DIST, RELEASE_VERSIONS, SMOKE_PYTHON,
-    TOOLCHAIN, WRAPPER_DIR, fill,
+    self, CARGO_TEST, CLIPPY, INSTALLER_SMOKE, LIFECYCLE, LIFECYCLE_NEW, LIFECYCLE_OLD,
+    PUBLISHED_SMOKE, PYTHON, RELEASE_DIST, RELEASE_VERSIONS, SMOKE_PYTHON, TOOLCHAIN, WRAPPER_DIR,
+    fill,
 };
 pub use crate::ssh_ci::plan::{CI_DIR, TREE_FILE, UV_VERSION, tarball_name};
 
@@ -53,8 +54,13 @@ pub const RUN_FILE: &str = ".kluris-run.ps1";
 pub const ENCODED_LIMIT: usize = 8000;
 
 /// The most processes a run's job holds at once: cargo's jobs, the linker,
-/// test binaries, git, Python and the two kluris binaries fit well within it.
+/// test binaries, git, Python and the kluris binaries fit well within it.
 pub const PROCESS_LIMIT: u32 = 64;
+
+/// The folders under `cache\` a run points a tool at: `target`
+/// (`CARGO_TARGET_DIR`) and `uv` (`UV_CACHE_DIR`, the installer smoke's). The
+/// sweep removes every other folder there.
+pub const CACHE_FOLDERS: [&str; 2] = ["target", "uv"];
 
 /// uv's Windows zip ([`UV_VERSION`]), fetched into Kluris's tools folder when
 /// the machine has none there.
@@ -70,10 +76,6 @@ pub struct Spec<'a> {
     pub channel: &'a str,
     /// `CARGO_BUILD_JOBS` on this machine.
     pub jobs: u32,
-    pub parity: bool,
-    /// The `parity/*.py` files `--parity-files` named (already checked); empty:
-    /// the whole suite.
-    pub parity_files: &'a [String],
     /// Appended to `cargo test --workspace --no-fail-fast`.
     pub cargo_args: &'a [String],
     /// The release installer smoke instead of the tests.
@@ -99,7 +101,7 @@ pub fn steps(spec: &Spec) -> Vec<plan::Step> {
     } else if spec.installer_smoke {
         plan::smoke_steps()
     } else {
-        plan::steps(spec.parity)
+        plan::steps()
     }
 }
 
@@ -112,7 +114,7 @@ pub fn bound(spec: &Spec) -> Duration {
     } else if spec.installer_smoke {
         plan::smoke_bound()
     } else {
-        plan::bound(spec.parity)
+        plan::bound()
     }
 }
 
@@ -255,21 +257,9 @@ pub fn run_script(spec: &Spec) -> String {
             CARGO_TEST.minutes,
             quoted(&command_line(&test))
         );
-        let parity = if spec.parity {
-            let pytest = plan::pytest_args(spec.parity_files);
-            uv + &fill(
-                PARITY_TEMPLATE,
-                &[
-                    ("release", &RELEASE_BUILD.minutes.to_string()),
-                    ("parity", &PARITY.minutes.to_string()),
-                    ("pytest", &quoted(&command_line(&pytest))),
-                ],
-            )
-        } else {
-            String::new()
-        };
-        (test_step, parity)
+        (test_step, String::new())
     };
+    let kept: Vec<String> = CACHE_FOLDERS.iter().map(|name| quoted(name)).collect();
     fill(
         RUN_TEMPLATE,
         &[
@@ -277,6 +267,7 @@ pub fn run_script(spec: &Spec) -> String {
             ("processes", &PROCESS_LIMIT.to_string()),
             ("ci", CI_DIR),
             ("id", spec.id),
+            ("cache_folders", &kept.join(", ")),
             ("jobs", &spec.jobs.to_string()),
             ("toolchain_minutes", &TOOLCHAIN.minutes.to_string()),
             ("toolchain", &quoted(&toolchain)),
@@ -397,6 +388,10 @@ foreach ($old in @(Get-ChildItem -LiteralPath (Join-Path $ci 'runs') -Directory 
   if (Test-Path -LiteralPath $old.FullName) { Write-Output "== sweep: could not remove runs\$($old.Name)" } else { Write-Output "== sweep: removed runs\$($old.Name)" }
 }
 Get-ChildItem -LiteralPath $env:USERPROFILE -File -Filter 'kluris-*.tgz' | Where-Object { $_.LastWriteTime -lt $cutoff } | Remove-Item -Force -ErrorAction SilentlyContinue
+foreach ($stale in @(Get-ChildItem -LiteralPath $cache -Directory | Where-Object { $_.Name -notin @(«cache_folders») })) {
+  Remove-Item -LiteralPath $stale.FullName -Recurse -Force -ErrorAction SilentlyContinue
+  if (Test-Path -LiteralPath $stale.FullName) { Write-Output "== sweep: could not remove cache\$($stale.Name)" } else { Write-Output "== sweep: removed cache\$($stale.Name)" }
+}
 $rustup = Join-Path $env:USERPROFILE '.cargo\bin\rustup.exe'
 $cargo = Join-Path $env:USERPROFILE '.cargo\bin\cargo.exe'
 if (-not ((Test-Path -LiteralPath $rustup -PathType Leaf) -and (Test-Path -LiteralPath $cargo -PathType Leaf))) {
@@ -439,7 +434,7 @@ if ($state.failed) { Exit-Run $state.failed }
 "##;
 
 /// uv fetched (and its hash checked) into the tools folder when it is not
-/// there: the parity steps and the installer smoke run on it.
+/// there: the installer smoke runs its Python and local release server on it.
 const UV_TEMPLATE: &str = r##"$uvdir = Join-Path $tools 'uv-«uv_version»'
 $uv = Join-Path $uvdir 'uv.exe'
 if (-not (Test-Path -LiteralPath $uv -PathType Leaf)) {
@@ -455,21 +450,6 @@ if (-not (Test-Path -LiteralPath $uv -PathType Leaf)) {
   $code = if (Test-Path -LiteralPath $uv -PathType Leaf) { 0 } else { 1 }
   if ($code -and -not $state.failed) { $state.failed = $code }
   Write-Output "== step uv exit $code $([int]((Get-Date) - $started).TotalSeconds)s «id»"
-}
-"##;
-
-/// The parity steps: a release `kluris.exe`, then the harness, with the
-/// oracle's venv, uv's cache and Python kept in Kluris's folder.
-const PARITY_TEMPLATE: &str = r##"if (Test-Path -LiteralPath $uv -PathType Leaf) {
-  $env:UV_CACHE_DIR = Join-Path $cache 'uv'
-  $env:UV_PYTHON_INSTALL_DIR = Join-Path $tools 'python'
-  $env:UV_PYTHON_PREFERENCE = 'only-managed'
-  $env:UV_PROJECT_ENVIRONMENT = Join-Path $cache 'parity-venv'
-  $env:KLURIS_PARITY_ORACLE_DIR = Join-Path $cache 'oracle'
-  $env:KLURIS_V3_BIN = Join-Path $env:CARGO_TARGET_DIR 'release\kluris.exe'
-  $env:Path = "$uvdir;" + $env:Path
-  Invoke-Step 'release-build' «release» $cargo 'build --release --package kluris'
-  if ($state.last -eq 0) { Invoke-Step 'parity' «parity» $uv «pytest» }
 }
 "##;
 

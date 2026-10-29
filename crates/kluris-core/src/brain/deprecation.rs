@@ -17,11 +17,11 @@
 //! neuron, while each walked path still reports its own issues. `file` and
 //! `source` are the walked relative paths, the `active_links_to_deprecated`
 //! target is the resolved target's relative path, all `/`-joined on every OS
-//! (interview-01 #7; v2's `str(Path)` is native, PAR-037); `replaced_by`
+//! (interview-01 #7; v2's `str(Path)` is native); `replaced_by`
 //! targets are kept as written.
 //!
 //! A markdown neuron whose frontmatter cannot be read is skipped and reported
-//! in [`DeprecationReport::skipped`]; v2 raises instead (PAR-007).
+//! in [`DeprecationReport::skipped`]; v2 raises instead.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};

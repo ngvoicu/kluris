@@ -4,7 +4,7 @@
 //! name and target are checked, the brain is scaffolded ([`scaffold`]), the
 //! companion picker may run, then git, the maps (v2's `_run_dream_on_brain`),
 //! the first commit, and the registration. Differences from v2, each
-//! allowlisted:
+//! decided:
 //! - the wizard's brain type is checked like `--type` (asked again);
 //! - the caller runs the wizard only on a terminal (not with `--json` or
 //!   `KLURIS_NO_PROMPT=1`); without one a missing name is an error;

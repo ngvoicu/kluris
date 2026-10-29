@@ -71,9 +71,8 @@ pub fn value(json: &Json) -> Value {
 
 /// What reading `text` must give, from a corpus outcome: `{"value": ...}` or
 /// `{"error": ...}` (error messages are not compared). An outcome marked
-/// `deliberate` (an allowlisted difference from the oracle) keeps the
-/// oracle's reading and holds Kluris's own under `kluris`, which is the one
-/// checked.
+/// `deliberate` (a decided difference from Kluris 2.28.11) keeps 2.28.11's
+/// reading and holds Kluris's own under `kluris`, which is the one checked.
 pub fn check_load(text: &str, outcome: &Json) -> Result<(), String> {
     let expected = if outcome.get("deliberate").is_some() {
         &outcome["kluris"]

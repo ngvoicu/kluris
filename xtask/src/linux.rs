@@ -1,9 +1,9 @@
-//! `cargo xtask linux`: the workspace's tests, and with `--parity` the parity
-//! harness, on the household laptop's Ubuntu `zeelin` (WSL2), over ssh, the
-//! way `cargo xtask windows` runs them on zeewin and zeewin2.
+//! `cargo xtask linux`: the workspace's tests on the household laptop's Ubuntu
+//! `zeelin` (WSL2), over ssh, the way `cargo xtask windows` runs them on
+//! zeewin and zeewin2.
 //!
 //! ```text
-//! cargo xtask linux [--wait MINUTES] [--parity [--parity-files f.py[,...]]] [-- <extra cargo test args>]
+//! cargo xtask linux [--wait MINUTES] [-- <extra cargo test args>]
 //! ```
 //!
 //! A run, in order:
@@ -42,13 +42,12 @@
 //!    sourced. Its `trap` ends every other process of the run's session and
 //!    removes the tarball and the record, however the run ends.
 //! 5. The run script: `ulimit -u` caps the user's tasks while the run goes,
-//!    run folders and tarballs older than a day are swept, then each step under
-//!    `timeout`: the tree's Rust toolchain into Kluris's own `RUSTUP_HOME`
-//!    (with the user's `~/.cargo/bin/rustup` by its full path), `cargo test
-//!    --workspace --no-fail-fast`, and with `--parity` uv (fetched once, its
-//!    hash checked), a release `kluris` and the parity harness with
-//!    `KLURIS_V3_BIN` pointing at it. Everything lives under `~/.kluris-ci/`;
-//!    PATH changes for the run's own process only, and no profile is touched.
+//!    run folders and tarballs older than a day and every folder in `cache/`
+//!    that no run uses are swept, then each step under `timeout`: the tree's
+//!    Rust toolchain into Kluris's own `RUSTUP_HOME` (with the user's
+//!    `~/.cargo/bin/rustup` by its full path), then `cargo test --workspace
+//!    --no-fail-fast`. Everything lives under `~/.kluris-ci/`; PATH changes
+//!    for the run's own process only, and no profile is touched.
 //! 6. The output streams back as it comes; the status is the run's last line
 //!    (`== exit N`), and a summary line says each step's. A run stopped here
 //!    (Ctrl-C: 130), past its bound (124) or whose connection was lost is ended

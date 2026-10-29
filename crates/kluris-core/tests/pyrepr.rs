@@ -1,8 +1,7 @@
 //! Python's float formatting: `repr(x)` and `json.dumps(x)`.
 //!
 //! Every expected string is the output of `repr(x)` and `json.dumps(x)` in
-//! the oracle venv (Python 3.11). `parity/test_float_differential.py`
-//! compares 20,000+ more against the oracle.
+//! Python 3.11, recorded and frozen.
 
 use kluris_core::pyrepr::{float_repr, json_float};
 

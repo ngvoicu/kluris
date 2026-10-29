@@ -1,5 +1,5 @@
 //! `kluris doctor` (v2 `cli.py:1900-2002`, research-03 §1.13, with the
-//! interview-01 #8 changes: `parity/allowlist.md`).
+//! interview-01 #8 changes).
 //!
 //! Checks, in order:
 //! 1. `git`: `git --version` runs and exits 0.

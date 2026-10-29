@@ -1,5 +1,4 @@
-//! Golden tests of `kluris wake-up` and `kluris search`, the scenarios of
-//! `parity/test_wake_up.py` and `parity/test_search.py`.
+//! Golden tests of `kluris wake-up` and `kluris search`.
 //!
 //! wake-up: each run's exit code, stdout and stderr, normalized by the
 //! brain's own folder, so its `path` reads `<ROOT>` on every OS; every run

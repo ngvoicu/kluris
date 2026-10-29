@@ -1,5 +1,5 @@
 //! The decided fixes in `kluris create` and `kluris register` (TEST-K3-25;
-//! each one is a `parity/allowlist.md` entry):
+//! each one a deliberate difference from v2):
 //! - `create --json` without a name is a JSON error (v2: a traceback);
 //! - the wizard's brain type is checked like `--type`;
 //! - nothing is asked when stdin is not a terminal or `KLURIS_NO_PROMPT=1`:

@@ -3,8 +3,7 @@
 //! first body line keeps its indentation, line endings are kept, odd
 //! `related` values and a missing `kluris.yml` never crash, and link checking
 //! ignores code, other schemes and titles and reads `%20`. Each case is one
-//! where v2 crashes or writes the wrong thing (`parity/test_dream.py` shows
-//! v2's side).
+//! where v2 crashes or writes the wrong thing.
 
 use std::fs;
 use std::path::{Path, PathBuf};

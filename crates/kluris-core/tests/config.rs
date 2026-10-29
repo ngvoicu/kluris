@@ -1,6 +1,6 @@
 //! The global `config.yml` and each brain's `kluris.yml`, read and written as
-//! v2.28.11 does. Every fixture under `fixtures/config/` was written by the v2
-//! oracle (`parity/tools/gen_config_fixtures.py`); `*-input.yml` files are the
+//! v2.28.11 does. Every fixture under `fixtures/config/` was written by Kluris
+//! 2.28.11; `*-input.yml` files are the
 //! hand-edited files v2 was given to read, and the matching `*-rewritten.yml`
 //! is what v2 wrote back.
 
@@ -1002,8 +1002,8 @@ fn the_sync_auto_fetch_key_is_read_and_kept_on_rewrite() {
 
 // --- YAML 1.1 syntax corners, as `kluris list` reads them --------------------
 
-/// Configs in flow style and configs that do not read, as rows: the scenarios
-/// of `parity/test_config_yaml_syntax.py`, by its ids.
+/// Configs in flow style and configs that do not read, as rows keyed by
+/// scenario id.
 const YAML_SYNTAX: &[(&str, &str)] = &[
     // `alpha:{` is a key and a flow mapping (a `:` followed by a flow
     // indicator ends a plain scalar in a flow collection).

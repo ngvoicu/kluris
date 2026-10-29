@@ -14,7 +14,8 @@
 //!   tarball and the record, however the run ends; the lock goes with its
 //!   descriptor.
 //! - The run script ([`run_script`]) rides in the tarball: the task cap
-//!   (`ulimit -u`), old runs swept, then each step under `timeout`.
+//!   (`ulimit -u`), old runs and every cache folder no run uses
+//!   ([`CACHE_FOLDERS`]) swept, then each step under `timeout`.
 //! - The stop ([`stop_script`]) ends a run that was stopped on this side or
 //!   whose connection was lost: a session without a terminal is not ended by
 //!   sshd when its connection goes.
@@ -26,8 +27,8 @@ use std::time::Duration;
 
 use crate::ssh_ci::plan::{
     self, CARGO_TEST, CI_DIR, CLIPPY, INSTALLER_SMOKE, LIFECYCLE, LIFECYCLE_NEW, LIFECYCLE_OLD,
-    PARITY, PUBLISHED_SMOKE, PYTHON, RELEASE_BUILD, RELEASE_DIST, RELEASE_VERSIONS, SMOKE_PYTHON,
-    TOOLCHAIN, TREE_FILE, UV_VERSION, WRAPPER_DIR, fill, tarball_name,
+    PUBLISHED_SMOKE, PYTHON, RELEASE_DIST, RELEASE_VERSIONS, SMOKE_PYTHON, TOOLCHAIN, TREE_FILE,
+    UV_VERSION, WRAPPER_DIR, fill, tarball_name,
 };
 
 /// The ssh host: the laptop's Ubuntu under WSL2.
@@ -49,6 +50,10 @@ pub const LOCK: &str = ".linux-run.lock";
 pub const OWNER: &str = ".linux-run.id";
 /// Where tarballs are sent, under [`CI_DIR`].
 pub const INCOMING: &str = "incoming";
+/// The folders under `cache/` a run points a tool at: `target`
+/// (`CARGO_TARGET_DIR`), `uv` (`UV_CACHE_DIR`, the smokes') and `xdg`
+/// (`XDG_CACHE_HOME`). The sweep removes every other folder there.
+pub const CACHE_FOLDERS: [&str; 3] = ["target", "uv", "xdg"];
 
 /// uv's Linux tarball ([`UV_VERSION`]), fetched into Kluris's tools folder
 /// when the machine has none there; its hash is GitHub's `.sha256` of it.
@@ -87,10 +92,6 @@ pub struct Spec<'a> {
     pub jobs: u32,
     /// `ulimit -u` for the run.
     pub tasks: u32,
-    pub parity: bool,
-    /// The `parity/*.py` files `--parity-files` named (already checked); empty:
-    /// the whole suite.
-    pub parity_files: &'a [String],
     /// Appended to `cargo test --workspace --no-fail-fast`.
     pub cargo_args: &'a [String],
     /// The release installer smoke instead of the tests.
@@ -116,7 +117,7 @@ pub fn steps(spec: &Spec) -> Vec<plan::Step> {
     } else if spec.installer_smoke {
         plan::smoke_steps()
     } else {
-        plan::steps(spec.parity)
+        plan::steps()
     }
 }
 
@@ -129,7 +130,7 @@ pub fn bound(spec: &Spec) -> Duration {
     } else if spec.installer_smoke {
         plan::smoke_bound()
     } else {
-        plan::bound(spec.parity)
+        plan::bound()
     }
 }
 
@@ -298,26 +299,19 @@ pub fn run_script(spec: &Spec) -> String {
             CARGO_TEST.minutes,
             quote_all(&test)
         );
-        let parity = if spec.parity {
-            uv + &fill(
-                PARITY_TEMPLATE,
-                &[
-                    ("release", &RELEASE_BUILD.minutes.to_string()),
-                    ("parity", &PARITY.minutes.to_string()),
-                    ("pytest", &quote_all(&plan::pytest_args(spec.parity_files))),
-                ],
-            )
-        } else {
-            String::new()
-        };
-        (test_step, parity)
+        (test_step, String::new())
     };
+    let kept: String = CACHE_FOLDERS
+        .iter()
+        .map(|name| format!(" ! -name {}", quote(name)))
+        .collect();
     fill(
         RUN_TEMPLATE,
         &[
             ("tasks", &spec.tasks.to_string()),
             ("ci", CI_DIR),
             ("incoming", INCOMING),
+            ("cache_kept", &kept),
             ("jobs", &spec.jobs.to_string()),
             ("step_mark", STEP_MARK),
             ("toolchain_minutes", &TOOLCHAIN.minutes.to_string()),
@@ -468,6 +462,14 @@ while IFS= read -r old; do
   fi
 done < <(find "$ci/runs" -mindepth 1 -maxdepth 1 -type d ! -name "$id" -mmin +1440)
 find "$ci/«incoming»" -mindepth 1 -maxdepth 1 -type f -name 'kluris-*.tgz' -mmin +1440 -exec rm -f -- {} + || true
+while IFS= read -r stale; do
+  rm -rf -- "${stale:?}"
+  if [ -e "$stale" ]; then
+    printf '== sweep: could not remove cache/%s\n' "${stale##*/}"
+  else
+    printf '== sweep: removed cache/%s\n' "${stale##*/}"
+  fi
+done < <(find "$cache" -mindepth 1 -maxdepth 1 -type d«cache_kept»)
 rustup="${HOME:?}/.cargo/bin/rustup"
 cargo="${HOME:?}/.cargo/bin/cargo"
 if [ ! -x "$rustup" ] || [ ! -x "$cargo" ]; then
@@ -502,7 +504,7 @@ if [ "$failed" -ne 0 ]; then exit_run "$failed"; fi
 "#;
 
 /// uv fetched (its hash checked) into the tools folder when it is not there:
-/// the parity steps and the installer smoke run on it.
+/// the smokes run their Python and local release server on it.
 const UV_TEMPLATE: &str = r#"uvdir="$tools/uv-«uv_version»"
 uv="$uvdir/uv"
 if [ ! -x "$uv" ]; then
@@ -528,22 +530,6 @@ if [ ! -x "$uv" ]; then
   last=$code
   if [ "$code" -ne 0 ] && [ "$failed" -eq 0 ]; then failed=$code; fi
   printf '== step uv exit %s %ss %s\n' "$code" "$((SECONDS - started))" "$id"
-fi
-"#;
-
-/// The parity steps: a release `kluris`, then the harness, with the oracle's
-/// venv, uv's cache and Python kept in Kluris's folder.
-const PARITY_TEMPLATE: &str = r#"if [ -x "$uv" ]; then
-  export UV_CACHE_DIR="$cache/uv"
-  export UV_PYTHON_INSTALL_DIR="$tools/python"
-  export UV_PYTHON_BIN_DIR="$tools/python-bin"
-  export UV_PYTHON_PREFERENCE=only-managed
-  export UV_PROJECT_ENVIRONMENT="$cache/parity-venv"
-  export KLURIS_PARITY_ORACLE_DIR="$cache/oracle"
-  export KLURIS_V3_BIN="$CARGO_TARGET_DIR/release/kluris"
-  export PATH="$uvdir:$PATH"
-  step release-build «release» "$cargo" 'build' '--release' '--package' 'kluris'
-  if [ "$last" -eq 0 ]; then step parity «parity» "$uv" «pytest»; fi
 fi
 "#;
 

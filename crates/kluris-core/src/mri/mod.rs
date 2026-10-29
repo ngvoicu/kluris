@@ -4,19 +4,19 @@
 //! The graph is v2's `build_graph` over the shared walker:
 //! - nodes: every walked `.md` file (maps, `brain.md`, `glossary.md` and
 //!   `index.md` too) but `README.md`, then the opted-in YAML neurons, in path
-//!   order (PAR-008); a node's id is its index. The walker prunes dot
+//!   order; a node's id is its index. The walker prunes dot
 //!   directories, `node_modules`, `__pycache__` and symlinks that leave the
-//!   brain, which v2's MRI walk graphs (PAR-042);
+//!   brain, which v2's MRI walk graphs;
 //! - edges: `parent`, each `related` and `replaced_by` whose target resolves
 //!   to a node, then inline `[text](target)` links (not `http...`, anchor and
 //!   query cut, no self-link) for a pair that has no edge yet.
 //!
 //! The page is v2's shell, CSS and JS byte for byte
-//! (`assets/mri/`, taken from v2.28.11 by `parity/tools/mri_oracle.py`), with
+//! (`assets/mri/`, taken from v2.28.11), with
 //! the brain name, the header counts and `json.dumps(graph, indent=2)`
 //! injected. Differences: the name is the registered brain name, not the
-//! directory name (PAR-044), and `</` and `<!--` in the graph JSON are
-//! escaped so neuron text cannot end the script (PAR-043).
+//! directory name, and `</` and `<!--` in the graph JSON are escaped so
+//! neuron text cannot end the script.
 
 mod text;
 mod uri;

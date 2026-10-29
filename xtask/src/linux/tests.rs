@@ -20,13 +20,11 @@ fn words(line: &str) -> Vec<String> {
     line.split_whitespace().map(str::to_owned).collect()
 }
 
-fn spec<'a>(parity: bool, parity_files: &'a [String], cargo_args: &'a [String]) -> Spec<'a> {
+fn spec(cargo_args: &[String]) -> Spec<'_> {
     Spec {
         channel: "1.99.0",
         jobs: 8,
         tasks: script::TASK_LIMIT,
-        parity,
-        parity_files,
         cargo_args,
         installer_smoke: false,
         wrapper: false,
@@ -41,7 +39,7 @@ fn smoke_spec(wrapper: bool) -> Spec<'static> {
     Spec {
         installer_smoke: true,
         wrapper,
-        ..spec(false, &[], &[])
+        ..spec(&[])
     }
 }
 
@@ -50,7 +48,7 @@ fn published_spec(version: &'static str) -> Spec<'static> {
     Spec {
         installer_smoke: true,
         published: Some(version),
-        ..spec(false, &[], &[])
+        ..spec(&[])
     }
 }
 
@@ -76,12 +74,10 @@ mod words_of_the_command {
     }
 
     #[test]
-    fn no_words_is_a_run_without_parity() {
+    fn no_words_is_a_tests_run() {
         assert_eq!(
             run_of(""),
             Options {
-                parity: false,
-                parity_files: vec![],
                 cargo_args: vec![],
                 installer_smoke: false,
                 wrapper: None,
@@ -96,12 +92,11 @@ mod words_of_the_command {
     #[test]
     fn the_installer_smoke_and_its_wrapper() {
         let options = run_of("--installer-smoke --wrapper ../site/install.sh");
-        assert!(options.installer_smoke && !options.parity, "{options:?}");
+        assert!(options.installer_smoke, "{options:?}");
         assert_eq!(options.wrapper.as_deref(), Some("../site/install.sh"));
         assert_eq!(run_of("--installer-smoke").wrapper, None);
         for (line, says) in [
             ("--wrapper x.sh", "--wrapper goes with --installer-smoke"),
-            ("--installer-smoke --parity", "not with --parity"),
             ("--installer-smoke -- -p kluris-core", "runs no cargo test"),
             ("--installer-smoke --wrapper", "--wrapper takes"),
         ] {
@@ -135,7 +130,7 @@ mod words_of_the_command {
     #[test]
     fn the_published_smoke_names_a_release_and_takes_no_wrapper_file() {
         let options = run_of("--installer-smoke --published 3.0.0-rc.1");
-        assert!(options.installer_smoke && !options.parity, "{options:?}");
+        assert!(options.installer_smoke, "{options:?}");
         assert_eq!(options.published.as_deref(), Some("3.0.0-rc.1"));
         assert_eq!(options.wrapper, None);
         assert_eq!(
@@ -176,9 +171,8 @@ mod words_of_the_command {
     #[test]
     fn the_clippy_run() {
         let options = run_of("--clippy");
-        assert!(options.clippy && !options.parity && !options.installer_smoke);
+        assert!(options.clippy && !options.installer_smoke);
         for (line, says) in [
-            ("--clippy --parity", "--clippy"),
             ("--clippy --installer-smoke", "--clippy"),
             ("--clippy -- -p kluris-core", "--clippy"),
         ] {
@@ -205,16 +199,13 @@ mod words_of_the_command {
     }
 
     #[test]
-    fn parity_parity_files_and_cargo_args() {
-        let options = run_of(
-            "--parity --parity-files parity/test_smoke.py,parity/test_dream.py -- -p kluris-core -- --nocapture",
-        );
-        assert!(options.parity);
+    fn words_after_the_dashes_go_to_cargo_test_as_they_are() {
+        let options = run_of("-- -p kluris-core -- --nocapture --clippy");
         assert_eq!(
-            options.parity_files,
-            words("parity/test_smoke.py parity/test_dream.py")
+            options.cargo_args,
+            words("-p kluris-core -- --nocapture --clippy")
         );
-        assert_eq!(options.cargo_args, words("-p kluris-core -- --nocapture"));
+        assert!(!options.clippy, "--clippy after -- is cargo's");
     }
 
     #[test]
@@ -253,13 +244,31 @@ mod words_of_the_command {
         assert_eq!(options::parse(&words("-h")), Ok(Parsed::Help));
     }
 
+    /// The tests are Kluris's own: there is no other harness to ask for.
+    #[test]
+    fn parity_and_parity_files_are_usage_errors() {
+        for (line, says) in [
+            ("--parity", "unknown option: --parity"),
+            ("--wait 5 --parity", "unknown option: --parity"),
+            (
+                "--parity-files parity/test_smoke.py",
+                "unknown option: --parity-files",
+            ),
+            (
+                "--parity-files=parity/test_smoke.py",
+                "unknown option: --parity-files",
+            ),
+        ] {
+            let refused = options::parse(&words(line)).expect_err(line);
+            assert!(refused.contains(says), "{line:?}: {refused}");
+        }
+    }
+
     #[test]
     fn refusals() {
         for (line, says) in [
             ("--machine zeelin", "unknown option: --machine"),
             ("--bogus", "unknown option: --bogus"),
-            ("--parity=yes", "--parity takes no value"),
-            ("--parity-files parity/test_smoke.py", "goes with --parity"),
             ("test", "after --"),
         ] {
             let refused = options::parse(&words(line)).expect_err(line);
@@ -274,16 +283,12 @@ mod scripts {
     use super::*;
 
     fn every_script() -> Vec<(&'static str, String)> {
-        let files = words("parity/test_smoke.py");
         let extra = words("-p kluris-core");
         vec![
             ("probe", script::probe(&Layout::zeelin())),
             ("bootstrap", script::bootstrap(ID, &Layout::zeelin())),
-            ("run", script::run_script(&spec(false, &[], &[]))),
-            (
-                "run --parity",
-                script::run_script(&spec(true, &files, &extra)),
-            ),
+            ("run", script::run_script(&spec(&[]))),
+            ("run -- -p kluris-core", script::run_script(&spec(&extra))),
             (
                 "run --installer-smoke",
                 script::run_script(&smoke_spec(true)),
@@ -383,10 +388,10 @@ mod scripts {
 
     #[test]
     fn the_run_is_bounded_in_tasks_and_time() {
-        let text = script::run_script(&spec(true, &[], &[]));
+        let text = script::run_script(&spec(&[]));
         assert!(text.contains(&format!("ulimit -u {}", script::TASK_LIMIT)));
         const { assert!(script::TASK_LIMIT >= 512 && script::TASK_LIMIT <= 4096) };
-        for step in crate::ssh_ci::plan::steps(true) {
+        for step in crate::ssh_ci::plan::steps() {
             assert!(
                 text.contains(&format!("step {} {} ", step.name, step.minutes)),
                 "{}",
@@ -394,13 +399,13 @@ mod scripts {
             );
         }
         assert!(text.contains("timeout --kill-after=30s \"${minutes}m\""));
-        let bound = crate::ssh_ci::plan::bound(true);
+        let bound = crate::ssh_ci::plan::bound();
         assert!(bound < Duration::from_secs(8 * 3600));
     }
 
     #[test]
     fn tools_and_caches_stay_in_klurises_own_folder() {
-        let text = script::run_script(&spec(true, &[], &[]));
+        let text = script::run_script(&spec(&[]));
         for line in [
             "export RUSTUP_HOME=\"$tools/rustup\"",
             "export CARGO_HOME=\"$tools/cargo\"",
@@ -408,18 +413,21 @@ mod scripts {
             "export CARGO_BUILD_JOBS='8'",
             "export TMPDIR=\"$tmp\"",
             "export XDG_CACHE_HOME=\"$cache/xdg\"",
-            "export UV_CACHE_DIR=\"$cache/uv\"",
-            "export UV_PYTHON_INSTALL_DIR=\"$tools/python\"",
-            "export UV_PYTHON_BIN_DIR=\"$tools/python-bin\"",
-            "export UV_PYTHON_PREFERENCE=only-managed",
-            "export UV_PROJECT_ENVIRONMENT=\"$cache/parity-venv\"",
-            "export KLURIS_PARITY_ORACLE_DIR=\"$cache/oracle\"",
-            "export KLURIS_V3_BIN=\"$CARGO_TARGET_DIR/release/kluris\"",
         ] {
             assert!(text.contains(line), "{line}");
         }
         assert!(text.contains("ci=\"${HOME:?}/.kluris-ci\""));
-        assert!(text.contains(script::UV_SHA256) && text.contains(script::UV_URL));
+        // uv, its cache and its Python, for the smokes' server and checks.
+        let smoke = script::run_script(&smoke_spec(false));
+        for line in [
+            "export UV_CACHE_DIR=\"$cache/uv\"",
+            "export UV_PYTHON_INSTALL_DIR=\"$tools/python\"",
+            "export UV_PYTHON_BIN_DIR=\"$tools/python-bin\"",
+            "export UV_PYTHON_PREFERENCE=only-managed",
+        ] {
+            assert!(smoke.contains(line), "{line}");
+        }
+        assert!(smoke.contains(script::UV_SHA256) && smoke.contains(script::UV_URL));
         assert!(script::UV_URL.ends_with("/0.12.8/uv-x86_64-unknown-linux-gnu.tar.gz"));
         assert_eq!(
             script::UV_SHA256,
@@ -432,7 +440,7 @@ mod scripts {
     fn a_clippy_run_lints_every_target_and_runs_no_tests() {
         let spec = Spec {
             clippy: true,
-            ..super::spec(false, &[], &[])
+            ..super::spec(&[])
         };
         let steps: Vec<_> = script::steps(&spec).iter().map(|s| s.name).collect();
         assert_eq!(steps, ["toolchain", "clippy"]);
@@ -447,7 +455,7 @@ mod scripts {
             !text.contains("step cargo-test") && !text.contains("pytest"),
             "{text}"
         );
-        assert!(script::bound(&spec) < script::bound(&super::spec(true, &[], &[])));
+        assert!(script::bound(&spec) < script::bound(&super::spec(&[])));
     }
 
     #[test]
@@ -473,7 +481,7 @@ mod scripts {
                 step.name
             );
         }
-        assert!(script::bound(&spec) < script::bound(&super::spec(true, &[], &[])));
+        assert!(script::bound(&spec) < Duration::from_secs(8 * 3600));
         for line in [
             "export KLURIS_TOOLS_DIR=\"$tools\"",
             "export UV_PYTHON_INSTALL_DIR=\"$tools/python\"",
@@ -552,28 +560,23 @@ mod scripts {
 
     #[test]
     fn the_commands_of_a_run() {
-        let files = words("parity/test_smoke.py parity/test_dream.py");
         let extra = vec!["-p".to_owned(), "it's here".to_owned()];
-        let text = script::run_script(&spec(true, &files, &extra));
+        let text = script::run_script(&spec(&extra));
         assert!(text.contains(
             "step toolchain 30 \"$rustup\" toolchain install '1.99.0' '--profile' 'minimal' '--component' 'clippy' '--component' 'rustfmt' '--no-self-update'"
         ));
         assert!(text.contains(
             "step cargo-test 90 \"$cargo\" 'test' '--workspace' '--no-fail-fast' '-p' 'it'\\''s here'"
         ));
-        assert!(text.contains(
-            "step release-build 60 \"$cargo\" 'build' '--release' '--package' 'kluris'\n"
-        ));
-        assert!(text.contains(
-            "step parity 90 \"$uv\" 'run' '--project' 'parity' '--locked' 'pytest' 'parity/test_smoke.py' 'parity/test_dream.py' '-q'"
-        ));
-        let plain = script::run_script(&spec(false, &[], &[]));
-        assert!(!plain.contains("release-build") && !plain.contains("uv"));
+        let plain = script::run_script(&spec(&[]));
+        assert!(
+            plain.contains("step cargo-test 90 \"$cargo\" 'test' '--workspace' '--no-fail-fast'\n")
+        );
     }
 
     #[test]
     fn each_step_end_line_carries_the_run_id() {
-        let text = script::run_script(&spec(true, &[], &[]));
+        let text = script::run_script(&smoke_spec(false));
         for line in [
             "printf '== step %s exit %s %ss %s\\n' \"$name\" \"$code\" \"$((SECONDS - started))\" \"$id\"",
             "printf '== step uv exit %s %ss %s\\n' \"$code\" \"$((SECONDS - started))\" \"$id\"",
@@ -582,9 +585,66 @@ mod scripts {
         }
     }
 
+    /// A tests run is the toolchain, then cargo test: nothing is built for
+    /// release, no uv is fetched and no other harness runs.
+    #[test]
+    fn a_tests_run_is_the_toolchain_then_cargo_test() {
+        for extra in [vec![], words("-p kluris-core")] {
+            let spec = spec(&extra);
+            let names: Vec<_> = script::steps(&spec).iter().map(|step| step.name).collect();
+            assert_eq!(names, ["toolchain", "cargo-test"], "{extra:?}");
+            let text = script::run_script(&spec);
+            let steps: Vec<&str> = text
+                .lines()
+                .filter(|line| line.starts_with("step "))
+                .collect();
+            assert_eq!(steps.len(), 2, "{text}");
+            for word in [
+                "release-build",
+                "parity",
+                "oracle",
+                "pytest",
+                "KLURIS_V3_BIN",
+                "$uv",
+            ] {
+                assert!(!text.contains(word), "{word:?} in\n{text}");
+            }
+        }
+    }
+
+    /// The cache folders a script points a tool at (`$cache/<name>`).
+    fn cache_folders(text: &str) -> std::collections::BTreeSet<String> {
+        regex::Regex::new(r#"\$cache/([A-Za-z0-9._-]+)"#)
+            .unwrap()
+            .captures_iter(text)
+            .map(|caps| caps[1].to_owned())
+            .collect()
+    }
+
+    /// The sweep keeps the cache folders the runs use and removes every
+    /// other folder there: the rule holds for whatever a run used to keep.
+    #[test]
+    fn the_sweep_keeps_exactly_the_cache_folders_the_runs_use() {
+        let used: std::collections::BTreeSet<String> = every_script()
+            .iter()
+            .flat_map(|(_, text)| cache_folders(text))
+            .collect();
+        assert_eq!(
+            used.iter().map(String::as_str).collect::<Vec<_>>(),
+            ["target", "uv", "xdg"]
+        );
+        let text = script::run_script(&spec(&[]));
+        assert!(
+            text.contains(
+                "done < <(find \"$cache\" -mindepth 1 -maxdepth 1 -type d ! -name 'target' ! -name 'uv' ! -name 'xdg')"
+            ),
+            "{text}"
+        );
+    }
+
     #[test]
     fn old_runs_and_tarballs_are_swept_after_a_day() {
-        let text = script::run_script(&spec(false, &[], &[]));
+        let text = script::run_script(&spec(&[]));
         assert!(text.contains("-mmin +1440"));
         assert!(text.contains("! -name \"$id\""));
     }
@@ -928,7 +988,7 @@ mod scripts_run {
         assert!(!home.path(".kluris-ci/.linux-run.id").exists());
     }
 
-    // The run script, with a rustup, cargo and uv that only say what they were asked.
+    // The run script, with a rustup and cargo that only say what they were asked.
 
     fn tools(home: &Home, cargo_test_status: u8) {
         executable(
@@ -940,10 +1000,6 @@ mod scripts_run {
             &format!(
                 "#!/bin/bash\necho \"cargo $*\"\necho \"tasks $(ulimit -u)\"\ncase \"$1\" in test) exit {cargo_test_status};; esac\nexit 0\n"
             ),
-        );
-        executable(
-            &home.path(".kluris-ci/tools/uv-0.12.8/uv"),
-            "#!/bin/sh\necho \"uv $*\"\necho \"bin $KLURIS_V3_BIN\"\n",
         );
     }
 
@@ -965,9 +1021,8 @@ mod scripts_run {
     fn a_run_says_each_step_and_ends_with_the_first_failure() {
         let home = Home::new();
         tools(&home, 101);
-        let files = words("parity/test_smoke.py");
         let extra = vec!["it's".to_owned()];
-        let mut spec = spec(true, &files, &extra);
+        let mut spec = spec(&extra);
         spec.tasks = task_limit_here();
         home.upload(&script::run_script(&spec));
         let ran = home.run(&script::bootstrap(ID, &home.layout()));
@@ -978,10 +1033,6 @@ mod scripts_run {
             "== step toolchain exit 0 ",
             "cargo test --workspace --no-fail-fast it's",
             "== step cargo-test exit 101 ",
-            "cargo build --release --package kluris\n",
-            "== step release-build exit 0 ",
-            "uv run --project parity --locked pytest parity/test_smoke.py -q",
-            "== step parity exit 0 ",
             &format!("tasks {}", spec.tasks),
         ] {
             assert!(ran.out.contains(line), "{line:?} in\n{}", ran.out);
@@ -991,7 +1042,7 @@ mod scripts_run {
             .lines()
             .filter(|line| line.starts_with("== step ") && line.contains(" exit "))
             .collect();
-        assert_eq!(ends.len(), 4, "{}", ran.out);
+        assert_eq!(ends.len(), 2, "{}", ran.out);
         for line in ends {
             assert!(line.ends_with(&format!("s {ID}")), "{line}");
         }
@@ -1004,14 +1055,6 @@ mod scripts_run {
             "{}",
             ran.out
         );
-        assert!(
-            ran.out.contains(&format!(
-                "bin {}",
-                kluris_ci.join("cache/target/release/kluris").display()
-            )),
-            "{}",
-            ran.out
-        );
     }
 
     #[test]
@@ -1019,7 +1062,7 @@ mod scripts_run {
         let home = Home::new();
         tools(&home, 0);
         executable(&home.path(".cargo/bin/rustup"), "#!/bin/sh\nexit 3\n");
-        let mut spec = spec(false, &[], &[]);
+        let mut spec = spec(&[]);
         spec.tasks = task_limit_here();
         home.upload(&script::run_script(&spec));
         let ran = home.run(&script::bootstrap(ID, &home.layout()));
@@ -1030,7 +1073,7 @@ mod scripts_run {
     #[test]
     fn a_machine_without_rustup_is_told_about() {
         let home = Home::new();
-        let mut spec = spec(false, &[], &[]);
+        let mut spec = spec(&[]);
         spec.tasks = task_limit_here();
         home.upload(&script::run_script(&spec));
         let ran = home.run(&script::bootstrap(ID, &home.layout()));
@@ -1056,7 +1099,7 @@ mod scripts_run {
                 .unwrap();
             assert!(status.success());
         }
-        let mut spec = spec(false, &[], &[]);
+        let mut spec = spec(&[]);
         spec.tasks = task_limit_here();
         home.upload(&script::run_script(&spec));
         let ran = home.run(&script::bootstrap(ID, &home.layout()));
@@ -1072,6 +1115,45 @@ mod scripts_run {
             ran.out.contains("== sweep: removed runs/kluris-old"),
             "{}",
             ran.out
+        );
+    }
+
+    #[test]
+    fn the_sweep_removes_every_cache_folder_no_run_uses() {
+        let home = Home::new();
+        tools(&home, 0);
+        for folder in ["target", "uv", "xdg", "oracle", "parity-venv"] {
+            home.write(&format!(".kluris-ci/cache/{folder}/x"), "x");
+        }
+        home.write(".kluris-ci/cache/a-file", "x");
+        let mut spec = spec(&[]);
+        spec.tasks = task_limit_here();
+        home.upload(&script::run_script(&spec));
+        let ran = home.run(&script::bootstrap(ID, &home.layout()));
+        assert_eq!(ran.code, Some(0), "{}", ran.out);
+        for kept in ["target", "uv", "xdg"] {
+            assert!(
+                home.path(&format!(".kluris-ci/cache/{kept}/x")).exists(),
+                "{kept}: {}",
+                ran.out
+            );
+        }
+        for gone in ["oracle", "parity-venv"] {
+            assert!(
+                !home.path(&format!(".kluris-ci/cache/{gone}")).exists(),
+                "{gone}: {}",
+                ran.out
+            );
+            assert!(
+                ran.out
+                    .contains(&format!("== sweep: removed cache/{gone}\n")),
+                "{gone}: {}",
+                ran.out
+            );
+        }
+        assert!(
+            home.path(".kluris-ci/cache/a-file").exists(),
+            "only folders are swept"
         );
     }
 
@@ -1104,16 +1186,6 @@ mod runs {
         /// zeewin2's queue each time the tree was packed: after the wait,
         /// while the run holds its place.
         held: Vec<Vec<String>>,
-    }
-
-    fn ran_in(root: &Path, options: Options, answers: Vec<Answer>) -> Ran {
-        ran_queued(
-            root,
-            options,
-            answers,
-            tempfile::tempdir().unwrap(),
-            Clock::default(),
-        )
     }
 
     /// A run whose queues are `queues` and whose clock is `clock`.
@@ -1165,13 +1237,17 @@ mod runs {
     }
 
     fn ran(options: Options, answers: Vec<Answer>) -> Ran {
-        ran_in(Path::new("."), options, answers)
+        ran_queued(
+            Path::new("."),
+            options,
+            answers,
+            tempfile::tempdir().unwrap(),
+            Clock::default(),
+        )
     }
 
-    fn plain(parity: bool) -> Options {
+    fn plain() -> Options {
         Options {
-            parity,
-            parity_files: vec![],
             cargo_args: vec![],
             installer_smoke: false,
             wrapper: None,
@@ -1194,7 +1270,7 @@ mod runs {
         let options = Options {
             installer_smoke: true,
             wrapper: Some("site/install.sh".into()),
-            ..plain(false)
+            ..plain()
         };
         let ran = ran(
             options,
@@ -1270,7 +1346,7 @@ mod runs {
             == step cargo-test exit 0 212s kluris-0000abcd-12345678\n\
             \n== exit 0\n";
         let ran = ran(
-            plain(false),
+            plain(),
             vec![
                 free(),
                 said(0, ""),
@@ -1287,7 +1363,7 @@ mod runs {
     #[test]
     fn a_run_asks_zeelin_sends_the_tree_and_streams_the_answer() {
         let ran = ran(
-            plain(false),
+            plain(),
             vec![
                 free(),
                 said(0, ""),
@@ -1329,7 +1405,7 @@ mod runs {
             calls[2].args.last().unwrap(),
             &script::bootstrap_line(&id, &Layout::zeelin())
         );
-        assert!(calls[2].bound >= crate::ssh_ci::plan::bound(false));
+        assert!(calls[2].bound >= crate::ssh_ci::plan::bound());
 
         assert!(ran.scripts[0].contains("step cargo-test 90"));
         let summary = ran.err.lines().last().unwrap();
@@ -1344,7 +1420,7 @@ mod runs {
     #[test]
     fn poker_lab_holding_zeelin_is_75_and_sends_nothing() {
         let ran = ran(
-            plain(true),
+            plain(),
             vec![said(
                 75,
                 "zeelin is busy: poker-lab's job holds it (~/.compile-lock/owner), and no run goes while it does\n\n== exit 75\n",
@@ -1368,10 +1444,7 @@ mod runs {
             "the laptop is busy: a Kluris run (kluris-0000cf2a-be059375, process 62120) holds zeewin2",
             "zeelin's one-run lock is held by a Kluris run (kluris-1-2, process 7): one run at a time",
         ] {
-            let ran = ran(
-                plain(false),
-                vec![said(75, &format!("{line}\n\n== exit 75\n"))],
-            );
+            let ran = ran(plain(), vec![said(75, &format!("{line}\n\n== exit 75\n"))]);
             assert_eq!(ran.code, 75, "{}", ran.err);
             assert_eq!(ran.fake.calls.len(), 1);
             assert!(ran.err.contains(&format!("linux: {line}")), "{}", ran.err);
@@ -1391,7 +1464,7 @@ mod runs {
             ),
             timed_out(),
         ] {
-            let ran = ran(plain(false), vec![answer]);
+            let ran = ran(plain(), vec![answer]);
             assert_eq!(ran.code, 75, "{}", ran.err);
             assert!(ran.err.contains("linux: zeelin not running"), "{}", ran.err);
             assert_eq!(ran.fake.calls.len(), 1);
@@ -1404,7 +1477,7 @@ mod runs {
             failed(255, "Host key verification failed.\n"),
             said(0, "something else\n"),
         ] {
-            let ran = ran(plain(false), vec![answer]);
+            let ran = ran(plain(), vec![answer]);
             assert_eq!(ran.code, 1, "{}", ran.err);
             assert!(!ran.err.contains("not running"), "{}", ran.err);
             assert_eq!(ran.fake.calls.len(), 1);
@@ -1412,39 +1485,12 @@ mod runs {
     }
 
     #[test]
-    fn parity_files_are_checked_before_anything_is_sent() {
-        let dir = tempfile::tempdir().unwrap();
-        fs::create_dir_all(dir.path().join("parity")).unwrap();
-        fs::write(dir.path().join("parity").join("test_smoke.py"), "x").unwrap();
+    fn the_cargo_args_reach_the_remote_cargo_test_line() {
         let options = Options {
-            parity: true,
-            parity_files: words("parity/missing.py"),
-            cargo_args: vec![],
-            installer_smoke: false,
-            wrapper: None,
-            clippy: false,
-            published: None,
-            unpinned: false,
-            wait: 0,
-        };
-        let ran = ran_in(dir.path(), options, vec![]);
-        assert_eq!(ran.code, 1);
-        assert!(ran.err.contains("not in this tree"), "{}", ran.err);
-        assert!(ran.fake.calls.is_empty());
-
-        let options = Options {
-            parity: true,
-            parity_files: words("parity/test_smoke.py"),
             cargo_args: words("-p kluris-core"),
-            installer_smoke: false,
-            wrapper: None,
-            clippy: false,
-            published: None,
-            unpinned: false,
-            wait: 0,
+            ..plain()
         };
-        let ran = ran_in(
-            dir.path(),
+        let ran = ran(
             options,
             vec![
                 free(),
@@ -1453,14 +1499,13 @@ mod runs {
             ],
         );
         assert_eq!(ran.code, 0, "{}", ran.err);
-        assert!(ran.scripts[0].contains("'pytest' 'parity/test_smoke.py' '-q'"));
         assert!(ran.scripts[0].contains("'--no-fail-fast' '-p' 'kluris-core'"));
     }
 
     #[test]
     fn a_held_lock_found_by_the_bootstrap_is_75() {
         let ran = ran(
-            plain(false),
+            plain(),
             vec![
                 free(),
                 said(0, ""),
@@ -1480,7 +1525,7 @@ mod runs {
     #[test]
     fn a_failed_upload_runs_nothing_and_removes_its_tarball() {
         let ran = ran(
-            plain(false),
+            plain(),
             vec![
                 free(),
                 failed(1, "scp: write failed\n"),
@@ -1508,7 +1553,7 @@ mod runs {
     #[test]
     fn a_stopped_run_is_ended_there_and_is_130() {
         let ran = ran(
-            plain(false),
+            plain(),
             vec![
                 free(),
                 said(0, ""),
@@ -1524,7 +1569,7 @@ mod runs {
     #[test]
     fn a_run_past_its_bound_is_ended_there_and_is_124() {
         let ran = ran(
-            plain(true),
+            plain(),
             vec![
                 free(),
                 said(0, ""),
@@ -1541,7 +1586,7 @@ mod runs {
     #[test]
     fn a_lost_connection_ends_the_run_there_too() {
         let ran = ran(
-            plain(false),
+            plain(),
             vec![
                 free(),
                 said(0, ""),
@@ -1562,7 +1607,7 @@ mod runs {
     fn waiting() -> Options {
         Options {
             wait: 60,
-            ..plain(false)
+            ..plain()
         }
     }
 
@@ -1641,7 +1686,7 @@ mod runs {
         assert_eq!(ran.fake.calls.len(), 1);
         assert_eq!(tickets(ran.queues.path(), "zeewin2"), Vec::<String>::new());
         // Nor once the wait is on.
-        let later = ran_in(Path::new("."), waiting(), vec![poker_lab(), timed_out()]);
+        let later = self::ran(waiting(), vec![poker_lab(), timed_out()]);
         assert_eq!(later.code, 75, "{}", later.err);
         assert_eq!(later.pauses, [30_000]);
         assert!(
@@ -1696,13 +1741,7 @@ mod runs {
     fn wait_0_is_refused_behind_a_live_zeewin2_ticket_and_asks_nothing() {
         let queues = tempfile::tempdir().unwrap();
         let ahead = queued_ahead(&queues);
-        let ran = ran_queued(
-            Path::new("."),
-            plain(false),
-            vec![],
-            queues,
-            Clock::default(),
-        );
+        let ran = ran_queued(Path::new("."), plain(), vec![], queues, Clock::default());
         assert_eq!(ran.code, 75);
         assert_eq!(
             ran.err,
@@ -1715,10 +1754,7 @@ mod runs {
     #[test]
     fn a_wait_that_runs_out_is_75_saying_how_long_and_what_for() {
         let ran = ran(
-            Options {
-                wait: 1,
-                ..plain(false)
-            },
+            Options { wait: 1, ..plain() },
             vec![poker_lab(), poker_lab(), poker_lab()],
         );
         assert_eq!(ran.code, 75, "{}", ran.err);

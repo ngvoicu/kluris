@@ -1,6 +1,6 @@
 //! Installing every registered brain's skill into the agents' skill folders
 //! (v2 `_do_install`, with the `~/.agents/skills`-first matrix and the
-//! narrowed sweep: `parity/allowlist.md`).
+//! narrowed sweep).
 //!
 //! 1. `~/.agents/skills` always gets one `kluris-<brain>/SKILL.md` per brain.
 //! 2. Each selected registry agent's own folders get the same bytes

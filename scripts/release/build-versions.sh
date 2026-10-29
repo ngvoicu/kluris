@@ -32,8 +32,7 @@ for version in "$@"; do
     copy="$work/kluris-$version"
     mkdir -p "$copy"
     # No pipe: the same two steps work with Windows' tar.exe.
-    (cd "$root" && tar -cf "$work/tree.tar" --exclude=./target --exclude=./tmp --exclude=./.git \
-        --exclude=./parity/.oracle --exclude=./parity/.venv .)
+    (cd "$root" && tar -cf "$work/tree.tar" --exclude=./target --exclude=./tmp --exclude=./.git .)
     tar -xf "$work/tree.tar" -C "$copy"
     rm -f "$work/tree.tar"
     sed "s/^version = \".*\"$/version = \"$version\"/" "$root/Cargo.toml" > "$copy/Cargo.toml"

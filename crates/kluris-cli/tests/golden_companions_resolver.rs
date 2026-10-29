@@ -1,7 +1,6 @@
 //! Golden tests of `kluris companion list|add|remove` and of the brain
-//! resolver (the scenarios of `parity/test_companions.py` and
-//! `parity/test_resolver.py`): each run's exit code and streams and, for a
-//! command that writes, what it changed under the sandbox's `work/`.
+//! resolver: each run's exit code and streams and, for a command that
+//! writes, what it changed under the sandbox's `work/`.
 //!
 //! The companion scenarios start from a state in `tests/fixtures/companions/`,
 //! a home as the companion commands find it before they migrate it: `base/`

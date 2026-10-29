@@ -75,7 +75,7 @@ pub(crate) fn fix_missing_parents<S: BrainStore>(
 /// that resolves to another neuron that does not link back, append the
 /// source's path relative to the target's directory to the target's
 /// `related` (a `related` that is not a list is replaced). Sources in the
-/// store's neuron order (PAR-008); each target is read again for every link,
+/// store's neuron order; each target is read again for every link,
 /// so it collects all its reverse links in one run. Returns the target of
 /// each link added.
 pub(crate) fn fix_reverse_links<S: BrainStore>(
@@ -133,7 +133,7 @@ pub(crate) fn fix_reverse_links<S: BrainStore>(
 // --- validators ------------------------------------------------------------------
 
 /// Reads for the validators: as dream reads a file it may rewrite, a file
-/// that does not read skipped and reported (PAR-038).
+/// that does not read skipped and reported.
 struct Reader<'a, S: BrainStore> {
     store: &'a S,
     skipped: &'a mut BTreeMap<String, String>,
@@ -267,7 +267,7 @@ fn py_suffix(name: &str) -> &str {
 /// not linking back, or another existing `.md` file whose list `related`
 /// does not link back. v2 raises on a non-string entry and on a target
 /// outside the brain; Kluris 3 ignores both here (they are a frontmatter
-/// issue and broken synapses, PAR-047).
+/// issue and broken synapses).
 fn one_way_synapses<S: BrainStore>(store: &S, read: &mut Reader<'_, S>) -> Vec<OneWaySynapse> {
     let root = sandbox::resolve(store.root()).ok();
     let mut related: IndexMap<PathBuf, Vec<PathBuf>> = IndexMap::new();
@@ -369,7 +369,7 @@ pub(crate) fn orphans<S: BrainStore>(
 /// `check_frontmatter`: the required fields (markdown: `parent`, `created`,
 /// `updated`; YAML neurons: `updated`), then `related` and `tags` that are not
 /// lists, a `related` list with an entry that is not a string (where v2
-/// raises, PAR-047) and a `replaced_by` that is not a string or null.
+/// raises) and a `replaced_by` that is not a string or null.
 fn frontmatter_issues<S: BrainStore>(store: &S, read: &mut Reader<'_, S>) -> Vec<FrontmatterIssue> {
     let mut issues = Vec::new();
     for neuron in store.neurons() {

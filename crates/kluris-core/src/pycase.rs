@@ -1,8 +1,7 @@
 //! Python 3.11's `str.title()` and `str.lower()`, as CPython computes them
 //! (`Objects/unicodeobject.c`: `do_title`, `do_lower`, `lower_ucs4`,
 //! `handle_capital_sigma`) over its Unicode 14.0 database, which
-//! `pycase_tables.rs` holds (generated from the oracle by
-//! `parity/tools/gen_pycase.py`).
+//! `pycase_tables.rs` holds (generated from Python 3.11).
 //!
 //! Translated from CPython 3.11 `Objects/unicodeobject.c` (`do_title`,
 //! `do_lower`, `lower_ucs4`, `handle_capital_sigma`); see LICENSE-PSF.
