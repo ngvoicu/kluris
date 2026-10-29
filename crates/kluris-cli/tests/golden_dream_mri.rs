@@ -243,7 +243,8 @@ fn assert_skipped_untouched(
 /// A path written in the OS's own form (`\` on Windows) shown as `shown`,
 /// in each form text can hold it: raw, JSON-escaped, and each of those as
 /// [`tree_dump`] writes it (backslashes doubled). The snapshot then holds
-/// on every OS, and a path in any other form still shows.
+/// on every OS; the path written with `/` where the OS writes `\` fails
+/// the test, and a path in any other form still shows.
 fn native_path(text: &str, native: &Path, shown: &str) -> String {
     let escaped = |s: &str| {
         let quoted = json::to_string(&json::Json::Str(s.to_string()));
@@ -251,6 +252,15 @@ fn native_path(text: &str, native: &Path, shown: &str) -> String {
     };
     let dumped = |s: &str| s.replace('\\', "\\\\");
     let raw = native.display().to_string();
+    let slashed = raw.replace('\\', "/");
+    if slashed != raw {
+        for form in [escaped(&slashed), slashed.clone()] {
+            assert!(
+                !text.contains(&form),
+                "{form} is written with `/`, not as the OS writes it ({raw}), in {text:?}"
+            );
+        }
+    }
     let mut forms = [
         (dumped(&escaped(&raw)), dumped(&escaped(shown))),
         (escaped(&raw), escaped(shown)),
@@ -261,6 +271,25 @@ fn native_path(text: &str, native: &Path, shown: &str) -> String {
     forms
         .iter()
         .fold(text.to_string(), |text, (from, to)| text.replace(from, to))
+}
+
+/// A path the OS writes with `\\`, found written with `/`, fails, raw or
+/// JSON-escaped; in its own form it is shown as given.
+#[test]
+fn native_path_refuses_a_path_written_with_slashes() {
+    let native = Path::new(r"C:\Users\me\work\brains\calm\kluris.yml");
+    let shown = "<ROOT>/work/brains/calm/kluris.yml";
+    assert_eq!(
+        native_path(r"at C:\Users\me\work\brains\calm\kluris.yml", native, shown),
+        format!("at {shown}")
+    );
+    for text in [
+        "at C:/Users/me/work/brains/calm/kluris.yml",
+        r#"{"error": "C:/Users/me/work/brains/calm/kluris.yml"}"#,
+    ] {
+        let refused = std::panic::catch_unwind(|| native_path(text, native, shown));
+        assert!(refused.is_err(), "{text} was not refused");
+    }
 }
 
 // --- dream: the fixture brains ----------------------------------------------------
@@ -615,6 +644,13 @@ fn dream_on_a_brain_without_kluris_yml() {
     for (i, args) in [&["dream"][..], &["dream", "--json"]].iter().enumerate() {
         let mut out = scenario.run(args);
         let file = brain.join("kluris.yml");
+        let message = format!("Brain calm has no kluris.yml: {}", file.display());
+        if args.contains(&"--json") {
+            let doc: serde_json::Value = serde_json::from_str(&out.stdout).unwrap();
+            assert_eq!(doc["error"], message.as_str());
+        } else {
+            assert_eq!(out.stderr, format!("Error: {message}\n"));
+        }
         let shown = "<ROOT>/work/brains/calm/kluris.yml";
         out.stdout = native_path(&out.stdout, &file, shown);
         out.stderr = native_path(&out.stderr, &file, shown);
@@ -973,6 +1009,7 @@ impl Scenario<'_> {
         for (i, step) in runs.iter().enumerate() {
             let n = i + 1;
             let mut out = self.run(step.args);
+            self.assert_printed_pages(step.args, &out);
             out.stdout = mri_text(&out.stdout, self.sb);
             let after = without_pages(tree_files(&self.sb.work));
             let mut extra = format!(
@@ -1010,6 +1047,68 @@ impl Scenario<'_> {
             outs.push(out);
         }
         outs
+    }
+}
+
+impl Scenario<'_> {
+    /// The page `brain`'s run writes, as Kluris prints it: the `--output`
+    /// given (its `.` and empty parts dropped), else the brain's
+    /// `brain-mri.html`, each in the OS's own form.
+    fn printed_page(&self, args: &[&str], brain: &Path) -> String {
+        match args.iter().position(|a| *a == "--output") {
+            Some(i) => Path::new(args[i + 1])
+                .components()
+                .collect::<PathBuf>()
+                .display()
+                .to_string(),
+            None => brain.join("brain-mri.html").display().to_string(),
+        }
+    }
+
+    /// Each page a run prints is the expected one, built with `std::path`:
+    /// the JSON's `output_path` of each brain, and in text each
+    /// `MRI complete — <page>` line.
+    fn assert_printed_pages(&self, args: &[&str], out: &Run) {
+        if out.stdout.trim_start().starts_with('{') {
+            let doc: serde_json::Value = serde_json::from_str(&out.stdout).unwrap();
+            for entry in doc["brains"].as_array().into_iter().flatten() {
+                let name = entry["name"].as_str().unwrap();
+                let brain = self.brain_named(name);
+                assert_eq!(
+                    entry["output_path"],
+                    self.printed_page(args, brain).as_str(),
+                    "{}",
+                    out.stdout
+                );
+            }
+            return;
+        }
+        let pages: Vec<String> = self
+            .brains
+            .iter()
+            .map(|b| self.printed_page(args, b))
+            .collect();
+        for line in out.stdout.lines() {
+            if let Some(page) = line.strip_prefix("MRI complete — ") {
+                assert!(
+                    pages.iter().any(|p| p == page),
+                    "{page:?} is not one of {pages:?}"
+                );
+            }
+        }
+    }
+
+    /// The brain registered as `name`: the one in a folder of that name,
+    /// else the scenario's only brain.
+    fn brain_named(&self, name: &str) -> &Path {
+        self.brains
+            .iter()
+            .find(|b| b.file_name().is_some_and(|f| f == name))
+            .or(match self.brains.as_slice() {
+                [only] => Some(only),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("no brain registered as {name}"))
     }
 }
 
@@ -1096,6 +1195,7 @@ fn mri_output_relative_to_the_working_directory() {
     let mut tree = without_pages(tree_files(&sb.work));
     let json_args = ["mri", "--json", "--output", target];
     let mut out = scenario.run(&json_args);
+    scenario.assert_printed_pages(&json_args, &out);
     out.stdout = native_path(&out.stdout, &native, "out dir/deep/é page.html");
     let graph = sorted_graph(&page_graph(&sb.work.join(page[0].1), "calm"));
     snapshot(
@@ -1120,6 +1220,7 @@ fn mri_output_relative_to_the_working_directory() {
 
     let text_args = ["mri", "--output", target];
     let mut out = scenario.run(&text_args);
+    scenario.assert_printed_pages(&text_args, &out);
     let wsl = wsl_distro(&sb.root);
     if let Some(distro) = &wsl {
         eprintln!("WSL host: distro {distro}, link {:?}", out.stdout);
