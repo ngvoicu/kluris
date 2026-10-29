@@ -2,21 +2,36 @@
 source: crates/kluris-cli/tests/golden_list_status_help.rs
 ---
 $ kluris search needle --brain a --limit '' --limit 2 --json
-== stdout (392 bytes)
-{"ok": true, "brain": "a", "query": "needle", "total": 1, "results": [{"file": "lobe/needle.md", "file_type": "markdown", "title": "Needle", "matched_fields": ["title", "path", "body"], "snippet": "# Needle\\n\\nneedle text", "score": 55, "deprecated": false, "heading": null, "line": 6, "matched_terms": ["needle"], "coverage": 1.0, "related": [], "updated": "2026-01-01"}], "engine": "bm25"}
-== stderr (0 bytes)
+== search --json, sliced (142 bytes)
+ok: true
+brain: "a"
+query: "needle"
+engine: "bm25"
+exit: 0
+total: 1
+lobe/needle.md | "Needle" | markdown | deprecated false | title path body
 == exit 0
 <end of run>
 $ kluris search needle --brain a --limit invalid --limit 2 --json
-== stdout (392 bytes)
-{"ok": true, "brain": "a", "query": "needle", "total": 1, "results": [{"file": "lobe/needle.md", "file_type": "markdown", "title": "Needle", "matched_fields": ["title", "path", "body"], "snippet": "# Needle\\n\\nneedle text", "score": 55, "deprecated": false, "heading": null, "line": 6, "matched_terms": ["needle"], "coverage": 1.0, "related": [], "updated": "2026-01-01"}], "engine": "bm25"}
-== stderr (0 bytes)
+== search --json, sliced (142 bytes)
+ok: true
+brain: "a"
+query: "needle"
+engine: "bm25"
+exit: 0
+total: 1
+lobe/needle.md | "Needle" | markdown | deprecated false | title path body
 == exit 0
 <end of run>
 $ kluris search needle --brain a --limit 2.0 --limit 2 --json
-== stdout (392 bytes)
-{"ok": true, "brain": "a", "query": "needle", "total": 1, "results": [{"file": "lobe/needle.md", "file_type": "markdown", "title": "Needle", "matched_fields": ["title", "path", "body"], "snippet": "# Needle\\n\\nneedle text", "score": 55, "deprecated": false, "heading": null, "line": 6, "matched_terms": ["needle"], "coverage": 1.0, "related": [], "updated": "2026-01-01"}], "engine": "bm25"}
-== stderr (0 bytes)
+== search --json, sliced (142 bytes)
+ok: true
+brain: "a"
+query: "needle"
+engine: "bm25"
+exit: 0
+total: 1
+lobe/needle.md | "Needle" | markdown | deprecated false | title path body
 == exit 0
 <end of run>
 $ kluris search needle --brain a --limit 2 --limit x --json
@@ -41,9 +56,14 @@ $ kluris search needle --brain a --limit 2 --limit '' --json
 == exit 1
 <end of run>
 $ kluris search needle --brain nope --brain a --json
-== stdout (392 bytes)
-{"ok": true, "brain": "a", "query": "needle", "total": 1, "results": [{"file": "lobe/needle.md", "file_type": "markdown", "title": "Needle", "matched_fields": ["title", "path", "body"], "snippet": "# Needle\\n\\nneedle text", "score": 55, "deprecated": false, "heading": null, "line": 6, "matched_terms": ["needle"], "coverage": 1.0, "related": [], "updated": "2026-01-01"}], "engine": "bm25"}
-== stderr (0 bytes)
+== search --json, sliced (142 bytes)
+ok: true
+brain: "a"
+query: "needle"
+engine: "bm25"
+exit: 0
+total: 1
+lobe/needle.md | "Needle" | markdown | deprecated false | title path body
 == exit 0
 <end of run>
 $ kluris search needle --brain a --brain nope --json
@@ -53,21 +73,36 @@ $ kluris search needle --brain a --brain nope --json
 == exit 1
 <end of run>
 $ kluris search needle --brain '' --brain a --json
-== stdout (392 bytes)
-{"ok": true, "brain": "a", "query": "needle", "total": 1, "results": [{"file": "lobe/needle.md", "file_type": "markdown", "title": "Needle", "matched_fields": ["title", "path", "body"], "snippet": "# Needle\\n\\nneedle text", "score": 55, "deprecated": false, "heading": null, "line": 6, "matched_terms": ["needle"], "coverage": 1.0, "related": [], "updated": "2026-01-01"}], "engine": "bm25"}
-== stderr (0 bytes)
+== search --json, sliced (142 bytes)
+ok: true
+brain: "a"
+query: "needle"
+engine: "bm25"
+exit: 0
+total: 1
+lobe/needle.md | "Needle" | markdown | deprecated false | title path body
 == exit 0
 <end of run>
 $ kluris search needle --brain a --lobe '' --lobe lobe --json
-== stdout (392 bytes)
-{"ok": true, "brain": "a", "query": "needle", "total": 1, "results": [{"file": "lobe/needle.md", "file_type": "markdown", "title": "Needle", "matched_fields": ["title", "path", "body"], "snippet": "# Needle\\n\\nneedle text", "score": 55, "deprecated": false, "heading": null, "line": 6, "matched_terms": ["needle"], "coverage": 1.0, "related": [], "updated": "2026-01-01"}], "engine": "bm25"}
-== stderr (0 bytes)
+== search --json, sliced (142 bytes)
+ok: true
+brain: "a"
+query: "needle"
+engine: "bm25"
+exit: 0
+total: 1
+lobe/needle.md | "Needle" | markdown | deprecated false | title path body
 == exit 0
 <end of run>
 $ kluris search needle --brain a --tag '' --tag y --json
-== stdout (392 bytes)
-{"ok": true, "brain": "a", "query": "needle", "total": 1, "results": [{"file": "lobe/needle.md", "file_type": "markdown", "title": "Needle", "matched_fields": ["title", "path", "body"], "snippet": "# Needle\\n\\nneedle text", "score": 55, "deprecated": false, "heading": null, "line": 6, "matched_terms": ["needle"], "coverage": 1.0, "related": [], "updated": "2026-01-01"}], "engine": "bm25"}
-== stderr (0 bytes)
+== search --json, sliced (142 bytes)
+ok: true
+brain: "a"
+query: "needle"
+engine: "bm25"
+exit: 0
+total: 1
+lobe/needle.md | "Needle" | markdown | deprecated false | title path body
 == exit 0
 <end of run>
 $ kluris status --brain nope --brain a --json

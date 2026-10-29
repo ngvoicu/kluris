@@ -25,6 +25,7 @@ use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
 use common::brains::Brains;
+use common::search::{Found, found_list};
 use common::{
     Run, Sandbox, assert_unchanged, normalize, parse_json_line, run_end, section, tree_files,
     windows_variant, write, write_files,
@@ -493,32 +494,7 @@ fn check_shape(doc: &Value, brain: &str, query: &str, limit: i64) {
     }
 }
 
-/// A result as the snapshots and the frozen rows compare it.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-struct Found {
-    file: String,
-    title: String,
-    file_type: String,
-    deprecated: bool,
-    matched_fields: Vec<String>,
-}
-
 impl Found {
-    fn of_json(r: &Value) -> Found {
-        Found {
-            file: r["file"].as_str().unwrap().to_string(),
-            title: r["title"].as_str().unwrap().to_string(),
-            file_type: r["file_type"].as_str().unwrap().to_string(),
-            deprecated: r["deprecated"].as_bool().unwrap(),
-            matched_fields: r["matched_fields"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .map(|f| f.as_str().unwrap().to_string())
-                .collect(),
-        }
-    }
-
     /// A frozen row's `[file, title, file_type, deprecated, matched_fields]`;
     /// an item the filters keep has no matched fields.
     fn of_row(row: &Value) -> Found {
@@ -536,34 +512,6 @@ impl Found {
                 .collect(),
         }
     }
-
-    /// The results of a `search --json` document.
-    fn all_of(doc: &Value) -> Vec<Found> {
-        doc["results"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(Found::of_json)
-            .collect()
-    }
-}
-
-/// `total` and the results sorted by file and title, one per line.
-fn found_list(doc: &Value) -> String {
-    let mut found = Found::all_of(doc);
-    found.sort();
-    let mut out = format!("total: {}\n", doc["total"]);
-    for f in found {
-        out.push_str(&format!(
-            "{} | {:?} | {} | deprecated {} | {}\n",
-            f.file,
-            f.title,
-            f.file_type,
-            f.deprecated,
-            f.matched_fields.join(" ")
-        ));
-    }
-    out
 }
 
 /// `search --brain <brain> --json --limit <limit> [--lobe] [--tag] -- <q>`:

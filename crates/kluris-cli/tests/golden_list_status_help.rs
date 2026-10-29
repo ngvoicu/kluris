@@ -13,10 +13,13 @@ mod common;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use common::golden::python_json;
+use common::search::search_slice;
 use common::{
-    PINNED_GIT_DATE, Run, Sandbox, assert_unchanged, command_line, normalize, tree_files,
-    write_files,
+    PINNED_GIT_DATE, Run, Sandbox, assert_unchanged, command_line, normalize, parse_json_line,
+    run_end, section, tree_files, write_files,
 };
+use kluris_core::json;
 
 // --- snapshots -----------------------------------------------------------------
 
@@ -37,6 +40,16 @@ fn golden_table(
     setup: fn() -> Sandbox,
     show: fn(&Run, &Path) -> String,
 ) {
+    golden_rows(name, rows, setup, |_, run, root| show(run, root));
+}
+
+/// [`golden_table`] with `show` given each row's arguments too.
+fn golden_rows(
+    name: &str,
+    rows: &[&[&str]],
+    setup: fn() -> Sandbox,
+    show: impl Fn(&[&str], &Run, &Path) -> String,
+) {
     let mut out = String::new();
     for args in rows {
         let sb = setup();
@@ -44,7 +57,7 @@ fn golden_table(
         out.push_str(&format!(
             "$ {}\n{}",
             command_line(args),
-            show(&run, &sb.root)
+            show(args, &run, &sb.root)
         ));
     }
     insta::with_settings!({ omit_expression => true }, {
@@ -724,7 +737,49 @@ const REPEATED: &[&[&str]] = &[
 
 #[test]
 fn a_repeated_option_takes_its_last_value() {
-    golden_table("repeated_options", REPEATED, two_brains, whole);
+    golden_rows("repeated_options", REPEATED, two_brains, option_view);
+}
+
+/// An option table's row: a `search --json` that succeeds as its
+/// [`search_slice`] (checked whole first; what the options decide is the
+/// envelope and which items are found, never their ranks, scores or
+/// snippets) under a `== search --json, sliced` line, then its exit; any
+/// other run whole.
+fn option_view(args: &[&str], run: &Run, root: &Path) -> String {
+    if args.first() == Some(&"search") && args.contains(&"--json") && run.code == 0 {
+        let (_, slice) = search_slice(run);
+        format!(
+            "{}{}",
+            section("search --json, sliced", &slice),
+            run_end(run.code)
+        )
+    } else {
+        whole(run, root)
+    }
+}
+
+#[test]
+fn an_option_row_does_not_show_the_search_engine_s_own_fields() {
+    // The same run with only its score changed, written in the same layout:
+    // the whole run differs, the option row's view does not.
+    let args = [
+        "search", "needle", "--brain", "b", "--brain", "a", "--json", "--json",
+    ];
+    let sb = two_brains();
+    let run = sb.kluris_shown(&args);
+    let mut doc = parse_json_line(&run.stdout);
+    assert_eq!(doc["results"][0]["score"], 55, "{}", run.stdout);
+    doc["results"][0]["score"] = serde_json::json!(56);
+    let rescored = Run {
+        code: run.code,
+        stdout: json::to_line(&python_json(&doc)),
+        stderr: run.stderr.clone(),
+    };
+    assert_ne!(whole(&run, &sb.root), whole(&rescored, &sb.root));
+    assert_eq!(
+        option_view(&args, &run, &sb.root),
+        option_view(&args, &rescored, &sb.root)
+    );
 }
 
 /// Every token is parsed first (an unknown option, an option without its
@@ -824,7 +879,7 @@ const REPEATED_VALUES: &[&[&str]] = &[
 
 #[test]
 fn only_the_winning_value_is_converted() {
-    golden_table("repeated_values", REPEATED_VALUES, two_brains, whole);
+    golden_rows("repeated_values", REPEATED_VALUES, two_brains, option_view);
 }
 
 #[test]

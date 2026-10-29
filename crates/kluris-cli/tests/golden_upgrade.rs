@@ -25,7 +25,6 @@ mod common;
 use std::fs;
 use std::path::Path;
 
-use common::golden::python_json;
 use common::shared::{skill_reference, vendored_marker};
 use common::upgrade::{Brain, World, link_folder};
 use common::{
@@ -37,8 +36,7 @@ use kluris_core::agents::install::{
 };
 use kluris_core::agents::render::posix_path;
 use kluris_core::config::read_global_config;
-use kluris_core::json;
-use serde_json::{Value, json};
+use serde_json::json;
 
 /// A frozen world in its two forms: as the earlier Kluris made it on macOS
 /// and Linux, then on Windows (each with its brains, whose last commit ids
@@ -402,59 +400,14 @@ const QUERIES: &[(&str, &[&str])] = &[
     ("team", &["standup", "blockers"]),
 ];
 
-/// A `search --json` run as the migration snapshots hold it. The raw run is
-/// checked first: exit 0, nothing on stderr, and stdout one line of
-/// `json.dumps` of its parse with exactly the envelope's keys and `total`
-/// the number of results. The snapshot then holds the envelope, the exit
-/// code, `total` and the results sorted by file and title, each with its
-/// file type, `deprecated` flag and matched fields: the order, scores,
-/// snippets and other fields are the search engine's own.
+/// A `search --json` run as the migration snapshots hold it: the shared
+/// [`common::search::search_slice`], its brain and query those the run was
+/// given.
 fn search_slice(run: &Run, world: &World, brain: &str, query: &str) -> String {
-    assert_eq!(run.code, 0, "{}", world.render(run));
-    assert_eq!(run.stderr, "", "search wrote to stderr");
-    let doc: Value = serde_json::from_str(&run.stdout)
-        .unwrap_or_else(|e| panic!("stdout is not JSON ({e}): {:?}", run.stdout));
-    assert_eq!(
-        run.stdout,
-        json::to_line(&python_json(&doc)),
-        "stdout is not one line of json.dumps of its parse"
-    );
-    let keys: Vec<&String> = doc.as_object().expect("an object").keys().collect();
-    assert_eq!(keys, ["ok", "brain", "query", "total", "results", "engine"]);
-    assert_eq!(doc["brain"], brain);
-    assert_eq!(doc["query"], query);
-    let results = doc["results"].as_array().expect("results");
-    assert_eq!(doc["total"].as_u64(), Some(results.len() as u64));
-    let mut found: Vec<String> = results
-        .iter()
-        .map(|r| {
-            let fields: Vec<&str> = r["matched_fields"]
-                .as_array()
-                .expect("matched_fields")
-                .iter()
-                .map(|f| f.as_str().expect("a field"))
-                .collect();
-            format!(
-                "{} | {} | {} | deprecated {} | {}\n",
-                r["file"].as_str().expect("file"),
-                r["title"],
-                r["file_type"].as_str().expect("file_type"),
-                r["deprecated"].as_bool().expect("deprecated"),
-                fields.join(" ")
-            )
-        })
-        .collect();
-    found.sort();
-    format!(
-        "ok: {}\nbrain: {}\nquery: {}\nengine: {}\nexit: {}\ntotal: {}\n{}",
-        doc["ok"],
-        doc["brain"],
-        doc["query"],
-        doc["engine"],
-        run.code,
-        doc["total"],
-        found.concat()
-    )
+    let (doc, slice) = common::search::search_slice(run);
+    assert_eq!(doc["brain"], brain, "{}", world.render(run));
+    assert_eq!(doc["query"], query, "{}", world.render(run));
+    slice
 }
 
 /// The user's own files in the migration world (relative to HOME): no
