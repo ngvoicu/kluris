@@ -394,3 +394,36 @@ fn escape(bytes: &[u8]) -> String {
     }
     out
 }
+
+/// A path written in the OS's own form (`\` on Windows) shown as `shown`,
+/// in each form text can hold it: raw, JSON-escaped, and each of those as
+/// [`tree_dump`] writes it (backslashes doubled). The snapshot then holds
+/// on every OS; the path written with `/` where the OS writes `\` fails
+/// the test, and a path in any other form still shows.
+pub fn native_path(text: &str, native: &Path, shown: &str) -> String {
+    let escaped = |s: &str| {
+        let quoted = json::to_string(&json::Json::Str(s.to_string()));
+        quoted[1..quoted.len() - 1].to_string()
+    };
+    let dumped = |s: &str| s.replace('\\', "\\\\");
+    let raw = native.display().to_string();
+    let slashed = raw.replace('\\', "/");
+    if slashed != raw {
+        for form in [escaped(&slashed), slashed.clone()] {
+            assert!(
+                !text.contains(&form),
+                "{form} is written with `/`, not as the OS writes it ({raw}), in {text:?}"
+            );
+        }
+    }
+    let mut forms = [
+        (dumped(&escaped(&raw)), dumped(&escaped(shown))),
+        (escaped(&raw), escaped(shown)),
+        (dumped(&raw), dumped(shown)),
+        (raw.clone(), shown.to_string()),
+    ];
+    forms.sort_by_key(|(from, _)| std::cmp::Reverse(from.len()));
+    forms
+        .iter()
+        .fold(text.to_string(), |text, (from, to)| text.replace(from, to))
+}

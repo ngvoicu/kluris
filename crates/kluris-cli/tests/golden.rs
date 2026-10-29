@@ -7,7 +7,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use common::{PINNED_ENV, decode, git_dump, normalize, normalize_json, tree_dump};
+use common::{PINNED_ENV, decode, git_dump, native_path, normalize, normalize_json, tree_dump};
 
 /// A temp root whose name has a space and a non-ASCII letter, so its
 /// JSON-escaped form differs from its raw form.
@@ -391,4 +391,23 @@ fn a_tree_dump_snapshot_shows_every_escape() {
     fs::write(dir.join("backslashes.md"), b"C:\\brain \\r \\x41\n").unwrap();
     fs::write(dir.join("no-eol.md"), b"end").unwrap();
     insta::assert_snapshot!("tree_dump_format", tree_dump(dir));
+}
+
+/// A path the OS writes with `\\`, found written with `/`, fails, raw or
+/// JSON-escaped; in its own form it is shown as given.
+#[test]
+fn native_path_refuses_a_path_written_with_slashes() {
+    let native = Path::new(r"C:\Users\me\work\brains\calm\kluris.yml");
+    let shown = "<ROOT>/work/brains/calm/kluris.yml";
+    assert_eq!(
+        native_path(r"at C:\Users\me\work\brains\calm\kluris.yml", native, shown),
+        format!("at {shown}")
+    );
+    for text in [
+        "at C:/Users/me/work/brains/calm/kluris.yml",
+        r#"{"error": "C:/Users/me/work/brains/calm/kluris.yml"}"#,
+    ] {
+        let refused = std::panic::catch_unwind(|| native_path(text, native, shown));
+        assert!(refused.is_err(), "{text} was not refused");
+    }
 }

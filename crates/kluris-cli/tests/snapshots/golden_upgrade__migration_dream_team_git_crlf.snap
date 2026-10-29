@@ -1,0 +1,19 @@
+---
+source: crates/kluris-cli/tests/golden_upgrade.rs
+expression: crlf
+---
+== git status --porcelain
+== git cat-file -p HEAD
+tree 385e9222645d46dd3e00fb94da8b8b253f4c07a3
+parent c87fdd7453b61f3664029bc76d20ba656e992be5
+author Kluris Parity <parity@kluris.invalid> 1767268800 +0000
+committer Kluris Parity <parity@kluris.invalid> 1767268800 +0000
+
+brain: add team neurons
+== git ls-tree -r HEAD
+100644 blob 5ac8084983115fe0e4af8a757a1f01d5f3cf11dc	.gitignore
+100644 blob e542163456532163af1dab00b5ed5244d373a7ac	README.md
+100644 blob a81dc4d4c98f1e04d522318e8b4cf1837fffeaa8	brain.md
+100644 blob 04248cc13abfd9e69f6e29281bb0a7829802dde4	glossary.md
+100644 blob 0fe97a39a6f36987dabf5d85359ed5ac728deef1	process/map.md
+100644 blob 674304df9cd82fc28633f43e97ba2df4ea03153d	process/standup.md

@@ -28,7 +28,7 @@ use common::dream_brains::{
 };
 use common::golden::python_json;
 use common::sandbox::{Run, Sandbox, changed_files, json_dump, stream, write_tree};
-use common::{normalize, tree_dump, tree_files};
+use common::{native_path, normalize, tree_dump, tree_files};
 use kluris_core::json;
 use regex::Regex;
 
@@ -237,58 +237,6 @@ fn assert_skipped_untouched(
             );
             assert_eq!(after.get(&key), before.get(&key), "changed skipped {key}");
         }
-    }
-}
-
-/// A path written in the OS's own form (`\` on Windows) shown as `shown`,
-/// in each form text can hold it: raw, JSON-escaped, and each of those as
-/// [`tree_dump`] writes it (backslashes doubled). The snapshot then holds
-/// on every OS; the path written with `/` where the OS writes `\` fails
-/// the test, and a path in any other form still shows.
-fn native_path(text: &str, native: &Path, shown: &str) -> String {
-    let escaped = |s: &str| {
-        let quoted = json::to_string(&json::Json::Str(s.to_string()));
-        quoted[1..quoted.len() - 1].to_string()
-    };
-    let dumped = |s: &str| s.replace('\\', "\\\\");
-    let raw = native.display().to_string();
-    let slashed = raw.replace('\\', "/");
-    if slashed != raw {
-        for form in [escaped(&slashed), slashed.clone()] {
-            assert!(
-                !text.contains(&form),
-                "{form} is written with `/`, not as the OS writes it ({raw}), in {text:?}"
-            );
-        }
-    }
-    let mut forms = [
-        (dumped(&escaped(&raw)), dumped(&escaped(shown))),
-        (escaped(&raw), escaped(shown)),
-        (dumped(&raw), dumped(shown)),
-        (raw.clone(), shown.to_string()),
-    ];
-    forms.sort_by_key(|(from, _)| std::cmp::Reverse(from.len()));
-    forms
-        .iter()
-        .fold(text.to_string(), |text, (from, to)| text.replace(from, to))
-}
-
-/// A path the OS writes with `\\`, found written with `/`, fails, raw or
-/// JSON-escaped; in its own form it is shown as given.
-#[test]
-fn native_path_refuses_a_path_written_with_slashes() {
-    let native = Path::new(r"C:\Users\me\work\brains\calm\kluris.yml");
-    let shown = "<ROOT>/work/brains/calm/kluris.yml";
-    assert_eq!(
-        native_path(r"at C:\Users\me\work\brains\calm\kluris.yml", native, shown),
-        format!("at {shown}")
-    );
-    for text in [
-        "at C:/Users/me/work/brains/calm/kluris.yml",
-        r#"{"error": "C:/Users/me/work/brains/calm/kluris.yml"}"#,
-    ] {
-        let refused = std::panic::catch_unwind(|| native_path(text, native, shown));
-        assert!(refused.is_err(), "{text} was not refused");
     }
 }
 

@@ -1,5 +1,9 @@
 //! The homes an earlier Kluris set up, frozen as plain files under
-//! `tests/fixtures/upgrade-home/<world>/`, made live in a temp folder:
+//! `tests/fixtures/upgrade-home/<world>/`, made live in a temp folder. A
+//! name that starts with `.` is stored as `dot-<name>` (`dot-claude`,
+//! `dot-gitignore`), so that no agent working in this repository finds the
+//! fixture's skills and no `.gitignore` applies to it; it gets its name
+//! back when the world is copied out.
 //!
 //! - `home/` is copied to `<root>/work/home`, with `@WORK@` (the folder
 //!   the home was set up in) replaced by `<root>/work`: native in
@@ -11,10 +15,14 @@
 //!   identity and date of the sandbox, then `worktree/` holds the files
 //!   on disk that differ from the last commit (untracked, ignored or changed).
 //!
+//! A world whose name ends in `-crlf` is the home as the earlier Kluris
+//! made it on Windows, where its text files have CRLF line endings; its
+//! `crlf-files.txt` lists them, and making the world checks that exactly
+//! those files have CRLF (every other world has none).
+//!
 //! A world is a [`Sandbox`]: its commands run with only the pinned
-//! environment and the world's own paths, and their output and the files
-//! they change are written as snapshot text: [`World::render`] and
-//! [`World::changes_since`].
+//! environment and the world's own paths, and their output is written as
+//! snapshot text by [`World::render`].
 
 use std::collections::BTreeMap;
 use std::ffi::OsString;
@@ -26,8 +34,8 @@ use std::sync::LazyLock;
 
 use regex::Regex;
 
-use super::golden::{PINNED_GIT_DATE, decode, file_body, normalize, tree_files};
-use super::sandbox::{Run, Sandbox, copy_tree, fixture, write};
+use super::golden::{PINNED_GIT_DATE, decode, native_path, tree_files};
+use super::sandbox::{Run, Sandbox, fixture, write};
 
 /// A brain of a frozen world: its commit messages, oldest first (none: a
 /// brain without git), and the commit id its last commit must get.
@@ -45,6 +53,8 @@ static GIT_VERSION: LazyLock<Regex> =
 /// A [`Sandbox`] holding a frozen world.
 pub struct World {
     sb: Sandbox,
+    /// The world's brains, in `work/brains/`.
+    brains: Vec<&'static str>,
 }
 
 impl Deref for World {
@@ -63,20 +73,25 @@ pub fn kluris_bin() -> PathBuf {
 impl World {
     /// An empty world: a home and nothing in it.
     pub fn empty() -> World {
-        World { sb: Sandbox::new() }
+        World {
+            sb: Sandbox::new(),
+            brains: Vec::new(),
+        }
     }
 
     /// The frozen world `name` with its `brains`, made live.
     pub fn frozen(name: &str, brains: &[Brain]) -> World {
-        let world = World::empty();
+        let mut world = World::empty();
         let src = fixture("upgrade-home").join(name);
+        assert_crlf_files(&src);
         let home = src.join("home");
-        for rel in tree_files(&home).into_keys() {
-            let bytes = fs::read(home.join(&rel)).unwrap_or_else(|e| panic!("{rel}: {e}"));
+        for (rel, bytes) in tree_files(&home) {
+            let rel = unstored(&rel);
             write(&world.home.join(&rel), &world.place(&rel, bytes));
         }
         for brain in brains {
             world.rebuild(&src.join("brains").join(brain.name), brain);
+            world.brains.push(brain.name);
         }
         world
     }
@@ -113,7 +128,9 @@ impl World {
         let copy = |step: &str| {
             let from = src.join(step);
             assert!(from.is_dir(), "{} has no {step}/", src.display());
-            copy_tree(&from, &dest);
+            for (rel, bytes) in tree_files(&from) {
+                write(&dest.join(unstored(&rel)), &bytes);
+            }
         };
         let git = |args: &[&str]| self.git(&dest, args, PINNED_GIT_DATE);
         if !brain.commits.is_empty() {
@@ -180,16 +197,21 @@ impl World {
     /// A run as [`Run::render`] writes it, after what the machine decides
     /// beyond the temp root: the path of the `kluris` under test (as printed
     /// and JSON-escaped) becomes `<KLURIS>`, and git's version
-    /// `git version <GIT>`.
+    /// `git version <GIT>`. The config's path and each brain's, which
+    /// Kluris prints as the OS writes them, are checked to be in that form
+    /// and shown `/`-joined ([`native_path`]).
     pub fn render(&self, run: &Run) -> String {
         let bin = kluris_bin().display().to_string();
+        let mut native = vec![self.config.clone()];
+        native.extend(self.brains.iter().map(|b| self.brain(b)));
         let mark = |text: &str| {
             let text = text
                 .replace(&bin.replace('\\', "\\\\"), "<KLURIS>")
                 .replace(&bin, "<KLURIS>");
-            GIT_VERSION
-                .replace_all(&text, "git version <GIT>")
-                .into_owned()
+            let text = GIT_VERSION.replace_all(&text, "git version <GIT>");
+            native.iter().fold(text.into_owned(), |text, path| {
+                native_path(&text, path, &self.shown(path))
+            })
         };
         Run {
             code: run.code,
@@ -199,46 +221,47 @@ impl World {
         .render(&self.root)
     }
 
+    /// `path`, under the temp root, as `<ROOT>/` and its parts `/`-joined.
+    fn shown(&self, path: &Path) -> String {
+        let rel = path.strip_prefix(&self.root).expect("under the root");
+        let parts: Vec<String> = rel
+            .components()
+            .map(|c| c.as_os_str().to_string_lossy().into_owned())
+            .collect();
+        format!("<ROOT>/{}", parts.join("/"))
+    }
+
     /// Every file under `work/` as [`tree_files`] reads it.
     pub fn files(&self) -> BTreeMap<String, Vec<u8>> {
         tree_files(&self.work)
     }
-
-    /// What changed under `work/` since `before` ([`World::files`]), as
-    /// [`changes`] writes it, through [`normalize`].
-    pub fn changes_since(&self, before: &BTreeMap<String, Vec<u8>>) -> String {
-        normalize(&changes(before, &self.files()), &self.root)
-    }
 }
 
-/// What changed from `before` to `after` (both [`tree_files`]), by path:
-/// `== + <path>` (added) and `== ~ <path>` (changed) with the new bytes as
-/// [`file_body`] writes them, or `<same as <path>>` when an earlier entry of
-/// this listing has the same bytes; `== - <path>` (removed).
-/// `<nothing changed>` when nothing did.
-pub fn changes(before: &BTreeMap<String, Vec<u8>>, after: &BTreeMap<String, Vec<u8>>) -> String {
-    let mut out = String::new();
-    let mut shown: BTreeMap<&[u8], &str> = BTreeMap::new();
-    let paths: std::collections::BTreeSet<&String> = before.keys().chain(after.keys()).collect();
-    for path in paths {
-        match (before.get(path), after.get(path)) {
-            (Some(_), None) => out.push_str(&format!("== - {path}\n")),
-            (old, Some(new)) if old != Some(new) => {
-                let mark = if old.is_some() { '~' } else { '+' };
-                out.push_str(&format!("== {mark} {path}\n"));
-                match shown.get(new.as_slice()) {
-                    Some(first) => out.push_str(&format!("<same as {first}>\n")),
-                    None => {
-                        out.push_str(&file_body(new));
-                        shown.insert(new, path);
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
-    if out.is_empty() {
-        out.push_str("<nothing changed>\n");
-    }
-    out
+/// `rel` as a stored fixture path names it: each `dot-<name>` part as
+/// `.<name>`.
+fn unstored(rel: &str) -> String {
+    rel.split('/')
+        .map(|part| match part.strip_prefix("dot-") {
+            Some(name) => format!(".{name}"),
+            None => part.to_string(),
+        })
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+/// The frozen world `src` has CRLF in exactly the files its
+/// `crlf-files.txt` lists (none when it has no such list), so that a
+/// checkout that changed line endings fails here.
+fn assert_crlf_files(src: &Path) {
+    let list = src.join("crlf-files.txt");
+    let listed: Vec<String> = match fs::read_to_string(&list) {
+        Ok(text) => text.lines().map(str::to_string).collect(),
+        Err(_) => Vec::new(),
+    };
+    let found: Vec<String> = tree_files(src)
+        .into_iter()
+        .filter(|(rel, bytes)| rel != "crlf-files.txt" && bytes.windows(2).any(|w| w == b"\r\n"))
+        .map(|(rel, _)| rel)
+        .collect();
+    assert_eq!(found, listed, "{}: the files with CRLF", src.display());
 }

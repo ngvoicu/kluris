@@ -1,6 +1,6 @@
 ---
 source: crates/kluris-cli/tests/golden_upgrade.rs
-expression: "format!(\"== git status --porcelain\\n{status}{}\", git_dump(&repo))"
+expression: lf
 ---
 == git status --porcelain
  M features/map.md

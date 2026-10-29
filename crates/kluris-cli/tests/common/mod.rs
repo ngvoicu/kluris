@@ -19,10 +19,10 @@ pub mod upgrade;
 
 pub use golden::{
     PASSTHROUGH_ENV, PINNED_ENV, PINNED_GIT_DATE, decode, file_body, git_dump, git_state,
-    normalize, normalize_json, tree_dump, tree_files,
+    native_path, normalize, normalize_json, tree_dump, tree_files,
 };
 pub use sandbox::{
-    Run, Sandbox, command_line, copy_tree, fixture, printed_paths, write, write_files,
+    Run, Sandbox, changes_dump, command_line, copy_tree, fixture, printed_paths, write, write_files,
 };
 
 use std::path::{Path, PathBuf};

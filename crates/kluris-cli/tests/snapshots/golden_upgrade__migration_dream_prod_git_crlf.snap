@@ -1,0 +1,28 @@
+---
+source: crates/kluris-cli/tests/golden_upgrade.rs
+expression: crlf
+---
+== git status --porcelain
+ M features/map.md
+?? features/search.md
+== git cat-file -p HEAD
+tree b13c26796390f22bc97704e7321a0a5787e148b1
+parent fd2ec63168df32ff3843e0d8fdb60372f134a491
+author Kluris Parity <parity@kluris.invalid> 1767268800 +0000
+committer Kluris Parity <parity@kluris.invalid> 1767268800 +0000
+
+brain: add prod neurons
+== git ls-tree -r HEAD
+100644 blob 5ac8084983115fe0e4af8a757a1f01d5f3cf11dc	.gitignore
+100644 blob 202b335aef9bac2bba3bef2690ae74dc56c1ef53	README.md
+100644 blob e684a5f559c58dc2127df1252e5f8143f4da561c	analytics/map.md
+100644 blob 2d7effc3c3565052bfc6e808adbf77c072a6ef00	brain.md
+100644 blob d66d8aebc67e3a93e9ebb8f67c851825c97f58c6	competitors/map.md
+100644 blob 1b422c4f9b24f47663587ab265eefd43095d2812	decisions/jwt-auth.md
+100644 blob 356561c57fa62108fb12ab5f3adf50e653c89ad3	decisions/map.md
+100644 blob 2e6ca0717a755c187790a26c67b95329488e13ca	decisions/server-sessions.md
+100644 blob 595431a3a2f18d304788f785e66a0efc48becfad	features/login.md
+100644 blob 93423e9c047c47a4cfa3b06499784fe660e0ff80	features/map.md
+100644 blob 04248cc13abfd9e69f6e29281bb0a7829802dde4	glossary.md
+100644 blob f9a967a8f7dd93ddde9bef9da1f4a24bbb3cd656	prd/map.md
+100644 blob ccc35b83ed11c9f9899f23d499506ed95aac14aa	ux/map.md

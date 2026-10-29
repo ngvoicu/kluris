@@ -1,0 +1,14 @@
+name: team
+description: The team brain
+agents:
+  commands_for:
+  - claude
+  - cursor
+  - windsurf
+  - copilot
+  - codex
+  - gemini
+  - hermes
+  - kilocode
+  - junie
+companions: []

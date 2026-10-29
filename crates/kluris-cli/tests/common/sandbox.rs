@@ -303,6 +303,27 @@ pub fn write_tree<P: AsRef<str>, B: AsRef<[u8]>>(
     }
 }
 
+/// What changed between two [`super::tree_files`]: each added or changed
+/// file under `== <path>` with the text `body` gives for its new bytes, a
+/// removed one with `<removed>`; empty when nothing changed.
+pub fn changes_dump(
+    before: &BTreeMap<String, Vec<u8>>,
+    after: &BTreeMap<String, Vec<u8>>,
+    mut body: impl FnMut(&str, &[u8]) -> String,
+) -> String {
+    let paths: BTreeSet<&String> = before.keys().chain(after.keys()).collect();
+    let mut out = String::new();
+    for path in paths {
+        let text = match (before.get(path), after.get(path)) {
+            (Some(old), Some(new)) if old == new => continue,
+            (_, None) => "<removed>\n".to_string(),
+            (_, Some(new)) => body(path, new),
+        };
+        out.push_str(&format!("== {path}\n{text}"));
+    }
+    out
+}
+
 /// The paths whose bytes differ between two [`super::tree_files`], each marked
 /// `+` (new), `-` (gone) or `~` (changed); `(none)` when none do.
 pub fn changed_files(

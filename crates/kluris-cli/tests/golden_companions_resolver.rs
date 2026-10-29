@@ -18,13 +18,14 @@
 
 mod common;
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 
 use common::shared::{COMPANIONS, skill_reference, vendored, vendored_marker};
 use common::{
-    PINNED_GIT_DATE, Run, Sandbox, file_body, normalize, printed_paths, tree_files, write,
+    PINNED_GIT_DATE, Run, Sandbox, changes_dump, file_body, normalize, printed_paths, tree_files,
+    write,
 };
 
 /// The fixture states: `base`, or `base` with the overlay of that name, and
@@ -124,17 +125,9 @@ fn check(sb: &Sandbox, name: &str, run: &Run) {
 /// skill_BRAIN_COMPANIONS>`, its text checked against that snapshot (one
 /// per brain and companion set, shared by every scenario that writes it).
 fn check_changes(sb: &Sandbox, name: &str, before: &BTreeMap<String, Vec<u8>>) {
-    let after = tree_files(&sb.work);
-    let paths: BTreeSet<&String> = before.keys().chain(after.keys()).collect();
-    let mut out = String::new();
-    for path in paths {
-        let body = match (before.get(path), after.get(path)) {
-            (Some(old), Some(new)) if old == new => continue,
-            (_, None) => "<removed>\n".to_string(),
-            (_, Some(new)) => body(sb, path, new),
-        };
-        out.push_str(&format!("== {path}\n{body}"));
-    }
+    let out = changes_dump(before, &tree_files(&sb.work), |path, bytes| {
+        body(sb, path, bytes)
+    });
     insta::assert_snapshot!(name, normalize(&out, &sb.root));
 }
 

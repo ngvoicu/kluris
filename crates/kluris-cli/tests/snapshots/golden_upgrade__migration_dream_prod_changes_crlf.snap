@@ -1,0 +1,41 @@
+---
+source: crates/kluris-cli/tests/golden_upgrade.rs
+expression: crlf
+---
+== brains/prod/features/map.md
+---\r
+auto_generated: true\r
+description: 'Sub-folder per feature: specs, status, feedback'\r
+parent: ../brain.md\r
+siblings:\r
+- ../analytics/map.md\r
+- ../competitors/map.md\r
+- ../decisions/map.md\r
+- ../prd/map.md\r
+- ../ux/map.md\r
+updated: '<TODAY>'\r
+---\r
+\r
+# Features\r
+\r
+Sub-folder per feature: specs, status, feedback\r
+\r
+up [brain.md](../brain.md)\r
+sideways [analytics](../analytics/map.md) | [competitors](../competitors/map.md) | [decisions](../decisions/map.md) | [prd](../prd/map.md) | [ux](../ux/map.md)\r
+\r
+## Contents\r
+\r
+- [login.md](./login.md) — Login flow\r
+- [search.md](./search.md) — Search\r
+== brains/prod/features/search.md
+---
+created: '2026-01-01'
+parent: ./map.md
+tags:
+- search
+updated: '2026-01-01'
+---
+
+# Search
+
+Full-text search over products; see [login](./login.md) for auth.

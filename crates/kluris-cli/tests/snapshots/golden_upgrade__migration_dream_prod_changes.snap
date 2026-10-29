@@ -1,8 +1,8 @@
 ---
 source: crates/kluris-cli/tests/golden_upgrade.rs
-expression: world.changes_since(&before)
+expression: lf
 ---
-== ~ brains/prod/features/map.md
+== brains/prod/features/map.md
 ---
 auto_generated: true
 description: 'Sub-folder per feature: specs, status, feedback'
@@ -27,7 +27,7 @@ sideways [analytics](../analytics/map.md) | [competitors](../competitors/map.md)
 
 - [login.md](./login.md) — Login flow
 - [search.md](./search.md) — Search
-== ~ brains/prod/features/search.md
+== brains/prod/features/search.md
 ---
 created: '2026-01-01'
 parent: ./map.md

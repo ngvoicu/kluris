@@ -1,0 +1,7 @@
+brains:
+  acme:
+    path: @WORK@/brains/acme
+    description: "Acme \"platform\" \u2014 \xFCn\xEFcode"
+  beta:
+    path: @WORK@/brains/beta
+    description: beta knowledge base

@@ -1,8 +1,0 @@
----
-source: crates/kluris-cli/tests/golden_upgrade.rs
-expression: world.render(&out)
----
-== stdout
-{"ok": true, "name": "team", "path": "<ROOT>\\work\\brains\\team", "description": "The team brain", "brain_md": "# team\n\nThe team brain\n\n## Lobes\n\n- [process/](./process/map.md) \u2014 \n\n## Reference\n\n- [glossary.md](./glossary.md) \u2014 Domain-specific terms, acronyms, and conventions", "lobes": [{"name": "process", "description": "", "neurons": 1, "yaml_count": 0}], "total_neurons": 1, "total_yaml_neurons": 0, "recent": [{"path": "process/standup.md", "updated": "2026-01-01", "file_type": "markdown"}], "glossary": [], "deprecation_count": 0, "deprecation": [], "parse_errors": 0}
-== stderr
-== exit 0

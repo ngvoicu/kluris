@@ -7,12 +7,24 @@
         crates/kluris-cli/tests/fixtures
 
 writes ``<out>/upgrade-home/skill-install`` (``test_skill_install._v2_home``),
-``<out>/upgrade-home/migration`` (``test_migration._v2_world``) and
-``<out>/posix-path-rows.jsonl`` (``[path, answer, the answer's anchor]``). Each world holds ``home/`` and, per brain,
-``brains/<name>/commit-<n>/`` (the files commit n adds or changes) and
-``brains/<name>/worktree/`` (the files on disk that differ from the last
-commit: untracked, ignored or changed). The sandbox's work folder is written
-as ``@WORK@``.
+``<out>/upgrade-home/migration`` (``test_migration._v2_world``), the same two
+as the oracle writes them on Windows (``skill-install-crlf``,
+``migration-crlf``) and ``<out>/posix-path-rows.jsonl`` (``[path, answer,
+the answer's anchor]``).
+
+Each world holds ``home/`` and, per brain, ``brains/<name>/commit-<n>/``
+(the files commit n adds or changes) and ``brains/<name>/worktree/`` (the
+files on disk that differ from the last commit: untracked, ignored or
+changed). The sandbox's work folder is written as ``@WORK@``, and every
+name that starts with ``.`` is stored as ``dot-<name>`` (``.claude`` as
+``dot-claude``, ``.gitignore`` as ``dot-gitignore``), so that no agent working
+in this repository finds the skills and no ``.gitignore`` applies to the
+fixture.
+
+On Windows the oracle opens text files with Python's text mode, which writes
+each ``\n`` as ``\r\n``. A ``-crlf`` world is made on this machine with the
+oracle's text-mode writes doing the same (``newline="\r\n"``); its
+``crlf-files.txt`` lists, by stored path, the files that came out with CRLF.
 """
 
 from __future__ import annotations
@@ -29,6 +41,7 @@ from pathlib import Path
 PARITY = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PARITY))
 
+import harness  # noqa: E402
 from harness import IS_WINDOWS, Sandbox, oracle_kluris  # noqa: E402
 import test_migration  # noqa: E402
 import test_skill_install  # noqa: E402
@@ -48,11 +61,18 @@ def lines(out: bytes) -> list[str]:
     return [line for line in out.decode("utf-8").split("\0") if line]
 
 
+def stored(rel: str) -> str:
+    """``rel`` with each part that starts with ``.`` as ``dot-<part>``."""
+    parts = rel.split("/")
+    assert not any(p.startswith("dot-") for p in parts), rel
+    return "/".join("dot-" + p[1:] if p.startswith(".") else p for p in parts)
+
+
 def copy(src: Path, dst: Path, rels: list[str], work: Path) -> None:
     for rel in rels:
         data = (src / rel).read_bytes()
         assert PLACEHOLDER not in data, rel
-        target = dst / rel
+        target = dst / stored(rel)
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(data.replace(str(work).encode("utf-8"), PLACEHOLDER))
 
@@ -86,15 +106,59 @@ def freeze_brain(brain: Path, out: Path, work: Path) -> list[str]:
     return messages
 
 
-def freeze_world(name: str, make, out: Path) -> None:
+# Runs the oracle with its text-mode writes as Windows makes them.
+WINDOWS_TEXT = """
+import builtins, io, sys
+
+_open = io.open
+
+def windows_open(file, mode="r", buffering=-1, encoding=None, errors=None, newline=None,
+                 closefd=True, opener=None):
+    if "b" not in mode and any(m in mode for m in "wax+") and newline is None:
+        newline = "\\r\\n"
+    return _open(file, mode, buffering, encoding, errors, newline, closefd, opener)
+
+builtins.open = io.open = windows_open
+from kluris.cli import cli
+sys.argv[0] = "kluris"
+sys.exit(cli())
+"""
+
+
+def windows_oracle(tmp: Path):
+    """An executable that runs the oracle with Windows' text-mode writes."""
+    python = oracle_kluris().parent / "python"
+    script = tmp / "windows_text.py"
+    script.write_text(WINDOWS_TEXT, encoding="utf-8")
+    exe = tmp / "kluris-windows-text"
+    exe.write_text(f'#!/bin/sh\nexec "{python}" -I "{script}" "$@"\n', encoding="utf-8")
+    exe.chmod(0o755)
+    return exe
+
+
+def freeze_world(name: str, make, out: Path, windows_text: bool) -> None:
     with tempfile.TemporaryDirectory() as tmp:
-        sb = Sandbox(Path(tmp))
-        make(sb)
+        original = harness.oracle_kluris
+        if windows_text:
+            exe = windows_oracle(Path(tmp))
+            harness.oracle_kluris = lambda: exe
+        try:
+            sb = Sandbox(Path(tmp) / "sandbox")
+            make(sb)
+        finally:
+            harness.oracle_kluris = original
         work = sb.work
         copy(sb.home, out / "home", files(sb.home), work)
         for brain in sorted((work / "brains").iterdir()):
             messages = freeze_brain(brain, out / "brains" / brain.name, work)
-            print(f"{name}/{brain.name}: {messages}")
+            head = git(brain, "rev-parse", "HEAD").decode().strip() if messages else None
+            print(f"{name}/{brain.name}: {messages} {head}")
+    crlf = sorted(rel for rel in files(out) if b"\r\n" in (out / rel).read_bytes())
+    if windows_text:
+        (out / "crlf-files.txt").write_text("".join(f"{rel}\n" for rel in crlf), encoding="utf-8")
+        print(f"{name}: {len(crlf)} CRLF files")
+    else:
+        assert not crlf, crlf
 
 
 # --- posix_path ---------------------------------------------------------------
@@ -145,10 +209,12 @@ def posix_rows(out: Path) -> None:
 def main() -> None:
     out = Path(sys.argv[1]).resolve()
     for name, make in WORLDS.items():
-        dest = out / "upgrade-home" / name
-        if dest.exists():
-            shutil.rmtree(dest)
-        freeze_world(name, make, dest)
+        for windows_text in (False, True):
+            world = f"{name}-crlf" if windows_text else name
+            dest = out / "upgrade-home" / world
+            if dest.exists():
+                shutil.rmtree(dest)
+            freeze_world(world, make, dest, windows_text)
     posix_rows(out / "posix-path-rows.jsonl")
 
 
