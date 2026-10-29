@@ -7,7 +7,10 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use common::{PINNED_ENV, decode, git_dump, native_path, normalize, normalize_json, tree_dump};
+use common::{
+    PINNED_ENV, PINNED_GIT_DATE, Sandbox, decode, git_dump, native_path, normalize, normalize_json,
+    tree_dump,
+};
 
 /// A temp root whose name has a space and a non-ASCII letter, so its
 /// JSON-escaped form differs from its raw form.
@@ -410,4 +413,51 @@ fn native_path_refuses_a_path_written_with_slashes() {
         let refused = std::panic::catch_unwind(|| native_path(text, native, shown));
         assert!(refused.is_err(), "{text} was not refused");
     }
+}
+
+/// The gits a sandbox runs, a push to a bare remote and a commit among
+/// them, start no automatic maintenance or gc: a detached one would still
+/// be writing the repository (its `objects/maintenance.lock`) while a test
+/// dumps it.
+#[test]
+fn sandboxed_git_starts_no_automatic_maintenance() {
+    let sb = Sandbox::new();
+    let remote = sb.work.join("remote.git");
+    let clone = sb.work.join("clone");
+    let s = |p: &Path| p.display().to_string();
+    let git = |cwd: &Path, args: &[&str]| sb.git(cwd, args, PINNED_GIT_DATE);
+    git(
+        &sb.work,
+        &["init", "-q", "--bare", "-b", "main", &s(&remote)],
+    );
+    git(&sb.work, &["clone", "-q", &s(&remote), &s(&clone)]);
+    fs::write(clone.join("a.md"), "a\n").unwrap();
+    let trace = sb.root.join("trace2.json");
+    for args in [
+        &["add", "-A"][..],
+        &["commit", "-q", "-m", "a"],
+        &["push", "-q", "-u", "origin", "main"],
+    ] {
+        let mut cmd = Command::new("git");
+        let out = sb
+            .env(&mut cmd)
+            .env("GIT_TRACE2_EVENT", &trace)
+            .args(args)
+            .current_dir(&clone)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "git {args:?}: {out:?}");
+    }
+    let started: Vec<String> = fs::read_to_string(&trace)
+        .unwrap()
+        .lines()
+        .map(|l| serde_json::from_str::<serde_json::Value>(l).unwrap())
+        .filter(|e| e["event"] == "child_start" || e["event"] == "start")
+        .map(|e| e["argv"].to_string())
+        .filter(|argv| argv.contains("\"maintenance\"") || argv.contains("\"gc\""))
+        .collect();
+    assert!(
+        started.is_empty(),
+        "automatic maintenance started: {started:?}"
+    );
 }

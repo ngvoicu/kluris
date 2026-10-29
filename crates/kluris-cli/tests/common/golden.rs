@@ -24,10 +24,13 @@ use regex::Regex;
 pub const PINNED_GIT_DATE: &str = "2026-01-01T12:00:00+00:00";
 
 /// The environment every sandboxed run pins, so that commits, dates, colour
-/// and line wrapping are the same everywhere, beside
-/// the per-sandbox paths a test sets itself: `HOME`, `USERPROFILE`,
-/// `KLURIS_CONFIG`, `GIT_CONFIG_GLOBAL` (an empty file) and the temp
-/// folder (`TMPDIR`, `TEMP`, `TMP`). `TZ=UTC` makes Kluris's today the UTC
+/// and line wrapping are the same everywhere, and no git starts automatic
+/// maintenance or gc (`maintenance.auto=false`, `gc.auto=0`): a commit or
+/// a push to a bare remote would otherwise leave a detached one writing the
+/// repository while a test dumps it. A test sets the per-sandbox paths
+/// beside them itself: `HOME`, `USERPROFILE`, `KLURIS_CONFIG`,
+/// `GIT_CONFIG_GLOBAL` (the sandbox's git config) and the temp folder (`TMPDIR`,
+/// `TEMP`, `TMP`). `TZ=UTC` makes Kluris's today the UTC
 /// date that [`normalize`] reads as `<TODAY>`.
 pub const PINNED_ENV: &[(&str, &str)] = &[
     ("KLURIS_NO_PROMPT", "1"),
@@ -38,6 +41,11 @@ pub const PINNED_ENV: &[(&str, &str)] = &[
     ("GIT_COMMITTER_EMAIL", "parity@kluris.invalid"),
     ("GIT_AUTHOR_DATE", PINNED_GIT_DATE),
     ("GIT_COMMITTER_DATE", PINNED_GIT_DATE),
+    ("GIT_CONFIG_COUNT", "2"),
+    ("GIT_CONFIG_KEY_0", "maintenance.auto"),
+    ("GIT_CONFIG_VALUE_0", "false"),
+    ("GIT_CONFIG_KEY_1", "gc.auto"),
+    ("GIT_CONFIG_VALUE_1", "0"),
     ("TZ", "UTC"),
     ("LC_ALL", "C.UTF-8"),
     ("NO_COLOR", "1"),

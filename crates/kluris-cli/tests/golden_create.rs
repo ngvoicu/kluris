@@ -26,6 +26,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
+use common::sandbox::GITCONFIG;
 use common::shared::{skill_brain, skill_reference, vendored_marker};
 use common::{
     PINNED_GIT_DATE, Run, Sandbox, file_body, fixture, git_state, normalize, printed_paths,
@@ -487,11 +488,8 @@ fn create_commit_identity_fallback() {
 #[test]
 fn create_keeps_a_git_identity() {
     let sb = &Sandbox::new();
-    fs::write(
-        sb.root.join("gitconfig-empty"),
-        "[user]\n\tname = Ada\n\temail = ada@example.com\n",
-    )
-    .unwrap_or_else(|e| panic!("{e}"));
+    let gitconfig = format!("{GITCONFIG}[user]\n\tname = Ada\n\temail = ada@example.com\n");
+    fs::write(sb.gitconfig(), gitconfig).unwrap_or_else(|e| panic!("{e}"));
     let mut cmd = sb.command(&["create", "demo", "--json"]);
     IDENTITY.iter().for_each(|key| {
         cmd.env_remove(key);

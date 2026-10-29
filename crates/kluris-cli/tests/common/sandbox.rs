@@ -18,10 +18,17 @@ use super::golden::{PASSTHROUGH_ENV, PINNED_ENV, decode, normalize, python_json}
 /// on every machine once the root reads `<ROOT>`.
 pub const ROOT_LEN: usize = 120;
 
+/// The sandbox's global git config: no automatic maintenance or gc. The
+/// same settings are in [`PINNED_ENV`], but git clears the config of the
+/// environment for the remote side of a local push, and a detached
+/// maintenance that push starts in a bare remote would still be writing
+/// it (`objects/maintenance.lock`) while a test dumps it.
+pub const GITCONFIG: &str = "[maintenance]\n\tauto = false\n[gc]\n\tauto = 0\n";
+
 /// One test's sandbox. Everything a run touches lives under `work/`: HOME
 /// (`work/home`), the config (`work/home/.kluris/config.yml`) and the
-/// brains a test builds; the root also holds an empty global git config and
-/// the temp folder.
+/// brains a test builds; the root also holds the global git config
+/// ([`GITCONFIG`]) and the temp folder.
 pub struct Sandbox {
     _tmp: tempfile::TempDir,
     /// The resolved root, padded to [`ROOT_LEN`].
@@ -46,7 +53,7 @@ impl Sandbox {
         let home = work.join("home");
         fs::create_dir_all(&home).unwrap();
         fs::create_dir_all(root.join("tmp")).unwrap();
-        fs::write(root.join("gitconfig-empty"), b"").unwrap();
+        fs::write(root.join("gitconfig"), GITCONFIG).unwrap();
         let config = home.join(".kluris").join("config.yml");
         Sandbox {
             _tmp: tmp,
@@ -55,6 +62,11 @@ impl Sandbox {
             home,
             config,
         }
+    }
+
+    /// The global git config every git of the sandbox reads.
+    pub fn gitconfig(&self) -> PathBuf {
+        self.root.join("gitconfig")
     }
 
     /// `cmd` with the sandbox's environment and nothing else.
@@ -70,7 +82,7 @@ impl Sandbox {
             .env("HOME", &self.home)
             .env("USERPROFILE", &self.home)
             .env("KLURIS_CONFIG", &self.config)
-            .env("GIT_CONFIG_GLOBAL", self.root.join("gitconfig-empty"))
+            .env("GIT_CONFIG_GLOBAL", self.gitconfig())
             .env("TMPDIR", &tmp)
             .env("TEMP", &tmp)
             .env("TMP", &tmp)
