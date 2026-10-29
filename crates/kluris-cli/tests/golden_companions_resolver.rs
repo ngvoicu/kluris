@@ -20,18 +20,12 @@ mod common;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
+use common::shared::{COMPANIONS, skill_reference, vendored, vendored_marker};
 use common::{
     PINNED_GIT_DATE, Run, Sandbox, file_body, normalize, printed_paths, tree_files, write,
 };
-
-const KNOWN: [&str; 4] = [
-    "specmint-core",
-    "specmint-tdd",
-    "specmint-core-html",
-    "specmint-tdd-html",
-];
 
 /// The fixture states: `base`, or `base` with the overlay of that name, and
 /// the companions its brains opted into.
@@ -61,10 +55,6 @@ const SKILL_COPIES: [&str; 9] = [
 
 fn manifest_dir() -> &'static Path {
     Path::new(env!("CARGO_MANIFEST_DIR"))
-}
-
-fn vendored() -> PathBuf {
-    manifest_dir().join("../../vendored")
 }
 
 /// A sandbox in the fixture state `name` (see the module docs).
@@ -149,31 +139,9 @@ fn check_changes(sb: &Sandbox, name: &str, before: &BTreeMap<String, Vec<u8>>) {
 }
 
 fn body(sb: &Sandbox, path: &str, bytes: &[u8]) -> String {
-    if let Some(rel) = path.strip_prefix("home/.kluris/companions/") {
-        if fs::read(vendored().join(rel)).is_ok_and(|v| v == bytes) {
-            return format!("<vendored/{rel}>\n");
-        }
-    } else if let Some(brain) = skill_brain(path) {
-        let companions: Vec<&str> = KNOWN
-            .into_iter()
-            .filter(|c| String::from_utf8_lossy(bytes).contains(&format!("/{c}/SKILL.md")))
-            .collect();
-        let companions = if companions.is_empty() {
-            "none".to_string()
-        } else {
-            companions.join("+")
-        };
-        let label = format!("skill_{brain}_{companions}");
-        insta::assert_snapshot!(label.as_str(), normalize(&file_body(bytes), &sb.root));
-        return format!("<snapshot {label}>\n");
-    }
-    file_body(bytes)
-}
-
-/// The brain of `home/<folder>/kluris-<brain>/SKILL.md`.
-fn skill_brain(path: &str) -> Option<&str> {
-    let dir = path.strip_prefix("home/")?.strip_suffix("/SKILL.md")?;
-    dir.rsplit('/').next()?.strip_prefix("kluris-")
+    vendored_marker(path, bytes)
+        .or_else(|| skill_reference(path, bytes, &sb.root, |_| String::new()))
+        .unwrap_or_else(|| file_body(bytes))
 }
 
 fn assert_unchanged(sb: &Sandbox, before: &BTreeMap<String, Vec<u8>>) {
@@ -272,7 +240,7 @@ fn companion_list_with_an_unknown_brain() {
 #[test]
 fn companion_add_json() {
     for brain in ["a", "b", "all"] {
-        for companion in KNOWN {
+        for companion in COMPANIONS {
             let sb = state("base");
             let before = tree_files(&sb.work);
             let run = sb.kluris(&["companion", "add", companion, "--brain", brain, "--json"]);

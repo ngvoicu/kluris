@@ -4,28 +4,32 @@
 //!
 //! Each run is snapshotted as `<name>__run` (stdout, stderr, exit code).
 //! A run that writes adds `<name>__tree` (every file under `work/`: the
-//! scaffolded brain, `config.yml`, the HOME skills) and, for a new brain,
+//! scaffolded brain, `config.yml`, the HOME skills, with each installed
+//! companion file and each brain's skill shown by reference, see [`tree`])
+//! and, for a new brain,
 //! `<name>__git` (its first commit, branch, remote and status). A run that
 //! must write nothing is checked against the tree from before it. On
 //! Windows a snapshot holding a path under the root has its own `windows`
 //! variant (see [`snapshot`]).
 //!
-//! Scenarios that start from brains made earlier take them from
-//! `tests/fixtures/create`: each brain's files, and the skill and Windsurf
-//! workflow it had in every agent's own folder (see [`Prior`]).
+//! Scenarios that start from brains made earlier build them from
+//! `tests/fixtures/create`: a brain's files and the skill it had in every
+//! agent's own folder, beside its Windsurf workflow (see [`Prior`]).
 //!
 //! The wizard and the pickers need a terminal on stdin: those scenarios run
 //! Kluris on a pseudo-terminal and exist on Unix only.
 
 mod common;
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
+use common::shared::{skill_brain, skill_reference, vendored_marker};
 use common::{
-    PINNED_GIT_DATE, Run, Sandbox, fixture, git_state, normalize, printed_paths, tree_dump,
-    write_files,
+    PINNED_GIT_DATE, Run, Sandbox, file_body, fixture, git_state, normalize, printed_paths,
+    tree_dump, tree_files, write_files,
 };
 use regex::Regex;
 
@@ -75,8 +79,68 @@ fn on_terminal(sb: &Sandbox, args: &[&str], lines: &[&str]) -> Run {
 }
 
 /// Every file under `work/` (HOME included), normalized.
-fn tree(sb: &Sandbox) -> String {
+fn files(sb: &Sandbox) -> String {
     normalize(&tree_dump(&sb.work), &sb.root)
+}
+
+/// [`files`] as a snapshot holds it: an installed companion file that holds
+/// its `vendored/` bytes reads `<vendored/NAME/PATH>`, and a brain's
+/// SKILL.md, after the test asserts every copy of it is the same, reads
+/// `<snapshot skill_...>` (see [`common::shared`] and [`skill_variant`]).
+fn tree(sb: &Sandbox) -> String {
+    let files = tree_files(&sb.work);
+    let mut skills: BTreeMap<&str, (&str, &[u8])> = BTreeMap::new();
+    for (path, bytes) in &files {
+        if let Some(brain) = skill_brain(path) {
+            let (first, copy) = *skills.entry(brain).or_insert((path, bytes));
+            assert_eq!(copy, bytes.as_slice(), "{path} differs from {first}");
+        }
+    }
+    let mut out = String::new();
+    for (path, bytes) in &files {
+        let body = vendored_marker(path, bytes)
+            .or_else(|| skill_reference(path, bytes, &sb.root, skill_variant))
+            .unwrap_or_else(|| file_body(bytes));
+        out.push_str(&format!("== {path}\n{body}"));
+    }
+    normalize(&out, &sb.root)
+}
+
+/// What tells a brain's skill text from the others of the same brain and
+/// companions, as it names the brain's folder, git and description: `at-`
+/// and the folder below `work/` unless it is `brains/<brain>`, `git` for a
+/// git repository, and `desc-` and the description unless it is `<brain>
+/// knowledge base`, each lowercased with every run of other characters than
+/// ASCII letters and digits as one `-`.
+fn skill_variant(text: &str) -> String {
+    static FACTS: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(
+            r"(?m)^You are the SME for the \*\*(.+)\*\* brain\. The brain lives at `<ROOT>/work/(.+)` \((git|no git)\)\.\nDescription: (.*)$",
+        )
+        .unwrap()
+    });
+    let caps = FACTS
+        .captures(text)
+        .unwrap_or_else(|| panic!("a skill without its brain's facts:\n{text}"));
+    let slug = |s: &str| {
+        s.to_lowercase()
+            .split(|c: char| !c.is_ascii_alphanumeric())
+            .filter(|w| !w.is_empty())
+            .collect::<Vec<_>>()
+            .join("-")
+    };
+    let brain = &caps[1];
+    let mut parts = Vec::new();
+    if caps[2] != format!("brains/{brain}") {
+        parts.push(format!("at-{}", slug(&caps[2])));
+    }
+    if &caps[3] == "git" {
+        parts.push("git".to_string());
+    }
+    if caps[4] != format!("{brain} knowledge base") {
+        parts.push(format!("desc-{}", slug(&caps[4])));
+    }
+    parts.join("_")
 }
 
 /// The repository at `rel` (relative to `work/`), normalized.
@@ -109,7 +173,7 @@ fn assert_golden(name: &str, sb: &Sandbox, run: &Run, repo: Option<&str>) {
 /// The run of a command that writes nothing: `before` is the tree from
 /// before it.
 fn assert_golden_unchanged(name: &str, sb: &Sandbox, before: &str, run: &Run) {
-    assert_eq!(tree(sb), before, "{name}: the run changed the tree");
+    assert_eq!(files(sb), before, "{name}: the run changed the tree");
     snapshot(&format!("{name}__run"), run.render(&sb.root));
 }
 
@@ -132,64 +196,72 @@ const SKILL_FOLDERS: &[&str] = &[
 
 /// The state a scenario starts from: brains made and registered earlier.
 ///
-/// `brains`: the fixture `brains/<name>` placed at a folder under `work/`,
-/// its `gitignore` as `.gitignore` (so it ignores nothing in this
-/// repository) and `<TODAY>` as today's date; with git, it is a repository
-/// whose first commit is made as `create` makes it. `skills`: the brains
-/// whose `skills/<name>/SKILL.md` sits in every [`SKILL_FOLDERS`] folder,
-/// beside its `workflow.md`. `config`: `config.yml`. In the skills and the
-/// config, `<ROOT>` is the sandbox's root.
+/// `brains`: each brain's name, its folder under `work/`, whether it is a
+/// git repository and its description. Its files are `brain/` in the
+/// fixtures, with `<BRAIN>`, `<DESCRIPTION>` and `<TODAY>` filled in and
+/// `gitignore` placed as `.gitignore` (so it ignores nothing in this
+/// repository); with git, its first commit is made as `create` makes it.
+/// `skills`: the brains whose skill sits in every [`SKILL_FOLDERS`] folder
+/// beside its Windsurf workflow: the fixture `SKILL.md` with the brain's
+/// name, path (`<BRAIN PATH>`), `<GIT>` (`git` or `no git`) and
+/// description filled in, and the workflow that skill without its `name:`
+/// line and with its description cut to 200 characters. `config`:
+/// `config.yml`. In the skills and the config, `<ROOT>` is the sandbox's
+/// root.
 struct Prior {
-    brains: &'static [(&'static str, &'static str, bool)],
+    brains: &'static [(&'static str, &'static str, bool, &'static str)],
     skills: &'static [&'static str],
     config: &'static str,
 }
 
 /// `taken`, at `brains/taken` without git.
 const TAKEN: Prior = Prior {
-    brains: &[("taken", "brains/taken", false)],
+    brains: &[("taken", "brains/taken", false, "taken knowledge base")],
     skills: &["taken"],
     config: "brains:\n  taken:\n    path: <ROOT>/work/brains/taken\n    description: taken knowledge base\n",
 };
 
 /// `first`, at `first` without git.
 const FIRST: Prior = Prior {
-    brains: &[("first", "first", false)],
+    brains: &[("first", "first", false, "first knowledge base")],
     skills: &["first"],
     config: "brains:\n  first:\n    path: <ROOT>/work/first\n    description: first knowledge base\n",
 };
 
 /// `a--b`, at `a--b` with git: a name `create` refuses now.
 const A_B: Prior = Prior {
-    brains: &[("a--b", "a--b", true)],
+    brains: &[("a--b", "a--b", true, "a--b knowledge base")],
     skills: &["a--b"],
     config: "brains:\n  a--b:\n    path: <ROOT>/work/a--b\n    description: a--b knowledge base\n",
 };
 
 /// `team`, at `brains/team` with git, unregistered.
 const TEAM_UNREGISTERED: Prior = Prior {
-    brains: &[("team", "brains/team", true)],
+    brains: &[("team", "brains/team", true, "The team brain")],
     skills: &[],
     config: "brains: {}\n",
 };
 
 /// `team`, at `brains/team` with git, registered.
 const TEAM: Prior = Prior {
-    brains: &[("team", "brains/team", true)],
+    brains: &[("team", "brains/team", true, "The team brain")],
     skills: &["team"],
     config: "brains:\n  team:\n    path: <ROOT>/work/brains/team\n    description: The team brain\n",
 };
 
 /// `a` (git) and `b` (no git) in `brains`.
 const TWO: Prior = Prior {
-    brains: &[("a", "brains/a", true), ("b", "brains/b", false)],
+    brains: &[
+        ("a", "brains/a", true, "a knowledge base"),
+        ("b", "brains/b", false, "b knowledge base"),
+    ],
     skills: &["a", "b"],
     config: "brains:\n  a:\n    path: <ROOT>/work/brains/a\n    description: a knowledge base\n  b:\n    path: <ROOT>/work/brains/b\n    description: b knowledge base\n",
 };
 
 /// `only`, at `only` with git.
 const ONLY: Prior = Prior {
-    brains: &[("only", "only", true)],
+    brains: &[("only", "only", true, "only knowledge base")],
     skills: &["only"],
     config: "brains:\n  only:\n    path: <ROOT>/work/only\n    description: only knowledge base\n",
 };
@@ -199,19 +271,18 @@ fn place(sb: &Sandbox, prior: &Prior) {
         .to_zoned(jiff::tz::TimeZone::UTC)
         .date()
         .to_string();
-    for (name, rel, with_git) in prior.brains {
-        let from = fixture("create/brains").join(name);
-        for (file, text) in fixture_files(&from) {
+    for (name, rel, with_git, description) in prior.brains {
+        for (file, text) in fixture_files(&fixture("create/brain")) {
             let file = if file == "gitignore" {
                 ".gitignore".to_string()
             } else {
                 file
             };
-            write(
-                sb,
-                &format!("{rel}/{file}"),
-                &text.replace("<TODAY>", &today),
-            );
+            let text = text
+                .replace("<DESCRIPTION>", description)
+                .replace("<BRAIN>", name)
+                .replace("<TODAY>", &today);
+            write(sb, &format!("{rel}/{file}"), &text);
         }
         if *with_git {
             git(sb, rel, &["init", "-q"]);
@@ -224,21 +295,26 @@ fn place(sb: &Sandbox, prior: &Prior) {
             );
         }
     }
-    for name in prior.skills {
-        let read = |file: &str| {
-            let path = fixture("create/skills").join(name).join(file);
-            let text =
-                fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
-            expand(&text, &sb.root)
+    let template = fs::read_to_string(fixture("create/SKILL.md")).unwrap();
+    for skill_of in prior.skills {
+        let Some((name, rel, with_git, description)) =
+            prior.brains.iter().find(|(name, ..)| name == skill_of)
+        else {
+            panic!("no brain {skill_of} for its skill");
         };
-        let skill = read("SKILL.md");
+        let skill = template
+            .replace("<BRAIN PATH>", &format!("<ROOT>/work/{rel}"))
+            .replace("<GIT>", if *with_git { "git" } else { "no git" })
+            .replace("<DESCRIPTION>", description)
+            .replace("<BRAIN>", name);
+        let skill = expand(&skill, &sb.root);
         for folder in SKILL_FOLDERS {
             write(sb, &format!("home/{folder}/kluris-{name}/SKILL.md"), &skill);
         }
         write(
             sb,
             &format!("home/.codeium/windsurf/global_workflows/kluris-{name}.md"),
-            &read("workflow.md"),
+            &workflow(&skill),
         );
     }
     write(
@@ -246,6 +322,23 @@ fn place(sb: &Sandbox, prior: &Prior) {
         "home/.kluris/config.yml",
         &expand(prior.config, &sb.root),
     );
+}
+
+/// The Windsurf workflow beside `skill`: the skill without its `name:` line,
+/// its description cut to its first 200 characters.
+fn workflow(skill: &str) -> String {
+    let mut lines: Vec<String> = skill.split('\n').map(str::to_string).collect();
+    assert!(lines[1].starts_with("name: "), "{}", lines[1]);
+    lines.remove(1);
+    let quoted = lines[1]
+        .strip_prefix("description: \"")
+        .and_then(|d| d.strip_suffix('"'))
+        .unwrap_or_else(|| panic!("no quoted description: {}", lines[1]));
+    lines[1] = format!(
+        "description: \"{}\"",
+        quoted.chars().take(200).collect::<String>()
+    );
+    lines.join("\n")
 }
 
 /// Every file under `dir`, `.git` left out, as (its `/`-joined relative
@@ -489,7 +582,7 @@ const ERRORS: &[(&str, &[&str])] = &[
 #[test]
 fn create_validation_json() {
     let sb = &validation_scenario();
-    let before = tree(sb);
+    let before = files(sb);
     for (case, given) in ERRORS {
         let mut args = vec!["create"];
         args.extend(*given);
@@ -509,7 +602,7 @@ fn create_validation_json() {
 #[test]
 fn create_validation_text() {
     let sb = &validation_scenario();
-    let before = tree(sb);
+    let before = files(sb);
     for (case, given) in ERRORS.iter().filter(|(case, _)| *case != "empty") {
         let mut args = vec!["create"];
         args.extend(*given);
@@ -541,7 +634,7 @@ const OPTION_VALUES: &[(&str, &[&str])] = &[
 fn create_option_values() {
     for (case, args) in OPTION_VALUES {
         let sb = &Sandbox::new();
-        let before = tree(sb);
+        let before = files(sb);
         let run = sb.kluris(args);
         assert_golden_unchanged(&format!("create_option_values__{case}"), sb, &before, &run);
     }
@@ -611,7 +704,7 @@ fn from_config_refuses_paths_and_nested_values() {
     for (case, text) in FROM_CONFIG_REFUSED {
         let sb = &Sandbox::new();
         write(sb, "structure.yml", text);
-        let before = tree(sb);
+        let before = files(sb);
         let run = sb.kluris(&["create", "demo", "--from-config", "structure.yml", "--json"]);
         assert_golden_unchanged(&format!("from_config_refused__{case}"), sb, &before, &run);
     }
@@ -718,7 +811,7 @@ fn wizard_with_every_value_given_asks_nothing() {
 #[test]
 fn wizard_end_of_input_aborts() {
     let sb = &Sandbox::new();
-    let before = tree(sb);
+    let before = files(sb);
     let run = on_terminal(sb, &["create"], &["wiz"]);
     assert_golden_unchanged("wizard_end_of_input_aborts", sb, &before, &run);
 }
@@ -727,7 +820,7 @@ fn wizard_end_of_input_aborts() {
 #[test]
 fn wizard_validates_after_the_prompts() {
     let sb = &Sandbox::new();
-    let before = tree(sb);
+    let before = files(sb);
     let run = on_terminal(sb, &["create"], &["Bad", "d", "", "", "3"]);
     assert_golden_unchanged("wizard_validates_after_the_prompts", sb, &before, &run);
 }
@@ -794,7 +887,7 @@ fn create_without_a_name_and_no_terminal_is_an_error() {
         ("json", &["create", "--json"][..]),
     ] {
         let sb = &Sandbox::new();
-        let before = tree(sb);
+        let before = files(sb);
         let run = sb.kluris(args);
         assert_golden_unchanged(
             &format!("create_without_a_name_and_no_terminal_is_an_error__{case}"),
@@ -812,7 +905,7 @@ fn create_without_a_name_and_no_terminal_is_an_error() {
 fn new_names_follow_the_stricter_rule() {
     for name in ["a--b", "a-", "ab-", "x--", "a-b--c"] {
         let sb = &Sandbox::new();
-        let before = tree(sb);
+        let before = files(sb);
         let run = sb.kluris(&["create", name, "--no-git", "--json"]);
         assert_golden_unchanged(
             &format!("new_names_follow_the_stricter_rule__{name}"),
@@ -955,7 +1048,7 @@ fn register_identity_from_brain_md() {
 fn register_an_invalid_identity() {
     let sb = &Sandbox::new();
     write(sb, "brains/9bad/brain.md", "# Also Bad\n");
-    let before = tree(sb);
+    let before = files(sb);
     for (case, args) in [
         ("json", &["register", "brains/9bad", "--json"][..]),
         ("text", &["register", "brains/9bad"][..]),
@@ -986,7 +1079,7 @@ fn register_path_errors() {
     let sb = &Sandbox::new();
     write(sb, "afile", "x");
     mkdir(sb, "empty");
-    let before = tree(sb);
+    let before = files(sb);
     for (case, source) in REGISTER_PATH_ERRORS {
         for (mode, json) in [("json", true), ("text", false)] {
             let mut args = vec!["register", source];
@@ -1010,7 +1103,7 @@ fn register_path_errors() {
 fn register_the_same_brain_again() {
     let sb = &Sandbox::new();
     place(sb, &TEAM);
-    let before = tree(sb);
+    let before = files(sb);
     for (case, args) in [
         ("json", &["register", "brains/team", "--json"][..]),
         ("text", &["register", "brains/team"][..]),
@@ -1033,7 +1126,7 @@ fn register_conflicts() {
     for (file, text) in fixture_files(&sb.work.join("brains/team")) {
         write(sb, &format!("brains/copy/{file}"), &text);
     }
-    let before = tree(sb);
+    let before = files(sb);
     let run = sb.kluris(&["register", "brains/copy", "--json"]);
     assert_golden_unchanged("register_conflicts__same-name", sb, &before, &run);
 
@@ -1044,7 +1137,7 @@ fn register_conflicts() {
         "brains/team/brain.md",
         &text.replace("# team", "# other"),
     );
-    let before = tree(sb);
+    let before = files(sb);
     let run = sb.kluris(&["register", "brains/team", "--json"]);
     assert_golden_unchanged("register_conflicts__same-path", sb, &before, &run);
 }
@@ -1094,7 +1187,7 @@ fn register_by_symlink() {
 fn register_with_an_unreadable_kluris_yml() {
     let sb = &team_brain();
     write(sb, "brains/team/kluris.yml", "name: [broken\n");
-    let before = tree(sb);
+    let before = files(sb);
     let run = sb.kluris(&["register", "brains/team", "--json"]);
     assert_golden_unchanged("register_with_an_unreadable_kluris_yml", sb, &before, &run);
 }
@@ -1125,7 +1218,7 @@ fn register_without_a_path_and_no_terminal_is_an_error() {
         ("json", &["register", "--json"][..]),
     ] {
         let sb = &Sandbox::new();
-        let before = tree(sb);
+        let before = files(sb);
         let run = sb.kluris(args);
         assert_golden_unchanged(
             &format!("register_without_a_path_and_no_terminal_is_an_error__{case}"),
@@ -1171,7 +1264,7 @@ fn remove_errors() {
     ];
     let sb = &Sandbox::new();
     place(sb, &TWO);
-    let before = tree(sb);
+    let before = files(sb);
     for (case, args) in cases {
         let run = sb.kluris(args);
         assert_golden_unchanged(&format!("remove_errors__{case}"), sb, &before, &run);
