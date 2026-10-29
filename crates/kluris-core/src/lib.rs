@@ -24,7 +24,6 @@ pub mod register;
 pub mod resolve;
 pub mod scaffold;
 pub mod search;
-pub mod service;
 pub mod status;
 pub mod sync;
 pub mod upgrade;

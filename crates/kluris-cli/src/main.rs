@@ -268,31 +268,27 @@ enum Command {
         /// Skip the pre-merge-commit and commit-msg hooks
         #[arg(long = "no-verify")]
         no_verify: bool,
-        /// Keep syncing: check every --interval seconds, sync on a change, until Ctrl-C
-        #[arg(long, conflicts_with_all = ["install_service", "uninstall_service"])]
+        // What a sync service an earlier release installed runs: it removes
+        // that service and exits 0 (`commands::upgrade::watch`). Its other
+        // options are taken and not used.
+        #[arg(long, hide = true)]
         watch: bool,
-        // Checked by `converted`, as Click's IntRange(min=5).
         #[arg(
             long,
             value_name = "N",
             allow_hyphen_values = true,
-            help = "Seconds between checks with --watch (default 30, at least 5)"
+            hide = true,
+            requires = "watch"
         )]
         interval: Option<String>,
-        /// Install and start a per-user service that runs --watch for the brain
         #[arg(
-            long = "install-service",
-            conflicts_with_all = ["uninstall_service", "no_verify"]
+            long = "log-file",
+            value_name = "PATH",
+            hide = true,
+            requires = "watch"
         )]
-        install_service: bool,
-        /// Stop and remove the brain's sync service
-        #[arg(long = "uninstall-service", conflicts_with = "no_verify")]
-        uninstall_service: bool,
-        // The Windows service's log (a task has no stdout); with --watch.
-        #[arg(long = "log-file", value_name = "PATH", hide = true)]
         log_file: Option<String>,
-        // The Windows service's KLURIS_CONFIG (a task has no environment).
-        #[arg(long = "config", value_name = "PATH", hide = true)]
+        #[arg(long = "config", value_name = "PATH", hide = true, requires = "watch")]
         config: Option<String>,
         /// JSON output
         #[arg(long)]
@@ -469,8 +465,9 @@ Checks that git runs, that the first kluris on PATH is this one, and that \
 the config and every registered brain's kluris.yml read. Then refreshes the \
 companion playbooks and re-installs every brain's agent skill \
 (~/.agents/skills, plus the folders of the selected agents), removing the \
-copies Kluris 2 left in folders it no longer uses. This is the step after \
-an upgrade: run `kluris doctor` and everything is back in sync.
+copies Kluris 2 left in folders it no longer uses, and removes the \
+background sync services an earlier release installed. This is the step \
+after an upgrade: run `kluris doctor` and everything is back in sync.
 
 Pass --no-refresh to run only the read-only checks.";
 
@@ -490,28 +487,8 @@ and pre-push hooks run as git runs them, and git's reference-transaction \
 and post-index-change hooks run on every ref and index update (--no-verify \
 skips pre-merge-commit and commit-msg). Needs git 2.38 or newer.
 
---watch keeps going in the foreground: every --interval seconds (30, at \
-least 5) it asks the remote what its branch points at (git ls-remote, \
-never prompting) and looks for new local commits, and when either changed \
-runs one sync of that brain, printed as one line (with --json, the \
-document kluris sync --json prints). A conflict, a block or a refusal is \
-printed once; that brain is looked at again each tick (git status) and \
-synced once its branch or the remote moves or the cause clears (an edit \
-undone, a rebase aborted), and tried again a minute later, then after 2, \
-4, 8 and every 10 minutes, for causes git status cannot see (an ignored \
-file removed, a hook repaired); offline is quiet. Ctrl-C (or SIGTERM) lets a sync in progress finish, then exits 0.
-
---install-service writes a per-user service that runs `kluris sync --watch \
---brain NAME` from login on and starts it (a launchd agent on macOS, a \
-systemd user unit on Linux, a Task Scheduler task on Windows); \
---uninstall-service stops and removes it. Both can be run again safely. \
-`kluris doctor` lists the services and whether they run, and `kluris \
-self-uninstall` removes them.
-
   kluris sync --brain acme
-  kluris sync --brain all --json
-  kluris sync --watch --brain all
-  kluris sync --install-service --brain acme";
+  kluris sync --brain all --json";
 
 /// `resolve` (new in v3.1).
 const RESOLVE_HELP: &str = "Settle an open sync conflict path by path.
@@ -785,33 +762,6 @@ fn converted(cli: &Cli, args: &[OsString]) -> Result<(), clap::Error> {
         Command::Search { limit, .. } => {
             search_limit(limit)?;
         }
-        Command::Sync {
-            watch,
-            interval,
-            log_file,
-            ..
-        } => {
-            let alone = |flag: &str| {
-                clap::Error::raw(
-                    ErrorKind::ValueValidation,
-                    format!("Option '{flag}' only goes with --watch.\n"),
-                )
-            };
-            if let Some(raw) = interval {
-                if !watch {
-                    return Err(alone("--interval"));
-                }
-                kluris_core::sync::watch::parse_interval(raw).map_err(|reason| {
-                    clap::Error::raw(
-                        ErrorKind::ValueValidation,
-                        format!("Invalid value for '--interval': {reason}\n"),
-                    )
-                })?;
-            }
-            if log_file.is_some() && !watch {
-                return Err(alone("--log-file"));
-            }
-        }
         Command::Create {
             brain_type,
             from_config,
@@ -1026,37 +976,11 @@ fn run(cli: Cli) -> Result<(), CliError> {
             brain,
             no_verify,
             watch,
-            interval,
-            install_service,
-            uninstall_service,
-            log_file,
-            config,
             json,
+            ..
         } => {
-            if let Some(config) = config {
-                // SAFETY: set before any thread is started.
-                unsafe { std::env::set_var("KLURIS_CONFIG", config) };
-            }
-            if install_service {
-                commands::watch::install_service(brain.as_deref(), json)
-            } else if uninstall_service {
-                commands::watch::uninstall_service(brain.as_deref(), json)
-            } else if watch {
-                let interval = match interval.as_deref() {
-                    // Checked by `converted`.
-                    Some(raw) => kluris_core::sync::watch::parse_interval(raw)
-                        .map_err(|e| CliError::new(e.to_string()))?,
-                    None => std::time::Duration::from_secs(
-                        kluris_core::sync::watch::DEFAULT_INTERVAL_SECS,
-                    ),
-                };
-                commands::watch::run(&commands::watch::Options {
-                    brain: brain.as_deref(),
-                    interval,
-                    no_verify,
-                    json,
-                    log_file: log_file.as_deref(),
-                })
+            if watch {
+                commands::upgrade::watch(brain.as_deref())
             } else {
                 commands::sync::run(brain.as_deref(), no_verify, json)
             }

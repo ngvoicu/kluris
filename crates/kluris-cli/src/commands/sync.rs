@@ -31,7 +31,7 @@ fn opt(value: &Option<String>) -> Json {
 }
 
 /// One brain's entry: the report, or why it was refused.
-pub(crate) fn entry(name: &str, outcome: &Result<SyncReport, String>) -> Json {
+fn entry(name: &str, outcome: &Result<SyncReport, String>) -> Json {
     let empty = SyncReport::default();
     let (report, refused) = match outcome {
         Ok(report) => (report, opt(&report.refused)),
@@ -65,7 +65,7 @@ pub(crate) fn entry(name: &str, outcome: &Result<SyncReport, String>) -> Json {
 }
 
 /// One brain's short text block.
-pub(crate) fn text(name: &str, outcome: &Result<SyncReport, String>) -> String {
+fn text(name: &str, outcome: &Result<SyncReport, String>) -> String {
     let report = match outcome {
         Ok(report) => report,
         Err(why) => return format!("{name}: refused: {why}\n"),

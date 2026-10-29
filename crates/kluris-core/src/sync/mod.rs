@@ -60,7 +60,6 @@ pub mod frontmatter_merge;
 pub mod merge;
 pub mod plumbing;
 pub mod resolve;
-pub mod watch;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;

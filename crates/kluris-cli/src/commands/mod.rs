@@ -16,8 +16,8 @@ pub mod self_uninstall;
 pub mod self_update;
 pub mod status;
 pub mod sync;
+pub mod upgrade;
 pub mod wake_up;
-pub mod watch;
 
 use std::path::Path;
 
