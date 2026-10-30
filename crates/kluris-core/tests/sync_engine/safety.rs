@@ -252,6 +252,83 @@ fn a_git_that_stops_partway_is_failed_with_its_message() {
     assert_eq!(w.head(&w.ours), head);
 }
 
+/// A `reference-transaction` hook that stops the branch's update after git
+/// wrote the work tree and the index, running `before` first.
+fn stop_the_branch_update(w: &World, before: &str) {
+    w.hook(
+        &w.ours,
+        "reference-transaction",
+        &format!(
+            "[ \"$1\" = prepared ] || exit 0\nif grep -q ' refs/heads/main$'; then {before}\nexit 1; fi\nexit 0"
+        ),
+    );
+}
+
+/// git wrote the incoming files, then stopped: what it wrote is not in the
+/// way, so the land failed, with git's message, and nothing is rolled back.
+#[test]
+fn files_git_wrote_before_it_stopped_are_failed_not_uncommitted() {
+    let w = World::new();
+    let new = neuron("", "# New\n");
+    w.theirs_push(&[("ideas/new.md", &new)], &[]);
+    let head = w.head(&w.ours);
+    stop_the_branch_update(&w, ":");
+    let r = w.pull();
+    assert!(left(&r, LeftReason::Failed), "{r:?}");
+    // git's message: "update aborted by the reference-transaction hook",
+    // "ref updates aborted by hook" in older versions.
+    assert!(
+        detail(&r).contains("aborted by") && detail(&r).contains("hook"),
+        "{}",
+        detail(&r)
+    );
+    assert_eq!(r.pulled, 0);
+    assert_eq!(w.head(&w.ours), head);
+    assert_eq!(w.read(&w.ours, "ideas/new.md"), new, "git's write was kept");
+}
+
+/// git stopped while the user wrote an incoming path: bytes that are
+/// neither HEAD's nor the incoming commit's are the user's.
+#[test]
+fn an_edit_made_while_git_stopped_partway_is_uncommitted() {
+    let w = World::new();
+    w.theirs_push(&[("ideas/new.md", &neuron("", "# New\n"))], &[]);
+    stop_the_branch_update(&w, "printf 'MINE\\n' > ideas/new.md");
+    let r = w.pull();
+    assert!(left(&r, LeftReason::Uncommitted), "{r:?}");
+    assert_eq!(r.left_as_is.as_ref().unwrap().paths, ["ideas/new.md"]);
+    assert_eq!(w.read(&w.ours, "ideas/new.md"), "MINE\n");
+}
+
+/// git wrote the first incoming files, then could not write into a folder.
+#[cfg(unix)]
+#[test]
+fn a_folder_git_cannot_write_after_its_first_writes_is_failed() {
+    use std::os::unix::fs::PermissionsExt;
+    let w = World::new();
+    let first = neuron("", "# First lobe\n");
+    w.theirs_push(
+        &[
+            ("aaa/first.md", &first),
+            ("notes/new.md", &neuron("", "# New\n")),
+        ],
+        &[],
+    );
+    let notes = w.ours.join("notes");
+    let head = w.head(&w.ours);
+    fs::set_permissions(&notes, fs::Permissions::from_mode(0o555)).unwrap();
+    let r = w.pull();
+    fs::set_permissions(&notes, fs::Permissions::from_mode(0o755)).unwrap();
+    assert_eq!(
+        w.read(&w.ours, "aaa/first.md"),
+        first,
+        "git wrote nothing first"
+    );
+    assert!(left(&r, LeftReason::Failed), "{r:?}");
+    assert!(detail(&r).contains("Permission denied"), "{}", detail(&r));
+    assert_eq!(w.head(&w.ours), head);
+}
+
 #[test]
 fn unrelated_histories_are_refused_before_any_merge() {
     let w = World::new();

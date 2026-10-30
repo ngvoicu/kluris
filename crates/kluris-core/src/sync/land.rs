@@ -3,7 +3,7 @@
 //! [`blocked_paths`] (the uncommitted, untracked or ignored files the move
 //! would write over) and the locks git holds while it writes.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -91,6 +91,57 @@ pub fn blocked_paths<G: SyncGit>(
     Ok(blocked)
 }
 
+/// Whether the file at `rel` holds what git writes there for `incoming`
+/// (`None`: git removes it): its bytes, or a symlink's target.
+fn written_by_git(root: &Path, rel: &str, incoming: Option<&[u8]>, link: bool) -> bool {
+    let path = join(root, rel);
+    match incoming {
+        None => fs::symlink_metadata(&path).is_err(),
+        Some(want) if link => fs::read_link(&path)
+            .is_ok_and(|target| target.to_string_lossy().replace('\\', "/").as_bytes() == want),
+        Some(want) => {
+            fs::symlink_metadata(&path).is_ok_and(|m| m.is_file())
+                && fs::read(&path).is_ok_and(|bytes| bytes == want)
+        }
+    }
+}
+
+/// Of the `paths` in the way after git stopped partway, those that are not
+/// git's own writes: a file that holds the incoming commit's version, or a
+/// path gone where the commit removes it, is what git wrote before it
+/// stopped; anything else is the user's.
+fn not_written_by_git<G: SyncGit>(
+    git: &G,
+    repo: &Repo,
+    root: &Path,
+    to: &str,
+    paths: Vec<String>,
+) -> Result<Vec<String>, GitError> {
+    let wanted: BTreeSet<&String> = paths.iter().collect();
+    let incoming: BTreeMap<String, (bool, String)> = git
+        .tree_entries(repo, to)?
+        .into_iter()
+        .filter(|e| wanted.contains(&e.rel))
+        .map(|e| (e.rel.clone(), (e.is_symlink(), e.oid)))
+        .collect();
+    let oids: Vec<String> = incoming.values().map(|(_, oid)| oid.clone()).collect();
+    let blobs = git.read_blobs(repo, &oids)?;
+    Ok(paths
+        .into_iter()
+        .filter(|rel| {
+            let (link, bytes) = match incoming.get(rel) {
+                Some((link, oid)) => (*link, blobs.get(oid).map(Vec::as_slice)),
+                None => (false, None),
+            };
+            match (incoming.contains_key(rel), bytes) {
+                // A blob git could not read back: not known to be git's.
+                (true, None) => true,
+                (_, bytes) => !written_by_git(root, rel, bytes, link),
+            }
+        })
+        .collect())
+}
+
 /// Left for the uncommitted `paths` in the way.
 pub fn uncommitted(paths: Vec<String>) -> LeftAsIs {
     LeftAsIs {
@@ -126,10 +177,10 @@ fn held_lock<G: SyncGit>(git: &G, repo: &Repo) -> Result<Option<PathBuf>, GitErr
 /// Move the branch to `to`, a descendant of `ours`, unless a file that is
 /// not committed sits where it writes or a git lock is held. Checked right
 /// before the move (a hook or an editor may have written one since the
-/// pull decided) and again when git refuses (one written in between): the
-/// move itself never overwrites an ignored file nor stashes. git stopping
-/// partway is [`LeftReason::Failed`] with its message; nothing is rolled
-/// back.
+/// pull decided) and again when git refuses (one written in between, told
+/// apart from what git itself wrote before it stopped): the move itself
+/// never overwrites an ignored file nor stashes. git stopping partway is
+/// [`LeftReason::Failed`] with its message; nothing is rolled back.
 pub fn land<G: SyncGit>(
     git: &G,
     repo: &Repo,
@@ -154,11 +205,13 @@ pub fn land<G: SyncGit>(
             ),
         ));
     }
-    match git.fast_forward_to(repo, to) {
-        Ok(()) => Ok(()),
-        Err(e) => match in_the_way()? {
-            blocked if blocked.is_empty() => Err(failed(&e.detail)),
-            blocked => Err(uncommitted(blocked)),
-        },
+    let Err(e) = git.fast_forward_to(repo, to) else {
+        return Ok(());
+    };
+    let blocked = not_written_by_git(git, repo, root, to, in_the_way()?).map_err(failed)?;
+    if blocked.is_empty() {
+        Err(failed(&e.detail))
+    } else {
+        Err(uncommitted(blocked))
     }
 }
