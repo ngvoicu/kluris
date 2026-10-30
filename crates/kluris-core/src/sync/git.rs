@@ -242,7 +242,8 @@ pub trait SyncGit: Plumbing + TextMerger + Sized {
 
     /// Push `commit` to the upstream's branch through the `kluris-<remote>`
     /// alias (see the module docs), never prompting, by `deadline`. Runs
-    /// the `pre-push` hook; moves no remote-tracking ref.
+    /// the `pre-push` hook; what git printed, the hook's output included,
+    /// goes to this process's stderr. Moves no remote-tracking ref.
     fn push(
         &self,
         repo: &Repo,
@@ -405,6 +406,23 @@ fn listed(out: &[u8], remote_ref: &str) -> Option<String> {
         let (oid, name) = line.split_once('\t')?;
         (name == remote_ref && !oid.is_empty()).then(|| oid.to_string())
     })
+}
+
+/// What `git push --porcelain` printed on stdout before its own report:
+/// the `pre-push` hook's output, which git sends there, ahead of the
+/// report's `To <destination>` line, its ref lines and `Done`.
+fn before_porcelain(stdout: &[u8]) -> &[u8] {
+    let mut starts = std::iter::once(0).chain(
+        stdout
+            .iter()
+            .enumerate()
+            .filter(|(_, b)| **b == b'\n')
+            .map(|(i, _)| i + 1),
+    );
+    match starts.rfind(|i| stdout[*i..].starts_with(b"To ")) {
+        Some(report) => &stdout[..report],
+        None => stdout,
+    }
 }
 
 /// NUL-separated names, the empty ones dropped.
@@ -872,7 +890,16 @@ impl SyncGit for SystemGit {
             &alias,
             &refspec,
         ]);
-        match git.bounded(&repo.dir, &args, deadline) {
+        let done = git.bounded(&repo.dir, &args, deadline);
+        // The `pre-push` hook's output and git's stderr reach the user, on
+        // stderr so `--json` stays one document; both are kept for the
+        // outcome.
+        if let Ok(done) = &done {
+            let mut stderr = std::io::stderr();
+            let _ = stderr.write_all(before_porcelain(&done.stdout));
+            let _ = stderr.write_all(&done.stderr);
+        }
+        match done {
             Err(RemoteError::TimedOut) => PushOutcome::Unreachable,
             Err(RemoteError::Failed(e)) => PushOutcome::Failed(e.to_string()),
             Ok(done) if done.status.success() => PushOutcome::Pushed,
@@ -1162,6 +1189,26 @@ mod tests {
             why.starts_with("a remote named kluris-origin is configured"),
             "{why}"
         );
+    }
+
+    #[test]
+    fn a_push_forwards_what_comes_before_its_porcelain_report() {
+        let report = "To ../r.git\n*\tHEAD:refs/heads/main\t[new branch]\nDone\n";
+        for (stdout, hook) in [
+            (
+                format!("from pre-push\nTo be done\n{report}"),
+                "from pre-push\nTo be done\n",
+            ),
+            (report.to_string(), ""),
+            ("from pre-push\n".to_string(), "from pre-push\n"),
+            (String::new(), ""),
+        ] {
+            assert_eq!(
+                String::from_utf8_lossy(before_porcelain(stdout.as_bytes())),
+                hook,
+                "{stdout:?}"
+            );
+        }
     }
 
     #[test]

@@ -421,6 +421,7 @@ fn hook_output_goes_to_stderr() {
         "prepare-commit-msg",
         "commit-msg",
         "post-merge",
+        "pre-push",
     ] {
         assert!(err.contains(&format!("from {hook}")), "{hook}: {err}");
     }
