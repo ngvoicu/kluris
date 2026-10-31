@@ -434,6 +434,49 @@ fn hook_output_goes_to_stderr() {
     }
 }
 
+/// What a `reference-transaction` hook prints when the engine moves the
+/// tracking ref, on either stream, and every line a refusing `pre-push`
+/// prints, a line that starts with `To ` included, reach stderr; stdout
+/// stays one JSON document.
+#[test]
+fn ref_update_hooks_and_a_refusing_pre_push_are_heard() {
+    let mut h = Home::new();
+    let root = h.brain("alpha");
+    h.teammate_pushes("alpha", "notes/new.md", &neuron("New", ""));
+    h.commit(&root, "notes/second.md", &neuron("Second", ""));
+    let hooks = root.join(".git").join("hooks");
+    for (hook, body) in [
+        (
+            "reference-transaction",
+            "input=$(cat)\ncase \"$input\" in\n *refs/remotes/origin/main*) echo \"TRACKING HOOK STDOUT $1\"; echo \"TRACKING HOOK STDERR $1\" >&2;;\nesac\nexit 0",
+        ),
+        (
+            "pre-push",
+            "printf 'To fix this rejection, contact the maintainer\\nIMPORTANT: hook detail\\n'\nexit 7",
+        ),
+    ] {
+        let path = hooks.join(hook);
+        fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+        }
+    }
+    let (code, out, err) = h.run(&["sync", "--brain", "alpha", "--json"]);
+    assert_eq!(code, 1, "{err}");
+    let doc: Value = serde_json::from_str(&out).unwrap_or_else(|e| panic!("{e}: {out}"));
+    assert_eq!(sync_of(&doc, 0)["left_as_is"]["reason"], "hook", "{doc}");
+    for line in [
+        "TRACKING HOOK STDOUT committed",
+        "TRACKING HOOK STDERR committed",
+        "To fix this rejection, contact the maintainer",
+        "IMPORTANT: hook detail",
+    ] {
+        assert!(err.contains(line), "{line}: {err}");
+    }
+}
+
 #[test]
 fn a_missing_remote_named_with_network_words_is_refused_not_offline() {
     let mut h = Home::new();

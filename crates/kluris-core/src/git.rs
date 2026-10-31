@@ -150,6 +150,9 @@ pub struct SystemGit {
     /// Every run is stopped, with every process it started, at this
     /// instant ([`SystemGit::until`]).
     deadline: Option<Instant>,
+    /// What a run that succeeds printed on stderr also goes to this
+    /// process's stderr ([`SystemGit::forwarding_stderr`]).
+    forward_stderr: bool,
 }
 
 impl Default for SystemGit {
@@ -172,6 +175,22 @@ impl SystemGit {
             options: Vec::new(),
             remote_ready: false,
             deadline: None,
+            forward_stderr: false,
+        }
+    }
+
+    /// Forward to this process's stderr what each run that succeeds
+    /// printed on stderr (a hook's output, which git sends there); a run
+    /// that fails keeps its stderr for its error.
+    pub(crate) fn forwarding_stderr(mut self) -> SystemGit {
+        self.forward_stderr = true;
+        self
+    }
+
+    /// `stderr`, a run's, to this process's stderr when this git forwards.
+    pub(crate) fn forward(&self, stderr: &[u8]) {
+        if self.forward_stderr && !stderr.is_empty() {
+            let _ = std::io::stderr().write_all(stderr);
         }
     }
 
@@ -259,6 +278,7 @@ impl SystemGit {
             },
         };
         if out.status.success() {
+            self.forward(&out.stderr);
             Ok(out)
         } else {
             let detail = String::from_utf8_lossy(&out.stderr).trim().to_string();
@@ -344,6 +364,7 @@ impl SystemGit {
             let _ = writer.join();
         }
         if out.status.success() {
+            self.forward(&out.stderr);
             Ok(out.stdout)
         } else {
             let detail = String::from_utf8_lossy(&out.stderr).trim().to_string();

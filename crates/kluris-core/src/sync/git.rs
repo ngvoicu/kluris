@@ -164,6 +164,12 @@ pub enum RemoteError {
 
 /// The git steps of the sync engine (see the module docs).
 pub trait SyncGit: Plumbing + TextMerger + Sized {
+    /// This git, forwarding to this process's stderr what each of its runs
+    /// that succeeds printed on stderr (a hook's output, which git sends
+    /// there): the engine's gits, so no hook output is lost. A run that
+    /// fails keeps its stderr for the error.
+    fn showing_output(self) -> Self;
+
     /// This git with the remote environment for `repo`: [`remote_env`]
     /// (`core.sshCommand` read once, here) and [`NO_BACKGROUND`] on every
     /// run. A git that has it already is given back as it is.
@@ -478,20 +484,42 @@ fn listed(out: &[u8], remote_ref: &str) -> Option<String> {
     })
 }
 
-/// What `git push --porcelain` printed on stdout before its own report:
-/// the `pre-push` hook's output, which git sends there, ahead of the
-/// report's `To <destination>` line, its ref lines and `Done`.
+/// What `git push --porcelain` printed on stdout before its own reports:
+/// anything a hook printed there. A report is found by its structure, at
+/// the end: a `To <destination>` line, its ref lines (a flag, a tab), and
+/// `Done`; each such block at the end is git's, and everything before the
+/// first of them is kept. A hook line that starts with `To ` stays, and
+/// without a complete report at the end (a refused push prints no `Done`)
+/// everything is kept.
 fn before_porcelain(stdout: &[u8]) -> &[u8] {
-    let mut starts = std::iter::once(0).chain(
+    let mut lines = Vec::new();
+    let mut start = 0;
+    for (i, b) in stdout.iter().enumerate() {
+        if *b == b'\n' {
+            lines.push((start, &stdout[start..i]));
+            start = i + 1;
+        }
+    }
+    if start < stdout.len() {
+        lines.push((start, &stdout[start..]));
+    }
+    let line = |i: usize| -> &[u8] { lines[i].1.strip_suffix(b"\r").unwrap_or(lines[i].1) };
+    let ref_line = |l: &[u8]| l.len() > 1 && b" +-*!=".contains(&l[0]) && l[1] == b'\t';
+    let mut end = lines.len();
+    while end > 0 && line(end - 1) == b"Done" {
+        let mut first = end - 1;
+        while first > 0 && ref_line(line(first - 1)) {
+            first -= 1;
+        }
+        if first == 0 || !line(first - 1).starts_with(b"To ") {
+            break;
+        }
+        end = first - 1;
+    }
+    if end == lines.len() {
         stdout
-            .iter()
-            .enumerate()
-            .filter(|(_, b)| **b == b'\n')
-            .map(|(i, _)| i + 1),
-    );
-    match starts.rfind(|i| stdout[*i..].starts_with(b"To ")) {
-        Some(report) => &stdout[..report],
-        None => stdout,
+    } else {
+        &stdout[..lines[end].0]
     }
 }
 
@@ -694,6 +722,7 @@ impl SystemGit {
     ) -> Result<Vec<u8>, RemoteError> {
         let done = self.bounded(dir, args, deadline)?;
         if done.status.success() {
+            self.forward(&done.stderr);
             Ok(done.stdout)
         } else {
             Err(RemoteError::Failed(GitError {
@@ -717,6 +746,10 @@ impl SystemGit {
 }
 
 impl SyncGit for SystemGit {
+    fn showing_output(self) -> Self {
+        self.forwarding_stderr()
+    }
+
     fn for_remote(&self, repo: &Repo) -> Result<Self, GitError> {
         if self.remote_ready {
             return Ok(self.clone());
@@ -959,7 +992,9 @@ impl SyncGit for SystemGit {
                 detail: e.to_string(),
             })?;
         // 0: clean; 1: conflicts, listed after the tree; anything else fails.
-        if !matches!(out.status.code(), Some(0 | 1)) {
+        if matches!(out.status.code(), Some(0 | 1)) {
+            self.forward(&out.stderr);
+        } else {
             return Err(GitError {
                 args: args.iter().map(|a| a.to_string()).collect(),
                 code: out.status.code(),
@@ -1525,6 +1560,22 @@ mod tests {
             (report.to_string(), ""),
             ("from pre-push\n".to_string(), "from pre-push\n"),
             (String::new(), ""),
+            // A hook's own `To ` line, with no report after it (a refused
+            // push prints no `Done`): everything is the hook's.
+            (
+                "To fix this rejection, contact the maintainer\nIMPORTANT: detail\n".to_string(),
+                "To fix this rejection, contact the maintainer\nIMPORTANT: detail\n",
+            ),
+            // A `To ` line the report does not follow, before the report.
+            (
+                format!("To fix this, see below\nIMPORTANT: detail\n{report}"),
+                "To fix this, see below\nIMPORTANT: detail\n",
+            ),
+            // A report cut short (no `Done`) is not taken for one.
+            (
+                "To ../r.git\n!\tHEAD:refs/heads/main\t[rejected] (fetch first)\n".to_string(),
+                "To ../r.git\n!\tHEAD:refs/heads/main\t[rejected] (fetch first)\n",
+            ),
         ] {
             assert_eq!(
                 String::from_utf8_lossy(before_porcelain(stdout.as_bytes())),

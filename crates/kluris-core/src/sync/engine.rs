@@ -163,7 +163,8 @@ pub fn open<'a, G: SyncGit>(
             prefix: repo.prefix.clone(),
         });
     }
-    let git = git.for_remote(&repo)?;
+    // What the hooks of the gits it starts print reaches the user.
+    let git = git.for_remote(&repo)?.showing_output();
     let dirs = git.git_dirs(&repo)?;
     let branch = git.branch(&repo)?;
     let upstream = match &branch {
