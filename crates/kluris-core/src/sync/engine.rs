@@ -53,8 +53,14 @@
 //! pulled or merged, nor a push another URL already took.
 //!
 //! [`sync`] pulls again after a push the remote turned back because it
-//! moved, [`PUSH_ATTEMPTS`] times at most. Only the fetch and the push are
-//! bounded in time.
+//! moved, [`PUSH_ATTEMPTS`] times at most ([`share`]). Only the fetch and
+//! the push are bounded in time, unless the caller bounds every step before
+//! the land too ([`Context::until`]); the land and what follows it never
+//! are.
+//!
+//! A caller that fetches and lands apart (the session) has the two halves
+//! of [`pull`]: [`fetch_upstream`] under the remote claim, and
+//! [`pull_fetched`] under the tree claim it holds.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -93,7 +99,12 @@ pub fn check_git(git: &impl Git) -> Result<(), SyncError> {
 #[derive(Debug, Clone)]
 pub struct Context<'a, G> {
     root: PathBuf,
+    /// The git of every step before the land, stopped at the deadline it
+    /// was given ([`Context::until`]).
     git: G,
+    /// The git of the land and every step after it, never stopped: a land
+    /// stopped partway would leave the work tree half moved.
+    landing: G,
     repo: Repo,
     dirs: GitDirs,
     /// `refs/heads/<name>`; `None` on a detached HEAD.
@@ -105,6 +116,22 @@ pub struct Context<'a, G> {
 impl<'a, G: SyncGit> Context<'a, G> {
     pub fn git(&self) -> &G {
         &self.git
+    }
+
+    /// Stop every git of the steps before the land at `deadline` (`None`:
+    /// never); the land and what follows it are never stopped.
+    pub fn until(&mut self, deadline: Option<Instant>) {
+        self.git = self.git.clone().with_deadline(deadline);
+    }
+
+    /// The repository's two git directories.
+    pub fn dirs(&self) -> &GitDirs {
+        &self.dirs
+    }
+
+    /// The pinned branch's upstream; `None` without one.
+    pub fn upstream(&self) -> Option<&Upstream> {
+        self.upstream.as_ref()
     }
 
     pub fn repo(&self) -> &Repo {
@@ -152,7 +179,7 @@ impl<'a, G: SyncGit> Context<'a, G> {
     }
 
     /// The remote claim; `None` while another command holds it.
-    fn take_remote(&self) -> Result<Option<RemoteClaim>, LeftAsIs> {
+    pub fn take_remote(&self) -> Result<Option<RemoteClaim>, LeftAsIs> {
         match RemoteClaim::try_take(&self.dirs.common) {
             Ok(claim) => Ok(Some(claim)),
             Err(ClaimError::Busy) => Ok(None),
@@ -177,6 +204,7 @@ pub fn open<'a, G: SyncGit>(
     }
     // What the hooks of the gits it starts print reaches the user.
     let git = git.for_remote(&repo)?.showing_output();
+    let landing = git.clone().with_deadline(None);
     let dirs = git.git_dirs(&repo)?;
     let branch = git.branch(&repo)?;
     let upstream = match &branch {
@@ -186,6 +214,7 @@ pub fn open<'a, G: SyncGit>(
     Ok(Context {
         root: root.to_path_buf(),
         git,
+        landing,
         repo,
         dirs,
         branch,
@@ -196,28 +225,87 @@ pub fn open<'a, G: SyncGit>(
 
 /// Bring the upstream's commits into the brain (see the module docs).
 pub fn pull<G: SyncGit>(ctx: &Context<G>) -> SyncReport {
+    reported(|report| {
+        let theirs = fetch_step(ctx)?;
+        let tree = ctx.claim_tree()?;
+        land_into(ctx, &tree, theirs, report)
+    })
+}
+
+/// [`pull`] into a work tree whose claim the caller holds (`tree`).
+pub fn pull_claimed<G: SyncGit>(ctx: &Context<G>, tree: &TreeClaim) -> SyncReport {
+    reported(|report| {
+        let theirs = fetch_step(ctx)?;
+        land_into(ctx, tree, theirs, report)
+    })
+}
+
+/// The rest of a pull once its fetch named `theirs`, the upstream's commit
+/// ([`fetch_upstream`]; `None`: the remote has no such branch), into a work
+/// tree whose claim the caller holds (`tree`).
+pub fn pull_fetched<G: SyncGit>(
+    ctx: &Context<G>,
+    tree: &TreeClaim,
+    theirs: Option<String>,
+) -> SyncReport {
+    reported(|report| land_into(ctx, tree, theirs, report))
+}
+
+/// The report of a pull `step` filled, with why it stopped.
+fn reported(step: impl FnOnce(&mut SyncReport) -> Result<(), LeftAsIs>) -> SyncReport {
     let mut report = SyncReport::default();
-    if let Err(left) = pull_into(ctx, &mut report) {
+    if let Err(left) = step(&mut report) {
         report.left_as_is = Some(left);
     }
     report
 }
 
-fn pull_into<G: SyncGit>(ctx: &Context<G>, report: &mut SyncReport) -> Result<(), LeftAsIs> {
-    let (git, repo) = (&ctx.git, &ctx.repo);
-    if let Some(op) = git.in_progress(repo).map_err(failed)? {
+/// The pinned branch's upstream, once no git merge, rebase, cherry-pick or
+/// revert is in progress; or why a pull cannot start.
+pub fn ready<'c, G: SyncGit>(ctx: &'c Context<G>) -> Result<&'c Upstream, LeftAsIs> {
+    if let Some(op) = ctx.git.in_progress(&ctx.repo).map_err(failed)? {
         return Err(LeftAsIs::because(
             LeftReason::InProgress,
             format!("a {op} is in progress; finish or abort it first"),
         ));
     }
+    upstream(ctx)
+}
+
+/// The upstream's commit a pull may land, fetched under the remote claim.
+fn fetch_step<G: SyncGit>(ctx: &Context<G>) -> Result<Option<String>, LeftAsIs> {
+    let upstream = ready(ctx)?;
+    let Some(remote) = ctx.take_remote()? else {
+        return Err(remote_busy());
+    };
+    fetch_upstream(ctx, upstream, &remote)
+}
+
+/// Why a pull lands nothing while another command holds the remote claim:
+/// the upstream's commit is not known, and the tracking ref, which any git
+/// can rewrite, is never taken for it.
+pub fn remote_busy() -> LeftAsIs {
+    LeftAsIs::because(
+        LeftReason::Busy,
+        "another kluris command is fetching this brain's remote, so the upstream's commit is not known; nothing was pulled: run again",
+    )
+}
+
+fn land_into<G: SyncGit>(
+    ctx: &Context<G>,
+    _tree: &TreeClaim,
+    theirs: Option<String>,
+    report: &mut SyncReport,
+) -> Result<(), LeftAsIs> {
+    let (git, repo) = (&ctx.git, &ctx.repo);
     let upstream = upstream(ctx)?;
-    let theirs = fetched(ctx, upstream)?;
-    let _tree = ctx.claim_tree()?;
     let branch = upstream.branch.as_str();
     let ours = ctx.branch_commit(branch)?;
     unchanged(git, repo, branch, &ours)?;
     let count = |from: Option<&str>, to: &str| git.count(repo, from, to).map_err(failed);
+    // From the land on, nothing is stopped partway.
+    let landing = &ctx.landing;
+    let landed = |from: Option<&str>, to: &str| landing.count(repo, from, to).map_err(failed);
     let pending_path = ctx.pending();
     let waiting = match Pending::read(&pending_path) {
         Found::None => None,
@@ -239,8 +327,8 @@ fn pull_into<G: SyncGit>(ctx: &Context<G>, report: &mut SyncReport) -> Result<()
         return drop_waiting(&pending_path, waiting);
     }
     if !ahead {
-        land(git, repo, &ctx.root, branch, &ours, &theirs)?;
-        report.pulled = count(Some(&ours), &theirs)?;
+        land(landing, repo, &ctx.root, branch, &ours, &theirs)?;
+        report.pulled = landed(Some(&ours), &theirs)?;
         return drop_waiting(&pending_path, waiting);
     }
 
@@ -298,10 +386,10 @@ fn pull_into<G: SyncGit>(ctx: &Context<G>, report: &mut SyncReport) -> Result<()
         no_verify,
     )
     .map_err(merge_stopped)?;
-    land(git, repo, &ctx.root, branch, &ours, &commit)?;
-    report.pulled = count(Some(&ours), &theirs)?;
+    land(landing, repo, &ctx.root, branch, &ours, &commit)?;
+    report.pulled = landed(Some(&ours), &theirs)?;
     report.auto_merged = auto_merged;
-    report.to_push = count(Some(&theirs), &commit)?;
+    report.to_push = landed(Some(&theirs), &commit)?;
     drop_waiting(&pending_path, waiting)
 }
 
@@ -329,18 +417,14 @@ fn upstream<'c, G: SyncGit>(ctx: &'c Context<G>) -> Result<&'c Upstream, LeftAsI
 }
 
 /// The upstream's commit to pull from: the one this fetch's own
-/// `ls-remote` named, under the remote claim; `None` when the remote has
-/// no such branch. While another command holds the remote claim the
-/// upstream's commit is not known, and the tracking ref, which any git can
-/// rewrite, is never taken for it.
-fn fetched<G: SyncGit>(ctx: &Context<G>, upstream: &Upstream) -> Result<Option<String>, LeftAsIs> {
+/// `ls-remote` named, under the remote claim the caller holds (`_remote`);
+/// `None` when the remote has no such branch.
+pub fn fetch_upstream<G: SyncGit>(
+    ctx: &Context<G>,
+    upstream: &Upstream,
+    _remote: &RemoteClaim,
+) -> Result<Option<String>, LeftAsIs> {
     let (git, repo) = (&ctx.git, &ctx.repo);
-    let Some(_remote) = ctx.take_remote()? else {
-        return Err(LeftAsIs::because(
-            LeftReason::Busy,
-            "another kluris command is fetching this brain's remote, so the upstream's commit is not known; nothing was pulled: run again",
-        ));
-    };
     let deadline = Instant::now() + ctx.request.network_time_limit;
     match fetch::fetch(git, repo, upstream, deadline).map_err(failed)? {
         Fetch::Moved { new, .. } => Ok(Some(new)),
@@ -504,27 +588,28 @@ fn push_head<G: SyncGit>(ctx: &Context<G>) -> Result<Pushed, LeftAsIs> {
     }
 }
 
-/// Pull, then push what is committed; a push the remote turned back because
-/// it moved pulls again, [`PUSH_ATTEMPTS`] times at most.
+/// Pull, then push what is committed ([`share`]).
 pub fn sync<G: SyncGit>(ctx: &Context<G>) -> SyncReport {
-    let mut total = SyncReport::default();
-    for _ in 0..PUSH_ATTEMPTS {
-        let report = pull(ctx);
-        total.pulled += report.pulled;
-        for path in report.auto_merged {
-            if !total.auto_merged.contains(&path) {
-                total.auto_merged.push(path);
-            }
-        }
-        total.left_as_is = report.left_as_is;
-        total.conflicts = report.conflicts;
-        total.behind_conflict = report.behind_conflict;
-        total.to_push = report.to_push;
+    share(ctx, None, pull(ctx))
+}
+
+/// Push what `pulled`, a pull's report, left to push, unless it left the
+/// brain as it is or found a conflict. A push the remote turned back
+/// because it moved pulls again, into the work tree whose claim the caller
+/// holds (`tree`; without one the pull takes it), then pushes again,
+/// [`PUSH_ATTEMPTS`] pushes at most.
+pub fn share<G: SyncGit>(
+    ctx: &Context<G>,
+    tree: Option<&TreeClaim>,
+    pulled: SyncReport,
+) -> SyncReport {
+    let mut total = pulled;
+    for attempt in 1..=PUSH_ATTEMPTS {
         if total.left_as_is.is_some() || !total.conflicts.is_empty() || total.to_push == 0 {
             return total;
         }
         let pushed = push(ctx);
-        if let Some(count) = still_to_push(ctx) {
+        if let Some(count) = to_push(ctx) {
             total.to_push = count;
         }
         match pushed {
@@ -532,11 +617,18 @@ pub fn sync<G: SyncGit>(ctx: &Context<G>) -> SyncReport {
                 total.pushed = true;
                 return total;
             }
-            Pushed::RemoteMoved => {}
             Pushed::Left(left) => {
                 total.left_as_is = Some(left);
                 return total;
             }
+            Pushed::RemoteMoved if attempt < PUSH_ATTEMPTS => {
+                let again = match tree {
+                    Some(tree) => pull_claimed(ctx, tree),
+                    None => pull(ctx),
+                };
+                absorb(&mut total, again);
+            }
+            Pushed::RemoteMoved => {}
         }
     }
     total.left_as_is = Some(LeftAsIs::because(
@@ -548,14 +640,29 @@ pub fn sync<G: SyncGit>(ctx: &Context<G>) -> SyncReport {
     total
 }
 
-/// What the pinned branch has that the remote does not, read once the
-/// push ended, however it ended: the commits from the upstream's
-/// remote-tracking ref (which git moves to what the remote took; every
-/// commit while there is none) to the pinned branch's ref, never `HEAD`, so
-/// one made while the push ran (by a `pre-push` hook, say) is still to
-/// push. `None` when it cannot be read.
-fn still_to_push<G: SyncGit>(ctx: &Context<G>) -> Option<usize> {
-    let (git, repo) = (&ctx.git, &ctx.repo);
+/// `total` with a later pull's `report`: the commits and paths it brought
+/// added, the rest as it says now.
+fn absorb(total: &mut SyncReport, report: SyncReport) {
+    total.pulled += report.pulled;
+    for path in report.auto_merged {
+        if !total.auto_merged.contains(&path) {
+            total.auto_merged.push(path);
+        }
+    }
+    total.left_as_is = report.left_as_is;
+    total.conflicts = report.conflicts;
+    total.behind_conflict = report.behind_conflict;
+    total.to_push = report.to_push;
+}
+
+/// What the pinned branch has that the remote does not, read now: the
+/// commits from the upstream's remote-tracking ref (which git moves to what
+/// the remote took; every commit while there is none) to the pinned
+/// branch's ref, never `HEAD`, so one made while a push ran (by a
+/// `pre-push` hook, say) is still to push. `None` without an upstream, or
+/// when it cannot be read.
+pub fn to_push<G: SyncGit>(ctx: &Context<G>) -> Option<usize> {
+    let (git, repo) = (&ctx.landing, &ctx.repo);
     let upstream = ctx.upstream.as_ref()?;
     let tip = git.ref_value(repo, &upstream.branch).ok()??;
     let remote = git.ref_value(repo, &upstream.refname).ok()?;
@@ -594,7 +701,7 @@ pub fn finish_merge<G: SyncGit>(
     let no_verify = ctx.request.no_verify;
     let commit = merge_commit(git, repo, &index, &tree, [ours, theirs], message, no_verify)
         .map_err(merge_stopped)?;
-    land(git, repo, &ctx.root, branch, ours, &commit)?;
+    land(&ctx.landing, repo, &ctx.root, branch, ours, &commit)?;
     Ok(commit)
 }
 

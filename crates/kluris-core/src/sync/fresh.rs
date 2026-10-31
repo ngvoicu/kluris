@@ -40,12 +40,17 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime};
 
-use super::fetch::{
-    BACKOFF, STAMP, THROTTLE, back_off, backed_off, end_backoff, fetched_recently, write_stamp,
-};
+use super::fetch::{THROTTLE, back_off, backed_off, end_backoff, fetched_recently, write_stamp};
 use super::git::{RemoteError, SyncGit};
 use crate::config::read_brain_config;
 use crate::git::{Repo, SystemGit};
+
+/// The stamp of the last fresh read's fetch, relative to the worktree's
+/// git directory.
+pub const STAMP: &str = "kluris-sync/last-fetch";
+
+/// The fresh reads' back-off, relative to the worktree's git directory.
+pub const BACKOFF: &str = "kluris-sync/fetch-backoff";
 
 /// The time the whole step may take.
 pub const TIME_LIMIT: Duration = Duration::from_secs(3);

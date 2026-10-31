@@ -8,8 +8,9 @@
 //!
 //! Two exceptions: a brain's `search: {language: ...}`, which v2 ignores, is
 //! read for `kluris search` and written back after `companions`;
-//! its `sync: {auto_fetch: ...}`, also ignored by v2, is read for the fresh
-//! reads of `wake-up` and `search` and written back after `search`.
+//! and its `sync:` entry is written back after `search` exactly as written
+//! ([`SyncConfig::entry`]), its `auto_fetch` read for the fresh reads of
+//! `wake-up` and `search`.
 
 use std::collections::BTreeSet;
 use std::ffi::OsStr;
@@ -127,8 +128,12 @@ pub struct SearchConfig {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SyncConfig {
     /// `sync.auto_fetch` as written (`false` turns the fresh reads off);
-    /// `None` when absent or not a boolean, and then not written back.
+    /// `None` when absent or not a boolean.
     pub auto_fetch: Option<bool>,
+    /// The `sync:` entry, written back as it is: its own lines from the
+    /// file when they read alone as the same entry, else the entry's value
+    /// as the writer writes it. `None` without the key.
+    pub entry: Option<String>,
 }
 
 impl BrainConfig {
@@ -346,14 +351,52 @@ pub fn parse_brain_config(text: &str) -> Result<BrainConfig, String> {
         },
         _ => None,
     };
+    let entry = root.get("sync").map(|value| sync_entry(text, value));
     Ok(BrainConfig {
         name,
         description,
         agents,
         companions,
         search: SearchConfig { language },
-        sync: SyncConfig { auto_fetch },
+        sync: SyncConfig { auto_fetch, entry },
     })
+}
+
+/// The `sync:` entry of the `kluris.yml` text whose `sync` key holds
+/// `value`, to write back after the keys Kluris writes: the entry's lines
+/// as written ([`written_entry`]) when they read alone as `sync: value`,
+/// else `value` as the writer writes it.
+fn sync_entry(text: &str, value: &Value) -> String {
+    let as_written = written_entry(text).filter(|lines| {
+        let alone = Map::from([("sync".to_string(), value.clone())]);
+        yaml::load(lines).is_ok_and(|read| read == Value::Map(alone))
+    });
+    as_written.unwrap_or_else(|| {
+        let entry = Map::from([("sync".to_string(), value.clone())]);
+        yaml::emit(&entry, Profile::Config)
+    })
+}
+
+/// The lines of a top-level `sync:` key written at the start of a line,
+/// up to the next line that starts with anything but a space, a tab or a
+/// line break; blank lines at its end are left out, and it ends with a
+/// line break.
+fn written_entry(text: &str) -> Option<String> {
+    let mut lines = text.split_inclusive('\n');
+    let first = lines.find(|line| {
+        line.strip_prefix("sync:")
+            .is_some_and(|rest| rest.is_empty() || rest.starts_with([' ', '\t', '\r', '\n']))
+    })?;
+    let mut entry = vec![first];
+    entry.extend(lines.take_while(|line| line.starts_with([' ', '\t', '\r', '\n'])));
+    while entry.len() > 1 && entry.last().is_some_and(|line| line.trim().is_empty()) {
+        entry.pop();
+    }
+    let mut entry = entry.concat();
+    if !entry.ends_with('\n') {
+        entry.push('\n');
+    }
+    Some(entry)
 }
 
 /// The `kluris.yml` path of the brain at `brain_path`.
@@ -415,7 +458,7 @@ pub fn global_config_to_yaml(config: &GlobalConfig) -> String {
 
 /// A brain's `kluris.yml` as v2 writes it (`model_dump` order: name,
 /// description, agents.commands_for, companions), then `search` when it has
-/// a language and `sync` when it has `auto_fetch`.
+/// a language and the `sync:` entry as it was written.
 pub fn brain_config_to_yaml(config: &BrainConfig) -> String {
     let agents = Map::from([(
         "commands_for".to_string(),
@@ -431,11 +474,11 @@ pub fn brain_config_to_yaml(config: &BrainConfig) -> String {
         let search = Map::from([("language".to_string(), str_value(language))]);
         root.insert("search".to_string(), Value::Map(search));
     }
-    if let Some(auto_fetch) = config.sync.auto_fetch {
-        let sync = Map::from([("auto_fetch".to_string(), Value::Bool(auto_fetch))]);
-        root.insert("sync".to_string(), Value::Map(sync));
+    let mut text = yaml::emit(&root, Profile::Config);
+    if let Some(entry) = &config.sync.entry {
+        text.push_str(entry);
     }
-    yaml::emit(&root, Profile::Config)
+    text
 }
 
 /// Write the global config, creating its directory (`~/.kluris/`) when

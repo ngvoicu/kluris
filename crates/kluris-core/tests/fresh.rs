@@ -7,7 +7,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use kluris_core::sync::fetch::{BACKOFF, STAMP};
+use kluris_core::sync::fresh::{BACKOFF, STAMP};
 use kluris_core::sync::fresh::{CLAIM, Fresh, FreshRequest, NO_HOOKS, fresh_read};
 
 mod common;

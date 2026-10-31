@@ -16,7 +16,8 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use kluris_core::sync::claim::{
-    COMMAND_BOUND, ClaimError, READ_BOUND, REMOTE_CLAIM, RemoteClaim, STEP, TREE_CLAIM, TreeClaim,
+    COMMAND_BOUND, ClaimError, READ_BOUND, REMOTE_CLAIM, RemoteClaim, STEP, TREE_CLAIM, TREE_GATE,
+    TreeClaim,
 };
 use tempfile::TempDir;
 
@@ -281,6 +282,27 @@ fn two_shared_holders_coexist() {
     drop(first);
     // One shared holder left still keeps an exclusive taker out.
     assert!(busy(TreeClaim::exclusive(&git_dir, Duration::ZERO)));
+}
+
+#[test]
+fn a_downgraded_claim_is_shared_and_keeps_landers_out() {
+    let repo = Repo::new();
+    let git_dir = repo.git_dir(&repo.work);
+    let exclusive = TreeClaim::exclusive(&git_dir, Duration::ZERO).unwrap();
+    // The gate it holds keeps every other exclusive taker out.
+    assert!(busy(TreeClaim::exclusive(&git_dir, Duration::ZERO)));
+    let shared = exclusive.downgrade(SHORT).unwrap();
+    let reader = TreeClaim::shared(&git_dir, Duration::ZERO);
+    assert!(reader.is_ok(), "{:?}", reader.err());
+    assert!(busy(TreeClaim::exclusive(&git_dir, Duration::ZERO)));
+    drop(reader);
+    // A shared claim turns shared as it is.
+    let shared = shared.downgrade(SHORT).unwrap();
+    assert!(busy(TreeClaim::exclusive(&git_dir, Duration::ZERO)));
+    drop(shared);
+    let again = TreeClaim::exclusive(&git_dir, Duration::ZERO);
+    assert!(again.is_ok(), "{:?}", again.err());
+    assert!(git_dir.join(TREE_GATE).is_file());
 }
 
 #[test]

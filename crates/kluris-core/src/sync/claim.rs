@@ -16,6 +16,11 @@
 //!   A busy tree claim is tried again every [`STEP`] up to the caller's
 //!   bound: [`READ_BOUND`] for a read, [`COMMAND_BOUND`] for an explicit
 //!   command.
+//! - The tree gate, [`TREE_GATE`] beside it: an exclusive taker takes the
+//!   gate first and holds it with the claim, so a land that is done can
+//!   turn its claim shared ([`TreeClaim::downgrade`]) with no moment in
+//!   which another land could start: no other exclusive taker gets past
+//!   the gate meanwhile, and shared takers never take it.
 //!
 //! For the main worktree the two directories are one.
 //!
@@ -40,6 +45,9 @@ pub const REMOTE_CLAIM: &str = "kluris-sync/remote-claim";
 
 /// The tree claim's file, relative to the worktree's own git directory.
 pub const TREE_CLAIM: &str = "kluris-sync/tree-claim";
+
+/// The tree gate's file, relative to the worktree's own git directory.
+pub const TREE_GATE: &str = "kluris-sync/tree-gate";
 
 /// The time between two tries of a busy tree claim.
 pub const STEP: Duration = Duration::from_millis(25);
@@ -114,47 +122,97 @@ impl RemoteClaim {
     }
 }
 
-/// The tree claim, exclusive or shared, held until dropped.
+/// The tree claim, exclusive (with the tree gate) or shared, held until
+/// dropped.
 #[derive(Debug)]
 pub struct TreeClaim {
-    _held: Held,
+    // Dropped in this order: the claim, then the gate.
+    held: Held,
+    gate: Option<Held>,
 }
+
+/// One way to lock a file without waiting.
+type TryLock = fn(&fs::File) -> Result<(), fs::TryLockError>;
 
 impl TreeClaim {
     /// Takes the tree claim of the worktree whose own git directory is
-    /// `worktree_git_dir` exclusively, to change its work tree, trying
-    /// every [`STEP`] until `bound` has passed.
+    /// `worktree_git_dir` exclusively, to change its work tree: the tree
+    /// gate, then the claim, each tried every [`STEP`] until `bound` has
+    /// passed.
     pub fn exclusive(worktree_git_dir: &Path, bound: Duration) -> Result<TreeClaim, ClaimError> {
-        TreeClaim::take(worktree_git_dir, bound, fs::File::try_lock)
+        let deadline = Instant::now() + bound;
+        let gate = take(
+            &worktree_git_dir.join(TREE_GATE),
+            deadline,
+            fs::File::try_lock,
+        )?;
+        let held = take(
+            &worktree_git_dir.join(TREE_CLAIM),
+            deadline,
+            fs::File::try_lock,
+        )?;
+        Ok(TreeClaim {
+            held,
+            gate: Some(gate),
+        })
     }
 
     /// Takes the tree claim of the worktree whose own git directory is
     /// `worktree_git_dir` shared, to read its work tree, trying every
     /// [`STEP`] until `bound` has passed.
     pub fn shared(worktree_git_dir: &Path, bound: Duration) -> Result<TreeClaim, ClaimError> {
-        TreeClaim::take(worktree_git_dir, bound, fs::File::try_lock_shared)
+        let deadline = Instant::now() + bound;
+        let held = take(
+            &worktree_git_dir.join(TREE_CLAIM),
+            deadline,
+            fs::File::try_lock_shared,
+        )?;
+        Ok(TreeClaim { held, gate: None })
     }
 
-    fn take(
-        worktree_git_dir: &Path,
-        bound: Duration,
-        lock: fn(&fs::File) -> Result<(), fs::TryLockError>,
-    ) -> Result<TreeClaim, ClaimError> {
-        let file = open(&worktree_git_dir.join(TREE_CLAIM))?;
-        let deadline = Instant::now() + bound;
-        loop {
-            match lock(&file) {
-                Ok(()) => return Ok(TreeClaim { _held: Held(file) }),
-                Err(fs::TryLockError::WouldBlock) => {}
-                Err(error) => return Err(error.into()),
-            }
-            // Busy only once the whole bound has passed.
-            let now = Instant::now();
-            if now >= deadline {
-                return Err(ClaimError::Busy);
-            }
-            thread::sleep(STEP.min(deadline - now));
+    /// This claim shared, to read the work tree it changed: unlocked, then
+    /// locked shared on the same file, while the gate keeps every other
+    /// exclusive taker out, so no land starts in between; then the gate
+    /// goes. Only shared holders can hold the claim meanwhile, so the
+    /// shared lock is had at once; `bound` is how long it is tried. A
+    /// shared claim is given back as it is.
+    pub fn downgrade(mut self, bound: Duration) -> Result<TreeClaim, ClaimError> {
+        let Some(gate) = self.gate.take() else {
+            return Ok(self);
+        };
+        self.held.0.unlock().map_err(ClaimError::Io)?;
+        retry(
+            &self.held.0,
+            Instant::now() + bound,
+            fs::File::try_lock_shared,
+        )?;
+        drop(gate);
+        Ok(self)
+    }
+}
+
+/// The file at `path` opened and locked with `lock`, tried every [`STEP`]
+/// until `deadline`.
+fn take(path: &Path, deadline: Instant, lock: TryLock) -> Result<Held, ClaimError> {
+    let file = open(path)?;
+    retry(&file, deadline, lock)?;
+    Ok(Held(file))
+}
+
+/// `file` locked with `lock`, tried every [`STEP`] until `deadline`; busy
+/// only once it has passed.
+fn retry(file: &fs::File, deadline: Instant, lock: TryLock) -> Result<(), ClaimError> {
+    loop {
+        match lock(file) {
+            Ok(()) => return Ok(()),
+            Err(fs::TryLockError::WouldBlock) => {}
+            Err(error) => return Err(error.into()),
         }
+        let now = Instant::now();
+        if now >= deadline {
+            return Err(ClaimError::Busy);
+        }
+        thread::sleep(STEP.min(deadline - now));
     }
 }
 

@@ -960,33 +960,22 @@ fn the_search_language_key_is_read_and_kept_on_rewrite() {
 }
 
 #[test]
-fn the_sync_auto_fetch_key_is_read_and_kept_on_rewrite() {
-    // v2 ignores (and drops) the key; Kluris 3.1 reads it for the fresh
-    // reads of `wake-up` and `search` and writes it back after `search`.
-    let text = "name: alpha\ndescription: ''\ncompanions: []\nsearch:\n  language: ro\nsync:\n  auto_fetch: false\n  other: 1\n";
-    let cfg = parse_brain_config(text).unwrap();
-    assert_eq!(cfg.sync.auto_fetch, Some(false));
-    let written = brain_config_to_yaml(&cfg);
-    assert!(
-        written.ends_with("companions: []\nsearch:\n  language: ro\nsync:\n  auto_fetch: false\n"),
-        "{written}"
-    );
-    assert_eq!(parse_brain_config(&written).unwrap(), cfg);
-    // Without `search` it follows `companions`; YAML 1.1 booleans read as such.
-    for (text, value, line) in [
-        ("name: alpha\nsync:\n  auto_fetch: true\n", true, "true"),
-        ("name: alpha\nsync:\n  auto_fetch: off\n", false, "false"),
-        ("name: alpha\nsync: {auto_fetch: no}\n", false, "false"),
+fn the_sync_auto_fetch_key_is_read_for_the_fresh_reads() {
+    // The fresh reads of `wake-up` and `search` read it.
+    // A rewrite keeps the whole `sync:` entry as written (sync_session.rs).
+    for (text, value) in [
+        (
+            "name: alpha\nsync:\n  auto_fetch: false\n  other: 1\n",
+            false,
+        ),
+        ("name: alpha\nsync:\n  auto_fetch: true\n", true),
+        ("name: alpha\nsync:\n  auto_fetch: off\n", false),
+        ("name: alpha\nsync: {auto_fetch: no}\n", false),
     ] {
         let cfg = parse_brain_config(text).unwrap();
         assert_eq!(cfg.sync.auto_fetch, Some(value), "{text}");
-        assert!(
-            brain_config_to_yaml(&cfg)
-                .ends_with(&format!("companions: []\nsync:\n  auto_fetch: {line}\n")),
-            "{text}"
-        );
     }
-    // Without the key nothing changes; a malformed key is ignored, as in v2.
+    // A malformed key is ignored.
     for text in [
         "name: alpha\n",
         "name: alpha\nsync: 5\n",
@@ -996,6 +985,5 @@ fn the_sync_auto_fetch_key_is_read_and_kept_on_rewrite() {
     ] {
         let cfg = parse_brain_config(text).unwrap();
         assert_eq!(cfg.sync.auto_fetch, None, "{text}");
-        assert!(!brain_config_to_yaml(&cfg).contains("sync"), "{text}");
     }
 }

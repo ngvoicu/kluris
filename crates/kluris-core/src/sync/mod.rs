@@ -9,6 +9,8 @@
 //! - [`hooks`]: the gate and message hooks of commits and merge commits;
 //! - [`land`]: moving the work tree, never over an uncommitted file;
 //! - [`pending`]: the waiting merge a person settles;
+//! - [`session`]: the one step through which every command that opens a
+//!   brain syncs;
 //! - [`commit`]: `kluris commit`; [`resolve`]: `kluris resolve`;
 //!   [`fresh`]: the fetch before a read.
 //!
@@ -26,6 +28,7 @@ pub mod land;
 pub mod merge;
 pub mod pending;
 pub mod resolve;
+pub mod session;
 
 use std::fmt;
 use std::time::Duration;

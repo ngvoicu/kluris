@@ -164,12 +164,16 @@ pub enum RemoteError {
 }
 
 /// The git steps of the sync engine (see the module docs).
-pub trait SyncGit: Plumbing + TextMerger + Sized {
+pub trait SyncGit: Plumbing + TextMerger + Clone + Sized {
     /// This git, forwarding to this process's stderr what each of its runs
     /// that succeeds printed on stderr (a hook's output, which git sends
     /// there): the engine's gits, so no hook output is lost. A run that
     /// fails keeps its stderr for the error.
     fn showing_output(self) -> Self;
+
+    /// This git with every run stopped, with every process it started, at
+    /// `deadline`; `None`: never.
+    fn with_deadline(self, deadline: Option<Instant>) -> Self;
 
     /// This git with the remote environment for `repo`: [`remote_env`]
     /// (`core.sshCommand` read once, here) and [`NO_BACKGROUND`] on every
@@ -185,6 +189,10 @@ pub trait SyncGit: Plumbing + TextMerger + Sized {
 
     /// The worktree's own git directory and the repository's common one.
     fn git_dirs(&self, repo: &Repo) -> Result<GitDirs, GitError>;
+
+    /// Whether the repository is a shallow clone (`git rev-parse
+    /// --is-shallow-repository`).
+    fn is_shallow(&self, repo: &Repo) -> Result<bool, GitError>;
 
     /// How many commits `to` has that `from` has not (`git rev-list
     /// --count`); every commit of `to` when `from` is `None`.
@@ -834,6 +842,11 @@ impl SyncGit for SystemGit {
         self.forwarding_stderr()
     }
 
+    fn with_deadline(mut self, deadline: Option<Instant>) -> Self {
+        self.deadline = deadline;
+        self
+    }
+
     fn for_remote(&self, repo: &Repo) -> Result<Self, GitError> {
         if self.remote_ready {
             return Ok(self.clone());
@@ -872,6 +885,11 @@ impl SyncGit for SystemGit {
             own: PathBuf::from(own),
             common: repo.dir.join(common),
         })
+    }
+
+    fn is_shallow(&self, repo: &Repo) -> Result<bool, GitError> {
+        let out = self.run(&repo.dir, &["rev-parse", "--is-shallow-repository"])?;
+        Ok(first_line(&out) == "true")
     }
 
     fn count(&self, repo: &Repo, from: Option<&str>, to: &str) -> Result<usize, GitError> {

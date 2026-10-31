@@ -35,6 +35,8 @@
 //! [`back_off`] and their files are the read throttle: at most one read's
 //! fetch per [`THROTTLE`], and after a fetch stopped at the deadline none for
 //! [`BACKOFF_FIRST`], each further stop doubling that up to [`BACKOFF_MAX`].
+//! Like the remote claim, they belong to the remote, so they are in the
+//! repository's common git directory, which every linked worktree shares.
 
 use std::fs;
 use std::path::Path;
@@ -44,14 +46,15 @@ use super::git::{RefLock, RemoteError, SyncGit, Upstream, network_failure, one_l
 use crate::atomic;
 use crate::git::{GitError, Repo};
 
-/// The stamp of the last read's fetch, relative to the git directory.
-pub const STAMP: &str = "kluris-sync/last-fetch";
+/// The stamp of the last fetch, relative to the common git directory.
+pub const STAMP: &str = "kluris-sync/fetch-stamp";
 
 /// The least time between two reads' fetches of a brain.
 pub const THROTTLE: Duration = Duration::from_secs(60);
 
-/// The back-off after a fetch stopped at the deadline, relative to the git
-/// directory: `<until> <window>\n`, both in Unix seconds and seconds.
+/// The back-off after a fetch stopped at the deadline, relative to the
+/// common git directory: `<until> <window>\n`, both in Unix seconds and
+/// seconds.
 pub const BACKOFF: &str = "kluris-sync/fetch-backoff";
 
 /// The first back-off after a fetch stopped at the deadline.
@@ -141,8 +144,8 @@ pub fn fetch<G: SyncGit>(
                 });
             }
         };
-        if let Ok(path) = git.git_dir_path(repo, BACKOFF) {
-            end_backoff(&path);
+        if let Ok(dirs) = git.git_dirs(repo) {
+            end_backoff(&dirs.common.join(BACKOFF));
         }
         if let Some(detail) = unmovable(git, repo, upstream)? {
             return Ok(Fetch::Refused { detail });

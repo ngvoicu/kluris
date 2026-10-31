@@ -137,6 +137,9 @@ pub trait Git {
     fn version(&self) -> Result<String, GitError>;
 }
 
+/// The detail of a run stopped at its git's deadline ([`SystemGit::until`]).
+pub const STOPPED: &str = "stopped at the time limit";
+
 /// [`Git`] through the `git` program found on `PATH`.
 #[derive(Debug, Clone)]
 pub struct SystemGit {
@@ -149,7 +152,7 @@ pub struct SystemGit {
     pub(crate) remote_ready: bool,
     /// Every run is stopped, with every process it started, at this
     /// instant ([`SystemGit::until`]).
-    deadline: Option<Instant>,
+    pub(crate) deadline: Option<Instant>,
     /// What a run that succeeds printed on stderr also goes to this
     /// process's stderr ([`SystemGit::forwarding_stderr`]).
     forward_stderr: bool,
@@ -271,9 +274,7 @@ impl SystemGit {
                     stdout: done.stdout,
                     stderr: done.stderr,
                 },
-                Err(RunError::TimedOut) => {
-                    return Err(error(None, "stopped at the time limit".into()));
-                }
+                Err(RunError::TimedOut) => return Err(error(None, STOPPED.into())),
                 Err(RunError::Spawn(e)) => return Err(error(None, e.to_string())),
             },
         };
