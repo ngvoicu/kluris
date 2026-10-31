@@ -10,7 +10,7 @@
 use std::collections::BTreeMap;
 use std::fs;
 
-use kluris_core::sync::resolve::{Choice, ResolveRequest, open_conflicts, resolve};
+use kluris_core::sync::resolve::{Choice, ResolveRequest, resolve, waiting_merge};
 
 use crate::common::*;
 
@@ -44,7 +44,9 @@ fn introduced(w: &World, base: &str, rev: &str) -> BTreeMap<String, String> {
 
 /// The conflicts the waiting merge records, each side as its blob.
 fn recorded(w: &World) -> Vec<kluris_core::sync::Conflict> {
-    open_conflicts(&w.ours, &w.git()).unwrap_or_default()
+    waiting_merge(&w.ours, &w.git())
+        .map(|waiting| waiting.conflicts)
+        .unwrap_or_default()
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -102,12 +104,14 @@ fn check(name: &str, setup: &dyn Fn(&World)) -> Outcome {
         let recorded = recorded(&w);
         assert_eq!(recorded, conflicts, "{name} --{label}: the same conflicts");
         let mut last = None;
+        let merge = w.merge_id();
         for c in &recorded {
             let done = resolve(
                 &w.ours,
                 &w.git(),
                 &ResolveRequest {
                     path: &c.path,
+                    merge: &merge,
                     choice: choice.clone(),
                     sync: w.request(),
                 },

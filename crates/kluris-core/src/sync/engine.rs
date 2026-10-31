@@ -240,7 +240,7 @@ fn pull_into<G: SyncGit>(ctx: &Context<G>, report: &mut SyncReport) -> Result<()
         return Err(unrelated(upstream));
     }
     if let Some(waiting) = waiting.as_ref().filter(|w| w.theirs == theirs) {
-        report.conflicts = texts(git, repo, &waiting.conflicts).map_err(failed)?;
+        report.conflicts = texts(git, repo, waiting).map_err(failed)?;
         return Ok(());
     }
     let none = BTreeMap::new();
@@ -255,12 +255,13 @@ fn pull_into<G: SyncGit>(ctx: &Context<G>, report: &mut SyncReport) -> Result<()
             MergeOutcome::Conflicts { base, conflicts } => {
                 match waiting {
                     Some(waiting) => {
-                        report.conflicts = texts(git, repo, &waiting.conflicts).map_err(failed)?;
+                        report.conflicts = texts(git, repo, &waiting).map_err(failed)?;
                         report.behind_conflict = count(Some(&waiting.theirs), &theirs)?;
                     }
                     None => {
-                        report.conflicts = texts(git, repo, &conflicts).map_err(failed)?;
-                        Pending::new(base, &ours, &theirs, conflicts)
+                        let waiting = Pending::new(base, &ours, &theirs, conflicts);
+                        report.conflicts = texts(git, repo, &waiting).map_err(failed)?;
+                        waiting
                             .write(&pending_path)
                             .map_err(|e| failed(format!("cannot record the conflict: {e}")))?;
                     }
@@ -371,13 +372,16 @@ fn merge_stopped(e: MergeHookError) -> LeftAsIs {
     LeftAsIs::because(reason, e.to_string())
 }
 
-/// The conflicts with each side's text: `None` for a side with no file, or
-/// one that is binary (a NUL byte) or not UTF-8, which marks it `binary`.
-fn texts<G: Plumbing>(
+/// The waiting merge's conflicts with each side's text and the merge's id:
+/// `None` for a side with no file, or one that is binary (a NUL byte) or
+/// not UTF-8, which marks it `binary`.
+pub fn texts<G: Plumbing>(
     git: &G,
     repo: &Repo,
-    conflicts: &[Conflict],
+    waiting: &Pending,
 ) -> Result<Vec<ConflictText>, GitError> {
+    let conflicts: &[Conflict] = &waiting.conflicts;
+    let merge = waiting.id();
     let oids: Vec<String> = conflicts
         .iter()
         .flat_map(|c| [&c.base, &c.ours, &c.theirs])
@@ -403,6 +407,7 @@ fn texts<G: Plumbing>(
             ConflictText {
                 path: c.path.clone(),
                 kind: c.kind,
+                merge: merge.clone(),
                 base,
                 ours,
                 theirs,
@@ -632,11 +637,12 @@ fn strings(items: &[String]) -> Json {
 }
 
 impl ConflictText {
-    /// `{path, kind, ours, theirs, base, binary}`.
+    /// `{path, kind, merge, ours, theirs, base, binary}`.
     pub fn to_json(&self) -> Json {
         Json::Object(vec![
             ("path".into(), Json::Str(self.path.clone())),
             ("kind".into(), Json::Str(self.kind.as_str().into())),
+            ("merge".into(), Json::Str(self.merge.clone())),
             ("ours".into(), opt(&self.ours)),
             ("theirs".into(), opt(&self.theirs)),
             ("base".into(), opt(&self.base)),

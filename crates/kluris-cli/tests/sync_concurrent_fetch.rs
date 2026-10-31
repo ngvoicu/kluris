@@ -265,12 +265,15 @@ fn a_merge_that_would_conflict_with_the_other_fetch_merges_origin() {
 /// Resolve the conflict `h.conflict` opened, choosing ours: the merge is
 /// committed and pushed.
 fn assert_resolved_and_pushed(h: &Home) {
+    let merge = h.merge("alpha");
     let (code, doc) = h.json(&[
         "resolve",
         "--brain",
         "alpha",
         "notes/first.md",
         "--ours",
+        "--merge",
+        &merge,
         "--json",
     ]);
     assert_eq!(code, 0, "{doc}");

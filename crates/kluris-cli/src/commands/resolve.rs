@@ -1,6 +1,8 @@
-//! `kluris resolve [--brain NAME] PATH --ours|--theirs|--file FILE
+//! `kluris resolve [--brain NAME] PATH --ours|--theirs|--file FILE --merge ID
 //! [--no-verify] [--json]` and `kluris resolve --abort`: settle an open sync
-//! conflict path by path.
+//! conflict path by path. `--merge` names the waiting merge the choice
+//! answers; an id that is no longer the open conflict's is refused, with
+//! the current conflict's id, sides and the command to run.
 
 use std::path::Path;
 
@@ -9,8 +11,10 @@ use kluris_core::dream::DreamOptions;
 use kluris_core::git::SystemGit;
 use kluris_core::pyrepr::py_path_str;
 use kluris_core::sync::claim::COMMAND_BOUND;
-use kluris_core::sync::resolve::{Choice, ResolveReport, ResolveRequest, abort, resolve};
-use kluris_core::sync::{NETWORK_TIME_LIMIT, SyncRequest};
+use kluris_core::sync::resolve::{
+    Choice, ResolveError, ResolveReport, ResolveRequest, abort, resolve,
+};
+use kluris_core::sync::{ConflictText, NETWORK_TIME_LIMIT, SyncRequest};
 
 use crate::commands::dream::today;
 use crate::error::CliError;
@@ -24,6 +28,7 @@ pub struct Options<'a> {
     pub ours: bool,
     pub theirs: bool,
     pub file: Option<&'a str>,
+    pub merge: Option<&'a str>,
     pub abort: bool,
     pub no_verify: bool,
     pub json: bool,
@@ -37,14 +42,68 @@ fn conflicts(n: usize) -> &'static str {
     if n == 1 { "conflict" } else { "conflicts" }
 }
 
+/// `path` as a shell word: quoted when it holds anything but letters,
+/// digits and `._/-`.
+fn shell_word(path: &str) -> String {
+    let plain = |c: char| c.is_ascii_alphanumeric() || "._/-".contains(c);
+    if !path.is_empty() && path.chars().all(plain) {
+        path.to_string()
+    } else {
+        format!("'{}'", path.replace('\'', "'\\''"))
+    }
+}
+
+/// The command that settles the conflict at `path` of waiting merge
+/// `merge` in `brain`.
+pub fn command(brain: &str, path: &str, merge: &str) -> String {
+    format!(
+        "kluris resolve --brain {brain} {} --ours|--theirs|--file FILE --merge {merge}",
+        shell_word(path)
+    )
+}
+
+/// The error for an id that is no longer the open conflict's: the reason,
+/// the current conflict's sides and the command; in JSON, the current id
+/// and conflict entry.
+fn wrong_merge(
+    brain: &str,
+    error: &ResolveError,
+    current: &str,
+    conflict: Option<&ConflictText>,
+) -> CliError {
+    let mut message = format!("Brain {brain}: {error}");
+    if let Some(c) = conflict {
+        let side = |text: &Option<String>| match text {
+            Some(text) => text.clone(),
+            None if c.binary => "(binary)\n".into(),
+            None => "(no file)\n".into(),
+        };
+        message.push_str(&format!(
+            "\nIts sides now ({}):\n--- ours\n{}--- theirs\n{}--- base\n{}Then run: {}",
+            c.kind.as_str(),
+            side(&c.ours),
+            side(&c.theirs),
+            side(&c.base),
+            command(brain, &c.path, current)
+        ));
+    }
+    CliError::new(message).with_fields(vec![
+        ("merge".into(), Json::Str(current.into())),
+        (
+            "conflict".into(),
+            conflict.map_or(Json::Null, ConflictText::to_json),
+        ),
+    ])
+}
+
 pub fn run(options: &Options) -> Result<(), CliError> {
     let picked = [options.ours, options.theirs, options.file.is_some()]
         .iter()
         .filter(|on| **on)
         .count();
-    if options.abort && (options.path.is_some() || picked > 0) {
+    if options.abort && (options.path.is_some() || picked > 0 || options.merge.is_some()) {
         return Err(CliError::new(
-            "--abort takes no PATH and no --ours, --theirs or --file",
+            "--abort takes no PATH and no --ours, --theirs, --file or --merge",
         ));
     }
     let brains = resolve_brains(options.brain, false, options.json)?;
@@ -82,6 +141,11 @@ pub fn run(options: &Options) -> Result<(), CliError> {
     let Some(path) = options.path else {
         return Err(CliError::new("Give the conflicted PATH to resolve"));
     };
+    let Some(merge) = options.merge else {
+        return Err(CliError::new(
+            "Give --merge, the id of the waiting merge the choice answers",
+        ));
+    };
     let choice = match options.file {
         Some(file) => Choice::File(
             std::fs::read(file).map_err(|e| CliError::new(format!("Cannot read {file}: {e}")))?,
@@ -102,6 +166,7 @@ pub fn run(options: &Options) -> Result<(), CliError> {
         &git,
         &ResolveRequest {
             path,
+            merge,
             choice,
             sync: SyncRequest {
                 no_verify: options.no_verify,
@@ -115,7 +180,12 @@ pub fn run(options: &Options) -> Result<(), CliError> {
             },
         },
     )
-    .map_err(|e| failed(&e))?;
+    .map_err(|e| match &e {
+        ResolveError::WrongMerge {
+            wrong, conflict, ..
+        } => wrong_merge(&brain.name, &e, &wrong.current, conflict.as_deref()),
+        _ => failed(&e),
+    })?;
 
     if options.json {
         human::print(&json::to_line(&Json::Object(vec![

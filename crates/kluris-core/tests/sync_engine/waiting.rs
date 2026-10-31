@@ -5,10 +5,10 @@
 use std::fs;
 
 use kluris_core::sync::PENDING;
-use kluris_core::sync::resolve::{Choice, ResolveRequest, resolve};
+use kluris_core::sync::resolve::{Choice, ResolveError, ResolveRequest, resolve};
 
 use crate::common::*;
-use crate::overlapping;
+use crate::{chosen, overlapping, two_conflicts};
 
 fn pending_doc(w: &World) -> serde_json::Value {
     serde_json::from_str(&fs::read_to_string(w.ours.join(".git").join(PENDING)).unwrap()).unwrap()
@@ -25,7 +25,21 @@ fn a_waiting_merge_whose_ours_is_not_head_is_replaced() {
     let before = w.snapshot();
     let r = w.pull();
     assert!(r.left_as_is.is_none(), "{r:?}");
-    assert_eq!(r.conflicts, first.conflicts);
+    // The same conflict, found again: a new record, with a new id.
+    assert_ne!(r.conflicts[0].merge, first.conflicts[0].merge);
+    let texts = |c: &[kluris_core::sync::ConflictText]| -> Vec<_> {
+        c.iter()
+            .map(|c| {
+                (
+                    c.path.clone(),
+                    c.ours.clone(),
+                    c.theirs.clone(),
+                    c.base.clone(),
+                )
+            })
+            .collect()
+    };
+    assert_eq!(texts(&r.conflicts), texts(&first.conflicts));
     assert_eq!(r.behind_conflict, 0);
     assert_eq!(pending_doc(&w)["ours"], head.as_str());
     assert_eq!(w.snapshot(), before);
@@ -85,11 +99,14 @@ fn newer_commits_wait_behind_the_recorded_conflict() {
 
     // The merge finishes against the commit the conflict was shown with;
     // the newer commits come in after it.
+    let shown = &first.conflicts[0].merge;
+    assert_eq!(&r.conflicts[0].merge, shown, "a waiting merge keeps its id");
     let done = resolve(
         &w.ours,
         &w.git(),
         &ResolveRequest {
             path: "notes/first.md",
+            merge: shown,
             choice: Choice::Ours,
             sync: w.request(),
         },
@@ -104,4 +121,79 @@ fn newer_commits_wait_behind_the_recorded_conflict() {
     assert_eq!(w.read(&w.ours, "notes/first.md"), ours);
     assert!(w.read(&w.ours, "ideas/other.md").contains("# Other"));
     assert_eq!(w.remote_head(), w.head(&w.ours));
+}
+
+/// A waiting merge replaced since it was shown (a commit of ours made it
+/// stale, and the teammate changed the file again) is another conflict: a
+/// choice that names the one before it is refused with the current
+/// conflict's id and texts, and nothing is recorded.
+#[test]
+fn a_choice_for_a_replaced_waiting_merge_records_nothing() {
+    let w = World::new();
+    overlapping(&w);
+    let shown = w.sync().conflicts[0].merge.clone();
+    w.ours_commit(&[("notes/later.md", &neuron("", "# Later\n"))], &[]);
+    let base = w.read(&w.theirs, "notes/first.md");
+    let newer = base.replace("Three, theirs.", "Three, theirs, newer.");
+    w.theirs_push(&[("notes/first.md", &newer)], &[]);
+    let current = w.sync().conflicts[0].merge.clone();
+    assert_ne!(current, shown);
+    let recorded = fs::read(w.ours.join(".git").join(PENDING)).unwrap();
+    let answer = |merge: &str| {
+        resolve(
+            &w.ours,
+            &w.git(),
+            &ResolveRequest {
+                path: "notes/first.md",
+                merge,
+                choice: Choice::Ours,
+                sync: w.request(),
+            },
+        )
+    };
+    match answer(&shown) {
+        Err(ResolveError::WrongMerge {
+            path,
+            wrong,
+            conflict: Some(conflict),
+        }) => {
+            assert_eq!(path, "notes/first.md");
+            assert_eq!(
+                (wrong.given.as_str(), wrong.current.as_str()),
+                (shown.as_str(), current.as_str())
+            );
+            assert_eq!(conflict.merge, current);
+            assert_eq!(conflict.theirs.as_deref(), Some(newer.as_str()));
+        }
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(
+        fs::read(w.ours.join(".git").join(PENDING)).unwrap(),
+        recorded
+    );
+    assert!(answer(&current).unwrap().committed);
+}
+
+/// A replaced waiting merge starts with no recorded choices.
+#[test]
+fn a_replaced_waiting_merge_starts_with_no_choices() {
+    let w = World::new();
+    two_conflicts(&w);
+    let merge = w.merge_id();
+    resolve(
+        &w.ours,
+        &w.git(),
+        &ResolveRequest {
+            path: "notes/first.md",
+            merge: &merge,
+            choice: Choice::Ours,
+            sync: w.request(),
+        },
+    )
+    .unwrap();
+    assert_eq!(chosen(&w), ["notes/first.md"]);
+    w.ours_commit(&[("notes/later.md", &neuron("", "# Later\n"))], &[]);
+    assert_eq!(w.sync().conflicts.len(), 2);
+    assert_ne!(w.merge_id(), merge);
+    assert!(chosen(&w).is_empty(), "{:?}", chosen(&w));
 }

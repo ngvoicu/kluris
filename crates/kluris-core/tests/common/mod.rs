@@ -19,6 +19,7 @@ use kluris_core::git::SystemGit;
 use kluris_core::sync::claim::COMMAND_BOUND;
 use kluris_core::sync::commit::{CommitRequest, commit};
 use kluris_core::sync::engine::{self, Context};
+use kluris_core::sync::resolve::waiting_merge;
 use kluris_core::sync::{LeftReason, SyncReport, SyncRequest};
 use kluris_core::yaml::Date;
 use tempfile::TempDir;
@@ -250,6 +251,13 @@ impl World {
     /// Pull and push "ours".
     pub fn sync(&self) -> SyncReport {
         engine::sync(&self.open())
+    }
+
+    /// The id of "ours"' waiting merge; empty when none is open.
+    pub fn merge_id(&self) -> String {
+        waiting_merge(&self.ours, &self.git())
+            .map(|waiting| waiting.id())
+            .unwrap_or_default()
     }
 
     pub fn head(&self, at: &Path) -> String {

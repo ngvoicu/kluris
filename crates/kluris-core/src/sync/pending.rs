@@ -4,10 +4,19 @@
 //! against, so the merge is finished against that commit, never a newer
 //! one. It blocks nothing: each pull compares it with HEAD and the upstream
 //! ([`super::engine::pull`]).
+//!
+//! Each record has an id ([`Pending::id`]), shown with every conflict it
+//! reports. A command that finishes the merge names the id the person
+//! answered, and [`check_answer`] refuses one that is not the current
+//! record's: a record replaced since (its `ours` went stale, the teammate
+//! changed the file again) is a different conflict, never settled by a
+//! choice made for the one before it.
 
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
+
+use sha2::{Digest, Sha256};
 
 use super::git::GitDirs;
 use super::{Conflict, ConflictKind, PENDING, ResolvedChoice};
@@ -26,12 +35,25 @@ fn opt(value: &Option<String>) -> Json {
 }
 
 impl Conflict {
-    /// As the waiting merge and `kluris status --json` write it: `{path,
-    /// kind, base, ours, theirs}`, each side its blob.
+    /// As the waiting merge writes it: `{path, kind, base, ours, theirs}`,
+    /// each side its blob.
     pub fn to_json(&self) -> Json {
         Json::Object(vec![
             ("path".into(), Json::Str(self.path.clone())),
             ("kind".into(), Json::Str(self.kind.as_str().into())),
+            ("base".into(), opt(&self.base)),
+            ("ours".into(), opt(&self.ours)),
+            ("theirs".into(), opt(&self.theirs)),
+        ])
+    }
+
+    /// As `kluris status --json` reports it: `{path, kind, merge, base,
+    /// ours, theirs}`, with the id of the waiting merge it belongs to.
+    pub fn reported_json(&self, merge: &str) -> Json {
+        Json::Object(vec![
+            ("path".into(), Json::Str(self.path.clone())),
+            ("kind".into(), Json::Str(self.kind.as_str().into())),
+            ("merge".into(), Json::Str(merge.into())),
             ("base".into(), opt(&self.base)),
             ("ours".into(), opt(&self.ours)),
             ("theirs".into(), opt(&self.theirs)),
@@ -51,6 +73,30 @@ pub struct Pending {
     pub created: String,
     /// In the order they were made; one per path.
     pub resolved: Vec<(String, ResolvedChoice)>,
+}
+
+/// A merge id that is not the current waiting merge's.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WrongMerge {
+    /// The id given.
+    pub given: String,
+    /// The current record's id.
+    pub current: String,
+}
+
+/// The check every command that finishes a waiting merge makes first, once
+/// it holds the tree claim: `merge`, the id the person answered, is the
+/// current record's.
+pub fn check_answer(pending: &Pending, merge: &str) -> Result<(), WrongMerge> {
+    let current = pending.id();
+    if merge == current {
+        Ok(())
+    } else {
+        Err(WrongMerge {
+            given: merge.to_string(),
+            current,
+        })
+    }
 }
 
 /// What [`Pending::read`] found.
@@ -84,6 +130,22 @@ impl Pending {
             created: jiff::Timestamp::now().to_string(),
             resolved: Vec::new(),
         }
+    }
+
+    /// The record's id: the first 12 hex characters of SHA-256 over its
+    /// base, ours and theirs, one per line (an empty line for no base).
+    pub fn id(&self) -> String {
+        let text = format!(
+            "{}\n{}\n{}\n",
+            self.base.as_deref().unwrap_or(""),
+            self.ours,
+            self.theirs
+        );
+        Sha256::digest(text.as_bytes())
+            .iter()
+            .take(6)
+            .map(|b| format!("{b:02x}"))
+            .collect()
     }
 
     /// `{base, ours, theirs, conflicts, created}`, then `resolved` once a

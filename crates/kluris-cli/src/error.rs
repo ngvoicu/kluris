@@ -15,9 +15,11 @@ use crate::output::json::{self, Json};
 
 /// An error a command returns: printed as `Error: <message>` (exit 1), or as
 /// the JSON envelope under `--json`; or Click's `Abort` at a prompt.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct CliError {
     message: String,
+    /// More fields of the JSON envelope, after `ok` and `error`.
+    fields: Vec<(String, Json)>,
     aborted: bool,
     /// Exit with `code` and nothing more printed (the command printed its
     /// output).
@@ -29,10 +31,18 @@ impl CliError {
     pub fn new(message: impl Into<String>) -> Self {
         Self {
             message: message.into(),
+            fields: Vec::new(),
             aborted: false,
             silent: false,
             code: 1,
         }
+    }
+
+    /// This error with more fields in its JSON envelope, after `ok` and
+    /// `error`.
+    pub fn with_fields(mut self, fields: Vec<(String, Json)>) -> Self {
+        self.fields = fields;
+        self
     }
 
     /// What is printed after `Error: ` (empty for an exit-only error).
@@ -51,6 +61,7 @@ impl CliError {
     pub fn exit_code(code: u8) -> Self {
         Self {
             message: String::new(),
+            fields: Vec::new(),
             aborted: false,
             silent: true,
             code,
@@ -61,6 +72,7 @@ impl CliError {
     pub fn aborted() -> Self {
         Self {
             message: "Aborted!".into(),
+            fields: Vec::new(),
             aborted: true,
             silent: false,
             code: 1,
@@ -68,12 +80,14 @@ impl CliError {
     }
 }
 
-/// `{"ok": false, "error": <message>}` on stdout, exit 1.
-fn print_envelope(message: &str) -> ExitCode {
-    let envelope = Json::Object(vec![
+/// `{"ok": false, "error": <message>, ...fields}` on stdout, exit 1.
+fn print_envelope(message: &str, fields: &[(String, Json)]) -> ExitCode {
+    let mut envelope = vec![
         ("ok".into(), Json::Bool(false)),
         ("error".into(), Json::Str(message.into())),
-    ]);
+    ];
+    envelope.extend(fields.iter().cloned());
+    let envelope = Json::Object(envelope);
     let _ = io::stdout().write_all(json::to_line(&envelope).as_bytes());
     ExitCode::from(1)
 }
@@ -88,7 +102,7 @@ pub fn report(err: &CliError, json: bool) -> ExitCode {
         return ExitCode::from(1);
     }
     if json {
-        return print_envelope(&err.message);
+        return print_envelope(&err.message, &err.fields);
     }
     let _ = writeln!(io::stderr(), "Error: {}", err.message);
     ExitCode::from(1)
@@ -111,7 +125,7 @@ pub fn report_parse(err: &clap::Error, json: bool) -> ExitCode {
     }
     let message = usage_message(err);
     if json {
-        return print_envelope(&message);
+        return print_envelope(&message, &[]);
     }
     let rendered = err.render().to_string();
     let usage = rendered.lines().find(|l| l.starts_with("Usage:"));
@@ -180,9 +194,13 @@ fn usage_message(err: &clap::Error) -> String {
         ErrorKind::MissingRequiredArgument => {
             if let Some(ContextValue::Strings(args)) = err.get(ContextKind::InvalidArg)
                 && let Some(first) = args.first()
-                && first.starts_with('<')
             {
-                return format!("Missing argument '{}'.", first.trim_matches(['<', '>']));
+                if first.starts_with('<') {
+                    return format!("Missing argument '{}'.", first.trim_matches(['<', '>']));
+                }
+                // An option: `--merge <ID>` gives `--merge`.
+                let option = first.split(' ').next().unwrap_or(first);
+                return format!("Missing option '{option}'.");
             }
         }
         ErrorKind::TooManyValues => {

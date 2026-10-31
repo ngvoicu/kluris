@@ -2,8 +2,8 @@
 source: crates/kluris-cli/tests/golden_list_status_help.rs
 description: kluris status --json
 ---
-== stdout (397 bytes)
-{"ok": true, "brains": [{"name": "demo", "lobes": 2, "neurons": 4, "uncommitted": "", "git_enabled": true, "recent_commits": ["brain: initialize demo"], "sync": {"blocked": true, "conflicts": [{"path": "lobe/a.md", "kind": "content", "base": "1111111111111111111111111111111111111111", "ours": "2222222222222222222222222222222222222222", "theirs": "3333333333333333333333333333333333333333"}]}}]}
+== stdout (422 bytes)
+{"ok": true, "brains": [{"name": "demo", "lobes": 2, "neurons": 4, "uncommitted": "", "git_enabled": true, "recent_commits": ["brain: initialize demo"], "sync": {"blocked": true, "conflicts": [{"path": "lobe/a.md", "kind": "content", "merge": "f34e9a260c8d", "base": "1111111111111111111111111111111111111111", "ours": "2222222222222222222222222222222222222222", "theirs": "3333333333333333333333333333333333333333"}]}}]}
 == stderr (0 bytes)
 == exit 0
 <end of run>

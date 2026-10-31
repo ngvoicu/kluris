@@ -108,6 +108,8 @@ pub struct Conflict {
 pub struct ConflictText {
     pub path: String,
     pub kind: ConflictKind,
+    /// The id of the waiting merge it belongs to ([`pending::Pending::id`]).
+    pub merge: String,
     pub base: Option<String>,
     pub ours: Option<String>,
     pub theirs: Option<String>,

@@ -5,7 +5,7 @@ use std::fs;
 
 use kluris_core::sync::claim::COMMAND_BOUND;
 use kluris_core::sync::resolve::{
-    Choice, ResolveError, ResolveReport, ResolveRequest, abort, open_conflicts, resolve,
+    Choice, ResolveError, ResolveReport, ResolveRequest, abort, resolve, waiting_merge,
 };
 use kluris_core::sync::{ConflictKind, LeftReason, PENDING, SyncRequest};
 
@@ -24,11 +24,13 @@ fn resolve_req(
     choice: Choice,
     no_verify: bool,
 ) -> Result<ResolveReport, ResolveError> {
+    let merge = w.merge_id();
     resolve(
         &w.ours,
         &w.git(),
         &ResolveRequest {
             path,
+            merge: &merge,
             choice,
             sync: SyncRequest {
                 no_verify,
@@ -85,7 +87,7 @@ fn assert_completed(w: &World, r: &ResolveReport) {
     );
     assert_eq!(w.remote_head(), head);
     assert!(!pending(w).exists());
-    assert!(open_conflicts(&w.ours, &w.git()).is_none());
+    assert!(waiting_merge(&w.ours, &w.git()).is_none());
     assert_eq!(w.status(&w.ours), "");
     let next = w.sync();
     assert!(
@@ -361,14 +363,14 @@ fn no_open_conflict_is_an_error() {
         abort(&w.ours, &w.git(), COMMAND_BOUND),
         Err(ResolveError::NoOpenConflict)
     ));
-    assert!(open_conflicts(&w.ours, &w.git()).is_none());
+    assert!(waiting_merge(&w.ours, &w.git()).is_none());
 }
 
 #[test]
 fn a_stale_conflict_is_refused_and_abort_drops_it() {
     let w = World::new();
     content_conflict(&w);
-    let conflicts = open_conflicts(&w.ours, &w.git()).unwrap();
+    let conflicts = waiting_merge(&w.ours, &w.git()).unwrap().conflicts;
     assert_eq!(conflicts[0].path, "notes/first.md");
     // The user commits meanwhile: HEAD is no longer the conflict's ours.
     w.ours_commit(&[("notes/second.md", &neuron("", "# Second\n"))], &[]);
@@ -400,7 +402,7 @@ fn abort_changes_nothing_but_the_pending_state() {
     assert_eq!(abort(&w.ours, &w.git(), COMMAND_BOUND).unwrap(), 1);
     assert_eq!(w.snapshot(), before);
     assert!(!pending(&w).exists());
-    assert!(open_conflicts(&w.ours, &w.git()).is_none());
+    assert!(waiting_merge(&w.ours, &w.git()).is_none());
 }
 
 // --- completing: dirty files, hooks, the push race ----------------------------------

@@ -21,6 +21,7 @@ use kluris_core::sync::engine::{self, check_git};
 use kluris_core::sync::{LeftAsIs, LeftReason, NETWORK_TIME_LIMIT, SyncReport, SyncRequest};
 
 use crate::commands::dream::today;
+use crate::commands::resolve::command;
 use crate::error::CliError;
 use crate::output::human;
 use crate::output::json::{self, Json};
@@ -104,6 +105,7 @@ fn text(name: &str, report: &SyncReport) -> String {
         );
         for c in &report.conflicts {
             out.push_str(&format!("  {}: {}\n", c.kind.as_str(), c.path));
+            out.push_str(&format!("    {}\n", command(name, &c.path, &c.merge)));
         }
         return out;
     }

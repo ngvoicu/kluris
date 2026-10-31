@@ -16,8 +16,11 @@
 //! (pulling again when the remote moved; a new conflict there is a new
 //! waiting merge).
 //!
-//! A waiting merge whose `ours` is no longer `HEAD` (the user committed
-//! meanwhile) is stale: refused, with [`abort`] as the way out.
+//! Each call names the waiting merge it answers (its id, shown with every
+//! conflict): an id that is not the current record's is refused, with the
+//! current conflict, and nothing is recorded ([`pending::check_answer`]).
+//! A waiting merge whose `ours` is no longer the branch's commit (the user
+//! committed meanwhile) is stale: refused, with [`abort`] as the way out.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -29,7 +32,9 @@ use super::commit::{PathProblem, normalize_path};
 use super::engine;
 use super::git::{GitDirs, SyncGit};
 use super::pending::{self, Found, Pending};
-use super::{Conflict, ConflictKind, LeftAsIs, LeftReason, ResolvedChoice, SyncError, SyncRequest};
+use super::{
+    ConflictKind, ConflictText, LeftAsIs, LeftReason, ResolvedChoice, SyncError, SyncRequest,
+};
 use crate::frontmatter;
 use crate::git::{GitError, Repo};
 
@@ -46,6 +51,8 @@ pub enum Choice {
 pub struct ResolveRequest<'a> {
     /// Brain-relative, as given.
     pub path: &'a str,
+    /// The id of the waiting merge the choice answers.
+    pub merge: &'a str,
     pub choice: Choice,
     /// For the merge commit (`no_verify`, the maps) and the push.
     pub sync: SyncRequest<'a>,
@@ -78,6 +85,13 @@ pub enum ResolveError {
         problem: PathProblem,
     },
     NotConflicted(String),
+    /// `merge` is not the current waiting merge's id; nothing was recorded.
+    WrongMerge {
+        path: String,
+        wrong: pending::WrongMerge,
+        /// The current conflict at `path`, when the record has one.
+        conflict: Option<Box<ConflictText>>,
+    },
     InvalidFile {
         path: String,
         reason: String,
@@ -110,6 +124,11 @@ impl fmt::Display for ResolveError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             ResolveError::NoOpenConflict => f.write_str("there is no open sync conflict"),
+            ResolveError::WrongMerge { path, wrong, .. } => write!(
+                f,
+                "{path}: merge {} is no longer the open conflict; this brain now waits on merge {}, so nothing was recorded: decide again from its sides, then give --merge {}",
+                wrong.given, wrong.current, wrong.current
+            ),
             ResolveError::Unreadable(path) => write!(
                 f,
                 "the open sync conflict cannot be read ({}); drop it with `kluris resolve --abort`",
@@ -211,13 +230,11 @@ fn read_pending(path: &Path) -> Result<Pending, ResolveError> {
     }
 }
 
-/// The open conflicts of the brain at `root`, for `kluris status`; `None`
+/// The waiting merge of the brain at `root`, for `kluris status`; `None`
 /// when none is open (or it cannot be read).
-pub fn open_conflicts(root: &Path, git: &impl SyncGit) -> Option<Vec<Conflict>> {
+pub fn waiting_merge(root: &Path, git: &impl SyncGit) -> Option<Pending> {
     let (_, dirs) = locate(root, git).ok()?;
-    read_pending(&pending::path(&dirs))
-        .ok()
-        .map(|p| p.conflicts)
+    read_pending(&pending::path(&dirs)).ok()
 }
 
 /// Drop the open conflict, changing nothing else; how many paths it had.
@@ -287,6 +304,17 @@ pub fn resolve<G: SyncGit>(
         path: request.path.to_string(),
         problem,
     })?;
+    if let Err(wrong) = pending::check_answer(&pending, request.merge) {
+        let conflict = engine::texts(git, repo, &pending)?
+            .into_iter()
+            .find(|c| c.path == rel)
+            .map(Box::new);
+        return Err(ResolveError::WrongMerge {
+            path: rel,
+            wrong,
+            conflict,
+        });
+    }
     let Some(conflict) = pending.conflicts.iter().find(|c| c.path == rel) else {
         return Err(ResolveError::NotConflicted(rel));
     };

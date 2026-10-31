@@ -367,7 +367,8 @@ keys: `pulled` (the commits brought in), `auto_merged` (neurons merged on
 their own), `left_as_is` (why the brain was left as it is: `reason`, `paths`
 and `detail`, the `reason` `null` when nothing was), `conflicts` (each with
 `path`, `kind` (`content`, `delete_edit`, `parent`, `frontmatter`,
-`structure` or `ambiguous_base`), the `ours`, `theirs` and `base` texts,
+`structure` or `ambiguous_base`), `merge` (the waiting merge's id, which
+`kluris resolve --merge` names), the `ours`, `theirs` and `base` texts,
 `null` where a side has no file there or is binary, and `binary`),
 `behind_conflict` (the newer commits waiting behind an open conflict),
 `to_push` (the commits the remote does not have yet), `pushed` and
@@ -438,13 +439,22 @@ repository named `timed out.git` is still refused.
 
 ### Settle a conflict
 
-`kluris status` shows an open conflict and its paths. Choose for each path:
+`kluris status` and `kluris sync` show an open conflict, its paths and the
+id of the waiting merge they belong to (`--merge`), with the command to run.
+Choose for each path:
 
 ```sh
-kluris resolve --brain acme knowledge/auth.md --ours            # keep this brain's version
-kluris resolve --brain acme knowledge/oauth.md --theirs         # keep the remote's
-kluris resolve --brain acme knowledge/jwt.md --file merged.md   # keep what you merged by hand
+kluris resolve --brain acme knowledge/auth.md --ours --merge 4ba0581dd58e             # keep this brain's version
+kluris resolve --brain acme knowledge/oauth.md --theirs --merge 4ba0581dd58e          # keep the remote's
+kluris resolve --brain acme knowledge/jwt.md --file merged.md --merge 4ba0581dd58e    # keep what you merged by hand
 ```
+
+`--merge` says which conflict the choice answers. When the brain has moved
+on since you saw it (you committed, and the teammate changed the file
+again), the conflict is found afresh under a new id with no choices
+recorded; a choice that names the old id is refused, nothing is recorded,
+and the message gives the new id, the file's sides as they are now and the
+command to run.
 
 `--ours` and `--theirs` keep that side's version, a deletion included; for a
 `structure` conflict, that side's whole structure (its file, or its directory
@@ -461,8 +471,11 @@ changes nothing else, then `kluris sync`.
 
 With `--json`, a call prints `path`, `choice`, `remaining` (the paths still
 to settle), `committed`, `commit` and `pushed`; `--abort` prints `aborted`
-and `dropped`. While a conflict is open, `kluris status --json` adds
-`sync: {blocked: true, conflicts: [...]}` to that brain.
+and `dropped`. A refused `--merge` prints the error with `merge` (the
+current id) and `conflict` (the current conflict at that path, as `kluris
+sync` reports it). While a conflict is open, `kluris status --json` adds
+`sync: {blocked: true, conflicts: [...]}` to that brain, each conflict with
+its `path`, `kind`, `merge` and the `base`, `ours` and `theirs` blob ids.
 
 ### How the agent starts a session
 

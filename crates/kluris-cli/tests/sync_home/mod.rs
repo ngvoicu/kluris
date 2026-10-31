@@ -262,6 +262,19 @@ pub fn refused(sync: &Value) -> Value {
     }
 }
 
+impl Home {
+    /// The id of brain `name`'s waiting merge, as `kluris status --json`
+    /// reports it.
+    pub fn merge(&self, name: &str) -> String {
+        let (_, doc) = self.json(&["status", "--brain", name, "--json"]);
+        let merge = &doc["brains"][0]["sync"]["conflicts"][0]["merge"];
+        merge
+            .as_str()
+            .unwrap_or_else(|| panic!("no merge: {doc}"))
+            .to_string()
+    }
+}
+
 pub fn keys(doc: &Value) -> Vec<String> {
     doc.as_object().unwrap().keys().cloned().collect()
 }

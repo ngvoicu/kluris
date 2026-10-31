@@ -76,3 +76,43 @@ pub fn diverged(w: &World) {
 pub fn sh_path(path: &std::path::Path) -> String {
     path.display().to_string().replace('\\', "/")
 }
+
+/// Ours and theirs both edit `notes/first.md` and `ideas/idea.md`: a
+/// waiting merge with two conflicts.
+pub fn two_conflicts(w: &World) {
+    let first = w.read(&w.ours, "notes/first.md");
+    let idea = common::neuron("", "# Idea\n\nA.\n");
+    w.ours_commit(&[("ideas/idea.md", &idea)], &[]);
+    w.run(&w.ours, &["push", "-q"]);
+    w.run(&w.theirs, &["pull", "-q"]);
+    for (side, at) in [("theirs", &w.theirs), ("ours", &w.ours)] {
+        w.write(
+            at,
+            "notes/first.md",
+            &first.replace("Three.", &format!("Three, {side}.")),
+        );
+        w.write(
+            at,
+            "ideas/idea.md",
+            &idea.replace("A.", &format!("A, {side}.")),
+        );
+        w.commit(at, &["notes/first.md", "ideas/idea.md"]);
+    }
+    w.run(&w.theirs, &["push", "-q"]);
+    assert_eq!(w.sync().conflicts.len(), 2);
+}
+
+/// The paths the waiting merge holds a choice for.
+pub fn chosen(w: &World) -> Vec<String> {
+    let pending = w.ours.join(".git").join(kluris_core::sync::PENDING);
+    let doc: serde_json::Value = serde_json::from_slice(&std::fs::read(pending).unwrap()).unwrap();
+    doc["resolved"]
+        .as_array()
+        .map(|items| {
+            items
+                .iter()
+                .map(|item| item["path"].as_str().unwrap().to_string())
+                .collect()
+        })
+        .unwrap_or_default()
+}

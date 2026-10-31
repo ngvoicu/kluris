@@ -1385,6 +1385,7 @@ dependencies = [
  "rust-stemmers",
  "rustix",
  "serde_json",
+ "sha2 0.11.1",
  "tempfile",
  "unicode-normalization",
  "unicode-segmentation",

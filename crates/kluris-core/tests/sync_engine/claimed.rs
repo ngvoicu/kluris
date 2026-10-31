@@ -12,48 +12,10 @@ use kluris_core::sync::resolve::{Choice, ResolveError, ResolveRequest, abort, re
 use kluris_core::sync::{LeftReason, PENDING, SyncRequest};
 
 use crate::common::*;
-
-/// Ours and theirs both edit `notes/first.md` and `ideas/idea.md`: a
-/// waiting merge with two conflicts.
-fn two_conflicts(w: &World) {
-    let first = w.read(&w.ours, "notes/first.md");
-    let idea = neuron("", "# Idea\n\nA.\n");
-    w.ours_commit(&[("ideas/idea.md", &idea)], &[]);
-    w.run(&w.ours, &["push", "-q"]);
-    w.run(&w.theirs, &["pull", "-q"]);
-    for (side, at) in [("theirs", &w.theirs), ("ours", &w.ours)] {
-        w.write(
-            at,
-            "notes/first.md",
-            &first.replace("Three.", &format!("Three, {side}.")),
-        );
-        w.write(
-            at,
-            "ideas/idea.md",
-            &idea.replace("A.", &format!("A, {side}.")),
-        );
-        w.commit(at, &["notes/first.md", "ideas/idea.md"]);
-    }
-    w.run(&w.theirs, &["push", "-q"]);
-    assert_eq!(w.sync().conflicts.len(), 2);
-}
+use crate::{chosen, two_conflicts};
 
 fn pending(w: &World) -> Vec<u8> {
     fs::read(w.ours.join(".git").join(PENDING)).unwrap()
-}
-
-/// The paths the waiting merge holds a choice for.
-fn chosen(w: &World) -> Vec<String> {
-    let doc: serde_json::Value = serde_json::from_slice(&pending(w)).unwrap();
-    doc["resolved"]
-        .as_array()
-        .map(|items| {
-            items
-                .iter()
-                .map(|item| item["path"].as_str().unwrap().to_string())
-                .collect()
-        })
-        .unwrap_or_default()
 }
 
 /// A request whose wait for the tree claim is short.
@@ -64,8 +26,18 @@ fn hurried(w: &World) -> SyncRequest<'static> {
     }
 }
 
-fn request<'a>(path: &'a str, choice: Choice, sync: SyncRequest<'a>) -> ResolveRequest<'a> {
-    ResolveRequest { path, choice, sync }
+fn request<'a>(
+    path: &'a str,
+    merge: &'a str,
+    choice: Choice,
+    sync: SyncRequest<'a>,
+) -> ResolveRequest<'a> {
+    ResolveRequest {
+        path,
+        merge,
+        choice,
+        sync,
+    }
 }
 
 /// Left as it is because the work tree is busy.
@@ -77,12 +49,13 @@ fn busy(result: Result<impl std::fmt::Debug, ResolveError>) -> bool {
 fn a_resolution_while_another_holds_the_tree_claim_records_nothing() {
     let w = World::new();
     two_conflicts(&w);
+    let merge = w.merge_id();
     let recorded = pending(&w);
     let held = TreeClaim::exclusive(&w.ours.join(".git"), Duration::ZERO).unwrap();
     let r = resolve(
         &w.ours,
         &w.git(),
-        &request("notes/first.md", Choice::Ours, hurried(&w)),
+        &request("notes/first.md", &merge, Choice::Ours, hurried(&w)),
     );
     assert!(busy(r.clone()), "{r:?}");
     assert_eq!(pending(&w), recorded);
@@ -90,7 +63,7 @@ fn a_resolution_while_another_holds_the_tree_claim_records_nothing() {
     let r = resolve(
         &w.ours,
         &w.git(),
-        &request("notes/first.md", Choice::Ours, hurried(&w)),
+        &request("notes/first.md", &merge, Choice::Ours, hurried(&w)),
     );
     assert!(r.is_ok(), "{r:?}");
 }
@@ -155,20 +128,21 @@ fn reached(marker: &std::path::Path) {
 fn a_second_resolver_never_loses_a_recorded_choice() {
     let w = World::new();
     two_conflicts(&w);
+    let merge = w.merge_id();
     let (pausing, paused, go) = pausing_git(&w);
     let (first, second) = std::thread::scope(|s| {
         let first = s.spawn(|| {
             resolve(
                 &w.ours,
                 &pausing,
-                &request("notes/first.md", Choice::Ours, w.request()),
+                &request("notes/first.md", &merge, Choice::Ours, w.request()),
             )
         });
         reached(&paused);
         let second = resolve(
             &w.ours,
             &w.git(),
-            &request("ideas/idea.md", Choice::Theirs, hurried(&w)),
+            &request("ideas/idea.md", &merge, Choice::Theirs, hurried(&w)),
         );
         fs::write(&go, "").unwrap();
         (first.join().unwrap(), second)
@@ -193,13 +167,14 @@ fn a_second_resolver_never_loses_a_recorded_choice() {
 fn a_pull_while_a_resolver_records_is_busy() {
     let w = World::new();
     two_conflicts(&w);
+    let merge = w.merge_id();
     let (pausing, paused, go) = pausing_git(&w);
     let pulled = std::thread::scope(|s| {
         let resolver = s.spawn(|| {
             resolve(
                 &w.ours,
                 &pausing,
-                &request("notes/first.md", Choice::Ours, w.request()),
+                &request("notes/first.md", &merge, Choice::Ours, w.request()),
             )
         });
         reached(&paused);

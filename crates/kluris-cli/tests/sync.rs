@@ -84,7 +84,7 @@ fn brain_all_syncs_the_clean_brain_and_reports_the_conflicted_one() {
     let c = &a["conflicts"][0];
     assert_eq!(
         keys(c),
-        ["path", "kind", "ours", "theirs", "base", "binary"]
+        ["path", "kind", "merge", "ours", "theirs", "base", "binary"]
     );
     assert_eq!(c["path"], "notes/first.md");
     assert_eq!(c["kind"], "content");
@@ -105,7 +105,14 @@ fn brain_all_syncs_the_clean_brain_and_reports_the_conflicted_one() {
     // The conflict stays open: reported again, and nothing changes.
     let (code, out, err) = h.run(&["sync", "--brain", "all"]);
     assert_eq!(code, 1);
-    assert!(out.contains("kluris resolve"), "{out}");
+    let merge = c["merge"].as_str().unwrap();
+    assert_eq!(merge.len(), 12, "{merge}");
+    assert!(
+        out.contains(&format!(
+            "  content: notes/first.md\n    kluris resolve --brain alpha notes/first.md --ours|--theirs|--file FILE --merge {merge}\n"
+        )),
+        "{out}"
+    );
     assert_eq!(
         err,
         "kluris: alpha: 1 conflict (notes/first.md); 1 commit to push\n"

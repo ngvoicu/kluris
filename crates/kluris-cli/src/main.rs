@@ -315,6 +315,14 @@ enum Command {
         /// Keep this file's content (merged by hand)
         #[arg(long = "file", value_name = "FILE", allow_hyphen_values = true)]
         file: Option<String>,
+        /// The id of the waiting merge the choice answers (shown with each conflict)
+        #[arg(
+            long = "merge",
+            value_name = "ID",
+            allow_hyphen_values = true,
+            required_unless_present = "abort"
+        )]
+        merge: Option<String>,
         /// Drop the open conflict and change nothing else
         #[arg(long)]
         abort: bool,
@@ -496,7 +504,10 @@ const RESOLVE_HELP: &str = "Settle an open sync conflict path by path.
 When kluris sync leaves a conflict (kluris status lists it), choose for \
 each conflicted path: --ours keeps this brain's version, --theirs the \
 remote's (a deletion included), --file the content you merged by hand \
-(checked first: its frontmatter must read). With the last path, the merge \
+(checked first: its frontmatter must read). --merge names the waiting \
+merge the choice answers (kluris sync and kluris status show its id); one \
+the brain has replaced since is refused, with its new id and sides, and \
+nothing is recorded. With the last path, the merge \
 is committed under your git identity, the brain moves to it and the result \
 is pushed. A file with uncommitted changes in the way stops it until you \
 commit or stash it; the choices are kept. --abort drops the open conflict \
@@ -506,8 +517,8 @@ runs them, and git's reference-transaction and post-index-change hooks run \
 on every ref and index update (--no-verify skips pre-merge-commit and \
 commit-msg).
 
-  kluris resolve --brain acme knowledge/auth.md --theirs
-  kluris resolve --brain acme knowledge/auth.md --file merged.md
+  kluris resolve --brain acme knowledge/auth.md --theirs --merge 4ba0581dd58e
+  kluris resolve --brain acme knowledge/auth.md --file merged.md --merge 4ba0581dd58e
   kluris resolve --brain acme --abort";
 
 /// `self-update` (new in v3).
@@ -731,6 +742,7 @@ fn lenient(cmd: clap::Command) -> clap::Command {
             if arg.get_action().takes_values() {
                 arg.value_parser(clap::builder::ValueParser::os_string())
                     .required(false)
+                    .required_unless_present(clap::builder::Resettable::<clap::Id>::Reset)
             } else {
                 arg
             }
@@ -991,6 +1003,7 @@ fn run(cli: Cli) -> Result<(), CliError> {
             ours,
             theirs,
             file,
+            merge,
             abort,
             no_verify,
             json,
@@ -1000,6 +1013,7 @@ fn run(cli: Cli) -> Result<(), CliError> {
             ours,
             theirs,
             file: file.as_deref(),
+            merge: merge.as_deref(),
             abort,
             no_verify,
             json,
