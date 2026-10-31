@@ -13,18 +13,27 @@
 //!   a git without it.
 //! - **stdin closed** for every git ([`SystemGit`]'s runs), so a hook that
 //!   reads it never waits.
+//! - **One push URL at a time:** [`SyncGit::push_urls`] gives each URL a
+//!   push to the remote goes to, with `kluris-<remote>`, an alias defined
+//!   for that one git (`-c`) that pushes to that URL alone: the URL's own
+//!   raw `pushurl` (or `url`) entry, and every other `remote.<remote>.*`
+//!   value but `fetch` and `mirror`. git applies `insteadOf`,
+//!   `pushInsteadOf`, `receivepack`, the proxy and the rest exactly once,
+//!   as for the remote itself, but the alias has no fetch refspec, so git
+//!   moves no remote-tracking ref after the push (one it would move through
+//!   a symbolic ref, onto another branch): the caller moves it
+//!   ([`super::fetch::advance`]).
+//! - **What each URL holds:** [`SyncGit::destination`] asks that URL's
+//!   receive-pack with a dry run (porcelain, full object names, no hook),
+//!   as `git push` learns it.
 //! - **`pre-push` sees the remote itself:** the caller runs it first
-//!   ([`SyncGit::pre_push`]), once per push URL ([`SyncGit::remote_urls`]),
-//!   with the remote's own name, the URL and git's ref lines on stdin, as
-//!   `git push` would; the push then skips it (`--no-verify`).
-//! - **The push names no configured remote:** it goes to `kluris-<remote>`,
-//!   an alias defined for that one git (`-c`) with every
-//!   `remote.<remote>.*` value but `fetch` and `mirror`. git applies
-//!   `insteadOf`, `pushInsteadOf`, the push URLs, `receivepack`, the proxy
-//!   and the rest exactly as for the remote itself, but the alias has no
-//!   fetch refspec, so git moves no remote-tracking ref after the push (one
-//!   it would move through a symbolic ref, onto another branch): the caller
-//!   moves it ([`super::fetch::advance`]).
+//!   ([`SyncGit::pre_push`]), once per push URL, with the remote's own
+//!   name, the URL and git's ref line for what that URL holds on stdin (an
+//!   empty stdin where it already has the commit), as `git push` would.
+//! - **The push carries what the hook saw:** [`SyncGit::push`] goes to one
+//!   URL with a lease on the value its hook saw (`--force-with-lease`), so a
+//!   destination that moved since turns it back; the hook is not run again
+//!   (`--no-verify`).
 
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
@@ -128,6 +137,30 @@ fn parse_merge_tree(out: &[u8]) -> MergeTree {
         stages,
         messages,
     }
+}
+
+/// One URL a push to a remote goes to (see the module docs).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PushUrl {
+    /// As git pushes to it, `insteadOf` and `pushInsteadOf` applied once:
+    /// what the `pre-push` hook gets.
+    pub url: String,
+    /// The `-c` settings of the alias that pushes to this URL alone.
+    settings: Vec<String>,
+}
+
+/// What a push URL holds for the remote branch, against the commit to
+/// push.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Destination {
+    /// The branch already holds the commit.
+    UpToDate,
+    /// The branch holds this commit, which the push fast-forwards from as
+    /// git sees it; `None` when the branch does not exist there.
+    At(Option<String>),
+    /// The branch holds a commit the push would not fast-forward from, or
+    /// one not here: the remote moved.
+    Moved,
 }
 
 /// How a push ended.
@@ -289,16 +322,39 @@ pub trait SyncGit: Plumbing + TextMerger + Sized {
         lines: &str,
     ) -> Result<HookRun, GitError>;
 
-    /// Push `commit` to the upstream's branch through the `kluris-<remote>`
-    /// alias (see the module docs), never prompting, by `deadline`, with
-    /// `--no-verify`: the caller ran `pre-push` ([`SyncGit::pre_push`]).
-    /// What git printed goes to this process's stderr. Moves no
-    /// remote-tracking ref.
+    /// Each URL a push to the upstream's remote goes to, in git's order,
+    /// with the alias that pushes to it alone (see the module docs). A
+    /// remote already configured under the alias's name, or URLs git and
+    /// the config do not agree on, are a failure.
+    fn push_urls(&self, repo: &Repo, upstream: &Upstream) -> Result<Vec<PushUrl>, PushOutcome>;
+
+    /// What `url` holds for the upstream's branch, against `commit`, as its
+    /// receive-pack advertises it: a dry run of the push (`--porcelain`,
+    /// `core.abbrev=no`, `--no-verify`), never prompting, by `deadline`.
+    /// git could not talk to the remote: `Unreachable` or `Refused`.
+    fn destination(
+        &self,
+        repo: &Repo,
+        upstream: &Upstream,
+        url: &PushUrl,
+        commit: &str,
+        deadline: Instant,
+    ) -> Result<Destination, PushOutcome>;
+
+    /// Push `commit` to the upstream's branch at `url` alone, through its
+    /// alias, with a lease on `seen`, the value its `pre-push` hook saw
+    /// (`None`: the branch must not exist there), so a destination that
+    /// moved since turns it back (`RemoteMoved`); never prompting, by
+    /// `deadline`, with `--no-verify`: the caller ran `pre-push`
+    /// ([`SyncGit::pre_push`]). What git printed goes to this process's
+    /// stderr. Moves no remote-tracking ref.
     fn push(
         &self,
         repo: &Repo,
         upstream: &Upstream,
+        url: &PushUrl,
         commit: &str,
+        seen: Option<&str>,
         deadline: Instant,
     ) -> PushOutcome;
 }
@@ -585,14 +641,29 @@ pub fn remote_env(
     env
 }
 
-/// The `remote.<remote>.*` settings a push alias named `alias` takes
-/// (`git config --null --list`: `<key>\n<value>` entries, or `<key>` for a
-/// key with no value), as `-c` values in their order: every one but
-/// `fetch` and `mirror`. A remote already configured under the alias's
-/// name refuses the push, since its settings would add to the alias's.
-fn alias_settings(list: &[u8], remote: &str, alias: &str) -> Result<Vec<String>, String> {
+/// What the push aliases for a remote are made of ([`alias_parts`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct AliasParts {
+    /// The remote's raw `url` entries, in order.
+    urls: Vec<String>,
+    /// Its raw `pushurl` entries, in order.
+    pushurls: Vec<String>,
+    /// Every other `remote.<remote>.*` setting but `fetch` and `mirror`, as
+    /// the alias's `-c` values, in order.
+    settings: Vec<String>,
+}
+
+/// The parts of the push aliases named `alias` for `remote`, from `git
+/// config --null --list` (`<key>\n<value>` entries, or `<key>` for a key
+/// with no value). A remote already configured under the alias's name
+/// refuses the push, since its settings would add to the alias's.
+fn alias_parts(list: &[u8], remote: &str, alias: &str) -> Result<AliasParts, String> {
     let (own, taken) = (format!("remote.{remote}."), format!("remote.{alias}."));
-    let mut settings = Vec::new();
+    let mut parts = AliasParts {
+        urls: Vec::new(),
+        pushurls: Vec::new(),
+        settings: Vec::new(),
+    };
     for entry in String::from_utf8_lossy(list).split('\0') {
         let (key, value) = match entry.split_once('\n') {
             Some((key, value)) => (key, Some(value)),
@@ -606,15 +677,65 @@ fn alias_settings(list: &[u8], remote: &str, alias: &str) -> Result<Vec<String>,
         let Some(name) = key.strip_prefix(&own) else {
             continue;
         };
-        if name.contains('.') || name == "fetch" || name == "mirror" {
-            continue;
+        match (name, value) {
+            ("url", Some(value)) => parts.urls.push(value.to_string()),
+            ("pushurl", Some(value)) => parts.pushurls.push(value.to_string()),
+            _ if name.contains('.') || ["fetch", "mirror", "url", "pushurl"].contains(&name) => {}
+            (_, Some(value)) => parts
+                .settings
+                .push(format!("remote.{alias}.{name}={value}")),
+            (_, None) => parts.settings.push(format!("remote.{alias}.{name}")),
         }
-        settings.push(match value {
-            Some(value) => format!("remote.{alias}.{name}={value}"),
-            None => format!("remote.{alias}.{name}"),
-        });
     }
-    Ok(settings)
+    Ok(parts)
+}
+
+/// The alias settings that push to the `i`th push URL alone: its own raw
+/// entry (git applies `insteadOf` and `pushInsteadOf` to it once), the
+/// first `url` with a `pushurl`, and every other setting.
+fn alias_for(parts: &AliasParts, alias: &str, i: usize) -> Vec<String> {
+    let mut settings = parts.settings.clone();
+    if parts.pushurls.is_empty() {
+        settings.push(format!("remote.{alias}.url={}", parts.urls[i]));
+    } else {
+        if let Some(url) = parts.urls.first() {
+            settings.push(format!("remote.{alias}.url={url}"));
+        }
+        settings.push(format!("remote.{alias}.pushurl={}", parts.pushurls[i]));
+    }
+    settings
+}
+
+/// The porcelain line `git push --porcelain` prints for `remote_ref`: its
+/// flag and its summary (`<flag>\t<from>:<to>\t<summary>`), the ref named
+/// whole.
+fn porcelain_line<'a>(stdout: &'a str, remote_ref: &str) -> Option<(char, &'a str)> {
+    stdout.lines().find_map(|line| {
+        let mut fields = line.split('\t');
+        let (flag, refs, summary) = (fields.next()?, fields.next()?, fields.next()?);
+        let (_, to) = refs.rsplit_once(':')?;
+        let flag = flag.chars().next().filter(|_| flag.chars().count() == 1)?;
+        (to == remote_ref).then_some((flag, summary))
+    })
+}
+
+/// What a dry run's porcelain line says the destination holds for a push
+/// of `commit`: `=` already there, `*` no such branch, ` ` a fast-forward
+/// from the full object name before `..`, `!` turned back (the remote
+/// moved). An object name that is not whole is never taken.
+fn destination_of(flag: char, summary: &str, commit: &str) -> Option<Destination> {
+    match flag {
+        '=' => Some(Destination::UpToDate),
+        '*' => Some(Destination::At(None)),
+        '!' => Some(Destination::Moved),
+        ' ' => {
+            let (old, new) = summary.split_once("..")?;
+            let whole =
+                |oid: &str| oid.len() == commit.len() && oid.bytes().all(|b| b.is_ascii_hexdigit());
+            (new == commit && whole(old)).then(|| Destination::At(Some(old.to_string())))
+        }
+        _ => None,
+    }
 }
 
 /// Whether git runs a hook at `path`, as it decides on this OS.
@@ -688,6 +809,35 @@ impl SystemGit {
         )
         .stdin(fs::File::open(stdin).map_err(error)?);
         cmd.output().map(Some).map_err(error)
+    }
+
+    /// What a push (or its dry run) that did not succeed means: the remote
+    /// moved (a ref turned back for that, a lease that no longer holds);
+    /// git died before any ref was sent (`die()`, 128), so it could not
+    /// talk to the remote, over the network or otherwise; or a hook or the
+    /// remote's rules refused it (1 and `failed to push some refs`,
+    /// `builtin/push.c`).
+    fn push_failure(&self, repo: &Repo, upstream: &Upstream, done: &Finished) -> PushOutcome {
+        let stdout = String::from_utf8_lossy(&done.stdout);
+        let stderr = String::from_utf8_lossy(&done.stderr);
+        if remote_moved(&stdout) {
+            PushOutcome::RemoteMoved
+        } else if done.status.code() == Some(128) {
+            let urls = self.remote_urls(repo, &upstream.remote, true);
+            if network_failure(&urls.unwrap_or_default(), &stderr) {
+                PushOutcome::Unreachable
+            } else {
+                PushOutcome::Refused(stderr.into_owned())
+            }
+        } else {
+            let detail = [stdout.trim(), stderr.trim()]
+                .iter()
+                .filter(|s| !s.is_empty())
+                .copied()
+                .collect::<Vec<_>>()
+                .join("\n");
+            PushOutcome::Failed(detail)
+        }
     }
 
     /// git with `args` in `dir`, stopped with every process it started at
@@ -1113,11 +1263,108 @@ impl SyncGit for SystemGit {
         })
     }
 
+    fn push_urls(&self, repo: &Repo, upstream: &Upstream) -> Result<Vec<PushUrl>, PushOutcome> {
+        let git = match self.remote(repo) {
+            Ok(git) => git,
+            Err(RemoteError::TimedOut) => return Err(PushOutcome::Unreachable),
+            Err(RemoteError::Failed(e)) => return Err(PushOutcome::Failed(e.to_string())),
+        };
+        let failed = |e: GitError| PushOutcome::Failed(e.to_string());
+        let list = git
+            .run(&repo.dir, &["config", "--null", "--list"])
+            .map_err(failed)?;
+        let remote = &upstream.remote;
+        let alias = format!("kluris-{remote}");
+        let parts = alias_parts(&list, remote, &alias).map_err(PushOutcome::Failed)?;
+        let raw = if parts.pushurls.is_empty() {
+            &parts.urls
+        } else {
+            &parts.pushurls
+        };
+        // Each URL as git pushes to it: git's list, one line per URL but
+        // for a URL holding newlines, which takes one line more for each
+        // (a rewrite only replaces a prefix).
+        let out = git
+            .run(&repo.dir, &["remote", "get-url", "--push", "--all", remote])
+            .map_err(failed)?;
+        let text = String::from_utf8_lossy(&out);
+        let mut lines = text.lines();
+        let mut urls = Vec::new();
+        for (i, entry) in raw.iter().enumerate() {
+            let want = entry.matches('\n').count() + 1;
+            let taken: Vec<&str> = lines.by_ref().take(want).collect();
+            if taken.len() != want {
+                break;
+            }
+            urls.push(PushUrl {
+                url: taken.join("\n"),
+                settings: alias_for(&parts, &alias, i),
+            });
+        }
+        if urls.len() != raw.len() || lines.next().is_some() {
+            return Err(PushOutcome::Failed(format!(
+                "git's push URLs for {remote} do not match its url and pushurl settings; check them"
+            )));
+        }
+        Ok(urls)
+    }
+
+    fn destination(
+        &self,
+        repo: &Repo,
+        upstream: &Upstream,
+        url: &PushUrl,
+        commit: &str,
+        deadline: Instant,
+    ) -> Result<Destination, PushOutcome> {
+        let git = self.remote(repo).map_err(|e| match e {
+            RemoteError::TimedOut => PushOutcome::Unreachable,
+            RemoteError::Failed(e) => PushOutcome::Failed(e.to_string()),
+        })?;
+        let alias = format!("kluris-{}", upstream.remote);
+        let refspec = format!("{commit}:{}", upstream.remote_ref);
+        let mut args: Vec<&str> = url
+            .settings
+            .iter()
+            .flat_map(|s| ["-c", s.as_str()])
+            .collect();
+        args.extend([
+            "-c",
+            "core.abbrev=no",
+            "push",
+            "--dry-run",
+            "--porcelain",
+            "--no-verify",
+            "--no-recurse-submodules",
+            &alias,
+            &refspec,
+        ]);
+        // What a dry run prints ("Everything up-to-date", the hints for a
+        // ref it turns back) is not shown: the push that follows speaks.
+        let done = match git.bounded(&repo.dir, &args, deadline) {
+            Ok(done) => done,
+            Err(RemoteError::TimedOut) => return Err(PushOutcome::Unreachable),
+            Err(RemoteError::Failed(e)) => return Err(PushOutcome::Failed(e.to_string())),
+        };
+        let stdout = String::from_utf8_lossy(&done.stdout);
+        if let Some((flag, summary)) = porcelain_line(&stdout, &upstream.remote_ref) {
+            return destination_of(flag, summary, commit).ok_or_else(|| {
+                PushOutcome::Failed(format!(
+                    "git's dry run of the push to {} gave {flag:?} {summary:?} for {}",
+                    url.url, upstream.remote_ref
+                ))
+            });
+        }
+        Err(git.push_failure(repo, upstream, &done))
+    }
+
     fn push(
         &self,
         repo: &Repo,
         upstream: &Upstream,
+        url: &PushUrl,
         commit: &str,
+        seen: Option<&str>,
         deadline: Instant,
     ) -> PushOutcome {
         let git = match self.remote(repo) {
@@ -1125,29 +1372,31 @@ impl SyncGit for SystemGit {
             Err(RemoteError::TimedOut) => return PushOutcome::Unreachable,
             Err(RemoteError::Failed(e)) => return PushOutcome::Failed(e.to_string()),
         };
-        let list = match git.run(&repo.dir, &["config", "--null", "--list"]) {
-            Ok(list) => list,
-            Err(e) => return PushOutcome::Failed(e.to_string()),
-        };
         let alias = format!("kluris-{}", upstream.remote);
-        let settings = match alias_settings(&list, &upstream.remote, &alias) {
-            Ok(settings) => settings,
-            Err(why) => return PushOutcome::Failed(why),
-        };
         let refspec = format!("{commit}:{}", upstream.remote_ref);
-        let mut args: Vec<&str> = settings.iter().flat_map(|s| ["-c", s.as_str()]).collect();
+        // An empty value: the branch must not exist there.
+        let lease = format!(
+            "--force-with-lease={}:{}",
+            upstream.remote_ref,
+            seen.unwrap_or("")
+        );
+        let mut args: Vec<&str> = url
+            .settings
+            .iter()
+            .flat_map(|s| ["-c", s.as_str()])
+            .collect();
         args.extend([
             "push",
             "--porcelain",
             "--no-verify",
             "--no-recurse-submodules",
+            &lease,
             &alias,
             &refspec,
         ]);
         let done = git.bounded(&repo.dir, &args, deadline);
-        // The `pre-push` hook's output and git's stderr reach the user, on
-        // stderr so `--json` stays one document; both are kept for the
-        // outcome.
+        // What a hook printed and git's stderr reach the user, on stderr so
+        // `--json` stays one document; both are kept for the outcome.
         if let Ok(done) = &done {
             let mut stderr = std::io::stderr();
             let _ = stderr.write_all(before_porcelain(&done.stdout));
@@ -1157,32 +1406,7 @@ impl SyncGit for SystemGit {
             Err(RemoteError::TimedOut) => PushOutcome::Unreachable,
             Err(RemoteError::Failed(e)) => PushOutcome::Failed(e.to_string()),
             Ok(done) if done.status.success() => PushOutcome::Pushed,
-            Ok(done) => {
-                let stdout = String::from_utf8_lossy(&done.stdout);
-                let stderr = String::from_utf8_lossy(&done.stderr);
-                if remote_moved(&stdout) {
-                    PushOutcome::RemoteMoved
-                } else if done.status.code() == Some(128) {
-                    // git died (`die()`, 128) before any ref was sent: it
-                    // could not talk to the remote. A hook or a ref the
-                    // remote rejected ends with 1 and `failed to push some
-                    // refs` (`builtin/push.c`).
-                    let urls = git.remote_urls(repo, &upstream.remote, true);
-                    if network_failure(&urls.unwrap_or_default(), &stderr) {
-                        PushOutcome::Unreachable
-                    } else {
-                        PushOutcome::Refused(stderr.into_owned())
-                    }
-                } else {
-                    let detail = [stdout.trim(), stderr.trim()]
-                        .iter()
-                        .filter(|s| !s.is_empty())
-                        .copied()
-                        .collect::<Vec<_>>()
-                        .join("\n");
-                    PushOutcome::Failed(detail)
-                }
-            }
+            Ok(done) => git.push_failure(repo, upstream, &done),
         }
     }
 }
@@ -1514,29 +1738,88 @@ mod tests {
     }
 
     #[test]
-    fn a_push_alias_takes_every_remote_setting_but_fetch_and_mirror() {
+    fn a_push_alias_takes_one_push_url_and_every_setting_but_fetch_and_mirror() {
         let list = b"core.bare\nfalse\0remote.origin.url\n/r.git\0remote.origin.fetch\n+refs/heads/*:refs/remotes/origin/*\0remote.origin.pushurl\na\0remote.origin.pushurl\nb\0remote.origin.mirror\nfalse\0remote.origin.lfsurl\nhttps://l/x\0remote.origin.skipfetchall\0remote.origin.x.y\n1\0remote.originx.url\n/x.git\0remote.other.url\n/o.git\0";
+        let parts = alias_parts(list, "origin", "kluris-origin").unwrap();
+        let rest = [
+            "remote.kluris-origin.lfsurl=https://l/x",
+            "remote.kluris-origin.skipfetchall",
+        ];
+        // Each push URL alone, after the first url.
+        for (i, pushurl) in ["a", "b"].iter().enumerate() {
+            let mut expected: Vec<String> = rest.iter().map(|s| s.to_string()).collect();
+            expected.push("remote.kluris-origin.url=/r.git".into());
+            expected.push(format!("remote.kluris-origin.pushurl={pushurl}"));
+            assert_eq!(alias_for(&parts, "kluris-origin", i), expected);
+        }
+        // Without pushurl, each url alone.
+        let urls = b"remote.origin.url\n/one.git\0remote.origin.url\n/two.git\0";
+        let parts = alias_parts(urls, "origin", "kluris-origin").unwrap();
         assert_eq!(
-            alias_settings(list, "origin", "kluris-origin").unwrap(),
-            [
-                "remote.kluris-origin.url=/r.git",
-                "remote.kluris-origin.pushurl=a",
-                "remote.kluris-origin.pushurl=b",
-                "remote.kluris-origin.lfsurl=https://l/x",
-                "remote.kluris-origin.skipfetchall",
-            ]
+            alias_for(&parts, "kluris-origin", 1),
+            ["remote.kluris-origin.url=/two.git"]
         );
         // A remote whose name has a dot: only its own keys.
         let dotted = b"remote.a.b.url\n/ab.git\0remote.a.url\n/a.git\0";
+        let parts = alias_parts(dotted, "a.b", "kluris-a.b").unwrap();
         assert_eq!(
-            alias_settings(dotted, "a.b", "kluris-a.b").unwrap(),
+            alias_for(&parts, "kluris-a.b", 0),
             ["remote.kluris-a.b.url=/ab.git"]
         );
         let taken = b"remote.origin.url\n/r.git\0remote.kluris-origin.url\n/k.git\0";
-        let why = alias_settings(taken, "origin", "kluris-origin").unwrap_err();
+        let why = alias_parts(taken, "origin", "kluris-origin").unwrap_err();
         assert!(
             why.starts_with("a remote named kluris-origin is configured"),
             "{why}"
+        );
+    }
+
+    /// A dry run's porcelain line, read for the ref named whole: up to
+    /// date, a new branch, a fast-forward from a whole object name, turned
+    /// back; an abbreviated name or another commit is never taken.
+    #[test]
+    fn a_dry_run_says_what_the_destination_holds() {
+        let commit = "b".repeat(40);
+        let old = "a".repeat(40);
+        let ff = format!("To x\n \t{commit}:refs/heads/main\t{old}..{commit}\nDone\n");
+        for (stdout, expected) in [
+            (ff.clone(), Some(Destination::At(Some(old.clone())))),
+            (
+                format!("=\t{commit}:refs/heads/main\t[up to date]\n"),
+                Some(Destination::UpToDate),
+            ),
+            (
+                format!("*\t{commit}:refs/heads/main\t[new branch]\n"),
+                Some(Destination::At(None)),
+            ),
+            (
+                format!("!\t{commit}:refs/heads/main\t[rejected] (fetch first)\n"),
+                Some(Destination::Moved),
+            ),
+            (
+                format!(" \t{commit}:refs/heads/main\taaaaaaa..{commit}\n"),
+                None,
+            ),
+            (
+                format!(" \t{commit}:refs/heads/main\t{old}..{}\n", "c".repeat(40)),
+                None,
+            ),
+        ] {
+            let (flag, summary) = porcelain_line(&stdout, "refs/heads/main").unwrap();
+            assert_eq!(
+                destination_of(flag, summary, &commit),
+                expected,
+                "{stdout:?}"
+            );
+        }
+        // Another ref, or one that only ends like it, is not this one.
+        assert_eq!(porcelain_line(&ff, "refs/heads/mai"), None);
+        assert_eq!(
+            porcelain_line(
+                &ff.replace(":refs/heads/main", ":refs/heads/xmain"),
+                "refs/heads/main"
+            ),
+            None
         );
     }
 

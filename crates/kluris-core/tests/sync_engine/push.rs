@@ -142,3 +142,167 @@ fn no_verify_never_skips_pre_push() {
     assert!(left(&r, LeftReason::Hook), "{r:?}");
     assert!(!r.pushed);
 }
+
+/// A second bare repository cloned from the remote, added as the remote's
+/// second push URL after the first; its path.
+fn second_push_url(w: &World) -> std::path::PathBuf {
+    let second = w.dir.path().join("second.git");
+    let remote = w.remote.to_string_lossy().into_owned();
+    w.run(
+        w.dir.path(),
+        &["clone", "-q", "--bare", &remote, &second.to_string_lossy()],
+    );
+    for url in [&remote, &second.to_string_lossy().into_owned()] {
+        w.run(
+            &w.ours,
+            &["remote", "set-url", "--add", "--push", "origin", url],
+        );
+    }
+    second
+}
+
+/// Two push URLs whose `main` hold different commits: each hook run gets
+/// the value its own destination holds, as `git push` gives it, so a hook
+/// that guards the second destination's actual value stops the push.
+#[test]
+fn each_push_url_gets_its_own_destinations_value() {
+    let w = World::new();
+    let second = second_push_url(&w);
+    w.ours_commit(&[("notes/deployed.md", &neuron("", "# Deployed\n"))], &[]);
+    let deployed = w.head(&w.ours);
+    w.run(
+        &w.ours,
+        &[
+            "push",
+            "-q",
+            &second.to_string_lossy(),
+            "main:refs/heads/main",
+        ],
+    );
+    w.ours_commit(&[("notes/second.md", &neuron("", "# Second\n"))], &[]);
+    let log = w.dir.path().join("pre-push-input");
+    w.hook(
+        &w.ours,
+        "pre-push",
+        &format!(
+            "input=$(cat)\necho \"$2 $input\" >> '{}'\ncase \"$2\" in *second.git) case \"$input\" in *' {deployed}') echo 'deployed commit is protected' >&2; exit 7;; esac;; esac",
+            sh_path(&log)
+        ),
+    );
+    let (remote, at_second) = (w.remote_head(), w.run(&second, &["rev-parse", "main"]));
+    let r = w.sync();
+    assert!(left(&r, LeftReason::Hook), "{r:?}");
+    let seen = fs::read_to_string(&log).unwrap();
+    let old: Vec<&str> = seen
+        .lines()
+        .map(|l| l.rsplit(' ').next().unwrap())
+        .collect();
+    assert_eq!(old, [remote.as_str(), deployed.as_str()], "{seen}");
+    assert_eq!(w.remote_head(), remote);
+    assert_eq!(w.run(&second, &["rev-parse", "main"]), at_second);
+}
+
+/// The destination moves after the hook ran (the hook moves it itself, to
+/// an ancestor of the commit): the push carries a lease on the value the
+/// hook saw, so it is turned back, pulled again, and the hook then sees the
+/// new value and refuses it.
+#[test]
+fn the_push_goes_only_where_the_hook_saw_it() {
+    let w = World::new();
+    let base = w.remote_head();
+    w.ours_commit(&[("notes/protected.md", &neuron("", "# Protected\n"))], &[]);
+    let protected = w.head(&w.ours);
+    w.run(
+        &w.ours,
+        &["push", "-q", "origin", "main:refs/heads/object-source"],
+    );
+    w.ours_commit(&[("notes/second.md", &neuron("", "# Second\n"))], &[]);
+    w.hook(
+        &w.ours,
+        "pre-push",
+        &format!(
+            "input=$(cat)\ncase \"$input\" in *' {protected}') echo 'protected destination may not advance' >&2; exit 7;; esac\nunset GIT_DIR GIT_INDEX_FILE GIT_WORK_TREE\ngit -C '{remote}' update-ref refs/heads/main {protected} {base}",
+            remote = sh_path(&w.remote)
+        ),
+    );
+    let r = w.sync();
+    assert!(left(&r, LeftReason::Hook), "{r:?}");
+    assert!(
+        detail(&r).contains("protected destination may not advance"),
+        "{}",
+        detail(&r)
+    );
+    assert_eq!(
+        w.remote_head(),
+        protected,
+        "pushed past the value the hook saw"
+    );
+}
+
+/// A push URL that already has the commit: git runs the hook with nothing
+/// on stdin and pushes nothing there, and so does the engine.
+#[test]
+fn a_destination_that_has_the_commit_gets_no_update_line() {
+    let w = World::new();
+    w.ours_commit(&[("notes/second.md", &neuron("", "# Second\n"))], &[]);
+    let pushed = w.head(&w.ours);
+    let mirror = w.dir.path().join("mirror.git");
+    let remote = w.remote.to_string_lossy().into_owned();
+    w.run(
+        w.dir.path(),
+        &["clone", "-q", "--bare", &remote, &mirror.to_string_lossy()],
+    );
+    w.run(
+        &w.ours,
+        &[
+            "push",
+            "-q",
+            &mirror.to_string_lossy(),
+            "main:refs/heads/main",
+        ],
+    );
+    w.run(
+        &w.ours,
+        &["config", "remote.origin.pushurl", &mirror.to_string_lossy()],
+    );
+    w.hook(
+        &w.ours,
+        "pre-push",
+        "input=$(cat)\n[ \"$1\" = origin ] && [ -z \"$input\" ] || { echo \"unexpected: $input\" >&2; exit 7; }",
+    );
+    let r = w.sync();
+    assert!(clean(&r) && r.pushed && r.to_push == 0, "{r:?}");
+    assert_eq!(w.run(&mirror, &["rev-parse", "main"]).trim(), pushed);
+}
+
+/// The first push URL takes the commit and the second turns it away (its
+/// `pre-receive` hook): the report says which took it and which did not,
+/// and the sync fails.
+#[test]
+fn a_push_that_some_urls_took_says_which() {
+    let w = World::new();
+    let second = second_push_url(&w);
+    let hooks = second.join("hooks");
+    fs::create_dir_all(&hooks).unwrap();
+    let receive = hooks.join("pre-receive");
+    fs::write(&receive, "#!/bin/sh\necho 'second refuses' >&2\nexit 1\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&receive, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    w.ours_commit(&[("notes/second.md", &neuron("", "# Second\n"))], &[]);
+    let pushed = w.head(&w.ours);
+    let r = w.sync();
+    assert!(left(&r, LeftReason::Refused), "{r:?}");
+    assert!(!r.pushed, "{r:?}");
+    let remote = w.remote.to_string_lossy().into_owned();
+    let second_url = second.to_string_lossy().into_owned();
+    assert!(
+        detail(&r).contains(&format!("{remote} took it"))
+            && detail(&r).contains(&format!("{second_url} did not")),
+        "{}",
+        detail(&r)
+    );
+    assert_eq!(w.remote_head(), pushed);
+}

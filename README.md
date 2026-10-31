@@ -358,9 +358,14 @@ hooks run on every ref and index update (`--no-verify` skips
 `pre-merge-commit` and `commit-msg`); a merge hook may change the message,
 but one that stages files into the merge stops it, with nothing merged.
 `pre-push` runs as `git push` runs it, once for each push URL and before
-anything is sent: it gets the remote's name (`origin`), the URL and git's
-ref lines on stdin, and a refusal stops the push. The brain must be the
-root of its own git repository, and git must be 2.38 or newer.
+anything is sent: it gets the remote's name (`origin`), the URL and, on
+stdin, git's ref line with what that URL holds now (nothing where it
+already has the commit), and a refusal for any URL stops the push to all.
+The push to each URL then carries a lease on the value its hook saw, so a
+destination that moved after the hook ran turns it back, and the sync
+pulls again. When only some push URLs take the commit, the brain is
+`refused` and the detail says which took it and which did not. The brain
+must be the root of its own git repository, and git must be 2.38 or newer.
 
 With `--json`, each brain's entry is `name` and `sync`, which has eight
 keys: `pulled` (the commits brought in), `auto_merged` (neurons merged on

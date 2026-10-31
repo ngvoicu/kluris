@@ -1160,8 +1160,9 @@ fn a_push_to_an_ssh_host_that_refuses_the_connection_is_unreachable() {
     let (git, repo, upstream) = ours(&w);
     let head = w.head(&w.ours);
     let deadline = Instant::now() + Duration::from_secs(60);
-    let outcome = git.push(&repo, &upstream, &head, deadline);
-    assert_eq!(outcome, PushOutcome::Unreachable);
+    let urls = git.push_urls(&repo, &upstream).unwrap();
+    let outcome = git.destination(&repo, &upstream, &urls[0], &head, deadline);
+    assert_eq!(outcome, Err(PushOutcome::Unreachable));
     let r = w.sync();
     assert!(left(&r, LeftReason::Offline) && !r.pushed, "{r:?}");
     assert!(fs::read_to_string(&calls).unwrap().contains("fakehost"));
@@ -1428,16 +1429,11 @@ fn a_configured_remote_named_as_the_push_alias_stops_the_push() {
     w.ours_commit(&[("notes/second.md", &neuron("", "# Second\n"))], &[]);
     let (git, repo, upstream) = ours(&w);
     let before = w.remote_head();
-    let head = w.head(&w.ours);
-    let outcome = git.push(
-        &repo,
-        &upstream,
-        &head,
-        Instant::now() + Duration::from_secs(60),
-    );
-    let PushOutcome::Failed(why) = outcome else {
-        panic!("{outcome:?}");
+    let Err(PushOutcome::Failed(why)) = git.push_urls(&repo, &upstream) else {
+        panic!("not refused");
     };
+    let r = w.sync();
+    assert!(left(&r, LeftReason::Refused) && !r.pushed, "{r:?}");
     assert!(
         why.starts_with("a remote named kluris-origin is configured"),
         "{why}"
