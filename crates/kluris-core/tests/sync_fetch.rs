@@ -1299,25 +1299,31 @@ fn a_pre_push_hook_that_makes_the_tracking_ref_symbolic_moves_no_other_branch() 
 }
 
 #[test]
-fn the_pre_push_hook_gets_the_push_alias_and_its_url_resolves_there() {
+fn the_pre_push_hook_gets_the_remote_its_push_url_and_the_ref_line() {
     let w = World::new();
     w.ours_commit(&[("notes/second.md", &neuron("", "# Second\n"))], &[]);
+    let pushed = w.head(&w.ours);
+    let remote = w.remote_head();
     let log = w.dir.path().join("pre-push-args");
     w.hook(
         &w.ours,
         "pre-push",
         &format!(
-            "printf '%s|%s|%s\\n' \"$1\" \"$2\" \"$(git config \"remote.$1.url\")\" > '{}'",
-            sh_path(&log)
+            "printf '%s|%s|%s\\n' \"$1\" \"$2\" \"$(git config \"remote.$1.url\")\" > '{l}'\ncat >> '{l}'",
+            l = sh_path(&log)
         ),
     );
     let r = w.sync();
     assert!(r.pushed, "{r:?}");
-    let url = w.run(&w.ours, &["config", "remote.origin.url"]);
+    let url = w.run(&w.ours, &["remote", "get-url", "--push", "origin"]);
     let url = url.trim();
+    let configured = w.run(&w.ours, &["config", "remote.origin.url"]);
     assert_eq!(
         fs::read_to_string(&log).unwrap(),
-        format!("kluris-origin|{url}|{url}\n")
+        format!(
+            "origin|{url}|{}\nrefs/heads/main {pushed} refs/heads/main {remote}\n",
+            configured.trim()
+        )
     );
 }
 
@@ -1357,6 +1363,12 @@ fn push_instead_of_and_a_chained_instead_of_apply_once() {
     );
     w.ours_commit(&[("notes/second.md", &neuron("", "# Second\n"))], &[]);
     let pushed = w.head(&w.ours);
+    let log = w.dir.path().join("pre-push-url");
+    w.hook(
+        &w.ours,
+        "pre-push",
+        &format!("echo \"$2\" > '{}'", sh_path(&log)),
+    );
     // git itself: the fetch goes to the remote, the push to the second repo.
     let get = |args: &[&str]| w.run(&w.ours, args).trim().to_string();
     assert_eq!(get(&["remote", "get-url", "origin"]), remote);
@@ -1370,10 +1382,17 @@ fn push_instead_of_and_a_chained_instead_of_apply_once() {
     };
     assert_eq!(at(&pushes), pushed);
     assert_ne!(at(&remote), pushed);
+    // The hook sees the push URL rewritten once, as git would push to it.
+    assert_eq!(fs::read_to_string(&log).unwrap().trim(), pushes);
 }
 
+/// The alias push takes the remote's settings but `fetch` and `mirror`,
+/// seen by their effects: the remote's `receivepack` runs; `mirror = true`,
+/// which cannot go with the push's refspec, does not stop it; and git moves
+/// no tracking ref (it has no fetch refspec), Kluris does. The settings
+/// themselves are checked by `a_push_alias_takes_every_remote_setting_but_fetch_and_mirror`.
 #[test]
-fn the_remotes_receivepack_proxy_and_other_settings_carry_over_but_not_fetch_or_mirror() {
+fn the_remotes_receivepack_carries_over_but_not_fetch_or_mirror() {
     let w = World::new();
     let received = w.dir.path().join("received");
     let script = w.dir.path().join("receive-pack.sh");
@@ -1385,34 +1404,20 @@ fn the_remotes_receivepack_proxy_and_other_settings_carry_over_but_not_fetch_or_
         ),
     )
     .unwrap();
-    for (key, value) in [
-        (
-            "remote.origin.receivepack",
-            format!("sh '{}'", sh_path(&script)),
-        ),
-        ("remote.origin.proxy", "http://127.0.0.1:9".to_string()),
-        ("remote.origin.lfsurl", "https://lfs.example/x".to_string()),
-        ("remote.origin.mirror", "false".to_string()),
-    ] {
-        w.run(&w.ours, &["config", key, &value]);
-    }
-    let log = w.dir.path().join("alias");
-    w.hook(
+    let receivepack = format!("sh '{}'", sh_path(&script));
+    w.run(
         &w.ours,
-        "pre-push",
-        &format!(
-            "for key in proxy lfsurl fetch mirror; do printf '%s=%s\\n' $key \"$(git config --get-all \"remote.$1.$key\")\"; done > '{}'",
-            sh_path(&log)
-        ),
+        &["config", "remote.origin.receivepack", &receivepack],
     );
+    w.run(&w.ours, &["config", "remote.origin.mirror", "true"]);
     w.ours_commit(&[("notes/second.md", &neuron("", "# Second\n"))], &[]);
+    let pushed = w.head(&w.ours);
     let r = w.sync();
-    assert!(r.pushed, "{r:?}");
+    assert!(clean(&r) && r.pushed, "{r:?}");
     assert!(received.exists(), "the remote's receivepack did not run");
-    assert_eq!(
-        fs::read_to_string(&log).unwrap(),
-        "proxy=http://127.0.0.1:9\nlfsurl=https://lfs.example/x\nfetch=\nmirror=\n"
-    );
+    assert_eq!(w.remote_head(), pushed);
+    let reflog = w.run(&w.ours, &["reflog", "show", "-1", "--format=%gs", TRACKING]);
+    assert_eq!(reflog.trim(), "kluris sync: push origin");
 }
 
 #[test]

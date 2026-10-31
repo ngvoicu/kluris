@@ -34,9 +34,11 @@
 //!    otherwise its conflicts are reported again, with the upstream's newer
 //!    commits counted in `behind_conflict`.
 //!
-//! [`push`] is network only, under the remote claim: the pinned branch's
-//! commit goes through the `kluris-<remote>` alias ([`SyncGit::push`]), then
-//! the engine
+//! [`push`] is network only, under the remote claim: the user's `pre-push`
+//! hook runs first, as git would run it, once per push URL with the
+//! remote's own name, and any refusal stops the push before anything is
+//! sent; then the pinned branch's commit goes through the `kluris-<remote>`
+//! alias ([`SyncGit::push`]), and the engine
 //! moves the tracking ref, checked and by compare-and-swap, as after a
 //! fetch. [`sync`] pulls again after a push the remote turned back because
 //! it moved, [`PUSH_ATTEMPTS`] times at most. Only the fetch and the push
@@ -48,7 +50,7 @@ use std::time::Instant;
 
 use super::claim::{ClaimError, RemoteClaim, TreeClaim};
 use super::fetch::{self, Fetch};
-use super::git::{GitDirs, PushOutcome, SyncGit, Upstream};
+use super::git::{GitDirs, PushOutcome, RemoteError, SyncGit, Upstream, network_failure, one_line};
 use super::hooks::{HookError, MergeHookError, merge_commit};
 use super::land::{blocked_paths, failed, land, unchanged, uncommitted};
 use super::merge::{MergeOutcome, merge_commits};
@@ -443,6 +445,7 @@ fn push_head<G: SyncGit>(ctx: &Context<G>) -> Result<Pushed, LeftAsIs> {
     let before = git.ref_value(repo, &upstream.refname).map_err(failed)?;
     let commit = ctx.branch_commit(&upstream.branch)?;
     let deadline = Instant::now() + ctx.request.network_time_limit;
+    pre_push(ctx, upstream, &commit, deadline)?;
     match git.push(repo, upstream, &commit, deadline) {
         PushOutcome::Pushed => {
             moved_after_push(git, repo, upstream, before.as_deref(), &commit);
@@ -459,6 +462,63 @@ fn push_head<G: SyncGit>(ctx: &Context<G>) -> Result<Pushed, LeftAsIs> {
             format!("the push was refused: {detail}"),
         )),
     }
+}
+
+/// Run the `pre-push` hook for each push URL before anything is pushed, as
+/// `git push` runs it: the remote's name and the URL, and on stdin the
+/// line for the pinned branch, `commit` and the remote's branch with the
+/// commit the remote names for it now (zeros when it has none). A refusal
+/// stops the push. `no_verify` never skips it.
+fn pre_push<G: SyncGit>(
+    ctx: &Context<G>,
+    upstream: &Upstream,
+    commit: &str,
+    deadline: Instant,
+) -> Result<(), LeftAsIs> {
+    let (git, repo) = (&ctx.git, &ctx.repo);
+    let remote = &upstream.remote;
+    let theirs = match git.ls_remote(repo, upstream, deadline) {
+        Ok(theirs) => theirs,
+        Err(RemoteError::TimedOut) => return Err(offline()),
+        Err(RemoteError::Failed(e)) => {
+            // Over the network only: a local remote, or one whose URL git
+            // cannot say, is never offline.
+            let urls = git.remote_urls(repo, remote, false).unwrap_or_default();
+            if !urls.is_empty() && network_failure(&urls, &e.detail) {
+                return Err(offline());
+            }
+            return Err(LeftAsIs::because(
+                LeftReason::Refused,
+                fetch::refused_access("fetch", remote, &e.detail),
+            ));
+        }
+    };
+    let theirs = theirs.unwrap_or_else(|| "0".repeat(commit.len()));
+    let line = format!(
+        "{} {commit} {} {theirs}\n",
+        upstream.branch, upstream.remote_ref
+    );
+    for url in git.remote_urls(repo, remote, true).map_err(failed)? {
+        let run = git
+            .pre_push(repo, &upstream.remote, &url, &line)
+            .map_err(failed)?;
+        if run.code != 0 {
+            let output = one_line(&run.output);
+            let said = if output.is_empty() {
+                String::new()
+            } else {
+                format!(": {output}")
+            };
+            return Err(LeftAsIs::because(
+                LeftReason::Hook,
+                format!(
+                    "the pre-push hook failed (exit {}) for {} {url}; nothing was pushed{said}",
+                    run.code, upstream.remote
+                ),
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// Move the upstream's tracking ref to `pushed` once the remote took the
