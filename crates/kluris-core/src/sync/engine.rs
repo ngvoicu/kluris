@@ -530,8 +530,8 @@ fn pre_push<G: SyncGit>(
 }
 
 /// Move the upstream's tracking ref to `pushed` once the remote took the
-/// push, as after a fetch ([`fetch::advance`]): never when it is no longer
-/// movable ([`fetch::unmovable`], a `pre-push` hook may have made it
+/// push, as after a fetch ([`fetch::advance`]): never when it cannot be
+/// moved now ([`fetch::unmovable`], a `pre-push` hook may have made it
 /// symbolic) nor over another git's value. Anything in the way leaves it
 /// where it is: the next fetch moves it, and reports what stops it.
 fn moved_after_push<G: SyncGit>(

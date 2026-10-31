@@ -372,7 +372,7 @@ fn a_stale_conflict_is_refused_and_abort_drops_it() {
     content_conflict(&w);
     let conflicts = waiting_merge(&w.ours, &w.git()).unwrap().conflicts;
     assert_eq!(conflicts[0].path, "notes/first.md");
-    // The user commits meanwhile: HEAD is no longer the conflict's ours.
+    // The user commits meanwhile: the branch is not at the conflict's ours.
     w.ours_commit(&[("notes/second.md", &neuron("", "# Second\n"))], &[]);
     let before = w.snapshot();
     match resolve_with(&w, "notes/first.md", Choice::Ours) {

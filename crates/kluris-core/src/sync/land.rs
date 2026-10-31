@@ -184,7 +184,7 @@ fn short(oid: &str) -> &str {
     oid.get(..7).unwrap_or(oid)
 }
 
-/// Why the work tree is no longer the one the engine decided for: a git
+/// Why the work tree is not the one the engine decided for: a git
 /// operation started, HEAD names another branch (or none), or `branch`
 /// moved from `ours`. Read under the tree claim, just before git writes.
 pub fn changed<G: SyncGit>(
@@ -234,7 +234,7 @@ pub fn unchanged<G: SyncGit>(
 
 /// Move `branch`, which HEAD names, from `ours` to `to`, a descendant,
 /// unless a file that is not committed sits where it writes, a git lock is
-/// held, or the work tree is no longer the one decided for ([`changed`]).
+/// held, or the work tree is not the one decided for ([`changed`]).
 /// The caller holds the tree claim. Checked right before the move (a hook
 /// or an editor may have written a file, or switched or moved the branch,
 /// since the pull decided) and again when git refuses (a file written in

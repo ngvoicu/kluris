@@ -1,7 +1,7 @@
 //! `kluris resolve [--brain NAME] PATH --ours|--theirs|--file FILE --merge ID
 //! [--no-verify] [--json]` and `kluris resolve --abort`: settle an open sync
 //! conflict path by path. `--merge` names the waiting merge the choice
-//! answers; an id that is no longer the open conflict's is refused, with
+//! answers; an id that is not the open conflict's is refused, with
 //! the current conflict's id, sides and the command to run.
 
 use std::path::Path;
@@ -62,7 +62,7 @@ pub fn command(brain: &str, path: &str, merge: &str) -> String {
     )
 }
 
-/// The error for an id that is no longer the open conflict's: the reason,
+/// The error for an id that is not the open conflict's: the reason,
 /// the current conflict's sides and the command; in JSON, the current id
 /// and conflict entry.
 fn wrong_merge(

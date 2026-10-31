@@ -73,7 +73,7 @@ fn a_rebase_started_during_the_fetch_lands_nothing() {
 }
 
 /// The branch moves after the merge was made, before it lands (a hook
-/// commits on it): the merge is for a commit the branch no longer holds.
+/// commits on it): the merge is for a commit the branch does not hold now.
 #[test]
 fn a_branch_that_moved_before_the_land_lands_nothing() {
     let w = World::new();

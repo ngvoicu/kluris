@@ -1,4 +1,4 @@
-//! `kluris resolve` (SPEC Phase 7, item 48): settle an open sync conflict
+//! `kluris resolve`: settle an open sync conflict
 //! ([`PENDING`]) path by path, then finish the merge.
 //!
 //! Each call is one transaction under the worktree's tree claim, from
@@ -19,7 +19,7 @@
 //! Each call names the waiting merge it answers (its id, shown with every
 //! conflict): an id that is not the current record's is refused, with the
 //! current conflict, and nothing is recorded ([`pending::check_answer`]).
-//! A waiting merge whose `ours` is no longer the branch's commit (the user
+//! A waiting merge whose `ours` is not the branch's commit now (the user
 //! committed meanwhile) is stale: refused, with [`abort`] as the way out.
 
 use std::collections::BTreeMap;
@@ -126,7 +126,7 @@ impl fmt::Display for ResolveError {
             ResolveError::NoOpenConflict => f.write_str("there is no open sync conflict"),
             ResolveError::WrongMerge { path, wrong, .. } => write!(
                 f,
-                "{path}: merge {} is no longer the open conflict; this brain now waits on merge {}, so nothing was recorded: decide again from its sides, then give --merge {}",
+                "{path}: merge {} is not the open conflict: this brain waits on merge {} now, so nothing was recorded; decide again from its sides, then give --merge {}",
                 wrong.given, wrong.current, wrong.current
             ),
             ResolveError::Unreadable(path) => write!(

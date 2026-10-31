@@ -245,9 +245,6 @@ pub trait SyncGit: Plumbing + TextMerger + Sized {
         message: &str,
     ) -> Result<(), GitError>;
 
-    /// The commit `rev` names.
-    fn rev_parse(&self, repo: &Repo, rev: &str) -> Result<String, GitError>;
-
     /// Whether `ancestor` is an ancestor of (or is) `descendant`.
     fn is_ancestor(&self, repo: &Repo, ancestor: &str, descendant: &str) -> Result<bool, GitError>;
 
@@ -951,12 +948,6 @@ impl SyncGit for SystemGit {
         self.run(&repo.dir, &args).map(drop)
     }
 
-    fn rev_parse(&self, repo: &Repo, rev: &str) -> Result<String, GitError> {
-        let spec = format!("{rev}^{{commit}}");
-        let out = self.run(&repo.dir, &["rev-parse", "--verify", &spec])?;
-        Ok(first_line(&out))
-    }
-
     fn is_ancestor(&self, repo: &Repo, ancestor: &str, descendant: &str) -> Result<bool, GitError> {
         let args = ["merge-base", "--is-ancestor", ancestor, descendant];
         match self.output(self.command(Some(&repo.dir), &args), &args) {
@@ -1312,7 +1303,7 @@ mod tests {
             ref_lock("error: cannot lock ref 'refs/remotes/origin/main': is at 1 but expected 2"),
             Some(RefLock::Ref("refs/remotes/origin/main".into()))
         );
-        // Git for Windows after a terminated fetch (T-159's probe).
+        // Git for Windows after a terminated fetch.
         assert_eq!(
             ref_lock(
                 "From C:/r\n   a8a671a..3b9f47e  main       -> origin/main\nerror: fetching ref refs/remotes/origin/main failed: reference already exists\n"

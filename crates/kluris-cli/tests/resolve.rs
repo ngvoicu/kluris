@@ -1,7 +1,7 @@
-//! `kluris resolve [--brain NAME] PATH --ours|--theirs|--file FILE`,
-//! `kluris resolve --abort`, and the open conflict in `kluris status`
-//! (TEST-K3-47): the command surface over real git. The rules are in
-//! `kluris-core/tests/sync_resolve.rs`.
+//! `kluris resolve [--brain NAME] PATH --ours|--theirs|--file FILE --merge
+//! ID`, `kluris resolve --abort`, and the open conflict in `kluris status`:
+//! the command surface over real git. The rules are in
+//! `kluris-core/tests/sync_engine/finish.rs`.
 
 use std::fs;
 
