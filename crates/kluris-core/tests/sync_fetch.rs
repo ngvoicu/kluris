@@ -940,6 +940,226 @@ fn a_missing_remote_path_holding_a_newline_then_ssh_words_is_a_refusal() {
     assert_eq!(w.snapshot(), before);
 }
 
+/// A missing local path that holds an apostrophe, then a newline, then
+/// words that read like ssh's: git quotes it, and the apostrophe looks
+/// like the field's end.
+#[cfg(unix)]
+fn quoted_missing_path(w: &World) -> String {
+    format!(
+        "{}/missing'\nssh: Could not resolve hostname this-is-path-text.git",
+        w.dir.path().display()
+    )
+}
+
+#[cfg(unix)]
+#[test]
+fn a_missing_remote_path_holding_an_apostrophe_a_newline_then_ssh_words_is_a_refusal() {
+    let w = World::new();
+    w.run(
+        &w.ours,
+        &["config", "remote.origin.url", &quoted_missing_path(&w)],
+    );
+    let before = w.snapshot();
+    let Fetch::Refused { detail } = fetch_ours(&w) else {
+        panic!("not refused");
+    };
+    let r = w.sync();
+    assert!(!left(&r, LeftReason::Offline), "{r:?}");
+    for why in [detail, refused(&r)] {
+        assert!(
+            why.contains("does not appear to be a git repository"),
+            "{why}"
+        );
+    }
+    assert_eq!(w.snapshot(), before);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_push_to_a_missing_path_holding_an_apostrophe_a_newline_then_ssh_words_is_a_refusal() {
+    let w = World::new();
+    w.run(
+        &w.ours,
+        &["config", "remote.origin.pushurl", &quoted_missing_path(&w)],
+    );
+    w.ours_commit(&[("notes/second.md", &neuron("", "# Second\n"))], &[]);
+    let before = w.remote_head();
+    let r = w.sync();
+    assert!(!left(&r, LeftReason::Offline) && !r.pushed, "{r:?}");
+    let why = refused(&r);
+    assert!(
+        why.contains("does not appear to be a git repository"),
+        "{why}"
+    );
+    assert_eq!(w.remote_head(), before);
+}
+
+/// A `file://` URL, as git takes it on each OS.
+fn file_url(path: &Path) -> String {
+    let path = sh_path(path);
+    match path.strip_prefix('/') {
+        Some(rest) => format!("file:///{rest}"),
+        None => format!("file:///{path}"),
+    }
+}
+
+#[test]
+fn a_file_url_to_a_missing_repository_named_with_network_words_is_refused() {
+    let w = World::new();
+    let gone = w
+        .dir
+        .path()
+        .join("Could not resolve host")
+        .join("Connection refused timed out.git");
+    w.run(&w.ours, &["config", "remote.origin.url", &file_url(&gone)]);
+    let before = w.snapshot();
+    let Fetch::Refused { detail } = fetch_ours(&w) else {
+        panic!("not refused");
+    };
+    let r = w.sync();
+    assert!(!left(&r, LeftReason::Offline), "{r:?}");
+    for why in [detail, refused(&r)] {
+        assert!(why.contains("Connection refused timed out.git"), "{why}");
+    }
+    assert_eq!(w.snapshot(), before);
+}
+
+/// Make the remote's upload-pack print ssh's words for a host it cannot
+/// reach and fail, as no local git does.
+fn upload_pack_says_ssh_cannot_connect(w: &World) {
+    upload_pack(
+        w,
+        &w.ours,
+        "ssh-words-upload-pack.sh",
+        "echo 'ssh: connect to host h port 22: Connection refused' >&2\nexit 128\n",
+    );
+}
+
+#[test]
+fn a_local_remote_that_fails_with_ssh_words_is_refused() {
+    let w = World::new();
+    upload_pack_says_ssh_cannot_connect(&w);
+    let before = w.snapshot();
+    let Fetch::Refused { detail } = fetch_ours(&w) else {
+        panic!("not refused");
+    };
+    let r = w.sync();
+    assert!(!left(&r, LeftReason::Offline), "{r:?}");
+    for why in [detail, refused(&r)] {
+        assert!(why.contains("ssh: connect to host h port 22"), "{why}");
+    }
+    assert_eq!(w.snapshot(), before);
+}
+
+#[test]
+fn an_ssh_url_that_insteadof_makes_a_local_path_is_local() {
+    let w = World::new();
+    upload_pack_says_ssh_cannot_connect(&w);
+    let remote = w.remote.to_string_lossy().into_owned();
+    w.run(
+        &w.ours,
+        &[
+            "config",
+            &format!("url.{remote}.insteadOf"),
+            "ssh://h/brain.git",
+        ],
+    );
+    w.run(
+        &w.ours,
+        &["config", "remote.origin.url", "ssh://h/brain.git"],
+    );
+    let before = w.snapshot();
+    let r = w.sync();
+    assert!(!left(&r, LeftReason::Offline), "{r:?}");
+    assert!(
+        refused(&r).contains("ssh: connect to host h port 22"),
+        "{r:?}"
+    );
+    assert_eq!(w.snapshot(), before);
+}
+
+/// Point "ours"'s ssh at a script that says the host refused the
+/// connection, as OpenSSH does, and fails with ssh's 255. Returns the file
+/// each run of it appends to.
+fn ssh_cannot_connect(w: &World) -> PathBuf {
+    let calls = w.dir.path().join("ssh-calls");
+    let script = w.dir.path().join("ssh-down.sh");
+    fs::write(
+        &script,
+        format!(
+            "#!/bin/sh\necho \"$*\" >> '{}'\necho 'ssh: connect to host fakehost port 22: Connection refused' >&2\nexit 255\n",
+            sh_path(&calls)
+        ),
+    )
+    .unwrap();
+    w.run(
+        &w.ours,
+        &[
+            "config",
+            "core.sshCommand",
+            &format!("sh '{}'", sh_path(&script)),
+        ],
+    );
+    w.run(&w.ours, &["config", "ssh.variant", "ssh"]);
+    calls
+}
+
+#[test]
+fn an_ssh_host_that_refuses_the_connection_is_offline() {
+    // ssh's `host:path`, `ssh://`, and a path that insteadOf makes ssh's.
+    for setup in ["scp", "ssh-url", "instead-of"] {
+        let w = World::new();
+        let calls = ssh_cannot_connect(&w);
+        let url = match setup {
+            "scp" => "fakehost:brain.git".to_string(),
+            "ssh-url" => "ssh://fakehost/brain.git".to_string(),
+            _ => {
+                let local = w.dir.path().join("elsewhere.git");
+                let local = local.to_string_lossy().into_owned();
+                w.run(
+                    &w.ours,
+                    &["config", "url.ssh://fakehost/brain.git.insteadOf", &local],
+                );
+                local
+            }
+        };
+        w.run(&w.ours, &["config", "remote.origin.url", &url]);
+        let before = w.snapshot();
+        assert_eq!(fetch_ours(&w), Fetch::Offline, "{setup}");
+        let r = w.sync();
+        assert!(left(&r, LeftReason::Offline), "{setup}: {r:?}");
+        assert!(!left(&r, LeftReason::Refused), "{setup}: {r:?}");
+        assert!(
+            fs::read_to_string(&calls)
+                .unwrap_or_default()
+                .contains("fakehost"),
+            "{setup}: ssh never ran"
+        );
+        assert_eq!(w.snapshot(), before, "{setup}");
+    }
+}
+
+#[test]
+fn a_push_to_an_ssh_host_that_refuses_the_connection_is_unreachable() {
+    let w = World::new();
+    let calls = ssh_cannot_connect(&w);
+    w.run(
+        &w.ours,
+        &["config", "remote.origin.pushurl", "fakehost:brain.git"],
+    );
+    w.ours_commit(&[("notes/second.md", &neuron("", "# Second\n"))], &[]);
+    let before = w.remote_head();
+    let (git, repo, upstream) = ours(&w);
+    let head = w.head(&w.ours);
+    let deadline = Instant::now() + Duration::from_secs(60);
+    let outcome = git.push(&repo, &upstream, &head, deadline);
+    assert_eq!(outcome, PushOutcome::Unreachable);
+    let r = w.sync();
+    assert!(left(&r, LeftReason::Offline) && !r.pushed, "{r:?}");
+    assert!(fs::read_to_string(&calls).unwrap().contains("fakehost"));
+    assert_eq!(w.remote_head(), before);
+}
+
 #[test]
 fn a_transfer_slower_than_http_low_speed_limit_is_offline() {
     let w = World::new();

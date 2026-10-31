@@ -196,6 +196,12 @@ pub trait SyncGit: Plumbing + TextMerger + Sized {
     fn has_commit(&self, repo: &Repo, commit: &str, deadline: Instant)
     -> Result<bool, RemoteError>;
 
+    /// The URLs git goes to for `remote`, after `insteadOf`, one per line
+    /// of git's answer: the fetch's (`git ls-remote --get-url`), or with
+    /// `push` every one a push goes to (`git remote get-url --push --all`,
+    /// after `pushInsteadOf`). Read from config alone: no network.
+    fn remote_urls(&self, repo: &Repo, remote: &str, push: bool) -> Result<Vec<String>, GitError>;
+
     /// The object a ref holds; `None` when there is no such ref.
     fn ref_value(&self, repo: &Repo, refname: &str) -> Result<Option<String>, GitError>;
 
@@ -307,49 +313,72 @@ pub(crate) fn ref_lock(stderr: &str) -> Option<RefLock> {
 ///   `unable to connect to <host>:` for `git://` (`connect.c`,
 ///   `git_tcp_connect_sock`, 2.55).
 ///
+/// A remote git reaches without a network ([`local_url`]: a path or a
+/// `file://` URL) is never offline: with any of `urls` local, or none
+/// known, this is false before any diagnostic is read.
+///
 /// Each line is read from its start, after git's `fatal: ` or `error: `:
 /// a line the remote sent (`remote: ...`) is never one of them, and a
 /// quoted URL or path is never read for the words, so a remote or a path
-/// named `timed out.git` stays what git says it is. A quoted field that a
-/// `fatal: ` or `error: ` line opens (a `'` at the start of a word) and does
-/// not close holds the lines up to the one with the closing `'`: a path
-/// with a newline in it, whose next line reads like ssh's, is still the
-/// path. Anything else (`Permission denied (publickey).`, `Authentication
+/// named `timed out.git` stays what git says it is. No line after a
+/// `fatal: ` or `error: ` line that quotes a field (a `'` at the start of a
+/// word) is read: the field may hold `'` and newlines, so where it ends
+/// cannot be told, and a line that reads like ssh's may be the field's.
+/// Anything else (`Permission denied (publickey).`, `Authentication
 /// failed`, `does not appear to be a git repository`, `Repository not
 /// found`, and git's `Could not read from remote repository.` after any of
 /// them) is not network trouble. git translates its own messages (`unable
 /// to access`, `unable to look up`, `unable to connect to`); under another
 /// language those read as a refusal, shown rather than hidden.
-pub(crate) fn network_failure(stderr: &str) -> bool {
-    let mut in_field = false;
+pub(crate) fn network_failure(urls: &[String], stderr: &str) -> bool {
+    if urls.is_empty() || urls.iter().any(|url| local_url(url)) {
+        return false;
+    }
     for line in stderr.lines() {
-        if in_field {
-            in_field = !line.contains('\'');
-            continue;
-        }
         let line = line.trim();
         let message = ["fatal: ", "error: "]
             .iter()
             .find_map(|prefix| line.strip_prefix(prefix));
-        let text = message.unwrap_or(line);
-        if network_line(text) {
+        if network_line(message.unwrap_or(line)) {
             return true;
         }
-        in_field = message.is_some_and(opens_field);
+        if message.is_some_and(quotes_a_field) {
+            return false;
+        }
     }
     false
 }
 
-/// Whether git's message opens a quoted field it does not close on its
-/// line: its first `'` at the start of a word has no `'` after it.
-fn opens_field(message: &str) -> bool {
-    let bytes = message.as_bytes();
-    let opening = bytes
-        .iter()
-        .enumerate()
-        .find(|&(i, b)| *b == b'\'' && (i == 0 || bytes[i - 1] == b' '))
-        .map(|(i, _)| i);
-    opening.is_some_and(|i| !message[i + 1..].contains('\''))
+/// Whether git reaches `url` without a network, as git tells it
+/// (`transport.c`, `transport_get`; `connect.c`, `url_is_local_not_ssh`,
+/// 2.55): a `file://` URL, or a path: neither `<helper>::` nor
+/// `<scheme>://` before it, and no `:`, or a `/` before the first one
+/// (else it is ssh's `host:path`), or on Windows a drive letter (`C:`).
+fn local_url(url: &str) -> bool {
+    let scheme = url
+        .char_indices()
+        .take_while(|&(i, c)| c.is_ascii_alphanumeric() || (i > 0 && "+-.".contains(c)))
+        .count();
+    let after = &url[scheme..];
+    if scheme > 0 && after.starts_with("::") {
+        return false;
+    }
+    if url.starts_with("file://") {
+        return true;
+    }
+    if scheme > 0 && after.starts_with("://") {
+        return false;
+    }
+    let Some(colon) = url.find(':') else {
+        return true;
+    };
+    let drive = colon == 1 && url.as_bytes()[0].is_ascii_alphabetic();
+    url.find('/').is_some_and(|slash| slash < colon) || (cfg!(windows) && drive)
+}
+
+/// Whether git's message quotes a field: a `'` at the start of a word.
+fn quotes_a_field(message: &str) -> bool {
+    message.split(' ').any(|word| word.starts_with('\''))
 }
 
 /// One message of [`network_failure`], without git's `fatal: ` or `error: `.
@@ -726,6 +755,19 @@ impl SyncGit for SystemGit {
         }
     }
 
+    fn remote_urls(&self, repo: &Repo, remote: &str, push: bool) -> Result<Vec<String>, GitError> {
+        let args: &[&str] = if push {
+            &["remote", "get-url", "--push", "--all", remote]
+        } else {
+            &["ls-remote", "--get-url", remote]
+        };
+        let out = self.run(&repo.dir, args)?;
+        Ok(String::from_utf8_lossy(&out)
+            .lines()
+            .map(str::to_string)
+            .collect())
+    }
+
     fn ref_value(&self, repo: &Repo, refname: &str) -> Result<Option<String>, GitError> {
         let args = ["rev-parse", "--verify", "--quiet", refname];
         let out = self.output(self.command(Some(&repo.dir), &args), &args);
@@ -925,7 +967,8 @@ impl SyncGit for SystemGit {
                     // could not talk to the remote. A hook or a ref the
                     // remote rejected ends with 1 and `failed to push some
                     // refs` (`builtin/push.c`).
-                    if network_failure(&stderr) {
+                    let urls = git.remote_urls(repo, &upstream.remote, true);
+                    if network_failure(&urls.unwrap_or_default(), &stderr) {
                         PushOutcome::Unreachable
                     } else {
                         PushOutcome::Refused(stderr.into_owned())
@@ -1076,6 +1119,100 @@ mod tests {
         }
     }
 
+    /// [`network_failure`] for a remote over ssh: the diagnostics decide.
+    fn over_ssh(stderr: &str) -> bool {
+        network_failure(&["ssh://h/x.git".to_string()], stderr)
+    }
+
+    /// A missing local path that holds an apostrophe, then a newline, then
+    /// words that read like ssh's, and git 2.55's message for it on macOS.
+    const QUOTED_PATH: &str =
+        "/tmp/x/missing'\nssh: Could not resolve hostname this-is-path-text.git";
+    const QUOTED_PATH_STDERR: &str = "fatal: '/tmp/x/missing'\nssh: Could not resolve hostname this-is-path-text.git' does not appear to be a git repository\nfatal: Could not read from remote repository.\n\nPlease make sure you have the correct access rights\nand the repository exists.\n";
+
+    #[test]
+    fn a_url_is_local_when_git_reaches_it_without_a_network() {
+        for (url, local) in [
+            ("/srv/brain.git", true),
+            ("brain.git", true),
+            ("./brain", true),
+            ("../brain.git", true),
+            ("/srv/a:b/brain.git", true),
+            ("file:///srv/brain.git", true),
+            ("file://srv/brain.git", true),
+            ("\\\\server\\share\\brain.git", true),
+            (QUOTED_PATH, true),
+            ("", true),
+            ("ssh://h/brain.git", false),
+            ("ssh://h/srv/a:b", false),
+            ("git+ssh://h/brain.git", false),
+            ("git@h:brain.git", false),
+            ("host:brain.git", false),
+            ("host:/srv/brain.git", false),
+            ("https://h/brain.git", false),
+            ("http://127.0.0.1:9/brain.git", false),
+            ("git://h/brain.git", false),
+            ("ext::ssh -i key h %S brain.git", false),
+            ("persistent-https::https://h/brain.git", false),
+            ("FILE:///srv/brain.git", false),
+            // A drive letter (one letter, then `:`) is a path on Windows,
+            // ssh's `host:path` elsewhere.
+            ("C:/srv/brain.git", cfg!(windows)),
+            ("C:\\srv\\brain.git", cfg!(windows)),
+            ("c:brain.git", cfg!(windows)),
+            ("h:/srv/brain.git", cfg!(windows)),
+        ] {
+            assert_eq!(local_url(url), local, "{url:?}");
+        }
+    }
+
+    #[test]
+    fn a_local_remote_is_never_offline() {
+        let read = "\nfatal: Could not read from remote repository.\n";
+        for url in ["/srv/brain.git", "file:///srv/brain.git", QUOTED_PATH] {
+            for stderr in [
+                format!("ssh: Could not resolve hostname h: nodename nor servname provided, or not known{read}"),
+                format!("ssh: connect to host h port 22: Connection refused{read}"),
+                "fatal: unable to access 'https://h/x.git/': Could not resolve host: h".into(),
+                "fatal: unable to look up h (port 9418) (nodename nor servname provided, or not known)".into(),
+                QUOTED_PATH_STDERR.into(),
+            ] {
+                assert!(!network_failure(&[url.to_string()], &stderr), "{url:?}: {stderr}");
+                // One local URL among a push's URLs is enough.
+                let urls = ["ssh://h/x.git".to_string(), url.to_string()];
+                assert!(!network_failure(&urls, &stderr), "{url:?}: {stderr}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_remote_whose_url_git_could_not_say_is_never_offline() {
+        let stderr = "ssh: connect to host h port 22: Connection refused\nfatal: Could not read from remote repository.\n";
+        assert!(over_ssh(stderr), "over ssh this is network trouble");
+        assert!(!network_failure(&[], stderr));
+    }
+
+    #[test]
+    fn no_line_after_a_quoted_field_is_read_for_network_trouble() {
+        // A quoted path or URL may hold `'` and newlines, so where the
+        // field ends cannot be told: what follows it may be the field.
+        let ssh = "ssh: connect to host h port 22: Connection refused";
+        for refused in [
+            QUOTED_PATH_STDERR.to_string(),
+            format!("fatal: '/h/a' b\n{ssh}' does not appear to be a git repository\n"),
+            format!("fatal: '/h/it's\n{ssh}' does not appear to be a git repository\n"),
+            format!("fatal: '/h/a'\nb'\n{ssh}' does not appear to be a git repository\n"),
+            format!("error: '/h/a' x\n{ssh}\n"),
+            format!("fatal: Authentication failed for 'https://h/x.git/'\n{ssh}\n"),
+        ] {
+            assert!(!over_ssh(&refused), "{refused}");
+        }
+        // The words on the field's own line are curl's reason, after it.
+        assert!(over_ssh(
+            "fatal: unable to access 'https://h/x.git/': Could not resolve host: h\n"
+        ));
+    }
+
     #[test]
     fn network_trouble_is_told_apart_from_a_refusal() {
         // What git 2.55 printed on macOS for each.
@@ -1095,7 +1232,7 @@ mod tests {
             // `lib/multi.c` text after git's `RPC failed; curl <n> `.
             "error: RPC failed; curl 28 Operation timed out after 300000 milliseconds with 0 bytes received\nfetch-pack: unexpected disconnect while reading sideband packet\nfatal: early EOF\n".into(),
         ] {
-            assert!(network_failure(&network), "{network}");
+            assert!(over_ssh(&network), "{network}");
         }
         for refused in [
             format!("Permission denied (publickey).{read}"),
@@ -1112,7 +1249,7 @@ mod tests {
             "error: RPC failed; curl 18 transfer closed with 99992 bytes remaining to read\nfetch-pack: unexpected disconnect while reading sideband packet\nfatal: protocol error: bad pack header\n".into(),
             String::new(),
         ] {
-            assert!(!network_failure(&refused), "{refused}");
+            assert!(!over_ssh(&refused), "{refused}");
         }
     }
 
@@ -1136,7 +1273,7 @@ mod tests {
             // A push a pre-receive hook turned away with these words.
             "remote: fatal: unable to access x: Connection timed out after 300001 milliseconds        \nremote: ssh: connect to host h port 22: Operation timed out        \nerror: failed to push some refs to '/h/hooked.git'\n".into(),
         ] {
-            assert!(!network_failure(&refused), "{refused}");
+            assert!(!over_ssh(&refused), "{refused}");
         }
     }
 
@@ -1153,7 +1290,7 @@ mod tests {
                 "fatal: '/h/a\nb\nunable to access 'x': Could not resolve host: h' does not appear to be a git repository{read}"
             ),
         ] {
-            assert!(!network_failure(&refused), "{refused}");
+            assert!(!over_ssh(&refused), "{refused}");
         }
         // An apostrophe inside a word opens no field: the lines after it
         // are read.
@@ -1161,7 +1298,7 @@ mod tests {
             "fatal: couldn't find remote ref refs/heads/x\nssh: connect to host h port 22: Connection refused\n",
             "fatal: unable to access 'http://127.0.0.1:9/x.git/': Failed to connect to 127.0.0.1 port 9 after 0 ms: Couldn't connect to server\n",
         ] {
-            assert!(network_failure(network), "{network}");
+            assert!(over_ssh(network), "{network}");
         }
     }
 
@@ -1172,7 +1309,7 @@ mod tests {
             "fatal: unable to access 'http://127.0.0.1:9/x.git/': Operation too slow. Less than 1000 bytes/sec transferred the last 1 seconds\n",
             "error: RPC failed; curl 28 Operation too slow. Less than 1000 bytes/sec transferred the last 1 seconds\nfatal: expected flush after ref listing\n",
         ] {
-            assert!(network_failure(network), "{network}");
+            assert!(over_ssh(network), "{network}");
         }
     }
 

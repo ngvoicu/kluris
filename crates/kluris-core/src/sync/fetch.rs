@@ -287,7 +287,8 @@ fn fetch_refused<G: SyncGit>(
     if let Some(lock) = locked_ref(git, repo, &e.detail) {
         return Some(ref_locked(&lock));
     }
-    if network_failure(&e.detail) {
+    let urls = git.remote_urls(repo, remote, false).unwrap_or_default();
+    if network_failure(&urls, &e.detail) {
         return None;
     }
     Some(refused_access("fetch", remote, &e.detail))
