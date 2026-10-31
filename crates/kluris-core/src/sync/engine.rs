@@ -21,11 +21,14 @@
 //!    ([`merge_commits`]) and, without conflicts, makes the merge commit
 //!    (`kluris: sync` with `Kluris-Sync: auto`, through the merge hooks) and
 //!    lands it ([`land`], which checks the branch once more, and that it
-//!    still holds the commit the merge was made for). What stays open is
-//!    the moment between that last check and git's own write: a switch or
-//!    a commit made then is the same race as an edit made then, reported
-//!    (git refuses, or the second check finds it), not closed. Ahead only,
-//!    there is nothing to pull. A remote without the branch is ahead only, every
+//!    still holds the commit the merge was made for). The moment between
+//!    that last check and git's own write stays open, since git's
+//!    fast-forward moves whichever branch HEAD names when it runs: a commit
+//!    or an edit made then makes git refuse (or the second check finds the
+//!    edit), and a switch made then moves the other branch, which the
+//!    check after the write finds and reports (`busy`, naming the branch
+//!    that moved and to what); nothing is undone. Ahead only, there is
+//!    nothing to pull. A remote without the branch is ahead only, every
 //!    commit from the root to push. Unrelated histories are refused before
 //!    any merge;
 //! 4. a conflict writes the waiting merge ([`pending`]) and nothing else.

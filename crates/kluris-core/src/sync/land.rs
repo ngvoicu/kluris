@@ -219,6 +219,42 @@ pub fn changed<G: SyncGit>(
     }
 }
 
+/// After git's write: `branch` holds `to`, or HEAD named another branch
+/// when git ran and git moved that one, which is reported (busy) with the
+/// branch that moved and to what; nothing is undone. HEAD naming another
+/// branch once `branch` holds `to` is a switch made after the land, and
+/// harmless.
+fn moved_elsewhere<G: SyncGit>(
+    git: &G,
+    repo: &Repo,
+    branch: &str,
+    to: &str,
+) -> Result<(), LeftAsIs> {
+    let now = git.ref_value(repo, branch).map_err(failed)?;
+    if now.as_deref() == Some(to) {
+        return Ok(());
+    }
+    let stays = now
+        .as_deref()
+        .map_or("no commit".to_string(), |c| short(c).to_string());
+    let moved = match git.branch(repo).map_err(failed)? {
+        Some(head) if git.ref_value(repo, &head).map_err(failed)?.as_deref() == Some(to) => {
+            format!(
+                "{head} moved to {} instead of {branch}: HEAD named it when git landed the pull",
+                short(to)
+            )
+        }
+        Some(head) => format!("HEAD named {head} when git landed the pull, not {branch}"),
+        None => "HEAD was detached when git landed the pull".to_string(),
+    };
+    Err(LeftAsIs::because(
+        LeftReason::Busy,
+        format!(
+            "{moved}; {branch} stays at {stays}: check the branch HEAD names (git reflog) and run again"
+        ),
+    ))
+}
+
 /// [`changed`] as a reason to leave the brain as it is.
 pub fn unchanged<G: SyncGit>(
     git: &G,
@@ -241,9 +277,11 @@ pub fn unchanged<G: SyncGit>(
 /// between, told apart from what git itself wrote before it stopped): the
 /// move itself never overwrites an ignored file nor stashes. git stopping
 /// partway is [`LeftReason::Failed`] with its message; nothing is rolled
-/// back. What is left open is the moment between the last check and git's
-/// own write: a switch or a commit made then is the same race as an edit
-/// made then, reported by git's refusal or the second check, not closed.
+/// back. The moment between the last check and git's own write stays open
+/// (git's fast-forward moves whichever branch HEAD names when it runs): an
+/// edit made then is found by git's refusal or the second check, and a
+/// switch made then by the check after the write ([`moved_elsewhere`]),
+/// which reports it; nothing is undone.
 pub fn land<G: SyncGit>(
     git: &G,
     repo: &Repo,
@@ -271,7 +309,7 @@ pub fn land<G: SyncGit>(
     }
     unchanged(git, repo, branch, ours)?;
     let Err(e) = git.fast_forward_to(repo, to) else {
-        return Ok(());
+        return moved_elsewhere(git, repo, branch, to);
     };
     let blocked = not_written_by_git(git, repo, root, to, in_the_way()?).map_err(failed)?;
     if blocked.is_empty() {

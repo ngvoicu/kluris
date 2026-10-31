@@ -117,3 +117,41 @@ fn the_push_sends_the_pinned_branch_not_head() {
     assert_eq!(engine::push(&ctx), Pushed::Pushed);
     assert_eq!(w.remote_head(), main);
 }
+
+/// HEAD moves to another branch at the last moment, after the engine's
+/// last check and before git's own write (a git wrapper switches as the
+/// fast-forward starts): git moves that branch, and the engine reports it.
+#[cfg(unix)]
+#[test]
+fn a_switch_just_before_gits_write_is_reported() {
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+    let w = World::new();
+    side_branch(&w);
+    w.theirs_push(&[("ideas/new.md", &neuron("", "# New\n"))], &[]);
+    let incoming = w.remote_head();
+    let main = w.head(&w.ours);
+    let script = w.dir.path().join("switching-git");
+    fs::write(
+        &script,
+        "#!/bin/sh\ncase \" $* \" in\n *' merge --ff-only '*) git switch -q side;;\nesac\nexec git \"$@\"\n",
+    )
+    .unwrap();
+    fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
+    let ctx =
+        kluris_core::sync::engine::open(&w.ours, &w.git().program(&script), &w.request()).unwrap();
+    let r = engine::pull(&ctx);
+    assert_eq!(
+        w.run(&w.ours, &["rev-parse", "side"]).trim(),
+        incoming,
+        "the switch did not land"
+    );
+    assert!(left(&r, LeftReason::Busy), "{r:?}");
+    assert!(
+        detail(&r).contains("refs/heads/side") && detail(&r).contains("refs/heads/main"),
+        "{}",
+        detail(&r)
+    );
+    assert_eq!(r.pulled, 0);
+    assert_eq!(w.run(&w.ours, &["rev-parse", "main"]).trim(), main);
+}
