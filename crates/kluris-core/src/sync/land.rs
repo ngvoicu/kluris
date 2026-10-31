@@ -170,12 +170,8 @@ pub fn failed(error: impl std::fmt::Display) -> LeftAsIs {
 /// there: another git is writing to the brain. A move started now would
 /// write the work tree and the index, then fail on the ref, leaving the
 /// incoming files staged under the old HEAD.
-fn held_lock<G: SyncGit>(git: &G, repo: &Repo) -> Result<Option<PathBuf>, GitError> {
-    let mut locks = vec!["index.lock".to_string()];
-    if let Some(branch) = git.symbolic_target(repo, "HEAD")? {
-        locks.insert(0, format!("{branch}.lock"));
-    }
-    for lock in locks {
+fn held_lock<G: SyncGit>(git: &G, repo: &Repo, branch: &str) -> Result<Option<PathBuf>, GitError> {
+    for lock in [format!("{branch}.lock"), "index.lock".to_string()] {
         let path = git.git_dir_path(repo, &lock)?;
         if fs::symlink_metadata(&path).is_ok() {
             return Ok(Some(path));
@@ -184,17 +180,75 @@ fn held_lock<G: SyncGit>(git: &G, repo: &Repo) -> Result<Option<PathBuf>, GitErr
     Ok(None)
 }
 
-/// Move the branch to `to`, a descendant of `ours`, unless a file that is
-/// not committed sits where it writes or a git lock is held. Checked right
-/// before the move (a hook or an editor may have written one since the
-/// pull decided) and again when git refuses (one written in between, told
-/// apart from what git itself wrote before it stopped): the move itself
-/// never overwrites an ignored file nor stashes. git stopping partway is
-/// [`LeftReason::Failed`] with its message; nothing is rolled back.
+fn short(oid: &str) -> &str {
+    oid.get(..7).unwrap_or(oid)
+}
+
+/// Why the work tree is no longer the one the engine decided for: a git
+/// operation started, HEAD names another branch (or none), or `branch`
+/// moved from `ours`. Read under the tree claim, just before git writes.
+pub fn changed<G: SyncGit>(
+    git: &G,
+    repo: &Repo,
+    branch: &str,
+    ours: &str,
+) -> Result<Option<String>, GitError> {
+    let busy = |what: String| {
+        Some(format!(
+            "{what} while kluris synced {branch}; nothing was landed: run again"
+        ))
+    };
+    if let Some(op) = git.in_progress(repo)? {
+        return Ok(Some(format!(
+            "a {op} started while kluris synced {branch}; nothing was landed: finish or abort it, then run again"
+        )));
+    }
+    match git.branch(repo)? {
+        Some(head) if head == branch => {}
+        Some(head) => return Ok(busy(format!("HEAD moved to {head}"))),
+        None => return Ok(busy("HEAD was detached".into())),
+    }
+    match git.ref_value(repo, branch)? {
+        Some(now) if now == ours => Ok(None),
+        Some(now) => Ok(busy(format!(
+            "{branch} moved from {} to {}",
+            short(ours),
+            short(&now)
+        ))),
+        None => Ok(busy(format!("{branch} was deleted"))),
+    }
+}
+
+/// [`changed`] as a reason to leave the brain as it is.
+pub fn unchanged<G: SyncGit>(
+    git: &G,
+    repo: &Repo,
+    branch: &str,
+    ours: &str,
+) -> Result<(), LeftAsIs> {
+    match changed(git, repo, branch, ours).map_err(failed)? {
+        Some(why) => Err(LeftAsIs::because(LeftReason::Busy, why)),
+        None => Ok(()),
+    }
+}
+
+/// Move `branch`, which HEAD names, from `ours` to `to`, a descendant,
+/// unless a file that is not committed sits where it writes, a git lock is
+/// held, or the work tree is no longer the one decided for ([`changed`]).
+/// The caller holds the tree claim. Checked right before the move (a hook
+/// or an editor may have written a file, or switched or moved the branch,
+/// since the pull decided) and again when git refuses (a file written in
+/// between, told apart from what git itself wrote before it stopped): the
+/// move itself never overwrites an ignored file nor stashes. git stopping
+/// partway is [`LeftReason::Failed`] with its message; nothing is rolled
+/// back. What is left open is the moment between the last check and git's
+/// own write: a switch or a commit made then is the same race as an edit
+/// made then, reported by git's refusal or the second check, not closed.
 pub fn land<G: SyncGit>(
     git: &G,
     repo: &Repo,
     root: &Path,
+    branch: &str,
     ours: &str,
     to: &str,
 ) -> Result<(), LeftAsIs> {
@@ -206,7 +260,7 @@ pub fn land<G: SyncGit>(
     if !blocked.is_empty() {
         return Err(uncommitted(blocked));
     }
-    if let Some(lock) = held_lock(git, repo).map_err(failed)? {
+    if let Some(lock) = held_lock(git, repo, branch).map_err(failed)? {
         return Err(LeftAsIs::because(
             LeftReason::Busy,
             format!(
@@ -215,6 +269,7 @@ pub fn land<G: SyncGit>(
             ),
         ));
     }
+    unchanged(git, repo, branch, ours)?;
     let Err(e) = git.fast_forward_to(repo, to) else {
         return Ok(());
     };

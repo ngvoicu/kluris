@@ -113,37 +113,127 @@ fn no_tracking_ref_yet_is_ahead_only_from_the_root_and_the_push_makes_the_branch
     );
 }
 
-/// Another process holds the remote claim: the pull skips the fetch and
-/// pulls from what is already fetched; the push waits for the next run.
+/// A commit on a local branch `private` that the remote has never had.
+fn private_commit(w: &World) -> String {
+    w.run(&w.ours, &["switch", "-q", "-c", "private"]);
+    w.write(
+        &w.ours,
+        "private-secret.md",
+        &neuron("", "# Not for origin\n"),
+    );
+    w.run(&w.ours, &["add", "-A"]);
+    w.run(&w.ours, &["commit", "-q", "-m", "private"]);
+    let private = w.head(&w.ours);
+    w.run(&w.ours, &["switch", "-q", "main"]);
+    private
+}
+
+/// How the shared tracking ref comes to name a commit the remote's branch
+/// never had: written directly, made symbolic to a local branch, or moved
+/// by a fetch of another remote with the same URL whose refspec maps a
+/// private branch onto it.
+type Rewrite = (&'static str, fn(&World, &str));
+
+const TRACKING_REWRITES: [Rewrite; 3] = [
+    ("written directly", |w, private| {
+        w.run(
+            &w.ours,
+            &["update-ref", "refs/remotes/origin/main", private],
+        );
+    }),
+    ("made symbolic", |w, _| {
+        w.run(
+            &w.ours,
+            &[
+                "symbolic-ref",
+                "refs/remotes/origin/main",
+                "refs/heads/private",
+            ],
+        );
+    }),
+    ("moved by a same-URL fetch", |w, _| {
+        w.run(&w.ours, &["push", "-q", "origin", "private"]);
+        let url = w.remote.to_string_lossy().into_owned();
+        w.run(&w.ours, &["remote", "add", "vault", &url]);
+        let refspec = "+refs/heads/private:refs/remotes/origin/main";
+        w.run(
+            &w.ours,
+            &["config", "--replace-all", "remote.vault.fetch", refspec],
+        );
+        w.run(&w.ours, &["fetch", "-q", "vault"]);
+    }),
+];
+
+/// Another process holds the remote claim: this pull cannot learn the
+/// upstream's commit, so it lands nothing, whatever the tracking ref holds,
+/// and pushes nothing.
 #[test]
-fn a_held_remote_claim_skips_the_network_and_pulls_what_is_fetched() {
+fn a_held_remote_claim_lands_nothing() {
     let w = World::new();
     w.theirs_push(&[("ideas/new.md", &neuron("", "# New\n"))], &[]);
-    let tracking = w.run(&w.ours, &["rev-parse", "refs/remotes/origin/main"]);
-    let claim = RemoteClaim::try_take(&w.ours.join(".git")).unwrap();
-    let r = w.pull();
-    assert!(clean(&r), "{r:?}");
-    assert_eq!(r.pulled, 0, "{r:?}");
-    assert_eq!(
-        w.run(&w.ours, &["rev-parse", "refs/remotes/origin/main"]),
-        tracking,
-        "fetched while the claim was held"
-    );
-    // What a git fetch brought meanwhile is pulled.
     w.run(&w.ours, &["fetch", "-q"]);
-    let r = w.pull();
-    assert!(clean(&r), "{r:?}");
-    assert_eq!(r.pulled, 1, "{r:?}");
-    assert_eq!(w.head(&w.ours), w.remote_head());
-
     w.ours_commit(&[("notes/second.md", &neuron("", "# Second\n"))], &[]);
-    let remote = w.remote_head();
+    let claim = RemoteClaim::try_take(&w.ours.join(".git")).unwrap();
+    let before = w.snapshot();
     let r = w.sync();
     assert!(left(&r, LeftReason::Busy), "{r:?}");
-    assert_eq!((r.to_push, r.pushed), (1, false), "{r:?}");
-    assert_eq!(w.remote_head(), remote);
+    assert!(detail(&r).contains("remote"), "{}", detail(&r));
+    assert_eq!((r.pulled, r.pushed), (0, false), "{r:?}");
+    assert_eq!(w.snapshot(), before);
     drop(claim);
     let r = w.sync();
-    assert!(clean(&r) && r.pushed, "{r:?}");
+    assert!(clean(&r) && r.pulled == 1 && r.pushed, "{r:?}");
     assert_eq!(w.remote_head(), w.head(&w.ours));
+}
+
+/// The tracking ref names a private commit while another process holds the
+/// remote claim: nothing is adopted, and nothing private is published by a
+/// later sync.
+#[test]
+fn a_held_remote_claim_never_adopts_what_the_tracking_ref_holds() {
+    for (how, rewrite) in TRACKING_REWRITES {
+        let w = World::new();
+        let private = private_commit(&w);
+        rewrite(&w, &private);
+        let claim = RemoteClaim::try_take(&w.ours.join(".git")).unwrap();
+        let head = w.head(&w.ours);
+        let r = w.pull();
+        drop(claim);
+        assert!(left(&r, LeftReason::Busy), "{how}: {r:?}");
+        assert_eq!(w.head(&w.ours), head, "{how}: adopted the private commit");
+        w.run(
+            &w.ours,
+            &[
+                "update-ref",
+                "--no-deref",
+                "refs/remotes/origin/main",
+                &head,
+            ],
+        );
+        w.sync();
+        let published = w.run(&w.remote, &["ls-tree", "-r", "--name-only", "main"]);
+        assert!(
+            !published.contains("private-secret.md"),
+            "{how}: {published}"
+        );
+    }
+}
+
+/// The remote has no such branch: no commit the remote named can land, so
+/// a tracking ref left at a private commit is never pulled; the push makes
+/// the branch again from this branch's own commit.
+#[test]
+fn a_remote_without_the_branch_never_adopts_the_tracking_ref() {
+    let w = World::new();
+    let private = private_commit(&w);
+    w.run(&w.remote, &["update-ref", "-d", "refs/heads/main"]);
+    w.run(
+        &w.ours,
+        &["update-ref", "refs/remotes/origin/main", &private],
+    );
+    let head = w.head(&w.ours);
+    let r = w.sync();
+    assert!(clean(&r) && r.pulled == 0 && r.pushed, "{r:?}");
+    assert_eq!(w.head(&w.ours), head, "adopted the tracking ref's commit");
+    assert_eq!(w.remote_head(), head);
 }

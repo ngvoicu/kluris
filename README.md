@@ -324,7 +324,12 @@ kluris sync --brain all --json    # every brain, for scripts and agents
 
 For each brain, `kluris sync` fetches its branch's upstream (it never asks
 for credentials), fast-forwards when the brain is behind, pushes when it is
-ahead, and merges when both sides have new commits:
+ahead, and merges when both sides have new commits. It works on the branch
+checked out when it starts, from start to end: what it brings in is only
+the commit the remote itself named in this sync, never what another git
+left in `origin/main`, and what it pushes is that branch's commit. A remote
+that has no such branch gets it back from the push. When both sides have
+new commits:
 
 - Merged on their own: changes to different files; the generated `map.md`
   and `brain.md` files, rebuilt from the merged brain rather than merged line
@@ -374,8 +379,9 @@ connection is refused or times out, or the fetch or push runs past its
 minute), `refused` (a locked ref, a remote-tracking ref Kluris will not
 move, a remote that turned the brain away or kept moving, histories with
 no commit in common, or under `--brain all` a brain that cannot be synced),
-`busy` (another Kluris command is changing the brain, or a git lock is
-held), `in_progress` (a git merge, rebase, cherry-pick or revert), `hook` (a
+`busy` (another Kluris command is changing the brain or fetching its
+remote, a git lock is held, or the branch changed while Kluris synced it:
+a switch, a commit, a rebase started), `in_progress` (a git merge, rebase, cherry-pick or revert), `hook` (a
 hook stopped the merge), `failed` (git stopped partway) or `no_upstream`;
 `detail` gives git's message and the fix. Without `--json`, every brain
 that has something to say also gets one line on stderr, such as `kluris:

@@ -3,28 +3,40 @@
 //! it is done ([`push`]); [`sync`] does both, and [`finish_merge`] lands a
 //! merge a person settled.
 //!
+//! [`open`] pins the branch HEAD names and its upstream: every later step
+//! pulls into that branch and pushes that branch's commit, and never reads
+//! HEAD for a commit again.
+//!
 //! [`pull`], local but for the fetch:
 //! 1. a git merge, rebase, cherry-pick or revert in progress, or a branch
 //!    without an upstream, leaves the brain as it is;
-//! 2. the upstream is fetched ([`fetch::fetch`]) under the remote claim; when
-//!    another command holds it, the pull goes on from what is already
-//!    fetched;
-//! 3. under the exclusive tree claim it decides and moves the work tree:
+//! 2. the upstream is fetched ([`fetch::fetch`]) under the remote claim; the
+//!    only commit that may land is the one this fetch's own `ls-remote`
+//!    named. When another command holds the remote claim, the upstream's
+//!    commit is not known, so the pull lands nothing (`busy`);
+//! 3. under the exclusive tree claim it checks that HEAD still names the
+//!    pinned branch and no git operation started ([`land::changed`]), then
+//!    decides and moves the work tree:
 //!    behind only, it fast-forwards; diverged, it merges in memory
 //!    ([`merge_commits`]) and, without conflicts, makes the merge commit
 //!    (`kluris: sync` with `Kluris-Sync: auto`, through the merge hooks) and
-//!    lands it ([`land`]); ahead only, there is nothing to pull. A remote
-//!    without the branch and no tracking ref yet is ahead only, every commit
-//!    from the root to push. Unrelated histories are refused before any
-//!    merge;
+//!    lands it ([`land`], which checks the branch once more, and that it
+//!    still holds the commit the merge was made for). What stays open is
+//!    the moment between that last check and git's own write: a switch or
+//!    a commit made then is the same race as an edit made then, reported
+//!    (git refuses, or the second check finds it), not closed. Ahead only,
+//!    there is nothing to pull. A remote without the branch is ahead only, every
+//!    commit from the root to push. Unrelated histories are refused before
+//!    any merge;
 //! 4. a conflict writes the waiting merge ([`pending`]) and nothing else.
 //!    A waiting merge whose `ours` is not HEAD is stale and replaced; one
 //!    the upstream now merges cleanly with is dropped and the pull goes on;
 //!    otherwise its conflicts are reported again, with the upstream's newer
 //!    commits counted in `behind_conflict`.
 //!
-//! [`push`] is network only, under the remote claim: the commit goes
-//! through the `kluris-<remote>` alias ([`SyncGit::push`]), then the engine
+//! [`push`] is network only, under the remote claim: the pinned branch's
+//! commit goes through the `kluris-<remote>` alias ([`SyncGit::push`]), then
+//! the engine
 //! moves the tracking ref, checked and by compare-and-swap, as after a
 //! fetch. [`sync`] pulls again after a push the remote turned back because
 //! it moved, [`PUSH_ATTEMPTS`] times at most. Only the fetch and the push
@@ -38,7 +50,7 @@ use super::claim::{ClaimError, RemoteClaim, TreeClaim};
 use super::fetch::{self, Fetch};
 use super::git::{GitDirs, PushOutcome, SyncGit, Upstream};
 use super::hooks::{HookError, MergeHookError, merge_commit};
-use super::land::{blocked_paths, failed, land, uncommitted};
+use super::land::{blocked_paths, failed, land, unchanged, uncommitted};
 use super::merge::{MergeOutcome, merge_commits};
 use super::pending::{self, Found, Pending};
 use super::{
@@ -61,14 +73,18 @@ pub fn check_git(git: &impl Git) -> Result<(), SyncError> {
     }
 }
 
-/// One brain opened for the engine: its repo, its git directories, and a
-/// git with the remote environment, so no git the engine starts prompts.
+/// One brain opened for the engine: its repo, its git directories, a git
+/// with the remote environment (so no git the engine starts prompts), and
+/// the branch HEAD named when it was opened, with that branch's upstream.
 #[derive(Debug, Clone)]
 pub struct Context<'a, G> {
     root: PathBuf,
     git: G,
     repo: Repo,
     dirs: GitDirs,
+    /// `refs/heads/<name>`; `None` on a detached HEAD.
+    branch: Option<String>,
+    upstream: Option<Upstream>,
     request: SyncRequest<'a>,
 }
 
@@ -79,6 +95,11 @@ impl<'a, G: SyncGit> Context<'a, G> {
 
     pub fn repo(&self) -> &Repo {
         &self.repo
+    }
+
+    /// The pinned branch (`refs/heads/<name>`); `None` on a detached HEAD.
+    pub fn branch(&self) -> Option<&str> {
+        self.branch.as_deref()
     }
 
     /// Where the worktree's waiting merge is.
@@ -94,6 +115,24 @@ impl<'a, G: SyncGit> Context<'a, G> {
             ),
             ClaimError::Io(e) => failed(format!("cannot claim the work tree: {e}")),
         })
+    }
+
+    /// The pinned branch, or why there is none.
+    fn pinned(&self) -> Result<&str, LeftAsIs> {
+        self.branch().ok_or_else(|| {
+            LeftAsIs::because(
+                LeftReason::Busy,
+                "HEAD is detached; switch to the branch to sync, then run again",
+            )
+        })
+    }
+
+    /// The pinned branch's commit; refused while it has none.
+    fn branch_commit(&self, branch: &str) -> Result<String, LeftAsIs> {
+        self.git
+            .ref_value(&self.repo, branch)
+            .map_err(failed)?
+            .ok_or_else(|| failed("the branch has no commit yet: commit first"))
     }
 
     /// The remote claim; `None` while another command holds it.
@@ -122,11 +161,18 @@ pub fn open<'a, G: SyncGit>(
     }
     let git = git.for_remote(&repo)?;
     let dirs = git.git_dirs(&repo)?;
+    let branch = git.branch(&repo)?;
+    let upstream = match &branch {
+        Some(branch) => git.upstream(&repo, branch)?,
+        None => None,
+    };
     Ok(Context {
         root: root.to_path_buf(),
         git,
         repo,
         dirs,
+        branch,
+        upstream,
         request: *request,
     })
 }
@@ -149,12 +195,11 @@ fn pull_into<G: SyncGit>(ctx: &Context<G>, report: &mut SyncReport) -> Result<()
         ));
     }
     let upstream = upstream(ctx)?;
-    let theirs = fetched(ctx, &upstream)?;
+    let theirs = fetched(ctx, upstream)?;
     let _tree = ctx.take_tree()?;
-    let ours = git
-        .head(repo)
-        .map_err(failed)?
-        .ok_or_else(|| failed("the branch has no commit yet: commit first"))?;
+    let branch = upstream.branch.as_str();
+    let ours = ctx.branch_commit(branch)?;
+    unchanged(git, repo, branch, &ours)?;
     let count = |from: Option<&str>, to: &str| git.count(repo, from, to).map_err(failed);
     let pending_path = ctx.pending();
     let waiting = match Pending::read(&pending_path) {
@@ -177,7 +222,7 @@ fn pull_into<G: SyncGit>(ctx: &Context<G>, report: &mut SyncReport) -> Result<()
         return drop_waiting(&pending_path, waiting);
     }
     if !ahead {
-        land(git, repo, &ctx.root, &ours, &theirs)?;
+        land(git, repo, &ctx.root, branch, &ours, &theirs)?;
         report.pulled = count(Some(&ours), &theirs)?;
         return drop_waiting(&pending_path, waiting);
     }
@@ -188,7 +233,7 @@ fn pull_into<G: SyncGit>(ctx: &Context<G>, report: &mut SyncReport) -> Result<()
         .map_err(failed)?
         .is_empty()
     {
-        return Err(unrelated(&upstream));
+        return Err(unrelated(upstream));
     }
     if let Some(waiting) = waiting.as_ref().filter(|w| w.theirs == theirs) {
         report.conflicts = texts(git, repo, &waiting.conflicts).map_err(failed)?;
@@ -235,7 +280,7 @@ fn pull_into<G: SyncGit>(ctx: &Context<G>, report: &mut SyncReport) -> Result<()
         no_verify,
     )
     .map_err(merge_stopped)?;
-    land(git, repo, &ctx.root, &ours, &commit)?;
+    land(git, repo, &ctx.root, branch, &ours, &commit)?;
     report.pulled = count(Some(&ours), &theirs)?;
     report.auto_merged = auto_merged;
     report.to_push = count(Some(&theirs), &commit)?;
@@ -250,14 +295,13 @@ fn drop_waiting(path: &Path, waiting: Option<Pending>) -> Result<(), LeftAsIs> {
     }
 }
 
-/// The current branch's upstream, or why there is none.
-fn upstream<G: SyncGit>(ctx: &Context<G>) -> Result<Upstream, LeftAsIs> {
-    if let Some(upstream) = ctx.git.upstream(&ctx.repo).map_err(failed)? {
+/// The pinned branch's upstream, or why there is none.
+fn upstream<'c, G: SyncGit>(ctx: &'c Context<G>) -> Result<&'c Upstream, LeftAsIs> {
+    if let Some(upstream) = &ctx.upstream {
         return Ok(upstream);
     }
-    let head = ctx.git.symbolic_target(&ctx.repo, "HEAD").map_err(failed)?;
-    let branch = head
-        .as_deref()
+    let branch = ctx
+        .branch()
         .and_then(|b| b.strip_prefix("refs/heads/"))
         .unwrap_or("<branch>");
     Err(LeftAsIs::because(
@@ -266,18 +310,24 @@ fn upstream<G: SyncGit>(ctx: &Context<G>) -> Result<Upstream, LeftAsIs> {
     ))
 }
 
-/// The upstream's commit to pull from: fetched under the remote claim, or
-/// the tracking ref's value while another command holds it. `None`: no
-/// tracking ref.
+/// The upstream's commit to pull from: the one this fetch's own
+/// `ls-remote` named, under the remote claim; `None` when the remote has
+/// no such branch. While another command holds the remote claim the
+/// upstream's commit is not known, and the tracking ref, which any git can
+/// rewrite, is never taken for it.
 fn fetched<G: SyncGit>(ctx: &Context<G>, upstream: &Upstream) -> Result<Option<String>, LeftAsIs> {
     let (git, repo) = (&ctx.git, &ctx.repo);
     let Some(_remote) = ctx.take_remote()? else {
-        return git.ref_value(repo, &upstream.refname).map_err(failed);
+        return Err(LeftAsIs::because(
+            LeftReason::Busy,
+            "another kluris command is fetching this brain's remote, so the upstream's commit is not known; nothing was pulled: run again",
+        ));
     };
     let deadline = Instant::now() + ctx.request.network_time_limit;
     match fetch::fetch(git, repo, upstream, deadline).map_err(failed)? {
         Fetch::Moved { new, .. } => Ok(Some(new)),
-        Fetch::Same { at } => Ok(at),
+        Fetch::Same { at } => Ok(Some(at)),
+        Fetch::NoBranch => Ok(None),
         Fetch::Offline => Err(offline()),
         Fetch::Refused { detail } => Err(LeftAsIs::because(LeftReason::Refused, detail)),
     }
@@ -367,8 +417,8 @@ pub enum Pushed {
     Left(LeftAsIs),
 }
 
-/// Push HEAD to the upstream under the remote claim, then move the tracking
-/// ref (see the module docs).
+/// Push the pinned branch's commit to its upstream under the remote claim,
+/// then move the tracking ref (see the module docs).
 pub fn push<G: SyncGit>(ctx: &Context<G>) -> Pushed {
     match push_head(ctx) {
         Ok(pushed) => pushed,
@@ -387,18 +437,15 @@ fn push_head<G: SyncGit>(ctx: &Context<G>) -> Result<Pushed, LeftAsIs> {
     };
     // Checked right before: the ref the engine moves once the remote took
     // the push.
-    if let Some(why) = fetch::unmovable(git, repo, &upstream).map_err(failed)? {
+    if let Some(why) = fetch::unmovable(git, repo, upstream).map_err(failed)? {
         return Err(LeftAsIs::because(LeftReason::Refused, why));
     }
     let before = git.ref_value(repo, &upstream.refname).map_err(failed)?;
-    let head = git
-        .head(repo)
-        .map_err(failed)?
-        .ok_or_else(|| failed("the branch has no commit yet: commit first"))?;
+    let commit = ctx.branch_commit(&upstream.branch)?;
     let deadline = Instant::now() + ctx.request.network_time_limit;
-    match git.push(repo, &upstream, &head, deadline) {
+    match git.push(repo, upstream, &commit, deadline) {
         PushOutcome::Pushed => {
-            moved_after_push(git, repo, &upstream, before.as_deref(), &head);
+            moved_after_push(git, repo, upstream, before.as_deref(), &commit);
             Ok(Pushed::Pushed)
         }
         PushOutcome::RemoteMoved => Ok(Pushed::RemoteMoved),
@@ -484,8 +531,10 @@ pub fn finish_merge<G: SyncGit>(
     message: &str,
 ) -> Result<String, LeftAsIs> {
     let (git, repo) = (&ctx.git, &ctx.repo);
+    let branch = ctx.pinned()?;
     let _tree = ctx.take_tree()?;
     let (ours, theirs) = (&pending.ours, &pending.theirs);
+    unchanged(git, repo, branch, ours)?;
     let maps = &ctx.request.maps;
     let MergeOutcome::Clean { tree, index, .. } =
         merge_commits(git, repo, ours, theirs, maps, choices).map_err(failed)?
@@ -502,7 +551,7 @@ pub fn finish_merge<G: SyncGit>(
     let no_verify = ctx.request.no_verify;
     let commit = merge_commit(git, repo, &index, &tree, [ours, theirs], message, no_verify)
         .map_err(merge_stopped)?;
-    land(git, repo, &ctx.root, ours, &commit)?;
+    land(git, repo, &ctx.root, branch, ours, &commit)?;
     Ok(commit)
 }
 

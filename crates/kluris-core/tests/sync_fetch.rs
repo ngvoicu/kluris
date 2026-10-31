@@ -62,7 +62,8 @@ fn refused(r: &SyncReport) -> String {
 fn ours(w: &World) -> (SystemGit, Repo, Upstream) {
     let git = w.git();
     let repo = git.repo(&w.ours).unwrap();
-    let upstream = git.upstream(&repo).unwrap().unwrap();
+    let branch = git.branch(&repo).unwrap().unwrap();
+    let upstream = git.upstream(&repo, &branch).unwrap().unwrap();
     (git, repo, upstream)
 }
 
@@ -198,20 +199,30 @@ fn one_upstream_query_names_the_remote_the_tracking_ref_and_the_branch() {
     assert_eq!(
         upstream,
         Upstream {
+            branch: "refs/heads/main".into(),
             remote: "origin".into(),
             refname: TRACKING.into(),
             remote_ref: "refs/heads/main".into(),
         }
     );
-    // A local branch as upstream, no upstream, a detached HEAD: none.
+    // A local branch as upstream, no upstream: none.
+    let main = "refs/heads/main";
     w.run(&w.ours, &["branch", "base"]);
     w.run(&w.ours, &["branch", "--set-upstream-to=base"]);
-    assert_eq!(git.upstream(&repo).unwrap(), None);
+    assert_eq!(git.upstream(&repo, main).unwrap(), None);
     w.run(&w.ours, &["branch", "--unset-upstream"]);
-    assert_eq!(git.upstream(&repo).unwrap(), None);
+    assert_eq!(git.upstream(&repo, main).unwrap(), None);
+    // The upstream is the named branch's, whatever HEAD names; a detached
+    // HEAD names no branch.
     w.run(&w.ours, &["branch", "--set-upstream-to=origin/main"]);
+    w.run(&w.ours, &["checkout", "-q", "base"]);
+    assert_eq!(
+        git.branch(&repo).unwrap().as_deref(),
+        Some("refs/heads/base")
+    );
+    assert_eq!(git.upstream(&repo, main).unwrap(), Some(upstream.clone()));
     w.run(&w.ours, &["checkout", "-q", "--detach"]);
-    assert_eq!(git.upstream(&repo).unwrap(), None);
+    assert_eq!(git.branch(&repo).unwrap(), None);
 }
 
 #[test]
@@ -596,12 +607,7 @@ fn a_listed_commit_missing_from_a_partial_clone_is_reported_absent_not_fetched()
 fn the_fetch_moves_the_tracking_ref_to_the_listed_commit_and_writes_no_fetch_head() {
     let w = World::new();
     let old = tracking(&w);
-    assert_eq!(
-        fetch_ours(&w),
-        Fetch::Same {
-            at: Some(old.clone())
-        }
-    );
+    assert_eq!(fetch_ours(&w), Fetch::Same { at: old.clone() });
     w.theirs_push(&[("ideas/new.md", &neuron("", "# New\n"))], &[]);
     let t = &w.theirs;
     w.run(t, &["tag", "v9"]);
@@ -621,7 +627,7 @@ fn the_fetch_moves_the_tracking_ref_to_the_listed_commit_and_writes_no_fetch_hea
     assert_eq!(w.head(&w.ours), head, "the branch moved");
     let reflog = w.run(&w.ours, &["reflog", "show", TRACKING]);
     assert!(reflog.contains("kluris sync: fetch origin"), "{reflog}");
-    assert_eq!(fetch_ours(&w), Fetch::Same { at: Some(new) });
+    assert_eq!(fetch_ours(&w), Fetch::Same { at: new });
 }
 
 #[test]
@@ -639,15 +645,17 @@ fn an_upstream_with_no_tracking_ref_yet_is_moved_from_none() {
     assert_eq!(tracking(&w), new);
 }
 
+/// The remote has no such branch: no commit is the upstream's, and the
+/// tracking ref, with a value or without, is left as it is.
 #[test]
-fn a_remote_without_the_branch_is_the_same_at_the_tracking_ref_or_none() {
+fn a_remote_without_the_branch_is_no_branch_and_its_tracking_ref_stays() {
     let w = World::new();
     let held = tracking(&w);
     w.run(&w.remote, &["update-ref", "-d", "refs/heads/main"]);
-    assert_eq!(fetch_ours(&w), Fetch::Same { at: Some(held) });
-    // No tracking ref yet either: nothing upstream, nothing to move.
+    assert_eq!(fetch_ours(&w), Fetch::NoBranch);
+    assert_eq!(ref_at(&w, TRACKING), Some(held));
     w.run(&w.ours, &["update-ref", "-d", TRACKING]);
-    assert_eq!(fetch_ours(&w), Fetch::Same { at: None });
+    assert_eq!(fetch_ours(&w), Fetch::NoBranch);
     assert_eq!(ref_at(&w, TRACKING), None);
 }
 

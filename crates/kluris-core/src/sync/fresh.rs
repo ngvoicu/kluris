@@ -248,7 +248,12 @@ fn step(git: &SystemGit, req: &FreshRequest, deadline: Instant) -> Result<Fresh,
     let git = git
         .clone()
         .config(format!("core.hooksPath={}", no_hooks.display()));
-    let Some(upstream) = git.upstream(&repo).map_err(|_| Fresh::Failed)? else {
+    let branch = git.branch(&repo).map_err(|_| Fresh::Failed)?;
+    let upstream = match branch {
+        Some(branch) => git.upstream(&repo, &branch).map_err(|_| Fresh::Failed)?,
+        None => None,
+    };
+    let Some(upstream) = upstream else {
         write_stamp(stamp, req.now);
         return Ok(Fresh::NoUpstream);
     };

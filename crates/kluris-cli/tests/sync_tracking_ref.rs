@@ -477,12 +477,13 @@ fn a_tracking_ref_made_symbolic_during_the_merge_is_refused_before_the_push() {
     assert_eq!(h.git(&root, &["status", "--porcelain"]), "");
 }
 
-/// A remote that has no such branch: sync goes on from what the tracking
-/// ref held before the fetch.
+/// A remote that has no such branch: no commit the remote named can land,
+/// so the tracking ref's value is never taken for the upstream's; the push
+/// makes the branch again from this branch's own commit.
 #[test]
-fn a_remote_without_the_branch_goes_on_from_the_tracking_ref() {
+fn a_remote_without_the_branch_gets_it_back_from_this_branch() {
     let mut h = Home::new();
-    h.brain("alpha");
+    let root = h.brain("alpha");
     let bare = h.dir.path().join("alpha.git");
     h.git(&bare, &["update-ref", "-d", "refs/heads/main"]);
     let (code, doc) = h.json(&["sync", "--brain", "alpha", "--json"]);
@@ -490,5 +491,9 @@ fn a_remote_without_the_branch_goes_on_from_the_tracking_ref() {
     let entry = &doc["brains"][0]["sync"];
     assert_eq!(entry["left_as_is"]["reason"], Value::Null, "{doc}");
     assert!(!pulled(entry), "{doc}");
-    assert_eq!(entry["pushed"], false, "{doc}");
+    assert_eq!(entry["pushed"], true, "{doc}");
+    assert_eq!(
+        h.git(&bare, &["rev-parse", "main"]),
+        h.git(&root, &["rev-parse", "main"])
+    );
 }

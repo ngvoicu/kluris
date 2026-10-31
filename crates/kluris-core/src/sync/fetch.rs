@@ -28,8 +28,8 @@
 //! way ([`super::git::network_failure`]); refused, with git's message and
 //! the fix, when the remote turned the fetch away ([`refused_access`]) or a
 //! ref lock stops the move ([`ref_locked`]), which Kluris never removes.
-//! Nothing upstream (the remote has no such branch) is [`Fetch::Same`] at
-//! the tracking ref's value: `None` when there is no tracking ref yet.
+//! Nothing upstream (the remote has no such branch) is [`Fetch::NoBranch`]:
+//! the tracking ref is left as it is and its value is not the upstream's.
 //!
 //! A fetch that brought the commit ends the back-off; [`fetched_recently`],
 //! [`back_off`] and their files are the read throttle: at most one read's
@@ -67,10 +67,11 @@ pub enum Fetch {
     /// before (`None`: no tracking ref yet). The ref holds `new`, or what
     /// another git moved it to meanwhile.
     Moved { old: Option<String>, new: String },
-    /// Nothing to move: the tracking ref holds the upstream's commit, or
-    /// the remote has no such branch. `at` is the ref's value (`None`: no
-    /// tracking ref yet).
-    Same { at: Option<String> },
+    /// Nothing to move: the tracking ref already holds the upstream's
+    /// commit, `at`.
+    Same { at: String },
+    /// The remote has no such branch; the tracking ref is left as it is.
+    NoBranch,
     /// Stopped at the deadline, or the network is in the way.
     Offline,
     /// The brain is left alone: why, and the fix.
@@ -148,7 +149,7 @@ pub fn fetch<G: SyncGit>(
         }
         let new = match brought {
             Brought::Commit(new) => new,
-            Brought::NoBranch => return Ok(Fetch::Same { at: before }),
+            Brought::NoBranch => return Ok(Fetch::NoBranch),
             Brought::Gone if !gone_once => {
                 gone_once = true;
                 continue;
@@ -160,7 +161,7 @@ pub fn fetch<G: SyncGit>(
             }
         };
         if before.as_ref() == Some(&new) {
-            return Ok(Fetch::Same { at: before });
+            return Ok(Fetch::Same { at: new });
         }
         let message = format!("kluris sync: fetch {}", upstream.remote);
         match advance(git, repo, upstream, before.as_deref(), &new, &message)? {

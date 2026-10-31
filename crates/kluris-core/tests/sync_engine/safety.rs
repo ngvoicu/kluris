@@ -510,8 +510,8 @@ fn a_linked_worktree_shares_the_remote_claim_and_keeps_its_own_waiting_merge() {
     let claim = RemoteClaim::try_take(&w.ours.join(".git")).unwrap();
     let r = engine::pull(&open_linked());
     assert!(
-        clean(&r) && r.pulled == 0,
-        "fetched under a held claim: {r:?}"
+        left(&r, LeftReason::Busy),
+        "pulled under a held claim: {r:?}"
     );
     drop(claim);
 

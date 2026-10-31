@@ -7,6 +7,7 @@
 #[path = "../common/mod.rs"]
 mod common;
 
+mod branch;
 mod conflicts;
 mod finish;
 mod hooks;

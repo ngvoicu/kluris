@@ -35,9 +35,11 @@ use super::merge::TextMerger;
 use crate::git::{GitError, Plumbing, Repo, SystemGit, TreeEntry};
 use crate::process::{Finished, RunError, run_until};
 
-/// Where the current branch pulls from and pushes to.
+/// Where a local branch pulls from and pushes to.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Upstream {
+    /// The local branch (`refs/heads/main`).
+    pub branch: String,
     /// The remote (`%(upstream:remotename)`, `origin`).
     pub remote: String,
     /// The remote-tracking ref (`refs/remotes/origin/main`).
@@ -156,9 +158,12 @@ pub trait SyncGit: Plumbing + TextMerger + Sized {
     /// run. A git that has it already is given back as it is.
     fn for_remote(&self, repo: &Repo) -> Result<Self, GitError>;
 
-    /// The current branch's upstream on a remote; `None` on a detached HEAD,
-    /// without one, or with a local branch as upstream.
-    fn upstream(&self, repo: &Repo) -> Result<Option<Upstream>, GitError>;
+    /// The branch HEAD names (`refs/heads/main`); `None` on a detached HEAD.
+    fn branch(&self, repo: &Repo) -> Result<Option<String>, GitError>;
+
+    /// The upstream on a remote of the local `branch` (`refs/heads/main`);
+    /// `None` without one, or with a local branch as upstream.
+    fn upstream(&self, repo: &Repo, branch: &str) -> Result<Option<Upstream>, GitError>;
 
     /// The worktree's own git directory and the repository's common one.
     fn git_dirs(&self, repo: &Repo) -> Result<GitDirs, GitError>;
@@ -663,13 +668,19 @@ impl SyncGit for SystemGit {
         })
     }
 
-    fn upstream(&self, repo: &Repo) -> Result<Option<Upstream>, GitError> {
-        let Ok(branch) = self.run(&repo.dir, &["symbolic-ref", "--quiet", "HEAD"]) else {
-            return Ok(None);
-        };
-        let branch = first_line(&branch);
+    fn branch(&self, repo: &Repo) -> Result<Option<String>, GitError> {
+        let args = ["symbolic-ref", "--quiet", "HEAD"];
+        match self.run(&repo.dir, &args) {
+            Ok(out) => Ok(Some(first_line(&out)).filter(|b| b.starts_with("refs/heads/"))),
+            // A detached HEAD.
+            Err(e) if e.code == Some(1) => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+
+    fn upstream(&self, repo: &Repo, branch: &str) -> Result<Option<Upstream>, GitError> {
         let format = "--format=%(upstream:remotename)%00%(upstream)%00%(upstream:remoteref)";
-        let out = self.run(&repo.dir, &["for-each-ref", format, &branch])?;
+        let out = self.run(&repo.dir, &["for-each-ref", format, branch])?;
         let text = String::from_utf8_lossy(&out);
         let line = text.lines().next().unwrap_or_default();
         let mut fields = line.split('\0');
@@ -682,6 +693,7 @@ impl SyncGit for SystemGit {
             return Ok(None);
         }
         Ok(Some(Upstream {
+            branch: branch.to_string(),
             remote: remote.to_string(),
             refname: refname.to_string(),
             remote_ref: remote_ref.to_string(),

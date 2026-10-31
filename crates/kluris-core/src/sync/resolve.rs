@@ -286,7 +286,11 @@ pub fn resolve<G: SyncGit>(
             }
         }
     }
-    let head = git.head(repo)?;
+    // The pinned branch's commit, never HEAD's.
+    let head = match ctx.branch() {
+        Some(branch) => git.ref_value(repo, branch)?,
+        None => None,
+    };
     if head.as_deref() != Some(pending.ours.as_str()) {
         return Err(ResolveError::Stale {
             head,
