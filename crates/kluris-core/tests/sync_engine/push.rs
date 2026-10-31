@@ -1,6 +1,7 @@
-//! The push: the `pre-push` hook runs as git runs it, once per push URL
-//! and before anything is pushed; one the remote turned back because it
-//! moved is pulled again and retried, [`PUSH_ATTEMPTS`] times at most.
+//! The push: git's own push of the pinned branch, so the `pre-push` hooks
+//! run as for any push, once per push URL; one the remote turned back
+//! because it moved is pulled again and retried, [`PUSH_ATTEMPTS`] times at
+//! most.
 
 use std::fs;
 
@@ -68,8 +69,9 @@ fn a_remote_that_keeps_moving_is_tried_at_most_the_push_attempts() {
     assert_ne!(w.remote_head(), w.head(&w.ours));
 }
 
-/// A `pre-push` hook that refuses pushes to `origin` by name: the engine
-/// runs it as git would, with the remote's own name, so it stops the push.
+/// A `pre-push` hook that refuses pushes to `origin` by name: git runs it
+/// with the remote's own name, so it stops the push, and the report gives
+/// what it printed.
 #[test]
 fn a_pre_push_hook_that_refuses_origin_stops_the_push() {
     let w = World::new();
@@ -83,49 +85,13 @@ fn a_pre_push_hook_that_refuses_origin_stops_the_push() {
     let r = w.sync();
     assert!(left(&r, LeftReason::Hook), "{r:?}");
     assert!(
-        detail(&r).starts_with("the pre-push hook failed (exit 7) for origin ")
-            && detail(&r).ends_with("; nothing was pushed: origin policy rejected this push"),
+        detail(&r).starts_with("the pre-push hook refused the push to origin ")
+            && detail(&r).ends_with(": origin policy rejected this push"),
         "{}",
         detail(&r)
     );
     assert!(!r.pushed);
     assert_eq!(w.remote_head(), remote);
-}
-
-/// A remote with two push URLs: the hook runs once for each, as git runs
-/// it, and all of them before anything is pushed, so one refusal stops the
-/// push to every URL.
-#[test]
-fn the_pre_push_hook_runs_once_per_push_url_before_anything_is_pushed() {
-    let w = World::new();
-    let second = w.dir.path().join("second.git");
-    let remote = w.remote.to_string_lossy().into_owned();
-    w.run(
-        w.dir.path(),
-        &["clone", "-q", "--bare", &remote, &second.to_string_lossy()],
-    );
-    for url in [&remote, &second.to_string_lossy().into_owned()] {
-        w.run(
-            &w.ours,
-            &["remote", "set-url", "--add", "--push", "origin", url],
-        );
-    }
-    w.ours_commit(&[("notes/second.md", &neuron("", "# Second\n"))], &[]);
-    let log = w.dir.path().join("pre-push-urls");
-    w.hook(
-        &w.ours,
-        "pre-push",
-        &format!(
-            "echo \"$2\" >> '{}'\ncase \"$2\" in *second.git) exit 3;; esac",
-            sh_path(&log)
-        ),
-    );
-    let (first_before, second_before) = (w.remote_head(), w.run(&second, &["rev-parse", "main"]));
-    let r = w.sync();
-    assert!(left(&r, LeftReason::Hook), "{r:?}");
-    assert_eq!(fs::read_to_string(&log).unwrap().lines().count(), 2);
-    assert_eq!(w.remote_head(), first_before, "pushed to the first URL");
-    assert_eq!(w.run(&second, &["rev-parse", "main"]), second_before);
 }
 
 /// `--no-verify` skips the merge's gates, never `pre-push`.
@@ -161,9 +127,10 @@ fn second_push_url(w: &World) -> std::path::PathBuf {
     second
 }
 
-/// Two push URLs whose `main` hold different commits: each hook run gets
-/// the value its own destination holds, as `git push` gives it, so a hook
-/// that guards the second destination's actual value stops the push.
+/// Two push URLs whose `main` hold different commits: git runs the hook
+/// once for each, with the value that destination holds, so a hook that
+/// guards the second destination's value stops the push there; the first
+/// takes it, as `git push` gives it.
 #[test]
 fn each_push_url_gets_its_own_destinations_value() {
     let w = World::new();
@@ -180,6 +147,7 @@ fn each_push_url_gets_its_own_destinations_value() {
         ],
     );
     w.ours_commit(&[("notes/second.md", &neuron("", "# Second\n"))], &[]);
+    let pushed = w.head(&w.ours);
     let log = w.dir.path().join("pre-push-input");
     w.hook(
         &w.ours,
@@ -192,22 +160,27 @@ fn each_push_url_gets_its_own_destinations_value() {
     let (remote, at_second) = (w.remote_head(), w.run(&second, &["rev-parse", "main"]));
     let r = w.sync();
     assert!(left(&r, LeftReason::Hook), "{r:?}");
+    assert!(
+        detail(&r).contains("second.git: deployed commit is protected"),
+        "{}",
+        detail(&r)
+    );
     let seen = fs::read_to_string(&log).unwrap();
     let old: Vec<&str> = seen
         .lines()
         .map(|l| l.rsplit(' ').next().unwrap())
         .collect();
     assert_eq!(old, [remote.as_str(), deployed.as_str()], "{seen}");
-    assert_eq!(w.remote_head(), remote);
+    assert_eq!(w.remote_head(), pushed);
     assert_eq!(w.run(&second, &["rev-parse", "main"]), at_second);
 }
 
 /// The destination moves after the hook ran (the hook moves it itself, to
-/// an ancestor of the commit): the push carries a lease on the value the
-/// hook saw, so it is turned back, pulled again, and the hook then sees the
-/// new value and refuses it.
+/// an ancestor of the commit): git's push carries the old value it read,
+/// so the remote turns it back; the sync pulls again, and the hook then
+/// sees the new value and refuses it.
 #[test]
-fn the_push_goes_only_where_the_hook_saw_it() {
+fn a_destination_that_moved_after_the_hook_turns_the_push_back() {
     let w = World::new();
     let base = w.remote_head();
     w.ours_commit(&[("notes/protected.md", &neuron("", "# Protected\n"))], &[]);
@@ -240,7 +213,7 @@ fn the_push_goes_only_where_the_hook_saw_it() {
 }
 
 /// A push URL that already has the commit: git runs the hook with nothing
-/// on stdin and pushes nothing there, and so does the engine.
+/// on stdin and pushes nothing there.
 #[test]
 fn a_destination_that_has_the_commit_gets_no_update_line() {
     let w = World::new();
@@ -275,42 +248,76 @@ fn a_destination_that_has_the_commit_gets_no_update_line() {
     assert_eq!(w.run(&mirror, &["rev-parse", "main"]).trim(), pushed);
 }
 
-/// The first push URL takes the commit and the second turns it away (its
-/// `pre-receive` hook): the report says which took it and which did not,
-/// and the sync fails.
+/// The remote turns the push away (its `pre-receive` hook): the brain is
+/// refused with git's message, what the remote said included.
 #[test]
-fn a_push_that_some_urls_took_says_which() {
+fn a_push_the_remote_turns_away_is_refused_with_gits_message() {
     let w = World::new();
-    let second = second_push_url(&w);
-    let hooks = second.join("hooks");
+    let hooks = w.remote.join("hooks");
     fs::create_dir_all(&hooks).unwrap();
     let receive = hooks.join("pre-receive");
-    fs::write(&receive, "#!/bin/sh\necho 'second refuses' >&2\nexit 1\n").unwrap();
+    fs::write(
+        &receive,
+        "#!/bin/sh\necho 'the remote refuses' >&2\nexit 1\n",
+    )
+    .unwrap();
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         fs::set_permissions(&receive, fs::Permissions::from_mode(0o755)).unwrap();
     }
     w.ours_commit(&[("notes/second.md", &neuron("", "# Second\n"))], &[]);
-    let pushed = w.head(&w.ours);
+    let remote = w.remote_head();
     let r = w.sync();
     assert!(left(&r, LeftReason::Refused), "{r:?}");
     assert!(!r.pushed, "{r:?}");
-    let remote = w.remote.to_string_lossy().into_owned();
-    let second_url = second.to_string_lossy().into_owned();
+    for said in [
+        "the push was refused: ",
+        "[remote rejected] (pre-receive hook declined)",
+        "the remote refuses",
+    ] {
+        assert!(detail(&r).contains(said), "{said}: {}", detail(&r));
+    }
+    assert_eq!(w.remote_head(), remote);
+}
+
+/// With `push.followTags`, git sends the annotated tag the pushed commit
+/// carries, and its line is on the hook's stdin with the branch's.
+#[test]
+fn with_push_follow_tags_the_hook_sees_the_tags_line() {
+    let w = World::new();
+    w.run(&w.ours, &["config", "push.followTags", "true"]);
+    w.ours_commit(&[("notes/second.md", &neuron("", "# Second\n"))], &[]);
+    let pushed = w.head(&w.ours);
+    w.run(&w.ours, &["tag", "-a", "v1", "-m", "v1"]);
+    let tag = w.run(&w.ours, &["rev-parse", "refs/tags/v1"]);
+    let log = w.dir.path().join("pre-push-input");
+    w.hook(&w.ours, "pre-push", &format!("cat >> '{}'", sh_path(&log)));
+    let r = w.sync();
+    assert!(clean(&r) && r.pushed, "{r:?}");
+    let seen = fs::read_to_string(&log).unwrap();
+    let zeros = "0".repeat(pushed.len());
     assert!(
-        detail(&r).contains(&format!("{remote} took it"))
-            && detail(&r).contains(&format!("{second_url} did not")),
-        "{}",
-        detail(&r)
+        seen.lines()
+            .any(|l| l == format!("refs/tags/v1 {} refs/tags/v1 {zeros}", tag.trim())),
+        "{seen}"
     );
-    assert_eq!(w.remote_head(), pushed);
+    assert!(
+        seen.lines()
+            .any(|l| l.starts_with(&format!("refs/heads/main {pushed} refs/heads/main "))),
+        "{seen}"
+    );
+    assert_eq!(
+        w.run(&w.remote, &["rev-parse", "refs/tags/v1"]).trim(),
+        tag.trim()
+    );
 }
 
 /// A `pre-push` hook that does not finish within the push's time limit is
-/// stopped with every process it started, the push is left for the hook,
-/// nothing is pushed, and the remote claim is free: a retry with a quick
-/// hook pushes at once.
+/// stopped with the push and every process it started that stays in its
+/// process group (Unix) or job (Windows): the brain is offline, nothing is
+/// pushed, and the remote claim is free, so a retry with a quick hook
+/// pushes at once.
 #[test]
 fn a_hook_past_the_pushs_time_limit_is_stopped() {
     let w = World::new();
@@ -341,12 +348,7 @@ fn a_hook_past_the_pushs_time_limit_is_stopped() {
     let took = began.elapsed();
     assert!(started.exists(), "the hook never ran");
     assert!(took < std::time::Duration::from_millis(2900), "{took:?}");
-    assert!(left(&r, LeftReason::Hook), "{r:?}");
-    assert!(
-        detail(&r).contains("did not finish within"),
-        "{}",
-        detail(&r)
-    );
+    assert!(left(&r, LeftReason::Offline) && !r.pushed, "{r:?}");
     assert_eq!(w.remote_head(), remote);
     // Its processes are gone: what it would do after the sleep never comes.
     while began.elapsed() < std::time::Duration::from_millis(4000) {

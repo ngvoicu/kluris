@@ -1158,11 +1158,11 @@ fn a_push_to_an_ssh_host_that_refuses_the_connection_is_unreachable() {
     w.ours_commit(&[("notes/second.md", &neuron("", "# Second\n"))], &[]);
     let before = w.remote_head();
     let (git, repo, upstream) = ours(&w);
-    let head = w.head(&w.ours);
     let deadline = Instant::now() + Duration::from_secs(60);
-    let urls = git.push_urls(&repo, &upstream).unwrap();
-    let outcome = git.destination(&repo, &upstream, &urls[0], &head, deadline);
-    assert_eq!(outcome, Err(PushOutcome::Unreachable));
+    assert_eq!(
+        git.push(&repo, &upstream, deadline),
+        PushOutcome::Unreachable
+    );
     let r = w.sync();
     assert!(left(&r, LeftReason::Offline) && !r.pushed, "{r:?}");
     assert!(fs::read_to_string(&calls).unwrap().contains("fakehost"));
@@ -1250,29 +1250,28 @@ fn a_fetch_held_past_the_bound_by_a_slow_upload_pack_leaves_no_lock() {
 
 // --- the push ------------------------------------------------------------------------------
 
+/// git moves the tracking ref after a push the remote took, as after any
+/// push of yours (`update by push`), and leaves no lock.
 #[test]
-fn a_push_moves_the_tracking_ref_itself_outside_the_bound_and_leaves_no_lock() {
-    // git moves no tracking ref after the push (the alias has no fetch
-    // refspec), so a slow `reference-transaction` hook holds only Kluris's
-    // own move of the ref, after the push and outside its bound.
+fn git_moves_the_tracking_ref_after_a_push_the_remote_took() {
     let w = World::new();
     w.ours_commit(&[("notes/second.md", &neuron("", "# Second\n"))], &[]);
     let pushed = w.head(&w.ours);
-    w.hook(&w.ours, "reference-transaction", SLOW_TRACKING_HOOK);
-    let r = sync_within(&w, LIMIT);
+    let r = w.sync();
     assert!(clean(&r) && r.pushed, "{r:?}");
-    assert!(!left(&r, LeftReason::Refused), "{r:?}");
     assert_eq!(w.remote_head(), pushed);
     assert_eq!(tracking(&w), pushed);
     assert_eq!(ref_locks(&w.ours), Vec::<PathBuf>::new());
-    let reflog = w.run(&w.ours, &["reflog", "show", TRACKING]);
-    assert!(reflog.contains("kluris sync: push origin"), "{reflog}");
+    let reflog = w.run(&w.ours, &["reflog", "show", "-1", "--format=%gs", TRACKING]);
+    assert_eq!(reflog.trim(), "update by push");
 }
 
+/// A `pre-push` hook that makes the tracking ref symbolic while the push
+/// runs: git follows it, as `git push` does, and the next sync refuses the
+/// ref with the fix.
 #[test]
-fn a_pre_push_hook_that_makes_the_tracking_ref_symbolic_moves_no_other_branch() {
+fn a_tracking_ref_a_pre_push_hook_makes_symbolic_is_refused_by_the_next_sync() {
     let w = World::new();
-    let base = w.head(&w.ours);
     w.run(&w.ours, &["branch", "other"]);
     w.ours_commit(&[("notes/second.md", &neuron("", "# Second\n"))], &[]);
     let pushed = w.head(&w.ours);
@@ -1284,13 +1283,7 @@ fn a_pre_push_hook_that_makes_the_tracking_ref_symbolic_moves_no_other_branch() 
     let r = w.sync();
     assert!(r.pushed, "{r:?}");
     assert_eq!(w.remote_head(), pushed);
-    assert_eq!(
-        ref_at(&w, "refs/heads/other"),
-        Some(base),
-        "the push moved another branch"
-    );
     assert_eq!(w.head(&w.ours), pushed);
-    // Left alone: the next sync refuses it with the fix.
     assert!(is_symbolic(&w, TRACKING));
     let why = refused(&w.sync());
     assert!(
@@ -1387,13 +1380,9 @@ fn push_instead_of_and_a_chained_instead_of_apply_once() {
     assert_eq!(fs::read_to_string(&log).unwrap().trim(), pushes);
 }
 
-/// The alias push takes the remote's settings but `fetch` and `mirror`,
-/// seen by their effects: the remote's `receivepack` runs; `mirror = true`,
-/// which cannot go with the push's refspec, does not stop it; and git moves
-/// no tracking ref (it has no fetch refspec), Kluris does. The settings
-/// themselves are checked by `a_push_alias_takes_every_remote_setting_but_fetch_and_mirror`.
+/// The push is git's own to the remote: its `receivepack` runs.
 #[test]
-fn the_remotes_receivepack_carries_over_but_not_fetch_or_mirror() {
+fn the_remotes_receivepack_runs_for_the_push() {
     let w = World::new();
     let received = w.dir.path().join("received");
     let script = w.dir.path().join("receive-pack.sh");
@@ -1410,35 +1399,13 @@ fn the_remotes_receivepack_carries_over_but_not_fetch_or_mirror() {
         &w.ours,
         &["config", "remote.origin.receivepack", &receivepack],
     );
-    w.run(&w.ours, &["config", "remote.origin.mirror", "true"]);
     w.ours_commit(&[("notes/second.md", &neuron("", "# Second\n"))], &[]);
     let pushed = w.head(&w.ours);
     let r = w.sync();
     assert!(clean(&r) && r.pushed, "{r:?}");
     assert!(received.exists(), "the remote's receivepack did not run");
     assert_eq!(w.remote_head(), pushed);
-    let reflog = w.run(&w.ours, &["reflog", "show", "-1", "--format=%gs", TRACKING]);
-    assert_eq!(reflog.trim(), "kluris sync: push origin");
-}
-
-#[test]
-fn a_configured_remote_named_as_the_push_alias_stops_the_push() {
-    let w = World::new();
-    let remote = w.remote.to_string_lossy().into_owned();
-    w.run(&w.ours, &["remote", "add", "kluris-origin", &remote]);
-    w.ours_commit(&[("notes/second.md", &neuron("", "# Second\n"))], &[]);
-    let (git, repo, upstream) = ours(&w);
-    let before = w.remote_head();
-    let Err(PushOutcome::Failed(why)) = git.push_urls(&repo, &upstream) else {
-        panic!("not refused");
-    };
-    let r = w.sync();
-    assert!(left(&r, LeftReason::Refused) && !r.pushed, "{r:?}");
-    assert!(
-        why.starts_with("a remote named kluris-origin is configured"),
-        "{why}"
-    );
-    assert_eq!(w.remote_head(), before);
+    assert_eq!(tracking(&w), pushed);
 }
 
 // --- the read throttle and the back-off ----------------------------------------------------

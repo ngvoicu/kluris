@@ -357,15 +357,15 @@ git runs them, and git's `reference-transaction` and `post-index-change`
 hooks run on every ref and index update (`--no-verify` skips
 `pre-merge-commit` and `commit-msg`); a merge hook may change the message,
 but one that stages files into the merge stops it, with nothing merged.
-`pre-push` runs as `git push` runs it, once for each push URL and before
-anything is sent: it gets the remote's name (`origin`), the URL and, on
-stdin, git's ref line with what that URL holds now (nothing where it
-already has the commit), and a refusal for any URL stops the push to all.
-The push to each URL then carries a lease on the value its hook saw, so a
-destination that moved after the hook ran turns it back, and the sync
-pulls again. When only some push URLs take the commit, the brain is
-`refused` and the detail says which took it and which did not. The brain
-must be the root of its own git repository, and git must be 2.38 or newer.
+Kluris pushes with `git push <remote> <branch>` (`git push origin
+refs/heads/main:refs/heads/main`, the branch it synced named by its ref,
+never `HEAD`), so `pre-push` runs exactly as for your own push, and git
+moves `origin/main` once the remote took it. A `pre-push` hook that
+refuses leaves the brain as it is (`hook`, with what the hook printed); a
+remote that turns the push away is `refused`, with git's message. The
+commits to push are counted against the remote's fetch URL, so a push URL
+of its own is pushed to only when that count is not zero. The brain must
+be the root of its own git repository, and git must be 2.38 or newer.
 
 With `--json`, each brain's entry is `name` and `sync`, which has eight
 keys: `pulled` (the commits brought in), `auto_merged` (neurons merged on
@@ -386,7 +386,7 @@ no commit in common, or under `--brain all` a brain that cannot be synced),
 `busy` (another Kluris command is changing the brain or fetching its
 remote, a git lock is held, or the branch changed while Kluris synced it:
 a switch, a commit, a rebase started), `in_progress` (a git merge, rebase, cherry-pick or revert), `hook` (a
-hook stopped the merge), `failed` (git stopped partway) or `no_upstream`;
+hook stopped the merge or the push), `failed` (git stopped partway) or `no_upstream`;
 `detail` gives git's message and the fix. Without `--json`, every brain
 that has something to say also gets one line on stderr, such as `kluris:
 acme: pulled 2 commits; 1 conflict (notes/c.md)`. The exit code is 1 when a
@@ -406,10 +406,9 @@ fetch` moved it meanwhile, in which case Kluris keeps that and fetches once
 more. When origin moves its branch away from the listed commit before the
 fetch brings it, Kluris fetches again; if that happens on the second try
 too, `kluris sync` changes nothing and its `refused` detail says so: run it
-again. A push has the same limit, its `pre-push` hooks included: a hook
-still running then is stopped, with everything it started, and nothing is
-pushed (`hook`). Once the remote took the push, Kluris moves `origin/main`
-itself, as after a fetch.
+again. A push has the same limit: then the push is stopped, with every
+process it started that stays in its process group (Unix) or job
+(Windows), its `pre-push` hooks among them, and the brain is `offline`.
 
 When the fetch cannot update the remote-tracking ref because a lock file is
 in the way (such as `.git/refs/remotes/origin/main.lock`, left by a git that

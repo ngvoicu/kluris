@@ -37,26 +37,19 @@
 //!    otherwise its conflicts are reported again, with the upstream's newer
 //!    commits counted in `behind_conflict`.
 //!
-//! [`push`] is network only, under the remote claim, one push URL at a
-//! time, as `git push` goes to each:
-//! 1. each URL is asked what it holds for the branch
-//!    ([`SyncGit::destination`]); one that holds a commit the pinned
-//!    branch's commit does not descend from (or one not here) means the
-//!    remote moved, and nothing is pushed;
-//! 2. the user's `pre-push` hook runs for every URL before anything is
-//!    sent, with the remote's own name, the URL and the line for what that
-//!    URL holds (an empty stdin where it already has the commit), and a
-//!    refusal for any URL stops the push to all;
-//! 3. the commit goes to each URL that lacks it ([`SyncGit::push`]) with a
-//!    lease on the value its hook saw, so a destination that moved since
-//!    turns it back;
-//! 4. once every URL has it, the engine moves the tracking ref, checked
-//!    and by compare-and-swap, as after a fetch. When only some URLs took
-//!    it, the report says which did and which did not.
+//! [`push`] is network only, under the remote claim: git's own push of
+//! the pinned branch ([`SyncGit::push`]), `git push <remote> <branch>`, so
+//! the `pre-push` hooks run as for any push of yours, once for each push
+//! URL, and stop with the push at its time limit. Right before it, the
+//! engine checks the remote-tracking ref git moves once the remote took
+//! the push ([`fetch::unmovable`]); one a `pre-push` hook makes symbolic
+//! during the push, git follows, and the next sync refuses it. The commits
+//! to push are counted against the remote's fetch URL (`to_push`), so a
+//! push URL of its own is pushed to only when that count is not zero.
 //!
 //! [`sync`] pulls again after a push the remote turned back because it
-//! moved (pushing again after one some URLs took), [`PUSH_ATTEMPTS`] times
-//! at most. Only the fetch and the push are bounded in time.
+//! moved, [`PUSH_ATTEMPTS`] times at most. Only the fetch and the push are
+//! bounded in time.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -64,9 +57,7 @@ use std::time::Instant;
 
 use super::claim::{ClaimError, RemoteClaim, TreeClaim};
 use super::fetch::{self, Fetch};
-use super::git::{
-    Destination, GitDirs, PushOutcome, PushUrl, RemoteError, SyncGit, Upstream, one_line,
-};
+use super::git::{GitDirs, PushOutcome, SyncGit, Upstream, one_line};
 use super::hooks::{HookError, MergeHookError, merge_commit};
 use super::land::{blocked_paths, failed, land, unchanged, uncommitted};
 use super::merge::{MergeOutcome, merge_commits};
@@ -437,18 +428,15 @@ pub fn texts<G: Plumbing>(
 /// How a push ended.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Pushed {
-    /// Every push URL has the commit.
+    /// The remote took the push.
     Pushed,
-    /// A push URL turned it back because it moved: pull, then push again.
-    /// `partial` says which URLs have the commit when only some do.
-    RemoteMoved {
-        partial: Option<String>,
-    },
+    /// The remote turned it back because it moved: pull, then push again.
+    RemoteMoved,
     Left(LeftAsIs),
 }
 
-/// Push the pinned branch's commit to its upstream under the remote claim,
-/// then move the tracking ref (see the module docs).
+/// Push the pinned branch to its upstream under the remote claim (see the
+/// module docs).
 pub fn push<G: SyncGit>(ctx: &Context<G>) -> Pushed {
     match push_head(ctx) {
         Ok(pushed) => pushed,
@@ -456,7 +444,7 @@ pub fn push<G: SyncGit>(ctx: &Context<G>) -> Pushed {
     }
 }
 
-/// Why a push URL could not be pushed to, as the report says it.
+/// Why the push did not go through, as the report says it.
 fn push_left(outcome: PushOutcome, remote: &str) -> LeftAsIs {
     match outcome {
         PushOutcome::Unreachable => offline(),
@@ -464,6 +452,19 @@ fn push_left(outcome: PushOutcome, remote: &str) -> LeftAsIs {
             LeftReason::Refused,
             fetch::refused_access("push", remote, &stderr),
         ),
+        PushOutcome::Hook { url, output } => {
+            let to = url.map_or_else(|| remote.to_string(), |url| format!("{remote} {url}"));
+            let output = one_line(&output);
+            let said = if output.is_empty() {
+                String::new()
+            } else {
+                format!(": {output}")
+            };
+            LeftAsIs::because(
+                LeftReason::Hook,
+                format!("the pre-push hook refused the push to {to}{said}"),
+            )
+        }
         PushOutcome::Failed(detail) => LeftAsIs::because(
             LeftReason::Refused,
             format!("the push was refused: {detail}"),
@@ -474,187 +475,34 @@ fn push_left(outcome: PushOutcome, remote: &str) -> LeftAsIs {
     }
 }
 
-/// Which push URLs have the commit and which do not, when only some do.
-fn partial(has: &[String], lacks: &[String]) -> Option<String> {
-    (!has.is_empty() && !lacks.is_empty())
-        .then(|| format!("{} took it; {} did not", has.join(", "), lacks.join(", ")))
-}
-
-/// `left` with which push URLs took the commit, when only some did.
-fn with_partial(mut left: LeftAsIs, partial: Option<String>) -> LeftAsIs {
-    if let Some(partial) = partial {
-        left.detail = Some(match left.detail {
-            Some(detail) => format!("{detail}; {partial}"),
-            None => partial,
-        });
-    }
-    left
-}
-
 fn push_head<G: SyncGit>(ctx: &Context<G>) -> Result<Pushed, LeftAsIs> {
     let (git, repo) = (&ctx.git, &ctx.repo);
     let upstream = upstream(ctx)?;
-    let remote = &upstream.remote;
     let Some(_remote) = ctx.take_remote()? else {
         return Err(LeftAsIs::because(
             LeftReason::Busy,
             "another kluris command is talking to the remote; the commits wait for the next push",
         ));
     };
-    // Checked right before: the ref the engine moves once the remote took
-    // the push.
+    // Checked right before: the ref git moves once the remote took the
+    // push.
     if let Some(why) = fetch::unmovable(git, repo, upstream).map_err(failed)? {
         return Err(LeftAsIs::because(LeftReason::Refused, why));
     }
-    let before = git.ref_value(repo, &upstream.refname).map_err(failed)?;
-    let commit = ctx.branch_commit(&upstream.branch)?;
+    // git pushes the pinned branch by its ref: it must have a commit.
+    ctx.branch_commit(&upstream.branch)?;
     let deadline = Instant::now() + ctx.request.network_time_limit;
-    let urls = git
-        .push_urls(repo, upstream)
-        .map_err(|outcome| push_left(outcome, remote))?;
-    // What each URL holds; a URL that moved is pulled again first.
-    let mut seen = Vec::new();
-    for url in &urls {
-        let destination = git
-            .destination(repo, upstream, url, &commit, deadline)
-            .map_err(|outcome| push_left(outcome, remote))?;
-        let destination = match destination {
-            Destination::At(Some(old)) if !fast_forward(ctx, &old, &commit, deadline)? => {
-                Destination::Moved
-            }
-            destination => destination,
-        };
-        if destination == Destination::Moved {
-            return Ok(Pushed::RemoteMoved { partial: None });
-        }
-        seen.push(destination);
+    match git.push(repo, upstream, deadline) {
+        PushOutcome::Pushed => Ok(Pushed::Pushed),
+        PushOutcome::RemoteMoved => Ok(Pushed::RemoteMoved),
+        outcome => Err(push_left(outcome, &upstream.remote)),
     }
-    pre_push(ctx, upstream, &urls, &seen, &commit, deadline)?;
-    let (mut has, mut lacks) = (Vec::new(), Vec::new());
-    for (i, (url, destination)) in urls.iter().zip(&seen).enumerate() {
-        let Destination::At(old) = destination else {
-            has.push(url.url.clone());
-            continue;
-        };
-        match git.push(repo, upstream, url, &commit, old.as_deref(), deadline) {
-            PushOutcome::Pushed => has.push(url.url.clone()),
-            outcome => {
-                lacks.extend(urls[i..].iter().map(|u| u.url.clone()));
-                let partial = partial(&has, &lacks);
-                return match outcome {
-                    PushOutcome::RemoteMoved => Ok(Pushed::RemoteMoved { partial }),
-                    outcome => Err(with_partial(push_left(outcome, remote), partial)),
-                };
-            }
-        }
-    }
-    moved_after_push(git, repo, upstream, before.as_deref(), &commit);
-    Ok(Pushed::Pushed)
-}
-
-/// Whether `old`, what a push URL holds, is a commit here that `commit`
-/// descends from: a push from it is a fast-forward. One not here is not.
-fn fast_forward<G: SyncGit>(
-    ctx: &Context<G>,
-    old: &str,
-    commit: &str,
-    deadline: Instant,
-) -> Result<bool, LeftAsIs> {
-    let (git, repo) = (&ctx.git, &ctx.repo);
-    match git.has_commit(repo, old, deadline) {
-        Ok(true) => git.is_ancestor(repo, old, commit).map_err(failed),
-        Ok(false) => Ok(false),
-        Err(RemoteError::TimedOut) => Err(offline()),
-        Err(RemoteError::Failed(e)) => Err(failed(e)),
-    }
-}
-
-/// Run the `pre-push` hook for each push URL before anything is pushed, as
-/// `git push` runs it: the remote's name and the URL, and on stdin the
-/// line for the pinned branch, `commit` and the remote's branch with what
-/// that URL holds (zeros when it has no such branch), or nothing where it
-/// already has the commit. A refusal for any URL stops the push to all,
-/// and so does a hook still running at the push's `deadline`, which is
-/// stopped. `no_verify` never skips it.
-fn pre_push<G: SyncGit>(
-    ctx: &Context<G>,
-    upstream: &Upstream,
-    urls: &[PushUrl],
-    seen: &[Destination],
-    commit: &str,
-    deadline: Instant,
-) -> Result<(), LeftAsIs> {
-    let (git, repo) = (&ctx.git, &ctx.repo);
-    let zeros = "0".repeat(commit.len());
-    for (url, destination) in urls.iter().zip(seen) {
-        let line = match destination {
-            Destination::At(old) => format!(
-                "{} {commit} {} {}\n",
-                upstream.branch,
-                upstream.remote_ref,
-                old.as_deref().unwrap_or(&zeros)
-            ),
-            Destination::UpToDate | Destination::Moved => String::new(),
-        };
-        let run = match git.pre_push(repo, &upstream.remote, &url.url, &line, deadline) {
-            Ok(run) => run,
-            Err(RemoteError::TimedOut) => {
-                return Err(LeftAsIs::because(
-                    LeftReason::Hook,
-                    format!(
-                        "the pre-push hook did not finish within the push's time limit for {} {}; it was stopped and nothing was pushed",
-                        upstream.remote, url.url
-                    ),
-                ));
-            }
-            Err(RemoteError::Failed(e)) => return Err(failed(e)),
-        };
-        if run.code != 0 {
-            let output = one_line(&run.output);
-            let said = if output.is_empty() {
-                String::new()
-            } else {
-                format!(": {output}")
-            };
-            return Err(LeftAsIs::because(
-                LeftReason::Hook,
-                format!(
-                    "the pre-push hook failed (exit {}) for {} {}; nothing was pushed{said}",
-                    run.code, upstream.remote, url.url
-                ),
-            ));
-        }
-    }
-    Ok(())
-}
-
-/// Move the upstream's tracking ref to `pushed` once the remote took the
-/// push, as after a fetch ([`fetch::advance`]): never when it cannot be
-/// moved now ([`fetch::unmovable`], a `pre-push` hook may have made it
-/// symbolic) nor over another git's value. Anything in the way leaves it
-/// where it is: the next fetch moves it, and reports what stops it.
-fn moved_after_push<G: SyncGit>(
-    git: &G,
-    repo: &Repo,
-    upstream: &Upstream,
-    before: Option<&str>,
-    pushed: &str,
-) {
-    if !matches!(fetch::unmovable(git, repo, upstream), Ok(None)) {
-        return;
-    }
-    let message = format!("kluris sync: push {}", upstream.remote);
-    let _ = fetch::advance(git, repo, upstream, before, pushed, &message);
 }
 
 /// Pull, then push what is committed; a push the remote turned back because
 /// it moved pulls again, [`PUSH_ATTEMPTS`] times at most.
 pub fn sync<G: SyncGit>(ctx: &Context<G>) -> SyncReport {
     let mut total = SyncReport::default();
-    // A push turned back after some URLs took the commit: push again even
-    // when the fetch URL has it, so the others get it.
-    let mut again = false;
-    let mut last_partial = None;
     for _ in 0..PUSH_ATTEMPTS {
         let report = pull(ctx);
         total.pulled += report.pulled;
@@ -667,10 +515,7 @@ pub fn sync<G: SyncGit>(ctx: &Context<G>) -> SyncReport {
         total.conflicts = report.conflicts;
         total.behind_conflict = report.behind_conflict;
         total.to_push = report.to_push;
-        if total.left_as_is.is_some()
-            || !total.conflicts.is_empty()
-            || (total.to_push == 0 && !again)
-        {
+        if total.left_as_is.is_some() || !total.conflicts.is_empty() || total.to_push == 0 {
             return total;
         }
         match push(ctx) {
@@ -679,24 +524,18 @@ pub fn sync<G: SyncGit>(ctx: &Context<G>) -> SyncReport {
                 total.to_push = 0;
                 return total;
             }
-            Pushed::RemoteMoved { partial } => {
-                again = again || partial.is_some();
-                last_partial = partial;
-            }
+            Pushed::RemoteMoved => {}
             Pushed::Left(left) => {
                 total.left_as_is = Some(left);
                 return total;
             }
         }
     }
-    total.left_as_is = Some(with_partial(
-        LeftAsIs::because(
-            LeftReason::Refused,
-            format!(
-                "the remote kept moving: {PUSH_ATTEMPTS} pushes were rejected; run kluris sync again"
-            ),
+    total.left_as_is = Some(LeftAsIs::because(
+        LeftReason::Refused,
+        format!(
+            "the remote kept moving: {PUSH_ATTEMPTS} pushes were rejected; run kluris sync again"
         ),
-        last_partial,
     ));
     total
 }
