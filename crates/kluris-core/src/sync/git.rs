@@ -229,6 +229,11 @@ pub trait SyncGit: Plumbing + TextMerger + Sized {
     /// `git merge-tree --write-tree` (git >= 2.38): the merge, in memory.
     fn merge_tree(&self, repo: &Repo, ours: &str, theirs: &str) -> Result<MergeTree, GitError>;
 
+    /// The bytes checkout writes at `path` for `blob` (`git cat-file
+    /// --filters --path`): the blob through the path's smudge filter and
+    /// line-ending conversion (`core.autocrlf`, the `eol` attribute).
+    fn checked_out(&self, repo: &Repo, path: &str, blob: &str) -> Result<Vec<u8>, GitError>;
+
     /// The paths that differ between two trees (or commits), brain-relative.
     fn diff_names(&self, repo: &Repo, from: &str, to: &str) -> Result<Vec<String>, GitError>;
 
@@ -805,6 +810,13 @@ impl SyncGit for SystemGit {
             });
         }
         Ok(parse_merge_tree(&out.stdout))
+    }
+
+    fn checked_out(&self, repo: &Repo, path: &str, blob: &str) -> Result<Vec<u8>, GitError> {
+        // One git per path: `--batch --filters` gives the unconverted size
+        // in its header, so its output cannot be split.
+        let path = format!("--path={path}");
+        self.run(&repo.dir, &["cat-file", "--filters", &path, blob])
     }
 
     fn diff_names(&self, repo: &Repo, from: &str, to: &str) -> Result<Vec<String>, GitError> {

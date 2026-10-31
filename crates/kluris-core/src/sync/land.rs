@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 
 use super::git::SyncGit;
 use super::{LeftAsIs, LeftReason};
-use crate::git::{GitError, Repo};
+use crate::git::{GitError, Repo, TreeEntry};
 
 /// The file at `rel` (`/`-separated) under `root`.
 pub fn join(root: &Path, rel: &str) -> PathBuf {
@@ -91,25 +91,14 @@ pub fn blocked_paths<G: SyncGit>(
     Ok(blocked)
 }
 
-/// Whether the file at `rel` holds what git writes there for `incoming`
-/// (`None`: git removes it): its bytes, or a symlink's target.
-fn written_by_git(root: &Path, rel: &str, incoming: Option<&[u8]>, link: bool) -> bool {
-    let path = join(root, rel);
-    match incoming {
-        None => fs::symlink_metadata(&path).is_err(),
-        Some(want) if link => fs::read_link(&path)
-            .is_ok_and(|target| target.to_string_lossy().replace('\\', "/").as_bytes() == want),
-        Some(want) => {
-            fs::symlink_metadata(&path).is_ok_and(|m| m.is_file())
-                && fs::read(&path).is_ok_and(|bytes| bytes == want)
-        }
-    }
-}
-
 /// Of the `paths` in the way after git stopped partway, those that are not
-/// git's own writes: a file that holds the incoming commit's version, or a
-/// path gone where the commit removes it, is what git wrote before it
-/// stopped; anything else is the user's.
+/// git's own writes, decided by what checkout writes: a file holding the
+/// incoming blob as checkout converts it for its path
+/// ([`SyncGit::checked_out`]: the smudge filter, the line endings), a
+/// symlink pointing where the incoming one does, or a path gone where the
+/// commit removes it, is what git wrote before it stopped; anything else is
+/// the user's. A symlink git wrote as a plain file (`core.symlinks` false)
+/// holds its target as it is.
 fn not_written_by_git<G: SyncGit>(
     git: &G,
     repo: &Repo,
@@ -118,28 +107,49 @@ fn not_written_by_git<G: SyncGit>(
     paths: Vec<String>,
 ) -> Result<Vec<String>, GitError> {
     let wanted: BTreeSet<&String> = paths.iter().collect();
-    let incoming: BTreeMap<String, (bool, String)> = git
+    let incoming: BTreeMap<String, TreeEntry> = git
         .tree_entries(repo, to)?
         .into_iter()
         .filter(|e| wanted.contains(&e.rel))
-        .map(|e| (e.rel.clone(), (e.is_symlink(), e.oid)))
+        .map(|e| (e.rel.clone(), e))
         .collect();
-    let oids: Vec<String> = incoming.values().map(|(_, oid)| oid.clone()).collect();
-    let blobs = git.read_blobs(repo, &oids)?;
-    Ok(paths
-        .into_iter()
-        .filter(|rel| {
-            let (link, bytes) = match incoming.get(rel) {
-                Some((link, oid)) => (*link, blobs.get(oid).map(Vec::as_slice)),
-                None => (false, None),
-            };
-            match (incoming.contains_key(rel), bytes) {
-                // A blob git could not read back: not known to be git's.
-                (true, None) => true,
-                (_, bytes) => !written_by_git(root, rel, bytes, link),
+    let links: Vec<String> = incoming
+        .values()
+        .filter(|e| e.is_symlink())
+        .map(|e| e.oid.clone())
+        .collect();
+    let targets = git.read_blobs(repo, &links)?;
+    let mut mine = Vec::new();
+    for rel in paths {
+        let path = join(root, &rel);
+        let on_disk = fs::symlink_metadata(&path).ok();
+        let written = match (incoming.get(&rel), on_disk) {
+            (None, on_disk) => on_disk.is_none(),
+            (Some(_), None) => false,
+            (Some(e), Some(meta)) if e.is_symlink() => {
+                let target = targets.get(&e.oid).map(Vec::as_slice);
+                if meta.file_type().is_symlink() {
+                    fs::read_link(&path).is_ok_and(|link| {
+                        let link = link.to_string_lossy().replace('\\', "/");
+                        target == Some(link.as_bytes())
+                    })
+                } else {
+                    meta.is_file() && target.is_some_and(|t| fs::read(&path).is_ok_and(|b| b == t))
+                }
             }
-        })
-        .collect())
+            (Some(e), Some(meta)) => {
+                meta.is_file()
+                    && fs::read(&path).is_ok_and(|bytes| {
+                        git.checked_out(repo, &rel, &e.oid)
+                            .is_ok_and(|want| want == bytes)
+                    })
+            }
+        };
+        if !written {
+            mine.push(rel);
+        }
+    }
+    Ok(mine)
 }
 
 /// Left for the uncommitted `paths` in the way.

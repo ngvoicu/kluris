@@ -300,6 +300,117 @@ fn an_edit_made_while_git_stopped_partway_is_uncommitted() {
     assert_eq!(w.read(&w.ours, "ideas/new.md"), "MINE\n");
 }
 
+/// A conversion git applies when it writes a file: its name, how to set it
+/// up in "ours", and what the written `ideas/new.md` then holds that its
+/// blob does not.
+type Conversion = (&'static str, fn(&World), &'static str);
+
+/// The conversions: line endings by config and by attribute, and a filter
+/// with and without its clean side.
+const CONVERSIONS: [Conversion; 4] = [
+    (
+        "core.autocrlf",
+        |w| {
+            w.run(&w.ours, &["config", "core.autocrlf", "true"]);
+        },
+        "\r\n",
+    ),
+    (
+        "eol=crlf",
+        |w| {
+            fs::write(
+                w.ours.join(".git").join("info").join("attributes"),
+                "* text eol=crlf\n",
+            )
+            .unwrap();
+        },
+        "\r\n",
+    ),
+    (
+        "smudge and clean filters",
+        |w| {
+            fs::write(
+                w.ours.join(".git").join("info").join("attributes"),
+                "*.md filter=mark\n",
+            )
+            .unwrap();
+            w.run(&w.ours, &["config", "filter.mark.smudge", "sed 's/^/S:/'"]);
+            w.run(&w.ours, &["config", "filter.mark.clean", "sed 's/^S://'"]);
+        },
+        "S:",
+    ),
+    (
+        "a smudge filter alone",
+        |w| {
+            fs::write(
+                w.ours.join(".git").join("info").join("attributes"),
+                "*.md filter=mark\n",
+            )
+            .unwrap();
+            w.run(&w.ours, &["config", "filter.mark.smudge", "sed 's/^/S:/'"]);
+        },
+        "S:",
+    ),
+];
+
+/// What git wrote through a conversion (line endings, a filter) before it
+/// stopped is still git's: the land failed. An edit made at that moment is
+/// still the user's.
+#[test]
+fn files_git_wrote_through_a_conversion_before_it_stopped_are_failed() {
+    for (name, convert, converted) in CONVERSIONS {
+        // One world at a time: each holds the worlds' lock until dropped.
+        {
+            let w = World::new();
+            w.theirs_push(&[("ideas/new.md", &neuron("", "# New\n"))], &[]);
+            convert(&w);
+            stop_the_branch_update(&w, ":");
+            let r = w.pull();
+            assert!(
+                w.read(&w.ours, "ideas/new.md").contains(converted),
+                "{name}: git wrote no converted file, which proves nothing"
+            );
+            assert!(left(&r, LeftReason::Failed), "{name}: {r:?}");
+        }
+        let w = World::new();
+        w.theirs_push(&[("ideas/new.md", &neuron("", "# New\n"))], &[]);
+        convert(&w);
+        stop_the_branch_update(&w, "printf 'MINE\\n' > ideas/new.md");
+        let r = w.pull();
+        assert!(left(&r, LeftReason::Uncommitted), "{name}: {r:?}");
+        assert_eq!(
+            r.left_as_is.as_ref().unwrap().paths,
+            ["ideas/new.md"],
+            "{name}"
+        );
+    }
+}
+
+/// With `core.symlinks` false git writes an incoming symlink as a plain
+/// file holding its target: that file is git's write too. The symlink is
+/// committed by its blob, so no symlink is made on disk.
+#[test]
+fn a_symlink_git_wrote_as_a_plain_file_before_it_stopped_is_failed() {
+    let w = World::new();
+    let target = w.dir.path().join("target");
+    fs::write(&target, "keep.md").unwrap();
+    let oid = w.run(&w.theirs, &["hash-object", "-w", &target.to_string_lossy()]);
+    let entry = format!("120000,{},notes/link.md", oid.trim());
+    w.run(&w.theirs, &["update-index", "--add", "--cacheinfo", &entry]);
+    w.run(&w.theirs, &["commit", "-q", "-m", "a link"]);
+    w.run(&w.theirs, &["push", "-q"]);
+    w.run(&w.ours, &["config", "core.symlinks", "false"]);
+    stop_the_branch_update(&w, ":");
+    let r = w.pull();
+    let link = w.ours.join("notes").join("link.md");
+    assert!(
+        link.symlink_metadata().unwrap().is_file(),
+        "git made a symlink"
+    );
+    assert_eq!(w.read(&w.ours, "notes/link.md"), "keep.md");
+    assert!(left(&r, LeftReason::Failed), "{r:?}");
+}
+
 /// git wrote the first incoming files, then could not write into a folder.
 #[cfg(unix)]
 #[test]
