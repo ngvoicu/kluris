@@ -46,6 +46,11 @@
 //! during the push, git follows, and the next sync refuses it. The commits
 //! to push are counted against the remote's fetch URL (`to_push`), so a
 //! push URL of its own is pushed to only when that count is not zero.
+//! Once the push ends, however it ends, `to_push` is counted again from
+//! the pinned branch's ref against the tracking ref git moved, so a commit
+//! made while the push ran stays to push. A `pre-push` hook's refusal
+//! stops the transfer to the URL it ran for; it undoes nothing the sync
+//! pulled or merged, nor a push another URL already took.
 //!
 //! [`sync`] pulls again after a push the remote turned back because it
 //! moved, [`PUSH_ATTEMPTS`] times at most. Only the fetch and the push are
@@ -518,10 +523,13 @@ pub fn sync<G: SyncGit>(ctx: &Context<G>) -> SyncReport {
         if total.left_as_is.is_some() || !total.conflicts.is_empty() || total.to_push == 0 {
             return total;
         }
-        match push(ctx) {
+        let pushed = push(ctx);
+        if let Some(count) = still_to_push(ctx) {
+            total.to_push = count;
+        }
+        match pushed {
             Pushed::Pushed => {
                 total.pushed = true;
-                total.to_push = 0;
                 return total;
             }
             Pushed::RemoteMoved => {}
@@ -538,6 +546,20 @@ pub fn sync<G: SyncGit>(ctx: &Context<G>) -> SyncReport {
         ),
     ));
     total
+}
+
+/// What the pinned branch has that the remote does not, read once the
+/// push ended, however it ended: the commits from the upstream's
+/// remote-tracking ref (which git moves to what the remote took; every
+/// commit while there is none) to the pinned branch's ref, never `HEAD`, so
+/// one made while the push ran (by a `pre-push` hook, say) is still to
+/// push. `None` when it cannot be read.
+fn still_to_push<G: SyncGit>(ctx: &Context<G>) -> Option<usize> {
+    let (git, repo) = (&ctx.git, &ctx.repo);
+    let upstream = ctx.upstream.as_ref()?;
+    let tip = git.ref_value(repo, &upstream.branch).ok()??;
+    let remote = git.ref_value(repo, &upstream.refname).ok()?;
+    git.count(repo, remote.as_deref(), &tip).ok()
 }
 
 /// Finish the waiting merge with a person's `choices`: merge `ours` with

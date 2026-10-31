@@ -361,11 +361,21 @@ Kluris pushes with `git push <remote> <branch>` (`git push origin
 refs/heads/main:refs/heads/main`, the branch it synced named by its ref,
 never `HEAD`), so `pre-push` runs exactly as for your own push, and git
 moves `origin/main` once the remote took it. A `pre-push` hook that
-refuses leaves the brain as it is (`hook`, with what the hook printed); a
-remote that turns the push away is `refused`, with git's message. The
-commits to push are counted against the remote's fetch URL, so a push URL
-of its own is pushed to only when that count is not zero. The brain must
-be the root of its own git repository, and git must be 2.38 or newer.
+refuses stops the transfer to the push URL it ran for (`hook`, with what
+the hook printed); it undoes nothing the sync already pulled or merged,
+nor a push another URL already took. Kluris learns which hook refused
+from git's trace2 event stream, never from what a hook prints: it points
+`GIT_TRACE2_EVENT` at a temporary file for the push, so the hooks see that
+variable and a `trace2.eventTarget` of yours gets no events from the push.
+A remote that turns the push away is `refused`, with git's message, and so
+is a failure Kluris cannot attribute for certain; the sync pulls and
+pushes again only when git's own report says the remote moved and no
+`pre-push` run refused. The commits to push are counted against the
+remote's fetch URL, so a push URL of its own is pushed to only when that
+count is not zero; once the push ends, `to_push` counts what the branch
+still has that `origin/main` does not, a commit made while the push ran
+included. The brain must be the root of its own git repository, and git
+must be 2.38 or newer.
 
 With `--json`, each brain's entry is `name` and `sync`, which has eight
 keys: `pulled` (the commits brought in), `auto_merged` (neurons merged on

@@ -728,7 +728,7 @@ impl StagingIndex {
 }
 
 /// A file name unique to this process and moment.
-fn unique_name(stem: &str) -> String {
+pub(crate) fn unique_name(stem: &str) -> String {
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.subsec_nanos());

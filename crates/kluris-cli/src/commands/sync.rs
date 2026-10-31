@@ -69,7 +69,8 @@ fn summary(name: &str, report: &SyncReport) -> Option<String> {
     }
     if report.pushed {
         parts.push("pushed".into());
-    } else if report.to_push > 0 {
+    }
+    if report.to_push > 0 {
         parts.push(format!(
             "{} to push",
             plural(report.to_push, "commit", "commits")
@@ -83,10 +84,17 @@ fn text(name: &str, report: &SyncReport) -> String {
     let done = |report: &SyncReport| {
         let mut done = Vec::new();
         if report.pulled > 0 {
-            done.push("pulled");
+            done.push("pulled".to_string());
         }
         if report.pushed {
-            done.push("pushed");
+            done.push("pushed".to_string());
+            // A commit made while the push ran.
+            if report.to_push > 0 {
+                done.push(format!(
+                    "{} still to push",
+                    plural(report.to_push, "commit", "commits")
+                ));
+            }
         }
         let mut out = if done.is_empty() {
             format!("{name}: up to date\n")

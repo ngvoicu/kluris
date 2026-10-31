@@ -368,3 +368,175 @@ fn a_hook_past_the_pushs_time_limit_is_stopped() {
     let r = w.sync();
     assert!(clean(&r) && r.pushed, "{r:?}");
 }
+
+/// A `pre-push` hook body that commits on the branch once (the first run),
+/// then ends with `end`.
+fn committing_hook(w: &World, end: &str) -> String {
+    let mark = w.dir.path().join("committed");
+    format!(
+        "cat > /dev/null\nif [ ! -e '{m}' ]; then\n  : > '{m}'\n  unset GIT_DIR GIT_INDEX_FILE GIT_WORK_TREE\n  git commit -q --allow-empty -m 'made while the push ran'\nfi\n{end}",
+        m = sh_path(&mark)
+    )
+}
+
+/// A commit the `pre-push` hook makes on the pinned branch: git pushes the
+/// commit it read before the hook, and the new one is still to push.
+#[test]
+fn a_commit_the_pre_push_hook_makes_is_still_to_push() {
+    let w = World::new();
+    w.ours_commit(&[("notes/second.md", &neuron("", "# Second\n"))], &[]);
+    let pushed = w.head(&w.ours);
+    w.hook(&w.ours, "pre-push", &committing_hook(&w, "exit 0"));
+    let r = w.sync();
+    assert!(clean(&r) && r.pushed, "{r:?}");
+    assert_eq!(r.to_push, 1, "{r:?}");
+    assert_eq!(w.remote_head(), pushed);
+    assert_ne!(w.head(&w.ours), pushed);
+}
+
+/// The same hook refusing: nothing is pushed, and both commits are still
+/// to push.
+#[test]
+fn a_commit_a_refusing_pre_push_hook_makes_is_counted() {
+    let w = World::new();
+    w.ours_commit(&[("notes/second.md", &neuron("", "# Second\n"))], &[]);
+    let remote = w.remote_head();
+    w.hook(
+        &w.ours,
+        "pre-push",
+        &committing_hook(&w, "echo 'the gate refused' >&2\nexit 7"),
+    );
+    let r = w.sync();
+    assert!(left(&r, LeftReason::Hook) && !r.pushed, "{r:?}");
+    assert_eq!(r.to_push, 2, "{r:?}");
+    assert_eq!(w.remote_head(), remote);
+}
+
+/// A bare repository's hook, executable.
+fn remote_hook(repo: &std::path::Path, name: &str, body: &str) {
+    let hooks = repo.join("hooks");
+    fs::create_dir_all(&hooks).unwrap();
+    let path = hooks.join(name);
+    fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+}
+
+/// A `pre-push` hook that passes but prints no newline, so its text joins
+/// git's `To <url>` line, and a remote that turns the tag `push.followTags`
+/// sends away: the remote refused, not the hook.
+#[test]
+fn a_passing_hook_joined_to_gits_report_is_not_taken_for_a_refusal() {
+    let w = World::new();
+    w.run(&w.ours, &["config", "push.followTags", "true"]);
+    w.ours_commit(&[("notes/second.md", &neuron("", "# Second\n"))], &[]);
+    let pushed = w.head(&w.ours);
+    w.run(&w.ours, &["tag", "-a", "note-tag", "-m", "note tag"]);
+    remote_hook(
+        &w.remote,
+        "update",
+        "case \"$1\" in refs/tags/*) echo 'the remote refused the tag' >&2; exit 1;; esac",
+    );
+    w.hook(
+        &w.ours,
+        "pre-push",
+        "cat > /dev/null\nprintf 'gate check: '",
+    );
+    let r = w.sync();
+    assert!(left(&r, LeftReason::Refused) && !r.pushed, "{r:?}");
+    for said in [
+        "gate check: To ",
+        "[remote rejected]",
+        "the remote refused the tag",
+    ] {
+        assert!(detail(&r).contains(said), "{said}: {}", detail(&r));
+    }
+    // The remote took the branch: nothing is left to push.
+    assert_eq!(w.remote_head(), pushed);
+    assert_eq!(r.to_push, 0, "{r:?}");
+}
+
+/// A refusing `pre-push` hook that prints a nested push's rejection (the
+/// remote moved, for another destination): the hook refused, once, and
+/// the push is not tried again.
+#[test]
+fn a_rejection_a_refusing_hook_prints_is_not_the_remotes() {
+    let w = World::new();
+    let other = w.dir.path().join("other.git");
+    let remote = w.remote.to_string_lossy().into_owned();
+    w.run(
+        w.dir.path(),
+        &["clone", "-q", "--bare", &remote, &other.to_string_lossy()],
+    );
+    w.run(
+        &w.theirs,
+        &["commit", "-q", "--allow-empty", "-m", "elsewhere"],
+    );
+    w.run(
+        &w.theirs,
+        &[
+            "push",
+            "-q",
+            &other.to_string_lossy(),
+            "HEAD:refs/heads/main",
+        ],
+    );
+    w.ours_commit(&[("notes/second.md", &neuron("", "# Second\n"))], &[]);
+    let log = w.dir.path().join("pre-push-runs");
+    w.hook(
+        &w.ours,
+        "pre-push",
+        &format!(
+            "cat > /dev/null\necho run >> '{l}'\ngit push --no-verify --dry-run --porcelain '{o}' refs/heads/main:refs/heads/main\necho 'the gate refused' >&2\nexit 7",
+            l = sh_path(&log),
+            o = sh_path(&other)
+        ),
+    );
+    let before = w.remote_head();
+    let r = w.sync();
+    assert!(left(&r, LeftReason::Hook), "{r:?}");
+    assert!(detail(&r).contains("the gate refused"), "{}", detail(&r));
+    assert_eq!(fs::read_to_string(&log).unwrap().lines().count(), 1);
+    assert_eq!(w.remote_head(), before);
+}
+
+/// A push that failed (git died: the push URL is no repository) and whose
+/// classification would ask git for the push URLs past the push's time
+/// limit (a git that stalls on that question): reported at the limit, as a
+/// timeout (`offline`).
+#[cfg(unix)]
+#[test]
+fn a_failed_push_classified_past_the_time_limit_is_a_timeout() {
+    use std::os::unix::fs::PermissionsExt;
+    let w = World::new();
+    let missing = w.dir.path().join("missing.git");
+    w.run(
+        &w.ours,
+        &[
+            "config",
+            "remote.origin.pushurl",
+            &missing.to_string_lossy(),
+        ],
+    );
+    w.ours_commit(&[("notes/second.md", &neuron("", "# Second\n"))], &[]);
+    let stalling = w.dir.path().join("stalling-git");
+    fs::write(
+        &stalling,
+        "#!/bin/sh\ncase \" $* \" in *' get-url '*) sleep 5;; esac\nexec git \"$@\"\n",
+    )
+    .unwrap();
+    fs::set_permissions(&stalling, fs::Permissions::from_mode(0o755)).unwrap();
+    let request = SyncRequest {
+        network_time_limit: std::time::Duration::from_millis(1500),
+        ..w.request()
+    };
+    let ctx = open(&w.ours, &w.git().program(&stalling), &request).unwrap();
+    let began = std::time::Instant::now();
+    let r = sync(&ctx);
+    let took = began.elapsed();
+    assert!(left(&r, LeftReason::Offline) && !r.pushed, "{r:?}");
+    assert!(took < std::time::Duration::from_millis(4000), "{took:?}");
+}
