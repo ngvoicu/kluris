@@ -3,6 +3,7 @@
 
 use std::fs;
 
+use kluris_core::sync::claim::COMMAND_BOUND;
 use kluris_core::sync::resolve::{
     Choice, ResolveError, ResolveReport, ResolveRequest, abort, open_conflicts, resolve,
 };
@@ -357,7 +358,7 @@ fn no_open_conflict_is_an_error() {
         Err(ResolveError::NoOpenConflict)
     ));
     assert!(matches!(
-        abort(&w.ours, &w.git()),
+        abort(&w.ours, &w.git(), COMMAND_BOUND),
         Err(ResolveError::NoOpenConflict)
     ));
     assert!(open_conflicts(&w.ours, &w.git()).is_none());
@@ -380,7 +381,7 @@ fn a_stale_conflict_is_refused_and_abort_drops_it() {
         other => panic!("{other:?}"),
     }
     assert_eq!(w.snapshot(), before);
-    assert_eq!(abort(&w.ours, &w.git()).unwrap(), 1);
+    assert_eq!(abort(&w.ours, &w.git(), COMMAND_BOUND).unwrap(), 1);
     assert!(!pending(&w).exists());
     assert_eq!(
         w.snapshot(),
@@ -396,7 +397,7 @@ fn abort_changes_nothing_but_the_pending_state() {
     let w = World::new();
     content_conflict(&w);
     let before = w.snapshot();
-    assert_eq!(abort(&w.ours, &w.git()).unwrap(), 1);
+    assert_eq!(abort(&w.ours, &w.git(), COMMAND_BOUND).unwrap(), 1);
     assert_eq!(w.snapshot(), before);
     assert!(!pending(&w).exists());
     assert!(open_conflicts(&w.ours, &w.git()).is_none());

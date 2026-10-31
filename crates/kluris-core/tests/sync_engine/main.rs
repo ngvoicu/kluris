@@ -8,6 +8,7 @@
 mod common;
 
 mod branch;
+mod claimed;
 mod conflicts;
 mod finish;
 mod hooks;

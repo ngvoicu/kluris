@@ -109,7 +109,9 @@ impl<'a, G: SyncGit> Context<'a, G> {
         pending::path(&self.dirs)
     }
 
-    fn take_tree(&self) -> Result<TreeClaim, LeftAsIs> {
+    /// The exclusive tree claim, waited for up to the request's bound;
+    /// busy while another command holds it past that.
+    pub fn claim_tree(&self) -> Result<TreeClaim, LeftAsIs> {
         TreeClaim::exclusive(&self.dirs.own, self.request.tree_bound).map_err(|e| match e {
             ClaimError::Busy => LeftAsIs::because(
                 LeftReason::Busy,
@@ -198,7 +200,7 @@ fn pull_into<G: SyncGit>(ctx: &Context<G>, report: &mut SyncReport) -> Result<()
     }
     let upstream = upstream(ctx)?;
     let theirs = fetched(ctx, upstream)?;
-    let _tree = ctx.take_tree()?;
+    let _tree = ctx.claim_tree()?;
     let branch = upstream.branch.as_str();
     let ours = ctx.branch_commit(branch)?;
     unchanged(git, repo, branch, &ours)?;
@@ -583,16 +585,18 @@ pub fn sync<G: SyncGit>(ctx: &Context<G>) -> SyncReport {
 
 /// Finish the waiting merge with a person's `choices`: merge `ours` with
 /// the pinned `theirs`, check the files in the way, make the merge commit
-/// with `message` through the merge hooks, and land it; its commit.
+/// with `message` through the merge hooks, and land it; its commit. The
+/// caller holds the tree claim (`_claim`) from reading the waiting merge to
+/// removing it, so the merge and the record it answers stay one.
 pub fn finish_merge<G: SyncGit>(
     ctx: &Context<G>,
+    _claim: &TreeClaim,
     pending: &Pending,
     choices: &BTreeMap<String, ResolvedChoice>,
     message: &str,
 ) -> Result<String, LeftAsIs> {
     let (git, repo) = (&ctx.git, &ctx.repo);
     let branch = ctx.pinned()?;
-    let _tree = ctx.take_tree()?;
     let (ours, theirs) = (&pending.ours, &pending.theirs);
     unchanged(git, repo, branch, ours)?;
     let maps = &ctx.request.maps;

@@ -1,7 +1,10 @@
 //! `kluris resolve` (SPEC Phase 7, item 48): settle an open sync conflict
 //! ([`PENDING`]) path by path, then finish the merge.
 //!
-//! Each call records one choice in the waiting merge, atomically: our side,
+//! Each call is one transaction under the worktree's tree claim, from
+//! reading the waiting merge to writing or removing it, so two resolvers,
+//! an abort or a pull never change it in between. It records one choice in
+//! the waiting merge: our side,
 //! their side (a deletion included), or a file the person wrote, validated
 //! first (markdown frontmatter must parse; a YAML neuron needs its `#---`
 //! block; no conflict markers) and stored as a blob. Nothing else changes
@@ -21,9 +24,10 @@ use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use super::claim::{ClaimError, TreeClaim};
 use super::commit::{PathProblem, normalize_path};
 use super::engine;
-use super::git::SyncGit;
+use super::git::{GitDirs, SyncGit};
 use super::pending::{self, Found, Pending};
 use super::{Conflict, ConflictKind, LeftAsIs, LeftReason, ResolvedChoice, SyncError, SyncRequest};
 use crate::frontmatter;
@@ -169,6 +173,14 @@ impl From<LeftAsIs> for ResolveError {
     }
 }
 
+/// Another command holds the work tree.
+fn busy() -> LeftAsIs {
+    LeftAsIs::because(
+        LeftReason::Busy,
+        "another kluris command is changing this brain; nothing was recorded: run again once it is done",
+    )
+}
+
 fn record(e: std::io::Error) -> ResolveError {
     ResolveError::Record(e.to_string())
 }
@@ -177,9 +189,9 @@ fn short(oid: &str) -> String {
     oid.chars().take(7).collect()
 }
 
-/// The brain's repo, refused as the engine refuses it, and where its
-/// waiting merge is.
-fn locate(root: &Path, git: &impl SyncGit) -> Result<(Repo, PathBuf), ResolveError> {
+/// The brain's repo, refused as the engine refuses it, and its git
+/// directories.
+fn locate(root: &Path, git: &impl SyncGit) -> Result<(Repo, GitDirs), ResolveError> {
     let repo = git.repo(root).ok_or(SyncError::NotARepo)?;
     if repo.nested() {
         return Err(SyncError::Nested {
@@ -188,7 +200,7 @@ fn locate(root: &Path, git: &impl SyncGit) -> Result<(Repo, PathBuf), ResolveErr
         .into());
     }
     let dirs = git.git_dirs(&repo)?;
-    Ok((repo, pending::path(&dirs)))
+    Ok((repo, dirs))
 }
 
 fn read_pending(path: &Path) -> Result<Pending, ResolveError> {
@@ -202,13 +214,25 @@ fn read_pending(path: &Path) -> Result<Pending, ResolveError> {
 /// The open conflicts of the brain at `root`, for `kluris status`; `None`
 /// when none is open (or it cannot be read).
 pub fn open_conflicts(root: &Path, git: &impl SyncGit) -> Option<Vec<Conflict>> {
-    let (_, path) = locate(root, git).ok()?;
-    read_pending(&path).ok().map(|p| p.conflicts)
+    let (_, dirs) = locate(root, git).ok()?;
+    read_pending(&pending::path(&dirs))
+        .ok()
+        .map(|p| p.conflicts)
 }
 
 /// Drop the open conflict, changing nothing else; how many paths it had.
-pub fn abort(root: &Path, git: &impl SyncGit) -> Result<usize, ResolveError> {
-    let (_, path) = locate(root, git)?;
+/// Under the tree claim, waited for up to `bound`.
+pub fn abort(
+    root: &Path,
+    git: &impl SyncGit,
+    bound: std::time::Duration,
+) -> Result<usize, ResolveError> {
+    let (_, dirs) = locate(root, git)?;
+    let _claim = TreeClaim::exclusive(&dirs.own, bound).map_err(|e| match e {
+        ClaimError::Busy => ResolveError::Left(busy()),
+        ClaimError::Io(e) => ResolveError::Record(format!("cannot claim the work tree: {e}")),
+    })?;
+    let path = pending::path(&dirs);
     let count = match read_pending(&path) {
         Ok(pending) => pending.conflicts.len(),
         Err(ResolveError::Unreadable(_)) => 0,
@@ -255,6 +279,9 @@ pub fn resolve<G: SyncGit>(
     // Every git from here has the remote environment: none prompts.
     let ctx = engine::open(root, git, &request.sync)?;
     let (git, repo, path) = (ctx.git(), ctx.repo(), ctx.pending());
+    // Read only once the claim is held: what another resolver recorded is
+    // in it.
+    let claim = ctx.claim_tree().map_err(|_| ResolveError::Left(busy()))?;
     let mut pending = read_pending(&path)?;
     let rel = normalize_path(request.path).map_err(|problem| ResolveError::InvalidPath {
         path: request.path.to_string(),
@@ -339,7 +366,7 @@ pub fn resolve<G: SyncGit>(
 
     // Every path has a choice: finish the merge. Until the merge commit is
     // in place the waiting merge (with the choices) stays.
-    let commit = finish(&ctx, &pending);
+    let commit = finish(&ctx, &claim, &pending);
     let commit = match commit {
         Ok(commit) => commit,
         Err(e) => {
@@ -348,6 +375,7 @@ pub fn resolve<G: SyncGit>(
         }
     };
     pending::remove(&path).map_err(record)?;
+    drop(claim);
     report.committed = true;
     report.commit = Some(commit);
     let synced = engine::sync(&ctx);
@@ -362,7 +390,11 @@ pub fn resolve<G: SyncGit>(
 }
 
 /// The merge with the choices, committed and landed; its commit.
-fn finish<G: SyncGit>(ctx: &engine::Context<G>, pending: &Pending) -> Result<String, ResolveError> {
+fn finish<G: SyncGit>(
+    ctx: &engine::Context<G>,
+    claim: &TreeClaim,
+    pending: &Pending,
+) -> Result<String, ResolveError> {
     let choices: BTreeMap<String, ResolvedChoice> = pending.resolved.iter().cloned().collect();
     let (git, repo) = (ctx.git(), ctx.repo());
     let author = git.author(repo)?;
@@ -373,5 +405,7 @@ fn finish<G: SyncGit>(ctx: &engine::Context<G>, pending: &Pending) -> Result<Str
         "kluris: sync (resolved)\n\nKluris-Sync: resolved\nKluris-Resolved-By: {}\n",
         resolver.replace(['\r', '\n'], " ")
     );
-    Ok(engine::finish_merge(ctx, pending, &choices, &message)?)
+    Ok(engine::finish_merge(
+        ctx, claim, pending, &choices, &message,
+    )?)
 }

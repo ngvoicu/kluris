@@ -56,7 +56,7 @@ pub fn run(options: &Options) -> Result<(), CliError> {
     let failed = |e: &dyn std::fmt::Display| CliError::new(format!("Brain {}: {e}", brain.name));
 
     if options.abort {
-        let dropped = abort(Path::new(&root), &git).map_err(|e| failed(&e))?;
+        let dropped = abort(Path::new(&root), &git, COMMAND_BOUND).map_err(|e| failed(&e))?;
         if options.json {
             human::print(&json::to_line(&Json::Object(vec![
                 ("ok".into(), Json::Bool(true)),
