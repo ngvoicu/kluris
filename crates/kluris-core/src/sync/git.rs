@@ -678,7 +678,7 @@ impl SystemGit {
             code,
             detail,
         };
-        match run_until(self.command(Some(dir), args), deadline) {
+        match run_until(self.command(Some(dir), args), self.bound(deadline)) {
             Ok(done) => Ok(done),
             Err(RunError::TimedOut) => Err(RemoteError::TimedOut),
             Err(RunError::Spawn(e)) => Err(RemoteError::Failed(error(None, e.to_string()))),

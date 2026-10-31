@@ -21,7 +21,9 @@ use std::fmt;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
+use std::time::Instant;
 
+use crate::process::{RunError, run_until};
 use crate::yaml::is_py_space;
 
 /// A git work tree that contains a brain directory.
@@ -145,6 +147,9 @@ pub struct SystemGit {
     options: Vec<String>,
     /// The remote environment is set ([`crate::sync::git::SyncGit::for_remote`]).
     pub(crate) remote_ready: bool,
+    /// Every run is stopped, with every process it started, at this
+    /// instant ([`SystemGit::until`]).
+    deadline: Option<Instant>,
 }
 
 impl Default for SystemGit {
@@ -166,7 +171,21 @@ impl SystemGit {
             env: Vec::new(),
             options: Vec::new(),
             remote_ready: false,
+            deadline: None,
         }
+    }
+
+    /// Stop every run of this git at `deadline` (with every process it
+    /// started), and every bounded step at the earlier of its own deadline
+    /// and this one.
+    pub fn until(mut self, deadline: Instant) -> SystemGit {
+        self.deadline = Some(deadline);
+        self
+    }
+
+    /// The earlier of `deadline` and this git's own.
+    pub(crate) fn bound(&self, deadline: Instant) -> Instant {
+        self.deadline.map_or(deadline, |own| own.min(deadline))
     }
 
     /// Run `program` instead of `git`.
@@ -225,7 +244,20 @@ impl SystemGit {
             code,
             detail,
         };
-        let out = cmd.output().map_err(|e| error(None, e.to_string()))?;
+        let out = match self.deadline {
+            None => cmd.output().map_err(|e| error(None, e.to_string()))?,
+            Some(deadline) => match run_until(cmd, deadline) {
+                Ok(done) => Output {
+                    status: done.status,
+                    stdout: done.stdout,
+                    stderr: done.stderr,
+                },
+                Err(RunError::TimedOut) => {
+                    return Err(error(None, "stopped at the time limit".into()));
+                }
+                Err(RunError::Spawn(e)) => return Err(error(None, e.to_string())),
+            },
+        };
         if out.status.success() {
             Ok(out)
         } else {

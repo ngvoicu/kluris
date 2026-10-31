@@ -317,3 +317,43 @@ fn a_claim_that_cannot_be_taken_skips_the_fetch() {
     assert_eq!(fresh, Fresh::NoClaim);
     assert!(!has_remote_head(&w));
 }
+
+/// A git that stalls on the step whose arguments hold `step`, for ten
+/// seconds at most, and runs every other one.
+#[cfg(unix)]
+fn stalling_git(w: &World, step: &str) -> kluris_core::git::SystemGit {
+    use std::os::unix::fs::PermissionsExt;
+    let script = w.dir.path().join("stalling-git");
+    fs::write(
+        &script,
+        format!(
+            "#!/bin/sh\ncase \" $* \" in\n *'{step}'*) n=0; while [ $n -lt 1000 ]; do sleep 0.01; n=$((n+1)); done;;\nesac\nexec git \"$@\"\n"
+        ),
+    )
+    .unwrap();
+    fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
+    w.git().program(&script)
+}
+
+/// Every git the read runs has the read's one deadline: whichever local
+/// step stalls, the read ends near the time limit, not when the step does.
+#[cfg(unix)]
+#[test]
+fn every_step_has_the_reads_one_deadline() {
+    for step in [
+        " symbolic-ref --quiet HEAD ",
+        " for-each-ref --format=%(upstream:remotename)",
+        " config --get core.sshCommand ",
+    ] {
+        let w = World::new();
+        w.theirs_push(&[("ideas/new.md", &neuron("", "# New\n"))], &[]);
+        let mut req = FreshRequest::new(&w.ours, false);
+        req.time_limit = Duration::from_millis(1500);
+        let started = Instant::now();
+        let fresh = fresh_read(&stalling_git(&w, step), &req);
+        let took = started.elapsed();
+        assert!(took < Duration::from_millis(4500), "{step}: {took:?}");
+        assert_ne!(fresh, Fresh::Fetched, "{step}");
+        assert!(!has_remote_head(&w), "{step}: fetched after the stall");
+    }
+}
