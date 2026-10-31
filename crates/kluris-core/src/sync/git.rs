@@ -311,16 +311,21 @@ pub trait SyncGit: Plumbing + TextMerger + Sized {
     /// hook git would run for the event included; an older git (which has
     /// only the hooks folder's hook) runs it from `git rev-parse --git-path
     /// hooks/pre-push`, which honours `core.hooksPath`, through a git shell
-    /// alias, so git's own `sh` starts it on every OS, as a hook git runs:
-    /// on Unix only when it is executable, on Windows when it starts with
-    /// `#!` or is an `.exe`.
+    /// alias, so git's own `sh` starts it on every OS (the path passed as
+    /// it is, `/`-separated on Windows only), as a hook git runs: on Unix
+    /// only when it is executable, on Windows when it starts with `#!` or
+    /// is an `.exe`; one git would not run gets git's ignored-hook hint on
+    /// stderr, unless `advice.ignoredHook` is false. Every git it starts and
+    /// the hook stop at `deadline`, with every process they started
+    /// (`TimedOut`).
     fn pre_push(
         &self,
         repo: &Repo,
         remote: &str,
         url: &str,
         lines: &str,
-    ) -> Result<HookRun, GitError>;
+        deadline: Instant,
+    ) -> Result<HookRun, RemoteError>;
 
     /// Each URL a push to the upstream's remote goes to, in git's order,
     /// with the alias that pushes to it alone (see the module docs). A
@@ -760,6 +765,32 @@ fn runnable(path: &Path) -> bool {
     fs::File::open(path).is_ok_and(|mut f| f.read_exact(&mut start).is_ok() && start == *b"#!")
 }
 
+/// A path as git's `sh` takes it: as it is on Unix, where `\\` is a
+/// filename character, so the hook run is the one checked.
+#[cfg(not(windows))]
+fn shell_path(path: &Path) -> OsString {
+    path.as_os_str().to_os_string()
+}
+
+/// A path as git's `sh` takes it: with `/` on Windows.
+#[cfg(windows)]
+fn shell_path(path: &Path) -> OsString {
+    OsString::from(path.to_string_lossy().replace('\\', "/"))
+}
+
+/// What the hooks folder holds for `pre-push` on a git without
+/// `--to-stdin`.
+#[derive(Debug)]
+enum HooksDir {
+    /// No hook there.
+    Missing,
+    /// A hook git would not run (not executable); git's hint for it, empty
+    /// under `advice.ignoredHook = false`.
+    Ignored(String),
+    /// The hook ran.
+    Ran(Finished),
+}
+
 /// A file removed when dropped.
 struct TempFile(PathBuf);
 
@@ -770,45 +801,78 @@ impl Drop for TempFile {
 }
 
 impl SystemGit {
-    /// Whether `git hook run` can give a hook stdin (`--to-stdin`).
-    fn hook_run_takes_stdin(&self) -> bool {
+    /// Whether `git hook run` can give a hook stdin (`--to-stdin`), asked
+    /// by `deadline`.
+    fn hook_run_takes_stdin(&self, deadline: Instant) -> Result<bool, RemoteError> {
         // `-h` prints the usage and exits 129.
-        self.command(None, &["hook", "run", "-h"])
-            .output()
-            .is_ok_and(|out| {
-                [&out.stdout, &out.stderr]
-                    .iter()
-                    .any(|text| String::from_utf8_lossy(text).contains("--to-stdin"))
-            })
+        let out = self.bounded_command(self.command(None, &["hook", "run", "-h"]), deadline)?;
+        Ok([&out.stdout, &out.stderr]
+            .iter()
+            .any(|text| String::from_utf8_lossy(text).contains("--to-stdin")))
     }
 
-    /// The hooks folder's `pre-push` run through a git shell alias, with
-    /// `stdin` its stdin (see [`SyncGit::pre_push`]); `None` without one.
+    /// `cmd`, stopped with every process it started at this git's deadline
+    /// or `deadline`, whichever comes first.
+    fn bounded_command(
+        &self,
+        cmd: std::process::Command,
+        deadline: Instant,
+    ) -> Result<Finished, RemoteError> {
+        match run_until(cmd, self.bound(deadline)) {
+            Ok(done) => Ok(done),
+            Err(RunError::TimedOut) => Err(RemoteError::TimedOut),
+            Err(RunError::Spawn(e)) => Err(RemoteError::Failed(GitError {
+                args: Vec::new(),
+                code: None,
+                detail: e.to_string(),
+            })),
+        }
+    }
+
+    /// The hooks folder's `pre-push`, on a git without `--to-stdin` (see
+    /// [`SyncGit::pre_push`]): found where `git rev-parse --git-path
+    /// hooks/pre-push` puts it, run through a git shell alias with `stdin`
+    /// its stdin, by `deadline`.
     fn pre_push_from_hooks_dir(
         &self,
         repo: &Repo,
         remote: &str,
         url: &str,
         stdin: &Path,
-    ) -> Result<Option<std::process::Output>, GitError> {
-        let hook = self.git_dir_path(repo, "hooks/pre-push")?;
-        if !runnable(&hook) {
-            return Ok(None);
+        deadline: Instant,
+    ) -> Result<HooksDir, RemoteError> {
+        let failed = RemoteError::Failed;
+        let out = self
+            .run(&repo.dir, &["rev-parse", "--git-path", "hooks/pre-push"])
+            .map_err(failed)?;
+        // As git names it in its hint; from the work tree's root, where
+        // git runs.
+        let text = String::from_utf8_lossy(&out);
+        let shown = text.strip_suffix('\n').unwrap_or(&text);
+        let shown = shown.strip_suffix('\r').unwrap_or(shown);
+        let hook = repo.dir.join(shown);
+        if !hook.is_file() {
+            return Ok(HooksDir::Missing);
         }
-        let alias = "alias.kluris-run-pre-push=!exec \"$KLURIS_PRE_PUSH_HOOK\"";
-        let args = ["-c", alias, "kluris-run-pre-push", remote, url];
-        let error = |e: std::io::Error| GitError {
-            args: args.iter().map(|a| a.to_string()).collect(),
-            code: None,
-            detail: e.to_string(),
-        };
-        let mut cmd = self.command(Some(&repo.dir), &args);
-        cmd.env(
-            "KLURIS_PRE_PUSH_HOOK",
-            hook.to_string_lossy().replace('\\', "/"),
-        )
-        .stdin(fs::File::open(stdin).map_err(error)?);
-        cmd.output().map(Some).map_err(error)
+        if !runnable(&hook) {
+            let args = ["config", "--type=bool", "--get", "advice.ignoredHook"];
+            let advice = self.run(&repo.dir, &args).unwrap_or_default();
+            if String::from_utf8_lossy(&advice).trim() == "false" {
+                return Ok(HooksDir::Ignored(String::new()));
+            }
+            return Ok(HooksDir::Ignored(format!(
+                "hint: The '{shown}' hook was ignored because it's not set as executable.\nhint: You can disable this warning with `git config advice.ignoredHook false`.\n"
+            )));
+        }
+        let alias =
+            "alias.kluris-run-pre-push=!exec \"$KLURIS_PRE_PUSH_HOOK\" <\"$KLURIS_PRE_PUSH_INPUT\"";
+        let mut cmd = self.command(
+            Some(&repo.dir),
+            &["-c", alias, "kluris-run-pre-push", remote, url],
+        );
+        cmd.env("KLURIS_PRE_PUSH_HOOK", shell_path(&hook))
+            .env("KLURIS_PRE_PUSH_INPUT", shell_path(stdin));
+        self.bounded_command(cmd, deadline).map(HooksDir::Ran)
     }
 
     /// What a push (or its dry run) that did not succeed means: the remote
@@ -1211,16 +1275,23 @@ impl SyncGit for SystemGit {
         remote: &str,
         url: &str,
         lines: &str,
-    ) -> Result<HookRun, GitError> {
-        let name = format!("KLURIS_PRE_PUSH-{}", std::process::id());
-        let file = TempFile(self.git_dir_path(repo, &name)?);
-        let wrote = |e: std::io::Error| GitError {
-            args: vec!["hook".into(), "run".into(), "pre-push".into()],
-            code: None,
-            detail: format!("cannot write the hook's input: {e}"),
+        deadline: Instant,
+    ) -> Result<HookRun, RemoteError> {
+        let failed = |detail: String| {
+            RemoteError::Failed(GitError {
+                args: vec!["hook".into(), "run".into(), "pre-push".into()],
+                code: None,
+                detail,
+            })
         };
-        fs::write(&file.0, lines).map_err(wrote)?;
-        let out = if self.hook_run_takes_stdin() {
+        let name = format!("KLURIS_PRE_PUSH-{}", std::process::id());
+        let file = TempFile(
+            self.git_dir_path(repo, &name)
+                .map_err(RemoteError::Failed)?,
+        );
+        fs::write(&file.0, lines)
+            .map_err(|e| failed(format!("cannot write the hook's input: {e}")))?;
+        let out = if self.hook_run_takes_stdin(deadline)? {
             let stdin = format!("--to-stdin={}", file.0.display());
             let args = [
                 "hook",
@@ -1232,19 +1303,21 @@ impl SyncGit for SystemGit {
                 remote,
                 url,
             ];
-            let run = self.command(Some(&repo.dir), &args).output();
-            run.map_err(|e| GitError {
-                args: args.iter().map(|a| a.to_string()).collect(),
-                code: None,
-                detail: e.to_string(),
-            })?
+            self.bounded_command(self.command(Some(&repo.dir), &args), deadline)?
         } else {
-            match self.pre_push_from_hooks_dir(repo, remote, url, &file.0)? {
-                Some(out) => out,
-                None => {
+            match self.pre_push_from_hooks_dir(repo, remote, url, &file.0, deadline)? {
+                HooksDir::Ran(out) => out,
+                HooksDir::Missing => {
                     return Ok(HookRun {
                         code: 0,
                         output: String::new(),
+                    });
+                }
+                HooksDir::Ignored(hint) => {
+                    let _ = std::io::stderr().write_all(hint.as_bytes());
+                    return Ok(HookRun {
+                        code: 0,
+                        output: hint,
                     });
                 }
             }
@@ -1861,8 +1934,11 @@ mod tests {
 
     /// The older-git path of [`SyncGit::pre_push`]: the hooks folder's
     /// hook, found where `core.hooksPath` puts it, gets the remote, the URL
-    /// and the ref lines on stdin through git's own shell; a missing hook,
-    /// or one that is not executable, runs nothing.
+    /// and the ref lines on stdin through git's own shell; a missing hook
+    /// runs nothing, one that is not executable gets git's hint (none
+    /// under `advice.ignoredHook = false`), the hook run is the one git
+    /// names even when its folder's name holds a backslash, and a hook still
+    /// running at the deadline is stopped.
     #[cfg(unix)]
     #[test]
     fn an_older_git_runs_the_hooks_folders_pre_push_with_its_stdin() {
@@ -1879,8 +1955,12 @@ mod tests {
         let repo = git.repo(&work).unwrap();
         let stdin = dir.path().join("stdin");
         fs::write(&stdin, "refs/heads/main 1 refs/heads/main 2\n").unwrap();
-        let ran = || git.pre_push_from_hooks_dir(&repo, "origin", "u:r", &stdin);
-        assert!(ran().unwrap().is_none(), "ran a missing hook");
+        let soon = || Instant::now() + std::time::Duration::from_secs(30);
+        let ran = |deadline| git.pre_push_from_hooks_dir(&repo, "origin", "u:r", &stdin, deadline);
+        assert!(
+            matches!(ran(soon()).unwrap(), HooksDir::Missing),
+            "ran a missing hook"
+        );
 
         let hooks = dir.path().join("hooks");
         fs::create_dir(&hooks).unwrap();
@@ -1894,17 +1974,60 @@ mod tests {
             l = log.display()
         );
         fs::write(&hook, body).unwrap();
-        assert!(
-            ran().unwrap().is_none(),
-            "ran a hook that is not executable"
+        let HooksDir::Ignored(hint) = ran(soon()).unwrap() else {
+            panic!("ran a hook that is not executable");
+        };
+        assert_eq!(
+            hint,
+            format!(
+                "hint: The '{}' hook was ignored because it's not set as executable.\nhint: You can disable this warning with `git config advice.ignoredHook false`.\n",
+                hook.display()
+            )
         );
+        git.run(&work, &["config", "advice.ignoredHook", "false"])
+            .unwrap();
+        assert!(matches!(ran(soon()).unwrap(), HooksDir::Ignored(hint) if hint.is_empty()));
+
         fs::set_permissions(&hook, fs::Permissions::from_mode(0o755)).unwrap();
-        let out = ran().unwrap().unwrap();
+        let HooksDir::Ran(out) = ran(soon()).unwrap() else {
+            panic!("the hook did not run");
+        };
         assert_eq!(out.status.code(), Some(4));
         assert_eq!(String::from_utf8_lossy(&out.stdout), "said\n");
         assert_eq!(
             fs::read_to_string(&log).unwrap(),
             "origin u:r\nrefs/heads/main 1 refs/heads/main 2\n"
+        );
+
+        // A hooks folder whose name holds a backslash, a filename character
+        // on Unix, beside one named with a slash there: the hook run is the
+        // one git names, never the other.
+        let literal = dir.path().join("custom\\hooks");
+        let other = dir.path().join("custom").join("hooks");
+        for (folder, said, code) in [(&literal, "configured", 7), (&other, "other", 0)] {
+            fs::create_dir_all(folder).unwrap();
+            let hook = folder.join("pre-push");
+            fs::write(&hook, format!("#!/bin/sh\necho {said}\nexit {code}\n")).unwrap();
+            fs::set_permissions(&hook, fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let path = literal.to_string_lossy().into_owned();
+        git.run(&work, &["config", "core.hooksPath", &path])
+            .unwrap();
+        let HooksDir::Ran(out) = ran(soon()).unwrap() else {
+            panic!("the configured hook did not run");
+        };
+        assert_eq!(String::from_utf8_lossy(&out.stdout), "configured\n");
+        assert_eq!(out.status.code(), Some(7));
+
+        // A hook still running at the deadline is stopped there.
+        fs::write(literal.join("pre-push"), "#!/bin/sh\nsleep 10\n").unwrap();
+        let started = Instant::now();
+        let stopped = ran(Instant::now() + std::time::Duration::from_millis(300));
+        assert!(matches!(stopped, Err(RemoteError::TimedOut)), "{stopped:?}");
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(5),
+            "{:?}",
+            started.elapsed()
         );
     }
 

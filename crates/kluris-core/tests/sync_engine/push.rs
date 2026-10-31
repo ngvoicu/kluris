@@ -306,3 +306,63 @@ fn a_push_that_some_urls_took_says_which() {
     );
     assert_eq!(w.remote_head(), pushed);
 }
+
+/// A `pre-push` hook that does not finish within the push's time limit is
+/// stopped with every process it started, the push is left for the hook,
+/// nothing is pushed, and the remote claim is free: a retry with a quick
+/// hook pushes at once.
+#[test]
+fn a_hook_past_the_pushs_time_limit_is_stopped() {
+    let w = World::new();
+    w.ours_commit(&[("notes/second.md", &neuron("", "# Second\n"))], &[]);
+    let (started, late, sleeper) = (
+        w.dir.path().join("started"),
+        w.dir.path().join("late"),
+        w.dir.path().join("sleeper"),
+    );
+    w.hook(
+        &w.ours,
+        "pre-push",
+        &format!(
+            ": > '{s}'\nsleep 3 &\necho $! > '{p}'\nwait\n: > '{l}'",
+            s = sh_path(&started),
+            p = sh_path(&sleeper),
+            l = sh_path(&late)
+        ),
+    );
+    let remote = w.remote_head();
+    let request = SyncRequest {
+        network_time_limit: std::time::Duration::from_millis(1500),
+        ..w.request()
+    };
+    let ctx = open(&w.ours, &w.git(), &request).unwrap();
+    let began = std::time::Instant::now();
+    let r = sync(&ctx);
+    let took = began.elapsed();
+    assert!(started.exists(), "the hook never ran");
+    assert!(took < std::time::Duration::from_millis(2900), "{took:?}");
+    assert!(left(&r, LeftReason::Hook), "{r:?}");
+    assert!(
+        detail(&r).contains("did not finish within"),
+        "{}",
+        detail(&r)
+    );
+    assert_eq!(w.remote_head(), remote);
+    // Its processes are gone: what it would do after the sleep never comes.
+    while began.elapsed() < std::time::Duration::from_millis(4000) {
+        assert!(!late.exists(), "the hook went on after it was stopped");
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    #[cfg(unix)]
+    {
+        let pid = fs::read_to_string(&sleeper).unwrap();
+        let alive = std::process::Command::new("kill")
+            .args(["-0", pid.trim()])
+            .status()
+            .unwrap();
+        assert!(!alive.success(), "the hook's sleep is still running");
+    }
+    w.hook(&w.ours, "pre-push", "exit 0");
+    let r = w.sync();
+    assert!(clean(&r) && r.pushed, "{r:?}");
+}

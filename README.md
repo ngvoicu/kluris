@@ -406,8 +406,10 @@ fetch` moved it meanwhile, in which case Kluris keeps that and fetches once
 more. When origin moves its branch away from the listed commit before the
 fetch brings it, Kluris fetches again; if that happens on the second try
 too, `kluris sync` changes nothing and its `refused` detail says so: run it
-again. A push has the same limit; once the remote took it, Kluris moves
-`origin/main` itself, as after a fetch.
+again. A push has the same limit, its `pre-push` hooks included: a hook
+still running then is stopped, with everything it started, and nothing is
+pushed (`hook`). Once the remote took the push, Kluris moves `origin/main`
+itself, as after a fetch.
 
 When the fetch cannot update the remote-tracking ref because a lock file is
 in the way (such as `.git/refs/remotes/origin/main.lock`, left by a git that

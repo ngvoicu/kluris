@@ -529,7 +529,7 @@ fn push_head<G: SyncGit>(ctx: &Context<G>) -> Result<Pushed, LeftAsIs> {
         }
         seen.push(destination);
     }
-    pre_push(ctx, upstream, &urls, &seen, &commit)?;
+    pre_push(ctx, upstream, &urls, &seen, &commit, deadline)?;
     let (mut has, mut lacks) = (Vec::new(), Vec::new());
     for (i, (url, destination)) in urls.iter().zip(&seen).enumerate() {
         let Destination::At(old) = destination else {
@@ -573,14 +573,16 @@ fn fast_forward<G: SyncGit>(
 /// `git push` runs it: the remote's name and the URL, and on stdin the
 /// line for the pinned branch, `commit` and the remote's branch with what
 /// that URL holds (zeros when it has no such branch), or nothing where it
-/// already has the commit. A refusal for any URL stops the push to all.
-/// `no_verify` never skips it.
+/// already has the commit. A refusal for any URL stops the push to all,
+/// and so does a hook still running at the push's `deadline`, which is
+/// stopped. `no_verify` never skips it.
 fn pre_push<G: SyncGit>(
     ctx: &Context<G>,
     upstream: &Upstream,
     urls: &[PushUrl],
     seen: &[Destination],
     commit: &str,
+    deadline: Instant,
 ) -> Result<(), LeftAsIs> {
     let (git, repo) = (&ctx.git, &ctx.repo);
     let zeros = "0".repeat(commit.len());
@@ -594,9 +596,19 @@ fn pre_push<G: SyncGit>(
             ),
             Destination::UpToDate | Destination::Moved => String::new(),
         };
-        let run = git
-            .pre_push(repo, &upstream.remote, &url.url, &line)
-            .map_err(failed)?;
+        let run = match git.pre_push(repo, &upstream.remote, &url.url, &line, deadline) {
+            Ok(run) => run,
+            Err(RemoteError::TimedOut) => {
+                return Err(LeftAsIs::because(
+                    LeftReason::Hook,
+                    format!(
+                        "the pre-push hook did not finish within the push's time limit for {} {}; it was stopped and nothing was pushed",
+                        upstream.remote, url.url
+                    ),
+                ));
+            }
+            Err(RemoteError::Failed(e)) => return Err(failed(e)),
+        };
         if run.code != 0 {
             let output = one_line(&run.output);
             let said = if output.is_empty() {
