@@ -1070,6 +1070,55 @@ mod scripts_run {
         assert!(!ran.out.contains("cargo test"), "{}", ran.out);
     }
 
+    /// A step ended by the KILL after it ignored TERM (timeout's 137) at or
+    /// past its bound is the bound's 124; ended before it, an outside kill's,
+    /// is 137. `timeout` here ends its command as GNU's does.
+    #[test]
+    fn a_step_killed_past_its_bound_is_ended_and_is_124() {
+        let home = Home::new();
+        executable(
+            &home.path("bin/timeout"),
+            "#!/bin/bash\n\
+            while case \"$1\" in -*) true;; *) false;; esac; do shift; done\n\
+            shift\n\
+            \"$@\" & pid=$!\n\
+            sleep 1\n\
+            kill -TERM \"$pid\" 2>/dev/null\n\
+            sleep 1\n\
+            kill -KILL \"$pid\" 2>/dev/null\n\
+            wait \"$pid\" 2>/dev/null\n\
+            exit 137\n",
+        );
+        executable(
+            &home.path("bin/ignore-term"),
+            "#!/bin/bash\ntrap '' TERM\nwhile :; do sleep 1; done\n",
+        );
+        let text = script::run_script(&spec(&[]));
+        let (_, step) = text.split_once("step() {").expect("step is defined");
+        let (body, _) = step.split_once("\n}\n").expect("step ends");
+        home.upload(&format!(
+            "failed=0\nlast=0\nstep() {{{body}\n}}\n\
+            step ignore-term 0 ignore-term\n\
+            step early-kill 60 ignore-term\n\
+            exit_run \"$failed\"\n"
+        ));
+        let ran = home.run(&script::bootstrap(ID, &home.layout()));
+        assert_eq!(ran.code, Some(124), "{}", ran.out);
+        for line in [
+            "== step ignore-term: still running after 0 min, ended",
+            "== step ignore-term exit 124 ",
+            "== step early-kill exit 137 ",
+        ] {
+            assert!(ran.out.contains(line), "{line:?} in\n{}", ran.out);
+        }
+        assert!(
+            !ran.out.contains("early-kill: still running"),
+            "{}",
+            ran.out
+        );
+        assert_eq!(ran.last_line(), "== exit 124");
+    }
+
     #[test]
     fn a_machine_without_rustup_is_told_about() {
         let home = Home::new();

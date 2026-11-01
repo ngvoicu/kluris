@@ -5,11 +5,11 @@
 //!   registered in a temporary home, so the developer's config is never
 //!   read) and its graded queries. Fails below hit@5 [`MIN_HIT5`] or MRR
 //!   [`MIN_MRR`].
-//! - `--local`: the 74 tuning queries (`--queries`, default the spec's
-//!   `assets/search-eval-queries.jsonl` beside this worktree) against the
-//!   brains registered on this machine (`KLURIS_CONFIG` or
-//!   `~/.kluris/config.yml`); queries for brains that are not registered are
-//!   skipped. Prints the same metrics; no gate.
+//! - `--local`: the 74 tuning queries (`--queries`, default the
+//!   `kluris-3-2-sync` spec's `assets/search-eval-queries.jsonl` beside this
+//!   worktree) against the brains registered on this machine
+//!   (`KLURIS_CONFIG` or `~/.kluris/config.yml`); queries for brains that are
+//!   not registered are skipped. Prints the same metrics; no gate.
 //!
 //! A query is `{"id", "brain", "type", "q", "rel"}`; `rel` maps files to
 //! grades 0-3 (0: judged not relevant) or lists relevant files (grade 1).
@@ -413,7 +413,7 @@ pub fn main(args: &[String]) -> Result<(), String> {
         if o.local {
             root.parent()
                 .unwrap_or(&root)
-                .join("kluris/.specs/kluris-v3-rust/assets/search-eval-queries.jsonl")
+                .join("kluris/.specs/kluris-3-2-sync/assets/search-eval-queries.jsonl")
         } else {
             fixture.join("queries.jsonl")
         }

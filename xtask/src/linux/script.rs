@@ -491,6 +491,9 @@ step() {
   shift 2
   printf '«step_mark»%s: %s (at most %s min)\n' "$name" "$*" "$minutes"
   timeout --kill-after=30s "${minutes}m" "$@" </dev/null || code=$?
+  if [ "$code" -eq 137 ] && [ $((SECONDS - started)) -ge $((minutes * 60)) ]; then
+    code=124
+  fi
   if [ "$code" -eq 124 ]; then
     printf '«step_mark»%s: still running after %s min, ended\n' "$name" "$minutes"
   fi
