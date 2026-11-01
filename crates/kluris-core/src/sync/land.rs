@@ -8,7 +8,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use super::git::SyncGit;
-use super::{LeftAsIs, LeftReason};
+use super::{LeftAsIs, LeftReason, SyncError};
 use crate::git::{GitError, Repo, TreeEntry};
 
 /// The file at `rel` (`/`-separated) under `root`.
@@ -158,12 +158,34 @@ pub fn uncommitted(paths: Vec<String>) -> LeftAsIs {
         reason: LeftReason::Uncommitted,
         paths,
         detail: None,
+        stopped: false,
     }
 }
 
 /// Left because a step failed: what failed.
 pub fn failed(error: impl std::fmt::Display) -> LeftAsIs {
     LeftAsIs::because(LeftReason::Failed, error.to_string())
+}
+
+/// A git that failed, or was stopped at its deadline ([`LeftAsIs::stopped`]).
+impl From<GitError> for LeftAsIs {
+    fn from(e: GitError) -> LeftAsIs {
+        LeftAsIs {
+            stopped: e.stopped,
+            ..failed(e)
+        }
+    }
+}
+
+/// A brain that could not be opened: its git's failure or stop as
+/// [`From<GitError>`] has it, anything else failed.
+impl From<SyncError> for LeftAsIs {
+    fn from(e: SyncError) -> LeftAsIs {
+        match e {
+            SyncError::Git(e) => e.into(),
+            e => failed(e),
+        }
+    }
 }
 
 /// The lock of the current branch's ref or of the index, when one is
@@ -230,15 +252,15 @@ fn moved_elsewhere<G: SyncGit>(
     branch: &str,
     to: &str,
 ) -> Result<(), LeftAsIs> {
-    let now = git.ref_value(repo, branch).map_err(failed)?;
+    let now = git.ref_value(repo, branch)?;
     if now.as_deref() == Some(to) {
         return Ok(());
     }
     let stays = now
         .as_deref()
         .map_or("no commit".to_string(), |c| short(c).to_string());
-    let moved = match git.branch(repo).map_err(failed)? {
-        Some(head) if git.ref_value(repo, &head).map_err(failed)?.as_deref() == Some(to) => {
+    let moved = match git.branch(repo)? {
+        Some(head) if git.ref_value(repo, &head)?.as_deref() == Some(to) => {
             format!(
                 "{head} moved to {} instead of {branch}: HEAD named it when git landed the pull",
                 short(to)
@@ -262,7 +284,7 @@ pub fn unchanged<G: SyncGit>(
     branch: &str,
     ours: &str,
 ) -> Result<(), LeftAsIs> {
-    match changed(git, repo, branch, ours).map_err(failed)? {
+    match changed(git, repo, branch, ours)? {
         Some(why) => Err(LeftAsIs::because(LeftReason::Busy, why)),
         None => Ok(()),
     }
@@ -270,7 +292,10 @@ pub fn unchanged<G: SyncGit>(
 
 /// Move `branch`, which HEAD names, from `ours` to `to`, a descendant,
 /// unless a file that is not committed sits where it writes, a git lock is
-/// held, or the work tree is not the one decided for ([`changed`]).
+/// held, or the work tree is not the one decided for ([`changed`]). Those
+/// checks run on `git`, stopped at its deadline when it has one; the move,
+/// the check after it and the reads after a refusal on `landing`, never
+/// stopped: a move stopped partway would leave the work tree half moved.
 /// The caller holds the tree claim. Checked right before the move (a hook
 /// or an editor may have written a file, or switched or moved the branch,
 /// since the pull decided) and again when git refuses (a file written in
@@ -284,21 +309,22 @@ pub fn unchanged<G: SyncGit>(
 /// which reports it; nothing is undone.
 pub fn land<G: SyncGit>(
     git: &G,
+    landing: &G,
     repo: &Repo,
     root: &Path,
     branch: &str,
     ours: &str,
     to: &str,
 ) -> Result<(), LeftAsIs> {
-    let in_the_way = || -> Result<Vec<String>, LeftAsIs> {
-        let dirty = git.dirty(repo).map_err(failed)?;
-        blocked_paths(git, repo, root, &dirty, ours, to).map_err(failed)
+    let in_the_way = |git: &G| -> Result<Vec<String>, LeftAsIs> {
+        let dirty = git.dirty(repo)?;
+        Ok(blocked_paths(git, repo, root, &dirty, ours, to)?)
     };
-    let blocked = in_the_way()?;
+    let blocked = in_the_way(git)?;
     if !blocked.is_empty() {
         return Err(uncommitted(blocked));
     }
-    if let Some(lock) = held_lock(git, repo, branch).map_err(failed)? {
+    if let Some(lock) = held_lock(git, repo, branch)? {
         return Err(LeftAsIs::because(
             LeftReason::Busy,
             format!(
@@ -308,10 +334,10 @@ pub fn land<G: SyncGit>(
         ));
     }
     unchanged(git, repo, branch, ours)?;
-    let Err(e) = git.fast_forward_to(repo, to) else {
-        return moved_elsewhere(git, repo, branch, to);
+    let Err(e) = landing.fast_forward_to(repo, to) else {
+        return moved_elsewhere(landing, repo, branch, to);
     };
-    let blocked = not_written_by_git(git, repo, root, to, in_the_way()?).map_err(failed)?;
+    let blocked = not_written_by_git(landing, repo, root, to, in_the_way(landing)?)?;
     if blocked.is_empty() {
         Err(failed(&e.detail))
     } else {

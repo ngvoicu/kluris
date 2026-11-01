@@ -12,11 +12,15 @@
 //!   claim, so one fetch throttles every linked worktree. Every git the
 //!   read runs before it reads stops at [`READ_TIME_LIMIT`]: the queries
 //!   that open the brain, the fetch, and the pull's local steps up to the
-//!   land, its merge commit and that commit's hooks included. The land
-//!   itself, and what follows it, is never stopped: a land stopped partway
-//!   would leave the work tree half moved. A local step stopped at the
-//!   limit leaves the brain as it is (`busy`). A read never waits for the
-//!   remote claim another command holds: it is `busy` at once.
+//!   land, its merge commit and that commit's hooks included (each with
+//!   every process it started), and the land's own checks before it
+//!   writes. The land itself, and what follows it, is never stopped: a
+//!   land stopped partway would leave the work tree half moved. A step
+//!   stopped at the limit leaves the brain as it is (`busy`); one that
+//!   fails on its own is `failed`, whatever it says. The stop is git's
+//!   own outcome ([`LeftAsIs::stopped`]), never read from what git says.
+//!   A read never waits for the remote claim another command holds: it
+//!   is `busy` at once.
 //! - **An explicit** command (`commit`, `sync`, `resolve`, `create
 //!   --remote`) always fetches, and its fetch and push each have
 //!   [`NETWORK_TIME_LIMIT`]. It waits for the remote claim another command
@@ -62,7 +66,6 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Mutex, PoisonError};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime};
 
@@ -74,7 +77,7 @@ use super::git::SyncGit;
 use super::land::failed;
 use super::{LeftAsIs, LeftReason, NETWORK_TIME_LIMIT, SyncError, SyncReport, SyncRequest};
 use crate::dream::DreamOptions;
-use crate::git::{STOPPED, SystemGit};
+use crate::git::SystemGit;
 
 /// How long the gits a read runs before it reads may take, all together.
 pub const READ_TIME_LIMIT: Duration = Duration::from_secs(3);
@@ -177,29 +180,38 @@ pub fn open<'a>(brain: Brain<'a>, intent: Intent, env: &SessionEnv) -> Session<'
 /// Open every brain for `intent`: [`PARALLEL_FETCHES`] fetch at a time at
 /// most, then each lands in turn; the sessions in the brains' order.
 pub fn open_all<'a>(brains: &[Brain<'a>], intent: Intent, env: &SessionEnv) -> Vec<Session<'a>> {
-    let slots: Vec<Mutex<Option<Fetched<'a>>>> = brains.iter().map(|_| Mutex::new(None)).collect();
     let next = AtomicUsize::new(0);
-    thread::scope(|scope| {
-        for _ in 0..PARALLEL_FETCHES.min(brains.len()) {
-            scope.spawn(|| {
-                loop {
-                    let index = next.fetch_add(1, Ordering::Relaxed);
-                    let (Some(brain), Some(slot)) = (brains.get(index), slots.get(index)) else {
-                        break;
-                    };
-                    let fetched = fetch(*brain, intent, env);
-                    *slot.lock().unwrap_or_else(PoisonError::into_inner) = Some(fetched);
-                }
-            });
-        }
+    // Each worker takes the next brain until none is left, and gives back
+    // what it fetched with each brain's place. A worker's panic is a bug,
+    // and the command's.
+    let mut fetched: Vec<(usize, Fetched<'a>)> = thread::scope(|scope| {
+        let workers: Vec<_> = (0..PARALLEL_FETCHES.min(brains.len()))
+            .map(|_| {
+                scope.spawn(|| {
+                    let mut done = Vec::new();
+                    loop {
+                        let index = next.fetch_add(1, Ordering::Relaxed);
+                        let Some(brain) = brains.get(index) else {
+                            return done;
+                        };
+                        done.push((index, fetch(*brain, intent, env)));
+                    }
+                })
+            })
+            .collect();
+        workers
+            .into_iter()
+            .flat_map(|worker| {
+                worker
+                    .join()
+                    .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+            })
+            .collect()
     });
-    slots
+    fetched.sort_by_key(|(index, _)| *index);
+    fetched
         .into_iter()
-        .zip(brains)
-        .map(|(slot, brain)| {
-            let fetched = slot.into_inner().unwrap_or_else(PoisonError::into_inner);
-            settle(fetched.unwrap_or_else(|| fetch(*brain, intent, env)), env)
-        })
+        .map(|(_, fetched)| settle(fetched, env))
         .collect()
 }
 
@@ -322,7 +334,7 @@ impl<'a> Fetched<'a> {
 
     /// Left as it is for `left`.
     fn left(mut self, left: LeftAsIs) -> Fetched<'a> {
-        let left = in_time(self.intent, left);
+        let left = in_time(left);
         self.report
             .get_or_insert_with(SyncReport::default)
             .left_as_is = Some(left);
@@ -347,7 +359,7 @@ fn fetch<'a>(brain: Brain<'a>, intent: Intent, env: &SessionEnv) -> Fetched<'a> 
         Ok(ctx) => ctx,
         Err(SyncError::NotARepo | SyncError::Nested { .. }) => return alone,
         Err(SyncError::GitTooOld { .. }) if intent.throttled() => return alone,
-        Err(e) => return alone.left(failed(e)),
+        Err(e) => return alone.left(e.into()),
     };
     if !intent.throttled() {
         ctx.wait_for_remote(COMMAND_BOUND);
@@ -355,7 +367,7 @@ fn fetch<'a>(brain: Brain<'a>, intent: Intent, env: &SessionEnv) -> Fetched<'a> 
     match ctx.git().is_shallow(ctx.repo()) {
         Ok(false) => {}
         Ok(true) => return alone,
-        Err(e) => return alone.left(failed(e)),
+        Err(e) => return alone.left(e.into()),
     }
     if ctx.upstream().is_none() {
         return match engine::ready(&ctx) {
@@ -431,7 +443,7 @@ fn settle<'a>(fetched: Fetched<'a>, env: &SessionEnv) -> Session<'a> {
         None if intent.throttled() => match TreeClaim::shared(&own, intent.tree_bound()) {
             Ok(claim) => Some(claim),
             Err(e) => {
-                add_left(&mut report, intent, claim_left(e));
+                add_left(&mut report, claim_left(e));
                 None
             }
         },
@@ -442,14 +454,14 @@ fn settle<'a>(fetched: Fetched<'a>, env: &SessionEnv) -> Session<'a> {
                         ctx.until(Some(Instant::now() + READ_TIME_LIMIT.saturating_sub(spent)));
                     }
                     let mut pulled = engine::pull_fetched(&ctx, &claim, theirs);
-                    pulled.left_as_is = pulled.left_as_is.map(|why| in_time(intent, why));
+                    pulled.left_as_is = pulled.left_as_is.map(in_time);
                     report = Some(pulled);
                 }
                 if intent.throttled() {
                     match claim.downgrade(READ_BOUND) {
                         Ok(shared) => Some(shared),
                         Err(e) => {
-                            add_left(&mut report, intent, claim_left(e));
+                            add_left(&mut report, claim_left(e));
                             None
                         }
                     }
@@ -458,7 +470,7 @@ fn settle<'a>(fetched: Fetched<'a>, env: &SessionEnv) -> Session<'a> {
                 }
             }
             Err(e) => {
-                add_left(&mut report, intent, claim_left(e));
+                add_left(&mut report, claim_left(e));
                 // Read as it is: shared with other readers when they are
                 // all that hold it.
                 intent
@@ -483,10 +495,10 @@ fn settle<'a>(fetched: Fetched<'a>, env: &SessionEnv) -> Session<'a> {
 
 /// `report` left as it is for `why`, unless it already was for another
 /// reason.
-fn add_left(report: &mut Option<SyncReport>, intent: Intent, why: LeftAsIs) {
+fn add_left(report: &mut Option<SyncReport>, why: LeftAsIs) {
     let report = report.get_or_insert_with(SyncReport::default);
     if report.left_as_is.is_none() {
-        report.left_as_is = Some(in_time(intent, why));
+        report.left_as_is = Some(why);
     }
 }
 
@@ -501,12 +513,11 @@ fn claim_left(e: ClaimError) -> LeftAsIs {
     }
 }
 
-/// `left` as a read reports it: a git step stopped at the read's time
-/// limit leaves the brain as it is (`busy`).
-fn in_time(intent: Intent, left: LeftAsIs) -> LeftAsIs {
-    let stopped = left.reason == LeftReason::Failed
-        && left.detail.as_deref().is_some_and(|d| d.contains(STOPPED));
-    if !(intent.throttled() && stopped) {
+/// `left` as the session reports it: a step whose git was stopped at the
+/// read's time limit leaves the brain as it is (`busy`). Only a read's
+/// gits before the land have a deadline, so nothing else is ever stopped.
+fn in_time(left: LeftAsIs) -> LeftAsIs {
+    if !left.stopped {
         return left;
     }
     LeftAsIs::because(

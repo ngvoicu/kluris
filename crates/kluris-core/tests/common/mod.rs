@@ -9,9 +9,10 @@ pub mod corpus;
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Child, Command, ExitStatus};
 use std::sync::{Mutex, MutexGuard};
-use std::time::Duration;
+use std::thread;
+use std::time::{Duration, Instant};
 
 use kluris_core::brain::store::LocalGitStore;
 use kluris_core::dream::{DreamOptions, dream};
@@ -34,6 +35,24 @@ pub const ISOLATED_VARS: [&str; 8] = [
     "GIT_WORK_TREE",
     "KLURIS_AGENT",
 ];
+
+/// How `child`, a process the test started, ended, waited for up to
+/// `patience`; past it the child is killed (by its handle) and the test
+/// fails.
+pub fn wait_bounded(child: &mut Child, what: &str, patience: Duration) -> ExitStatus {
+    let start = Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return status,
+            Ok(None) if start.elapsed() < patience => thread::sleep(Duration::from_millis(10)),
+            outcome => {
+                let _ = child.kill();
+                let _ = child.wait();
+                panic!("{what}: did not end within {patience:?} ({outcome:?})");
+            }
+        }
+    }
+}
 
 pub fn today() -> Date {
     Date::new(2026, 1, 1).unwrap()

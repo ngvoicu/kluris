@@ -172,8 +172,15 @@ pub trait SyncGit: Plumbing + TextMerger + Clone + Sized {
     fn showing_output(self) -> Self;
 
     /// This git with every run stopped, with every process it started, at
-    /// `deadline`; `None`: never.
+    /// `deadline` (its error [`GitError::stopped`]); `None`: never. The
+    /// fast-forward ([`SyncGit::fast_forward_to`]) is never stopped.
     fn with_deadline(self, deadline: Option<Instant>) -> Self;
+
+    /// The work tree `dir` is in, as git answers it (`git rev-parse
+    /// --is-inside-work-tree --show-prefix`): `None` outside one or inside a
+    /// `.git` directory; an error when git was stopped, could not start or
+    /// was killed.
+    fn discover(&self, dir: &Path) -> Result<Option<Repo>, GitError>;
 
     /// This git with the remote environment for `repo`: [`remote_env`]
     /// (`core.sshCommand` read once, here) and [`NO_BACKGROUND`] on every
@@ -276,6 +283,7 @@ pub trait SyncGit: Plumbing + TextMerger + Clone + Sized {
     /// change, an untracked or an ignored file would be overwritten, and
     /// runs the `post-merge` hook. git's output and the hook's go to this
     /// process's stderr; when git fails, its message is the error's detail.
+    /// Never stopped, whatever this git's deadline.
     fn fast_forward_to(&self, repo: &Repo, to: &str) -> Result<(), GitError>;
 
     /// Push the upstream's local branch, named by its ref, to its branch
@@ -793,15 +801,14 @@ impl SystemGit {
         args: &[&str],
         deadline: Instant,
     ) -> Result<Finished, RemoteError> {
-        let error = |code, detail: String| GitError {
-            args: args.iter().map(|a| a.to_string()).collect(),
-            code,
-            detail,
-        };
         match run_until(self.command(Some(dir), args), self.bound(deadline)) {
             Ok(done) => Ok(done),
             Err(RunError::TimedOut) => Err(RemoteError::TimedOut),
-            Err(RunError::Spawn(e)) => Err(RemoteError::Failed(error(None, e.to_string()))),
+            Err(RunError::Spawn(e)) => Err(RemoteError::Failed(GitError::new(
+                args,
+                None,
+                e.to_string(),
+            ))),
         }
     }
 
@@ -817,11 +824,11 @@ impl SystemGit {
             self.forward(&done.stderr);
             Ok(done.stdout)
         } else {
-            Err(RemoteError::Failed(GitError {
-                args: args.iter().map(|a| a.to_string()).collect(),
-                code: done.status.code(),
-                detail: String::from_utf8_lossy(&done.stderr).trim().to_string(),
-            }))
+            Err(RemoteError::Failed(GitError::new(
+                args,
+                done.status.code(),
+                String::from_utf8_lossy(&done.stderr).trim(),
+            )))
         }
     }
 
@@ -845,6 +852,10 @@ impl SyncGit for SystemGit {
     fn with_deadline(mut self, deadline: Option<Instant>) -> Self {
         self.deadline = deadline;
         self
+    }
+
+    fn discover(&self, dir: &Path) -> Result<Option<Repo>, GitError> {
+        SystemGit::discover(self, dir)
     }
 
     fn for_remote(&self, repo: &Repo) -> Result<Self, GitError> {
@@ -874,11 +885,11 @@ impl SyncGit for SystemGit {
         let text = String::from_utf8_lossy(&out);
         let mut lines = text.lines();
         let (Some(own), Some(common)) = (lines.next(), lines.next()) else {
-            return Err(GitError {
-                args: args.iter().map(|a| a.to_string()).collect(),
-                code: None,
-                detail: format!("unexpected output: {text}"),
-            });
+            return Err(GitError::new(
+                &args,
+                None,
+                format!("unexpected output: {text}"),
+            ));
         };
         // A relative common dir is relative to where git ran.
         Ok(GitDirs {
@@ -899,10 +910,12 @@ impl SyncGit for SystemGit {
         };
         let args = ["rev-list", "--count", &range];
         let out = self.run(&repo.dir, &args)?;
-        first_line(&out).parse().map_err(|_| GitError {
-            args: args.iter().map(|a| a.to_string()).collect(),
-            code: None,
-            detail: format!("not a count: {}", String::from_utf8_lossy(&out)),
+        first_line(&out).parse().map_err(|_| {
+            GitError::new(
+                &args,
+                None,
+                format!("not a count: {}", String::from_utf8_lossy(&out)),
+            )
         })
     }
 
@@ -1074,23 +1087,16 @@ impl SyncGit for SystemGit {
 
     fn merge_tree(&self, repo: &Repo, ours: &str, theirs: &str) -> Result<MergeTree, GitError> {
         let args = ["merge-tree", "--write-tree", "-z", ours, theirs];
-        let out = self
-            .command(Some(&repo.dir), &args)
-            .output()
-            .map_err(|e| GitError {
-                args: args.iter().map(|a| a.to_string()).collect(),
-                code: None,
-                detail: e.to_string(),
-            })?;
+        let out = self.finish(self.command(Some(&repo.dir), &args), &args, None)?;
         // 0: clean; 1: conflicts, listed after the tree; anything else fails.
         if matches!(out.status.code(), Some(0 | 1)) {
             self.forward(&out.stderr);
         } else {
-            return Err(GitError {
-                args: args.iter().map(|a| a.to_string()).collect(),
-                code: out.status.code(),
-                detail: String::from_utf8_lossy(&out.stderr).trim().to_string(),
-            });
+            return Err(GitError::new(
+                &args,
+                out.status.code(),
+                String::from_utf8_lossy(&out.stderr).trim(),
+            ));
         }
         Ok(parse_merge_tree(&out.stdout))
     }
@@ -1132,26 +1138,24 @@ impl SyncGit for SystemGit {
         ];
         // The post-merge hook's output reaches the user, all of it on
         // stderr so `--json` stays one document; git's own message too, and
-        // it is kept for the error.
+        // it is kept for the error. The land is never stopped, whatever
+        // this git's deadline: stopped partway, it would leave the work
+        // tree half moved.
         let out = self
             .command(Some(&repo.dir), &args)
             .output()
-            .map_err(|e| GitError {
-                args: args.iter().map(|a| a.to_string()).collect(),
-                code: None,
-                detail: e.to_string(),
-            })?;
+            .map_err(|e| GitError::new(&args, None, e.to_string()))?;
         let mut stderr = std::io::stderr();
         let _ = stderr.write_all(&out.stdout);
         let _ = stderr.write_all(&out.stderr);
         if out.status.success() {
             Ok(())
         } else {
-            Err(GitError {
-                args: args.iter().map(|a| a.to_string()).collect(),
-                code: out.status.code(),
-                detail: one_line(&String::from_utf8_lossy(&out.stderr)),
-            })
+            Err(GitError::new(
+                &args,
+                out.status.code(),
+                one_line(&String::from_utf8_lossy(&out.stderr)),
+            ))
         }
     }
 
@@ -1203,11 +1207,7 @@ impl TextMerger for SystemGit {
         static COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
         let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let dir = std::env::temp_dir().join(format!("kluris-merge-{}-{n}", std::process::id()));
-        let error = |detail: String| GitError {
-            args: vec!["merge-file".into()],
-            code: None,
-            detail,
-        };
+        let error = |detail: String| GitError::new(&["merge-file"], None, detail);
         std::fs::create_dir_all(&dir).map_err(|e| error(e.to_string()))?;
         let result = merge_files(self, &dir, base, ours, theirs, &error);
         let _ = std::fs::remove_dir_all(&dir);
@@ -1236,21 +1236,18 @@ fn merge_files(
         write("theirs", theirs)?,
     );
     let args = ["merge-file", "-p", &o, &b, &t];
-    let out = git
-        .command(Some(dir), &args)
-        .output()
-        .map_err(|e| error(e.to_string()))?;
+    let out = git.finish(git.command(Some(dir), &args), &args, None)?;
     match out.status.code() {
         Some(0) => String::from_utf8(out.stdout)
             .map(Some)
             .map_err(|_| error("the merged text is not UTF-8".into())),
         // The number of conflicts (git caps it at 127).
         Some(1..=127) => Ok(None),
-        code => Err(GitError {
-            args: args.iter().map(|a| a.to_string()).collect(),
+        code => Err(GitError::new(
+            &args,
             code,
-            detail: String::from_utf8_lossy(&out.stderr).trim().to_string(),
-        }),
+            String::from_utf8_lossy(&out.stderr).trim(),
+        )),
     }
 }
 

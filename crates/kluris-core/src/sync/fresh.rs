@@ -141,7 +141,7 @@ pub fn fresh_read(git: &SystemGit, req: &FreshRequest) -> Fresh {
     let deadline = Instant::now() + req.time_limit;
     // Every git the read runs, the local steps included, stops at the
     // read's one deadline.
-    let mut git = git.clone().until(deadline);
+    let mut git = git.clone().with_deadline(Some(deadline));
     for (key, value) in READ_ENV {
         git = git.env(key, value);
     }

@@ -55,7 +55,8 @@
 //! [`sync`] pulls again after a push the remote turned back because it
 //! moved, [`PUSH_ATTEMPTS`] times at most ([`share`]). Only the fetch and
 //! the push are bounded in time, unless the caller bounds every step before
-//! the land too ([`Context::until`]); the land and what follows it never
+//! the land too ([`Context::until`]: the merge hooks and the land's own
+//! checks before it writes included); the land and what follows it never
 //! are.
 //!
 //! A caller that fetches and lands apart (the session) has the two halves
@@ -100,11 +101,12 @@ pub fn check_git(git: &impl Git) -> Result<(), SyncError> {
 #[derive(Debug, Clone)]
 pub struct Context<'a, G> {
     root: PathBuf,
-    /// The git of every step before the land, stopped at the deadline it
-    /// was given ([`Context::until`]).
+    /// The git of every step before the land, the land's checks before it
+    /// writes included, stopped at the deadline it was given
+    /// ([`Context::until`]).
     git: G,
-    /// The git of the land and every step after it, never stopped: a land
-    /// stopped partway would leave the work tree half moved.
+    /// The git of the land's write and every step after it, never stopped:
+    /// a land stopped partway would leave the work tree half moved.
     landing: G,
     repo: Repo,
     dirs: GitDirs,
@@ -183,8 +185,7 @@ impl<'a, G: SyncGit> Context<'a, G> {
     /// The pinned branch's commit; refused while it has none.
     fn branch_commit(&self, branch: &str) -> Result<String, LeftAsIs> {
         self.git
-            .ref_value(&self.repo, branch)
-            .map_err(failed)?
+            .ref_value(&self.repo, branch)?
             .ok_or_else(|| failed("the branch has no commit yet: commit first"))
     }
 
@@ -211,7 +212,7 @@ pub fn open<'a, G: SyncGit>(
     request: &SyncRequest<'a>,
 ) -> Result<Context<'a, G>, SyncError> {
     check_git(git)?;
-    let repo = git.repo(root).ok_or(SyncError::NotARepo)?;
+    let repo = git.discover(root)?.ok_or(SyncError::NotARepo)?;
     if repo.nested() {
         return Err(SyncError::Nested {
             prefix: repo.prefix.clone(),
@@ -279,7 +280,7 @@ fn reported(step: impl FnOnce(&mut SyncReport) -> Result<(), LeftAsIs>) -> SyncR
 /// The pinned branch's upstream, once no git merge, rebase, cherry-pick or
 /// revert is in progress; or why a pull cannot start.
 pub fn ready<'c, G: SyncGit>(ctx: &'c Context<G>) -> Result<&'c Upstream, LeftAsIs> {
-    if let Some(op) = ctx.git.in_progress(&ctx.repo).map_err(failed)? {
+    if let Some(op) = ctx.git.in_progress(&ctx.repo)? {
         return Err(LeftAsIs::because(
             LeftReason::InProgress,
             format!("a {op} is in progress; finish or abort it first"),
@@ -318,10 +319,11 @@ fn land_into<G: SyncGit>(
     let branch = upstream.branch.as_str();
     let ours = ctx.branch_commit(branch)?;
     unchanged(git, repo, branch, &ours)?;
-    let count = |from: Option<&str>, to: &str| git.count(repo, from, to).map_err(failed);
+    let count = |from: Option<&str>, to: &str| git.count(repo, from, to).map_err(LeftAsIs::from);
     // From the land on, nothing is stopped partway.
     let landing = &ctx.landing;
-    let landed = |from: Option<&str>, to: &str| landing.count(repo, from, to).map_err(failed);
+    let landed =
+        |from: Option<&str>, to: &str| landing.count(repo, from, to).map_err(LeftAsIs::from);
     let pending_path = ctx.pending();
     let waiting = match Pending::read(&pending_path) {
         Found::None => None,
@@ -336,58 +338,53 @@ fn land_into<G: SyncGit>(
         report.to_push = count(None, &ours)?;
         return drop_waiting(&pending_path, waiting);
     };
-    let behind = !git.is_ancestor(repo, &theirs, &ours).map_err(failed)?;
-    let ahead = !git.is_ancestor(repo, &ours, &theirs).map_err(failed)?;
+    let behind = !git.is_ancestor(repo, &theirs, &ours)?;
+    let ahead = !git.is_ancestor(repo, &ours, &theirs)?;
     if !behind {
         report.to_push = count(Some(&theirs), &ours)?;
         return drop_waiting(&pending_path, waiting);
     }
     if !ahead {
-        land(landing, repo, &ctx.root, branch, &ours, &theirs)?;
+        land(git, landing, repo, &ctx.root, branch, &ours, &theirs)?;
         report.pulled = landed(Some(&ours), &theirs)?;
         return drop_waiting(&pending_path, waiting);
     }
 
     report.to_push = count(Some(&theirs), &ours)?;
-    if git
-        .merge_bases(repo, &ours, &theirs)
-        .map_err(failed)?
-        .is_empty()
-    {
+    if git.merge_bases(repo, &ours, &theirs)?.is_empty() {
         return Err(unrelated(upstream));
     }
     if let Some(waiting) = waiting.as_ref().filter(|w| w.theirs == theirs) {
-        report.conflicts = texts(git, repo, waiting).map_err(failed)?;
+        report.conflicts = texts(git, repo, waiting)?;
         return Ok(());
     }
     let none = BTreeMap::new();
     let maps = &ctx.request.maps;
-    let (tree, index, auto_merged) =
-        match merge_commits(git, repo, &ours, &theirs, maps, &none).map_err(failed)? {
-            MergeOutcome::Clean {
-                tree,
-                index,
-                auto_merged,
-            } => (tree, index, auto_merged),
-            MergeOutcome::Conflicts { base, conflicts } => {
-                match waiting {
-                    Some(waiting) => {
-                        report.conflicts = texts(git, repo, &waiting).map_err(failed)?;
-                        report.behind_conflict = count(Some(&waiting.theirs), &theirs)?;
-                    }
-                    None => {
-                        let waiting = Pending::new(base, &ours, &theirs, conflicts);
-                        report.conflicts = texts(git, repo, &waiting).map_err(failed)?;
-                        waiting
-                            .write(&pending_path)
-                            .map_err(|e| failed(format!("cannot record the conflict: {e}")))?;
-                    }
+    let (tree, index, auto_merged) = match merge_commits(git, repo, &ours, &theirs, maps, &none)? {
+        MergeOutcome::Clean {
+            tree,
+            index,
+            auto_merged,
+        } => (tree, index, auto_merged),
+        MergeOutcome::Conflicts { base, conflicts } => {
+            match waiting {
+                Some(waiting) => {
+                    report.conflicts = texts(git, repo, &waiting)?;
+                    report.behind_conflict = count(Some(&waiting.theirs), &theirs)?;
                 }
-                return Ok(());
+                None => {
+                    let waiting = Pending::new(base, &ours, &theirs, conflicts);
+                    report.conflicts = texts(git, repo, &waiting)?;
+                    waiting
+                        .write(&pending_path)
+                        .map_err(|e| failed(format!("cannot record the conflict: {e}")))?;
+                }
             }
-        };
-    let dirty = git.dirty(repo).map_err(failed)?;
-    let blocked = blocked_paths(git, repo, &ctx.root, &dirty, &ours, &tree).map_err(failed)?;
+            return Ok(());
+        }
+    };
+    let dirty = git.dirty(repo)?;
+    let blocked = blocked_paths(git, repo, &ctx.root, &dirty, &ours, &tree)?;
     if !blocked.is_empty() {
         return Err(uncommitted(blocked));
     }
@@ -402,7 +399,7 @@ fn land_into<G: SyncGit>(
         no_verify,
     )
     .map_err(merge_stopped)?;
-    land(landing, repo, &ctx.root, branch, &ours, &commit)?;
+    land(git, landing, repo, &ctx.root, branch, &ours, &commit)?;
     report.pulled = landed(Some(&ours), &theirs)?;
     report.auto_merged = auto_merged;
     report.to_push = landed(Some(&theirs), &commit)?;
@@ -442,7 +439,7 @@ pub fn fetch_upstream<G: SyncGit>(
 ) -> Result<Option<String>, LeftAsIs> {
     let (git, repo) = (&ctx.git, &ctx.repo);
     let deadline = Instant::now() + ctx.request.network_time_limit;
-    match fetch::fetch(git, repo, upstream, deadline).map_err(failed)? {
+    match fetch::fetch(git, repo, upstream, deadline)? {
         Fetch::Moved { new, .. } => Ok(Some(new)),
         Fetch::Same { at } => Ok(Some(at)),
         Fetch::NoBranch => Ok(None),
@@ -456,6 +453,7 @@ fn offline() -> LeftAsIs {
         reason: LeftReason::Offline,
         paths: Vec::new(),
         detail: None,
+        stopped: false,
     }
 }
 
@@ -473,16 +471,17 @@ fn unrelated(upstream: &Upstream) -> LeftAsIs {
     )
 }
 
-/// Why the merge hooks stopped the merge.
+/// Why the merge hooks stopped the merge: a hook's refusal, or a git
+/// (a hook's included) that failed or was stopped at its deadline.
 fn merge_stopped(e: MergeHookError) -> LeftAsIs {
-    let reason = match &e {
+    match e {
+        MergeHookError::Hook(HookError::Git(e)) => e.into(),
+        MergeHookError::Hook(HookError::MessageFile(_)) => failed(e),
         MergeHookError::Changed { .. }
         | MergeHookError::Hook(HookError::Failed { .. } | HookError::EmptyMessage) => {
-            LeftReason::Hook
+            LeftAsIs::because(LeftReason::Hook, e.to_string())
         }
-        MergeHookError::Hook(HookError::MessageFile(_) | HookError::Git(_)) => LeftReason::Failed,
-    };
-    LeftAsIs::because(reason, e.to_string())
+    }
 }
 
 /// The waiting merge's conflicts with each side's text and the merge's id:
@@ -600,7 +599,7 @@ fn push_head<G: SyncGit>(ctx: &Context<G>) -> Result<Pushed, LeftAsIs> {
     let upstream = upstream(ctx)?;
     // Checked right before: the ref git moves once the remote took the
     // push.
-    if let Some(why) = fetch::unmovable(git, repo, upstream).map_err(failed)? {
+    if let Some(why) = fetch::unmovable(git, repo, upstream)? {
         return Err(LeftAsIs::because(LeftReason::Refused, why));
     }
     // git pushes the pinned branch by its ref: it must have a commit.
@@ -712,21 +711,21 @@ pub fn finish_merge<G: SyncGit>(
     unchanged(git, repo, branch, ours)?;
     let maps = &ctx.request.maps;
     let MergeOutcome::Clean { tree, index, .. } =
-        merge_commits(git, repo, ours, theirs, maps, choices).map_err(failed)?
+        merge_commits(git, repo, ours, theirs, maps, choices)?
     else {
         return Err(failed(
             "the merge has conflicts the recorded choices do not cover",
         ));
     };
-    let dirty = git.dirty(repo).map_err(failed)?;
-    let blocked = blocked_paths(git, repo, &ctx.root, &dirty, ours, &tree).map_err(failed)?;
+    let dirty = git.dirty(repo)?;
+    let blocked = blocked_paths(git, repo, &ctx.root, &dirty, ours, &tree)?;
     if !blocked.is_empty() {
         return Err(uncommitted(blocked));
     }
     let no_verify = ctx.request.no_verify;
     let commit = merge_commit(git, repo, &index, &tree, [ours, theirs], message, no_verify)
         .map_err(merge_stopped)?;
-    land(&ctx.landing, repo, &ctx.root, branch, ours, &commit)?;
+    land(git, &ctx.landing, repo, &ctx.root, branch, ours, &commit)?;
     Ok(commit)
 }
 

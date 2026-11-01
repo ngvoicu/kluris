@@ -5,6 +5,10 @@
 //! - A read (and housekeeping) fetches for 3 s at most, once a minute per
 //!   brain, never inside the back-off, and lands only what its own fetch
 //!   named; it holds the shared tree claim until it is closed.
+//! - Every git a read runs before the land, its merge hooks and the checks
+//!   the land makes before it writes included, stops at the read's 3 s:
+//!   the brain is read as it is (`busy`). A git that fails on its own is
+//!   `failed`, whatever it says, and the land itself is never stopped.
 //! - An explicit session always fetches, holds the tree claim until it is
 //!   closed, and pushes then.
 //! - `open_all` fetches eight brains at a time at most, then lands them one
@@ -24,13 +28,13 @@ use std::process::{Child, Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use common::{ISOLATED_VARS, SERIAL, World, detail, neuron, options, reason};
+use common::{ISOLATED_VARS, SERIAL, World, detail, neuron, options, reason, wait_bounded};
 use kluris_core::config::{parse_brain_config, read_brain_config, write_brain_config};
 use kluris_core::git::SystemGit;
 use kluris_core::sync::claim::{COMMAND_BOUND, READ_BOUND, RemoteClaim, TreeClaim};
 use kluris_core::sync::engine;
 use kluris_core::sync::fetch::{BACKOFF, STAMP, back_off};
-use kluris_core::sync::session::{self, Brain, Intent, SessionEnv};
+use kluris_core::sync::session::{self, Brain, Intent, READ_TIME_LIMIT, SessionEnv};
 use kluris_core::sync::{NETWORK_TIME_LIMIT, SyncReport, SyncRequest};
 use tempfile::TempDir;
 
@@ -108,6 +112,24 @@ fn upload_pack(w: &World, at: &Path, name: &str, script: &str) {
     w.run(at, &["config", "remote.origin.uploadpack", &pack]);
 }
 
+/// Count every upload-pack the clone at `at` starts from `origin` (each
+/// `ls-remote` and each fetch starts one): their count is
+/// [`upload_packs`] of the file this returns.
+fn count_upload_packs(w: &World, at: &Path) -> PathBuf {
+    let log = w.dir.path().join("upload-packs.log");
+    let script = format!(
+        "echo run >> '{}'\nexec git upload-pack \"$@\"\n",
+        sh_path(&log)
+    );
+    upload_pack(w, at, "counting-upload-pack.sh", &script);
+    log
+}
+
+/// How many upload-packs the log of [`count_upload_packs`] holds.
+fn upload_packs(log: &Path) -> usize {
+    fs::read_to_string(log).map_or(0, |text| text.lines().count())
+}
+
 /// The remote's `file://` URL.
 fn file_url(w: &World) -> String {
     let remote = sh_path(&w.remote);
@@ -119,32 +141,27 @@ fn file_url(w: &World) -> String {
 }
 
 #[test]
-fn each_intent_has_its_bounds() {
-    for intent in READS {
-        assert_eq!(intent.network_bound(), Duration::from_secs(3), "{intent:?}");
-        assert_eq!(intent.tree_bound(), READ_BOUND, "{intent:?}");
-        assert!(intent.throttled(), "{intent:?}");
-    }
-    assert_eq!(Intent::Explicit.network_bound(), NETWORK_TIME_LIMIT);
-    assert_eq!(NETWORK_TIME_LIMIT, Duration::from_secs(60));
-    assert_eq!(Intent::Explicit.tree_bound(), COMMAND_BOUND);
-    assert!(!Intent::Explicit.throttled());
-}
-
-#[test]
 fn a_read_fetches_once_a_minute_per_brain() {
     for intent in READS {
         let w = World::new();
+        let log = count_upload_packs(&w, &w.ours);
         teammate_pushes(&w, "ideas/first-new.md");
         let report = session_at(&w, &w.ours, intent, at(0)).expect("a report");
         assert_eq!(report.pulled, 1, "{intent:?}: {report:?}");
         assert_eq!(w.head(&w.ours), w.remote_head(), "{intent:?}");
         // The stamp is the remote's, in the common git directory.
         assert!(w.ours.join(".git").join(STAMP).is_file(), "{intent:?}");
+        let fetched = upload_packs(&log);
+        assert!(fetched > 0, "{intent:?}: no upload-pack ran");
 
         teammate_pushes(&w, "ideas/second-new.md");
         let before = w.head(&w.ours);
         assert_eq!(session_at(&w, &w.ours, intent, at(30)), None, "{intent:?}");
+        assert_eq!(
+            upload_packs(&log),
+            fetched,
+            "{intent:?}: reached the remote inside the minute"
+        );
         assert_eq!(
             w.head(&w.ours),
             before,
@@ -154,6 +171,7 @@ fn a_read_fetches_once_a_minute_per_brain() {
         let report = session_at(&w, &w.ours, intent, at(61)).expect("a report");
         assert_eq!(report.pulled, 1, "{intent:?}: {report:?}");
         assert_eq!(w.head(&w.ours), w.remote_head(), "{intent:?}");
+        assert!(upload_packs(&log) > fetched, "{intent:?}: no fetch past it");
     }
 }
 
@@ -179,16 +197,19 @@ fn an_explicit_session_always_fetches_and_stamps_the_throttle() {
 #[test]
 fn a_read_inside_the_back_off_does_not_fetch() {
     let w = World::new();
+    let log = count_upload_packs(&w, &w.ours);
     back_off(&w.ours.join(".git").join(BACKOFF), at(0));
     teammate_pushes(&w, "ideas/new.md");
     let before = w.head(&w.ours);
     for intent in READS {
         assert_eq!(session_at(&w, &w.ours, intent, at(120)), None, "{intent:?}");
         assert_eq!(w.head(&w.ours), before, "{intent:?}");
+        assert_eq!(upload_packs(&log), 0, "{intent:?}: reached the remote");
     }
     // An explicit session fetches through it.
     let report = session_at(&w, &w.ours, Intent::Explicit, at(120)).expect("a report");
     assert_eq!(report.pulled, 1, "{report:?}");
+    assert!(upload_packs(&log) > 0, "no fetch");
 }
 
 #[test]
@@ -222,6 +243,7 @@ fn a_fetch_stopped_at_the_reads_bound_is_offline_and_backs_off() {
 #[test]
 fn a_fetch_through_one_worktree_throttles_a_read_through_another() {
     let w = World::new();
+    let log = count_upload_packs(&w, &w.ours);
     let linked = w.dir.path().join("linked");
     let to = linked.to_string_lossy().into_owned();
     w.run(
@@ -237,16 +259,20 @@ fn a_fetch_through_one_worktree_throttles_a_read_through_another() {
     let report = session_at(&w, &w.ours, Intent::Read, at(0)).expect("a report");
     assert_eq!(report.pulled, 1, "{report:?}");
 
+    let fetched = upload_packs(&log);
+    assert!(fetched > 0, "no upload-pack ran");
     let before = w.head(&linked);
     teammate_pushes(&w, "ideas/second-new.md");
     assert_eq!(session_at(&w, &linked, Intent::Read, at(10)), None);
-    assert_eq!(w.head(&linked), before, "the linked worktree fetched");
+    assert_eq!(upload_packs(&log), fetched, "the linked worktree fetched");
+    assert_eq!(w.head(&linked), before, "the linked worktree landed");
     let own = PathBuf::from(w.run(&linked, &["rev-parse", "--absolute-git-dir"]).trim());
     assert!(!own.join(STAMP).exists(), "a stamp of the worktree's own");
 
     let report = session_at(&w, &linked, Intent::Read, at(61)).expect("a report");
     assert!(report.pulled > 0, "{report:?}");
     assert_eq!(w.head(&linked), w.remote_head());
+    assert!(upload_packs(&log) > fetched, "no fetch past the minute");
 }
 
 #[test]
@@ -273,64 +299,208 @@ fn a_held_remote_claim_makes_a_session_land_nothing_and_report_busy() {
 #[test]
 fn a_throttled_read_lands_nothing_and_reports_nothing_with_a_newer_tracking_ref() {
     let w = World::new();
+    let log = count_upload_packs(&w, &w.ours);
     assert_eq!(session_at(&w, &w.ours, Intent::Read, at(0)), None);
     teammate_pushes(&w, "ideas/new.md");
     w.run(&w.ours, &["fetch", "-q"]);
+    let fetched = upload_packs(&log);
     let before = w.head(&w.ours);
     for intent in READS {
         assert_eq!(session_at(&w, &w.ours, intent, at(30)), None, "{intent:?}");
         assert_eq!(w.head(&w.ours), before, "{intent:?}");
+        assert_eq!(
+            upload_packs(&log),
+            fetched,
+            "{intent:?}: reached the remote"
+        );
     }
 }
 
-/// A git that stalls on the step whose arguments hold `step`, for ten
-/// seconds at most, and runs every other one.
+/// A git that runs `action` (a shell script's lines) before the step whose
+/// arguments hold `step`, and runs every step.
 #[cfg(unix)]
-fn stalling_git(w: &World, step: &str) -> SystemGit {
+fn git_that(w: &World, step: &str, action: &str) -> SystemGit {
     use std::os::unix::fs::PermissionsExt;
-    let script = w.dir.path().join("stalling-git");
+    let script = w.dir.path().join("wrapped-git");
     fs::write(
         &script,
-        format!(
-            "#!/bin/sh\ncase \" $* \" in\n *'{step}'*) n=0; while [ $n -lt 1000 ]; do sleep 0.01; n=$((n+1)); done;;\nesac\nexec git \"$@\"\n"
-        ),
+        format!("#!/bin/sh\ncase \" $* \" in\n *'{step}'*)\n{action}\n;;\nesac\nexec git \"$@\"\n"),
     )
     .unwrap();
     fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
     w.git().program(&script)
 }
 
-/// Every git a read runs before it reads, the upstream query and the
-/// pull's local steps after the fetch included, stops at its 3 s bound:
-/// the brain is read as it is.
+/// Ten seconds of a step that never ends within a read.
+const STALL: &str = "n=0; while [ $n -lt 1000 ]; do sleep 0.01; n=$((n+1)); done";
+
+/// What a git that fails on its own prints: the words of a stop.
 #[cfg(unix)]
-#[test]
-fn a_stalled_local_step_keeps_a_read_within_its_bound() {
-    for step in [
-        " for-each-ref --format=%(upstream:remotename)",
-        " merge-base ",
-    ] {
-        let w = World::new();
-        diverged(&w);
-        let before = w.head(&w.ours);
-        let env = SessionEnv {
-            git: stalling_git(&w, step),
-            no_verify: false,
-            now: at(0),
-            program: None,
-        };
-        let started = Instant::now();
-        let report =
-            session::close(session::open(brain(&w.ours), Intent::Read, &env)).expect("a report");
-        let took = started.elapsed();
-        assert!(took < READ_LIMIT, "{step}: {took:?}");
-        assert_eq!(reason(&report), Some("busy"), "{step}: {report:?}");
-        assert_eq!(w.head(&w.ours), before, "{step}");
+const FAILS_WITH_STOP_WORDS: &str =
+    "echo 'the gate hook refused: stopped at the time limit' >&2; exit 1";
+
+/// Where "ours" stands against the remote when a read opens it.
+#[derive(Debug, Clone, Copy)]
+enum Shape {
+    /// The remote is ahead: the read fast-forwards.
+    Behind,
+    /// Both moved: the read merges.
+    Diverged,
+}
+
+impl Shape {
+    fn make(self, w: &World) {
+        match self {
+            Shape::Behind => teammate_pushes(w, "ideas/new.md"),
+            Shape::Diverged => diverged(w),
+        }
     }
 }
 
-/// A teammate's commit and one of ours on different files.
+/// A read of "ours", shaped as `shape`, with `git` for its gits: what it
+/// reported and how long it took, once the brain is as it was before (HEAD,
+/// the index, the status and every file) and the tree claim is free.
+fn read_with(w: &World, shape: Shape, git: SystemGit, what: &str) -> (SyncReport, Duration) {
+    shape.make(w);
+    let before = w.snapshot();
+    let env = SessionEnv {
+        git,
+        no_verify: false,
+        now: at(0),
+        program: None,
+    };
+    let started = Instant::now();
+    let report = session::close(session::open(brain(&w.ours), Intent::Read, &env))
+        .unwrap_or_else(|| panic!("{what}: no report"));
+    let took = started.elapsed();
+    let after = w.snapshot();
+    assert_eq!(
+        (&after.0, &after.1, &after.2, &after.3),
+        (&before.0, &before.1, &before.2, &before.3),
+        "{what}: the brain changed: {report:?}"
+    );
+    let own = w.ours.join(".git");
+    assert!(
+        TreeClaim::exclusive(&own, Duration::ZERO).is_ok(),
+        "{what}: the tree claim is held"
+    );
+    (report, took)
+}
+
+/// The steps a read runs before the land, each in the shape that runs it:
+/// the brain's discovery, the upstream query, a pull's local step, and the
+/// checks the land makes before it writes (the work tree's status and the
+/// branch's lock, on a fast-forward and on a merge).
 #[cfg(unix)]
+const BEFORE_THE_LAND: [(&str, Shape); 6] = [
+    (
+        " rev-parse --is-inside-work-tree --show-prefix ",
+        Shape::Behind,
+    ),
+    (
+        " for-each-ref --format=%(upstream:remotename)",
+        Shape::Diverged,
+    ),
+    (" merge-base ", Shape::Diverged),
+    (" status ", Shape::Behind),
+    (" --git-path refs/heads/main.lock ", Shape::Behind),
+    (" --git-path refs/heads/main.lock ", Shape::Diverged),
+];
+
+/// Every git a read runs before the land stops at its 3 s bound: the
+/// brain is read as it is (`busy`).
+#[cfg(unix)]
+#[test]
+fn a_stalled_step_before_the_land_keeps_a_read_within_its_bound() {
+    for (step, shape) in BEFORE_THE_LAND {
+        let w = World::new();
+        let what = format!("{step} ({shape:?})");
+        let (report, took) = read_with(&w, shape, git_that(&w, step, STALL), &what);
+        assert!(took < READ_LIMIT, "{what}: {took:?}");
+        assert_eq!(reason(&report), Some("busy"), "{what}: {report:?}");
+    }
+}
+
+/// A git that fails at once is `failed`, even when what it says holds the
+/// words of a stop: before the land and in it.
+#[cfg(unix)]
+#[test]
+fn a_git_that_fails_on_its_own_is_failed_whatever_it_says() {
+    for (step, shape) in [
+        (
+            " for-each-ref --format=%(upstream:remotename)",
+            Shape::Diverged,
+        ),
+        (" merge --ff-only ", Shape::Behind),
+    ] {
+        let w = World::new();
+        let what = format!("{step} ({shape:?})");
+        let git = git_that(&w, step, FAILS_WITH_STOP_WORDS);
+        let (report, _) = read_with(&w, shape, git, &what);
+        assert_eq!(reason(&report), Some("failed"), "{what}: {report:?}");
+        assert!(
+            detail(&report).contains("the gate hook refused"),
+            "{what}: {report:?}"
+        );
+    }
+}
+
+/// A merge hook still running at the read's 3 s is stopped, with every
+/// process it started: nothing is merged or landed, and it writes nothing
+/// after that.
+#[test]
+fn a_stalled_merge_hook_stops_at_the_reads_bound() {
+    let w = World::new();
+    let pid = w.dir.path().join("hook.pid");
+    let late = w.dir.path().join("hook.late");
+    w.hook(
+        &w.ours,
+        "pre-merge-commit",
+        &format!(
+            "echo $$ > '{}'\n{STALL}\necho late > '{}'",
+            sh_path(&pid),
+            sh_path(&late)
+        ),
+    );
+    let (report, took) = read_with(&w, Shape::Diverged, w.git(), "pre-merge-commit");
+    assert!(took < READ_LIMIT, "{took:?}");
+    assert_eq!(reason(&report), Some("busy"), "{report:?}");
+    let pid = fs::read_to_string(&pid).expect("the hook ran");
+    eventually("the hook's end", || !alive(&w, pid.trim()));
+    assert!(!late.exists(), "the hook went on past the bound");
+}
+
+/// Whether the process `pid` (as the hooks' shell numbers it) runs.
+fn alive(w: &World, pid: &str) -> bool {
+    let alias = format!("alias.alive=!kill -0 {pid} 2>/dev/null");
+    w.command(&w.ours, &["-c", &alias, "alive"])
+        .status()
+        .unwrap()
+        .success()
+}
+
+/// The land is never stopped: a `post-merge` hook that takes longer than
+/// the read's 3 s runs to its end, and the read lands.
+#[test]
+fn a_hook_of_the_land_runs_to_its_end() {
+    let w = World::new();
+    let done = w.dir.path().join("post-merge.done");
+    w.hook(
+        &w.ours,
+        "post-merge",
+        &format!("sleep 4\necho done > '{}'", sh_path(&done)),
+    );
+    Shape::Behind.make(&w);
+    let started = Instant::now();
+    let report = session_at(&w, &w.ours, Intent::Read, at(0)).expect("a report");
+    assert!(started.elapsed() > READ_TIME_LIMIT, "the hook did not run");
+    assert_eq!(report.pulled, 1, "{report:?}");
+    assert_eq!(report.left_as_is, None, "{report:?}");
+    assert!(done.exists(), "the hook was stopped");
+    assert_eq!(w.head(&w.ours), w.remote_head());
+}
+
+/// A teammate's commit and one of ours on different files.
 fn diverged(w: &World) {
     teammate_pushes(w, "ideas/new.md");
     w.ours_commit(&[("notes/second.md", &neuron("", "# Second\n"))], &[]);
@@ -366,24 +536,20 @@ fn a_read_holds_the_shared_tree_claim_until_it_is_closed() {
     assert!(TreeClaim::exclusive(&own, Duration::ZERO).is_err());
     drop(TreeClaim::shared(&own, Duration::ZERO).expect("readers share it"));
 
-    // A land from another process waits for the read.
+    // A land from another process, which says when it takes the tree
+    // claim, waits for the read.
     teammate_pushes(&w, "ideas/new.md");
     let before = w.head(&w.ours);
     let out = w.dir.path().join("land.out");
     let mut lander = child(&w, "land", &out);
-    eventually("the lander's fetch", || {
+    eventually("the lander at the tree claim", || {
         assert_running(&mut lander);
-        ref_at(&w, &w.ours, "refs/remotes/origin/main") == w.remote_head()
+        claiming(&out).exists()
     });
-    let watching = Instant::now();
-    while watching.elapsed() < Duration::from_millis(500) {
-        assert_eq!(w.head(&w.ours), before, "landed while the read was open");
-        thread::sleep(Duration::from_millis(25));
-    }
+    assert_eq!(w.head(&w.ours), before, "landed while the read was open");
     let closed = millis(SystemTime::now());
     assert_eq!(session::close(reading), None);
-    eventually("the lander", || out.exists());
-    assert!(lander.wait().unwrap().success());
+    assert!(wait_bounded(&mut lander, "the lander", PATIENCE).success());
     let (pulled, landed) = child_result(&out);
     assert_eq!(pulled, 1);
     assert!(landed >= closed, "landed at {landed}, closed at {closed}");
@@ -672,7 +838,7 @@ fn no_environment_variable_turns_a_sessions_network_off() {
     teammate_pushes(&w, "ideas/new.md");
     let out = w.dir.path().join("read.out");
     let mut reader = child(&w, "read", &out);
-    assert!(reader.wait().unwrap().success());
+    assert!(wait_bounded(&mut reader, "the reader", PATIENCE).success());
     let (pulled, _) = child_result(&out);
     assert_eq!(pulled, 1);
     assert_eq!(w.head(&w.ours), w.remote_head());
@@ -681,7 +847,7 @@ fn no_environment_variable_turns_a_sessions_network_off() {
 /// The `kluris.yml` texts a rewrite keeps the `sync:` key of, each with
 /// the entry as it must come out: as written, after the keys Kluris
 /// writes.
-const KEPT: [(&str, &str); 9] = [
+const KEPT: [(&str, &str); 13] = [
     (
         "name: alpha\ndescription: ''\ncompanions: []\nsearch:\n  language: ro\nsync:\n  auto_fetch: false\n  other: 1\n",
         "sync:\n  auto_fetch: false\n  other: 1\n",
@@ -709,7 +875,34 @@ const KEPT: [(&str, &str); 9] = [
         "name: alpha\nsync:\n  auto: false",
         "sync:\n  auto: false\n",
     ),
+    (
+        "name: alpha\n'sync': {auto: false}  # keep\ndescription: d\n",
+        "'sync': {auto: false}  # keep\n",
+    ),
+    (
+        "name: alpha\n\"sync\": {auto: false}  # keep\n",
+        "\"sync\": {auto: false}  # keep\n",
+    ),
+    (
+        "name: alpha\nsync:\n  auto: false\n# why it is off\n  peers: [a, b]\n",
+        "sync:\n  auto: false\n# why it is off\n  peers: [a, b]\n",
+    ),
+    (
+        "name: alpha\nsync:\n  auto: false\n# about the description\n\ndescription: d\n",
+        "sync:\n  auto: false\n",
+    ),
 ];
+
+/// The top-level `sync` keys of a `kluris.yml` text, in any spelling.
+fn sync_keys(text: &str) -> usize {
+    text.lines()
+        .filter(|line| {
+            ["sync:", "'sync':", "\"sync\":"]
+                .iter()
+                .any(|key| line.starts_with(key))
+        })
+        .count()
+}
 
 #[test]
 fn a_rewrite_of_kluris_yml_keeps_its_sync_key_as_written() {
@@ -725,31 +918,63 @@ fn a_rewrite_of_kluris_yml_keeps_its_sync_key_as_written() {
                 || written.ends_with(&format!("  language: ro\n{entry}")),
             "{text:?} became {written:?}"
         );
-        assert_eq!(written.matches("sync:").count(), 1, "{written:?}");
+        assert_eq!(sync_keys(&written), 1, "{written:?}");
+        assert_eq!(parse_brain_config(&written).unwrap(), config, "{written:?}");
+    }
+}
+
+/// The `kluris.yml` texts whose `sync:` entry does not read alone as its
+/// value, each with the value as the rewrite writes it: an alias of an
+/// anchor elsewhere in the file, which the rewrite does not keep; a `|+`
+/// scalar that ends the file, whose last lines are its own; two `sync`
+/// keys.
+const VALUE_ONLY: [(&str, &str); 4] = [
+    (
+        "name: alpha\ndescription: &d team\nsync: *d\n",
+        "sync: team\n",
+    ),
+    (
+        "name: alpha\nsync: |+\n  team\n\n\n",
+        "sync: 'team\n\n\n\n  '\n",
+    ),
+    (
+        "name: alpha\nsync: {auto: true}  # first\nsync: {auto: false}  # second\n",
+        "sync:\n  auto: false\n",
+    ),
+    (
+        "name: alpha\nsync: {auto: false}  # first\nsync: {auto: false}  # second\n",
+        "sync:\n  auto: false\n",
+    ),
+];
+
+#[test]
+fn a_sync_key_that_cannot_be_moved_as_written_keeps_its_value() {
+    let tmp = TempDir::new().unwrap();
+    for (text, entry) in VALUE_ONLY {
+        fs::write(tmp.path().join("kluris.yml"), text).unwrap();
+        let config = read_brain_config(tmp.path()).unwrap();
+        write_brain_config(tmp.path(), &config).unwrap();
+        let written = fs::read_to_string(tmp.path().join("kluris.yml")).unwrap();
+        assert!(
+            written.ends_with(&format!("companions: []\n{entry}")),
+            "{text:?} became {written:?}"
+        );
+        assert_eq!(sync_keys(&written), 1, "{written:?}");
         assert_eq!(parse_brain_config(&written).unwrap(), config, "{written:?}");
     }
 }
 
 #[test]
-fn a_sync_key_that_cannot_be_moved_as_written_keeps_its_value() {
-    // The entry names an anchor elsewhere in the file, which the rewrite
-    // does not keep: its value is written instead.
+fn a_kluris_yml_without_a_sync_key_is_written_as_before() {
     let tmp = TempDir::new().unwrap();
-    let text = "name: alpha\ndescription: &d team\nsync: *d\n";
+    let text = "name: alpha\ndescription: team\nagents:\n  commands_for: [codex, claude]\ncompanions: [specmint-core]\n";
     fs::write(tmp.path().join("kluris.yml"), text).unwrap();
     let config = read_brain_config(tmp.path()).unwrap();
     write_brain_config(tmp.path(), &config).unwrap();
-    let written = fs::read_to_string(tmp.path().join("kluris.yml")).unwrap();
-    assert!(
-        written.ends_with("companions: []\nsync: team\n"),
-        "{written:?}"
+    assert_eq!(
+        fs::read_to_string(tmp.path().join("kluris.yml")).unwrap(),
+        "name: alpha\ndescription: team\nagents:\n  commands_for:\n  - codex\n  - claude\ncompanions:\n- specmint-core\n"
     );
-    // Without the key there is none to write.
-    fs::write(tmp.path().join("kluris.yml"), "name: alpha\n").unwrap();
-    let config = read_brain_config(tmp.path()).unwrap();
-    write_brain_config(tmp.path(), &config).unwrap();
-    let written = fs::read_to_string(tmp.path().join("kluris.yml")).unwrap();
-    assert!(!written.contains("sync"), "{written:?}");
 }
 
 /// The child's environment: what it does, the world's folder, the brain,
@@ -761,11 +986,11 @@ const CHILD_OUT: &str = "KLURIS_TEST_SESSION_OUT";
 
 /// This test binary run again as a child, without the world's lock, that
 /// `read`s the brain through a session (with `KLURIS_NO_AUTO_SYNC=1` in
-/// its environment) or `land`s what a pull brings, waiting for the tree
-/// claim up to an explicit command's bound, and writes `<pulled>
-/// <milliseconds when done>`; or `hold`s the remote claim until its stdin
-/// closes, writing an empty file once it holds it. Without those variables
-/// it does nothing.
+/// its environment); `land`s what a pull brings: it fetches, writes
+/// [`claiming`] right before it takes the tree claim, then waits for it up
+/// to an explicit command's bound, and writes `<pulled> <milliseconds when
+/// done>`; or `hold`s the remote claim until its stdin closes, writing an
+/// empty file once it holds it. Without those variables it does nothing.
 #[test]
 #[ignore = "run only as the child of the cross-process tests"]
 fn child_session() {
@@ -804,7 +1029,14 @@ fn child_session() {
                 network_time_limit: NETWORK_TIME_LIMIT,
                 tree_bound: COMMAND_BOUND,
             };
-            engine::pull(&engine::open(&root, &git, &request).unwrap()).pulled
+            let ctx = engine::open(&root, &git, &request).unwrap();
+            let upstream = engine::ready(&ctx).unwrap();
+            let remote = ctx.take_remote().unwrap().expect("the remote claim");
+            let theirs = engine::fetch_upstream(&ctx, upstream, &remote).unwrap();
+            drop(remote);
+            fs::write(claiming(Path::new(&out)), "").unwrap();
+            let tree = ctx.claim_tree().unwrap();
+            engine::pull_fetched(&ctx, &tree, theirs).pulled
         }
         "hold" => {
             let _claim = RemoteClaim::try_take(&root.join(".git")).unwrap();
@@ -819,6 +1051,11 @@ fn child_session() {
     let partial = PathBuf::from(&out).with_extension("partial");
     fs::write(&partial, format!("{pulled} {done}\n")).unwrap();
     fs::rename(&partial, &out).unwrap();
+}
+
+/// What the `land` child writes right before it takes the tree claim.
+fn claiming(out: &Path) -> PathBuf {
+    out.with_extension("claiming")
 }
 
 /// The child doing `action` on "ours", writing to `out`.
@@ -885,7 +1122,7 @@ fn an_explicit_session_waits_for_a_remote_claim_let_go_within_its_bound() {
     assert!(report.pushed, "{report:?}");
     assert_eq!(w.remote_head(), w.head(&w.ours));
     letting_go.join().unwrap();
-    assert!(held.wait().unwrap().success());
+    assert!(wait_bounded(&mut held, "the holder", PATIENCE).success());
 }
 
 #[test]

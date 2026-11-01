@@ -377,19 +377,41 @@ fn sync_entry(text: &str, value: &Value) -> String {
     })
 }
 
-/// The lines of a top-level `sync:` key written at the start of a line,
-/// up to the next line that starts with anything but a space, a tab or a
-/// line break; blank lines at its end are left out, and it ends with a
-/// line break.
-fn written_entry(text: &str) -> Option<String> {
-    let mut lines = text.split_inclusive('\n');
-    let first = lines.find(|line| {
-        line.strip_prefix("sync:")
+/// The top-level `sync` key as it may be written: plain or quoted.
+const SYNC_KEYS: [&str; 3] = ["sync:", "'sync':", "\"sync\":"];
+
+/// Whether `line` starts with the top-level `sync` key.
+fn is_sync_key(line: &str) -> bool {
+    SYNC_KEYS.iter().any(|key| {
+        line.strip_prefix(key)
             .is_some_and(|rest| rest.is_empty() || rest.starts_with([' ', '\t', '\r', '\n']))
-    })?;
+    })
+}
+
+/// Whether `line` can be inside a top-level entry: indented, blank, or a
+/// comment.
+fn inside_an_entry(line: &str) -> bool {
+    line.starts_with([' ', '\t', '\r', '\n', '#'])
+}
+
+/// The lines of the one top-level `sync` key (in any of [`SYNC_KEYS`]),
+/// from its line up to the next line that cannot be inside it
+/// ([`inside_an_entry`]); the blank and comment lines at its end belong to
+/// what follows, and it ends with a line break. `None` without the key, or
+/// with two.
+fn written_entry(text: &str) -> Option<String> {
+    if text.lines().filter(|line| is_sync_key(line)).count() != 1 {
+        return None;
+    }
+    let mut lines = text.split_inclusive('\n');
+    let first = lines.find(|line| is_sync_key(line))?;
     let mut entry = vec![first];
-    entry.extend(lines.take_while(|line| line.starts_with([' ', '\t', '\r', '\n'])));
-    while entry.len() > 1 && entry.last().is_some_and(|line| line.trim().is_empty()) {
+    entry.extend(lines.take_while(|line| inside_an_entry(line)));
+    while entry.len() > 1
+        && entry
+            .last()
+            .is_some_and(|line| line.trim().is_empty() || line.starts_with('#'))
+    {
         entry.pop();
     }
     let mut entry = entry.concat();

@@ -23,7 +23,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::time::Instant;
 
-use crate::process::{RunError, run_until};
+use crate::process::{RunError, run_until, run_until_fed, run_until_shown};
 use crate::yaml::is_py_space;
 
 /// A git work tree that contains a brain directory.
@@ -73,6 +73,31 @@ pub struct GitError {
     pub code: Option<i32>,
     /// git's stderr (trimmed), or why it could not be started.
     pub detail: String,
+    /// git was stopped at its runner's deadline
+    /// ([`crate::sync::git::SyncGit::with_deadline`]): it ran out of time,
+    /// which says nothing of the brain.
+    pub stopped: bool,
+}
+
+impl GitError {
+    /// git with `args` failed (`code`; `None`: it could not start or was
+    /// killed), saying `detail`.
+    pub(crate) fn new(args: &[&str], code: Option<i32>, detail: impl Into<String>) -> GitError {
+        GitError {
+            args: args.iter().map(|a| a.to_string()).collect(),
+            code,
+            detail: detail.into(),
+            stopped: false,
+        }
+    }
+
+    /// git with `args` was stopped at its runner's deadline.
+    pub(crate) fn out_of_time(args: &[&str]) -> GitError {
+        GitError {
+            stopped: true,
+            ..GitError::new(args, None, "stopped at the time limit")
+        }
+    }
 }
 
 impl fmt::Display for GitError {
@@ -137,9 +162,6 @@ pub trait Git {
     fn version(&self) -> Result<String, GitError>;
 }
 
-/// The detail of a run stopped at its git's deadline ([`SystemGit::until`]).
-pub const STOPPED: &str = "stopped at the time limit";
-
 /// [`Git`] through the `git` program found on `PATH`.
 #[derive(Debug, Clone)]
 pub struct SystemGit {
@@ -151,7 +173,7 @@ pub struct SystemGit {
     /// The remote environment is set ([`crate::sync::git::SyncGit::for_remote`]).
     pub(crate) remote_ready: bool,
     /// Every run is stopped, with every process it started, at this
-    /// instant ([`SystemGit::until`]).
+    /// instant ([`crate::sync::git::SyncGit::with_deadline`]).
     pub(crate) deadline: Option<Instant>,
     /// What a run that succeeds printed on stderr also goes to this
     /// process's stderr ([`SystemGit::forwarding_stderr`]).
@@ -195,14 +217,6 @@ impl SystemGit {
         if self.forward_stderr && !stderr.is_empty() {
             let _ = std::io::stderr().write_all(stderr);
         }
-    }
-
-    /// Stop every run of this git at `deadline` (with every process it
-    /// started), and every bounded step at the earlier of its own deadline
-    /// and this one.
-    pub fn until(mut self, deadline: Instant) -> SystemGit {
-        self.deadline = Some(deadline);
-        self
     }
 
     /// The earlier of `deadline` and this git's own.
@@ -260,30 +274,50 @@ impl SystemGit {
         cmd
     }
 
-    pub(crate) fn output(&self, mut cmd: Command, args: &[&str]) -> Result<Output, GitError> {
-        let error = |code, detail| GitError {
-            args: args.iter().map(|a| a.to_string()).collect(),
-            code,
-            detail,
+    /// Run `cmd` (git with `args`), `input` on its stdin (closed without),
+    /// and capture its output, whatever its exit code; stopped, with every
+    /// process it started, at this git's deadline when it has one.
+    pub(crate) fn finish(
+        &self,
+        mut cmd: Command,
+        args: &[&str],
+        input: Option<Vec<u8>>,
+    ) -> Result<Output, GitError> {
+        let could_not = |e: std::io::Error| GitError::new(args, None, e.to_string());
+        let Some(deadline) = self.deadline else {
+            return match input {
+                None => cmd.output().map_err(could_not),
+                Some(input) => fed(cmd, input).map_err(could_not),
+            };
         };
-        let out = match self.deadline {
-            None => cmd.output().map_err(|e| error(None, e.to_string()))?,
-            Some(deadline) => match run_until(cmd, deadline) {
-                Ok(done) => Output {
-                    status: done.status,
-                    stdout: done.stdout,
-                    stderr: done.stderr,
-                },
-                Err(RunError::TimedOut) => return Err(error(None, STOPPED.into())),
-                Err(RunError::Spawn(e)) => return Err(error(None, e.to_string())),
-            },
+        let done = match input {
+            None => run_until(cmd, deadline),
+            Some(input) => run_until_fed(cmd, input, deadline),
         };
+        match done {
+            Ok(done) => Ok(Output {
+                status: done.status,
+                stdout: done.stdout,
+                stderr: done.stderr,
+            }),
+            Err(RunError::TimedOut) => Err(GitError::out_of_time(args)),
+            Err(RunError::Spawn(e)) => Err(could_not(e)),
+        }
+    }
+
+    /// [`SystemGit::finish`], failing unless git exits 0.
+    pub(crate) fn output(&self, cmd: Command, args: &[&str]) -> Result<Output, GitError> {
+        self.checked_output(self.finish(cmd, args, None)?, args)
+    }
+
+    /// `out`, git's with `args`, when it exited 0; else its failure.
+    fn checked_output(&self, out: Output, args: &[&str]) -> Result<Output, GitError> {
         if out.status.success() {
             self.forward(&out.stderr);
             Ok(out)
         } else {
             let detail = String::from_utf8_lossy(&out.stderr).trim().to_string();
-            Err(error(out.status.code(), detail))
+            Err(GitError::new(args, out.status.code(), detail))
         }
     }
 
@@ -338,39 +372,37 @@ impl SystemGit {
         args: &[&str],
         input: Vec<u8>,
     ) -> Result<Vec<u8>, GitError> {
-        let error = |code, detail| GitError {
-            args: args.iter().map(|a| a.to_string()).collect(),
-            code,
-            detail,
-        };
         let mut cmd = self.command(Some(dir), args);
         if let Some(index) = index {
             cmd.env("GIT_INDEX_FILE", index);
         }
-        cmd.stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-        let mut child = cmd.spawn().map_err(|e| error(None, e.to_string()))?;
-        // Written from a thread: git may fill stdout before it has read all
-        // of stdin.
-        let writer = child.stdin.take().map(|mut stdin| {
-            std::thread::spawn(move || {
-                let _ = stdin.write_all(&input);
-            })
-        });
-        let out = child
-            .wait_with_output()
-            .map_err(|e| error(None, e.to_string()))?;
-        if let Some(writer) = writer {
-            let _ = writer.join();
+        let out = self.finish(cmd, args, Some(input))?;
+        self.checked_output(out, args).map(|out| out.stdout)
+    }
+
+    /// The work tree `dir` is in, as git answers it (`git rev-parse
+    /// --is-inside-work-tree --show-prefix`): `None` outside one or inside
+    /// a `.git` directory, where git says `false` or exits with an error of
+    /// its own; an error when git was stopped at this git's deadline, could
+    /// not start or was killed.
+    pub(crate) fn discover(&self, dir: &Path) -> Result<Option<Repo>, GitError> {
+        let out = match self.run(
+            dir,
+            &["rev-parse", "--is-inside-work-tree", "--show-prefix"],
+        ) {
+            Ok(out) => out,
+            Err(e) if e.code.is_some() => return Ok(None),
+            Err(e) => return Err(e),
+        };
+        let text = String::from_utf8_lossy(&out);
+        let mut lines = text.lines();
+        if lines.next() != Some("true") {
+            return Ok(None);
         }
-        if out.status.success() {
-            self.forward(&out.stderr);
-            Ok(out.stdout)
-        } else {
-            let detail = String::from_utf8_lossy(&out.stderr).trim().to_string();
-            Err(error(out.status.code(), detail))
-        }
+        Ok(Some(Repo {
+            dir: dir.to_path_buf(),
+            prefix: lines.next().unwrap_or_default().to_string(),
+        }))
     }
 
     /// A path `git rev-parse --git-path` names, made absolute.
@@ -410,23 +442,29 @@ impl SystemGit {
     }
 }
 
+/// Run `cmd` with `input` on its stdin, its output captured.
+fn fed(mut cmd: Command, input: Vec<u8>) -> std::io::Result<Output> {
+    cmd.stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = cmd.spawn()?;
+    // Written from a thread: git may fill stdout before it has read all of
+    // stdin.
+    let writer = child.stdin.take().map(|mut stdin| {
+        std::thread::spawn(move || {
+            let _ = stdin.write_all(&input);
+        })
+    });
+    let out = child.wait_with_output()?;
+    if let Some(writer) = writer {
+        let _ = writer.join();
+    }
+    Ok(out)
+}
+
 impl Git for SystemGit {
     fn repo(&self, dir: &Path) -> Option<Repo> {
-        let out = self
-            .run(
-                dir,
-                &["rev-parse", "--is-inside-work-tree", "--show-prefix"],
-            )
-            .ok()?;
-        let text = String::from_utf8_lossy(&out);
-        let mut lines = text.lines();
-        if lines.next()? != "true" {
-            return None;
-        }
-        Some(Repo {
-            dir: dir.to_path_buf(),
-            prefix: lines.next().unwrap_or_default().to_string(),
-        })
+        self.discover(dir).ok().flatten()
     }
 
     fn init(&self, dir: &Path) -> Result<(), GitError> {
@@ -1018,11 +1056,6 @@ impl Plumbing for SystemGit {
             all.push("--");
             all.extend_from_slice(args);
         }
-        let error = |code, detail: String| GitError {
-            args: all.iter().map(|a| a.to_string()).collect(),
-            code,
-            detail,
-        };
         let mut cmd = self.command(Some(&repo.dir), &all);
         if let Some(index) = index {
             cmd.env("GIT_INDEX_FILE", &index.0);
@@ -1031,10 +1064,20 @@ impl Plumbing for SystemGit {
         cmd.env("GIT_EDITOR", ":")
             .stdout(Stdio::from(std::io::stderr()))
             .stderr(Stdio::inherit());
-        let status = cmd.status().map_err(|e| error(None, e.to_string()))?;
+        // Stopped at this git's deadline with every process the hook
+        // started; never stopped without one.
+        let status = match self.deadline {
+            None => cmd.status(),
+            Some(deadline) => match run_until_shown(cmd, deadline) {
+                Ok(status) => Ok(status),
+                Err(RunError::TimedOut) => return Err(GitError::out_of_time(&all)),
+                Err(RunError::Spawn(e)) => Err(e),
+            },
+        };
+        let status = status.map_err(|e| GitError::new(&all, None, e.to_string()))?;
         status
             .code()
-            .ok_or_else(|| error(None, "the hook was killed by a signal".into()))
+            .ok_or_else(|| GitError::new(&all, None, "the hook was killed by a signal"))
     }
 
     fn tree_of(&self, repo: &Repo, rev: &str) -> Result<String, GitError> {
@@ -1075,10 +1118,12 @@ impl Plumbing for SystemGit {
         self.identity_fallback(&repo.dir, &mut cmd);
         let out = self.output(cmd, &args)?;
         let text = String::from_utf8_lossy(&out.stdout);
-        parse_ident(text.trim()).ok_or_else(|| GitError {
-            args: args.iter().map(|a| a.to_string()).collect(),
-            code: Some(0),
-            detail: format!("unexpected identity {:?}", text.trim()),
+        parse_ident(text.trim()).ok_or_else(|| {
+            GitError::new(
+                &args,
+                Some(0),
+                format!("unexpected identity {:?}", text.trim()),
+            )
         })
     }
 

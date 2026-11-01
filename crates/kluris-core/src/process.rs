@@ -9,7 +9,7 @@
 //! has passed, so git removes the lock files it holds; on Windows the job
 //! is terminated at once.
 
-use std::io::{self, Read};
+use std::io::{self, Read, Write};
 use std::process::{Command, ExitStatus, Stdio};
 use std::sync::mpsc::{self, Receiver};
 use std::thread;
@@ -38,13 +38,51 @@ pub enum RunError {
 /// Run `cmd` with stdin closed and its output captured, stopping it and its
 /// children once `deadline` passes (see the module documentation). Whatever
 /// the program leaves running when it exits is killed.
-pub fn run_until(mut cmd: Command, deadline: Instant) -> Result<Finished, RunError> {
-    cmd.stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+pub fn run_until(cmd: Command, deadline: Instant) -> Result<Finished, RunError> {
+    run(cmd, None, true, deadline)
+}
+
+/// [`run_until`], with `input` on the program's stdin.
+pub fn run_until_fed(
+    cmd: Command,
+    input: Vec<u8>,
+    deadline: Instant,
+) -> Result<Finished, RunError> {
+    run(cmd, Some(input), true, deadline)
+}
+
+/// [`run_until`], with the program's output going where `cmd` sends it
+/// (its streams as they are set on `cmd`): how it exited.
+pub fn run_until_shown(cmd: Command, deadline: Instant) -> Result<ExitStatus, RunError> {
+    run(cmd, None, false, deadline).map(|done| done.status)
+}
+
+/// Run `cmd`, `input` on its stdin (closed without), its output captured
+/// when `capture` (else where `cmd` sends it, and none comes back).
+fn run(
+    mut cmd: Command,
+    input: Option<Vec<u8>>,
+    capture: bool,
+    deadline: Instant,
+) -> Result<Finished, RunError> {
+    cmd.stdin(if input.is_some() {
+        Stdio::piped()
+    } else {
+        Stdio::null()
+    });
+    if capture {
+        cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+    }
     tree::isolate(&mut cmd);
     let mut child = cmd.spawn().map_err(RunError::Spawn)?;
     let tree = tree::Tree::adopt(&child);
+    // Written from a thread: the program may fill its output before it has
+    // read all of its input. A program stopped first ends the write.
+    if let (Some(mut stdin), Some(input)) = (child.stdin.take(), input) {
+        thread::spawn(move || {
+            let _ = stdin.write_all(&input);
+        });
+    }
     let stdout = drain(child.stdout.take());
     let stderr = drain(child.stderr.take());
     let mut status = None;
@@ -252,6 +290,45 @@ mod tests {
         assert_eq!(done.status.code(), Some(3));
         assert_eq!(done.stdout, b"out\n");
         assert_eq!(done.stderr, b"err\n");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn input_reaches_the_program() {
+        // More than a pipe holds: the program writes while it reads.
+        let input = vec![b'x'; 1 << 20];
+        let done = run_until_fed(
+            sh("cat"),
+            input.clone(),
+            Instant::now() + Duration::from_secs(10),
+        )
+        .unwrap();
+        assert!(done.status.success());
+        assert_eq!(done.stdout, input);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn shown_output_goes_where_the_command_sends_it() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let file = dir.path().join("out");
+        let mut cmd = sh("echo out; echo err >&2; exit 4");
+        cmd.stdout(std::fs::File::create(&file).unwrap())
+            .stderr(Stdio::null());
+        let status = run_until_shown(cmd, Instant::now() + Duration::from_secs(10)).unwrap();
+        assert_eq!(status.code(), Some(4));
+        assert_eq!(std::fs::read(&file).unwrap(), b"out\n");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn shown_output_stops_at_the_deadline() {
+        let started = Instant::now();
+        let mut cmd = sh("sleep 30");
+        cmd.stdout(Stdio::null()).stderr(Stdio::null());
+        let result = run_until_shown(cmd, started + Duration::from_millis(300));
+        assert!(matches!(result, Err(RunError::TimedOut)), "{result:?}");
+        assert!(started.elapsed() < Duration::from_secs(3));
     }
 
     #[cfg(unix)]

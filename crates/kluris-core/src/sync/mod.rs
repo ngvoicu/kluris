@@ -208,6 +208,10 @@ pub struct LeftAsIs {
     pub reason: LeftReason,
     pub paths: Vec<String>,
     pub detail: Option<String>,
+    /// The step's git was stopped at its deadline ([`GitError::stopped`]):
+    /// it ran out of time, which says nothing of the brain. Only a git
+    /// with a deadline is stopped, and the land's git has none.
+    pub stopped: bool,
 }
 
 impl LeftAsIs {
@@ -217,6 +221,7 @@ impl LeftAsIs {
             reason,
             paths: Vec::new(),
             detail: Some(detail.into()),
+            stopped: false,
         }
     }
 }
