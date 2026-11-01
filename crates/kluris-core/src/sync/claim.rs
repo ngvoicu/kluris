@@ -20,9 +20,10 @@
 //!   command.
 //! - The tree gate, [`TREE_GATE`] beside it: an exclusive taker takes the
 //!   gate first and holds it with the claim, so a land that is done can
-//!   turn its claim shared ([`TreeClaim::downgrade`]) with no moment in
-//!   which another land could start: no other exclusive taker gets past
-//!   the gate meanwhile, and shared takers never take it.
+//!   turn its claim shared ([`TreeClaim::downgrade`]), and a reader that
+//!   is to commit can turn its claim exclusive ([`TreeClaim::upgrade`]),
+//!   with no moment in which another land could start: no other exclusive
+//!   taker gets past the gate meanwhile, and shared takers never take it.
 //!
 //! For the main worktree the two directories are one.
 //!
@@ -33,7 +34,12 @@
 //! claim while it holds the tree claim; whoever holds the remote claim
 //! meanwhile (another command's fetch, the background push) never waits
 //! for a tree claim, so it lets the remote claim go, and the push gets it.
-//! The background push never takes the tree claim at all.
+//! The background push never takes the tree claim at all. The one wait
+//! between two holders of the tree claim is bounded on both sides: a
+//! reader turning its claim exclusive ([`TreeClaim::upgrade`]) waits for
+//! the gate while it holds the claim shared, and a lander that holds the
+//! gate waits for that reader; whichever bound passes first lets the other
+//! through.
 //!
 //! A lock goes with its file handle, so a command that ends, crashes or is
 //! killed releases its claims and blocks no other. A claim dropped is
@@ -207,6 +213,53 @@ impl TreeClaim {
         )?;
         drop(gate);
         Ok(self)
+    }
+
+    /// This claim exclusive, to change the work tree it reads, the other
+    /// way from [`TreeClaim::downgrade`]: the tree gate of the worktree
+    /// whose own git directory is `worktree_git_dir` first, so no land
+    /// starts from then on; then the claim unlocked and locked exclusive
+    /// on the same file once every other reader has let it go. Each is
+    /// tried every [`STEP`] until `bound` has passed. A claim that cannot
+    /// be had in time comes back shared, with why: while the gate is held
+    /// only readers can hold the claim, so the shared lock is had again at
+    /// once (an error there comes back instead, the claim then unlocked).
+    /// An exclusive claim is given back as it is.
+    pub fn upgrade(
+        mut self,
+        worktree_git_dir: &Path,
+        bound: Duration,
+    ) -> Result<TreeClaim, (TreeClaim, ClaimError)> {
+        if self.gate.is_some() {
+            return Ok(self);
+        }
+        let deadline = Instant::now() + bound;
+        let gate = match take(
+            &worktree_git_dir.join(TREE_GATE),
+            deadline,
+            fs::File::try_lock,
+        ) {
+            Ok(gate) => gate,
+            Err(e) => return Err((self, e)),
+        };
+        if let Err(e) = self.held.0.unlock() {
+            return Err((self, ClaimError::Io(e)));
+        }
+        match retry(&self.held.0, deadline, fs::File::try_lock) {
+            Ok(()) => {
+                self.gate = Some(gate);
+                Ok(self)
+            }
+            Err(e) => {
+                let back = retry(
+                    &self.held.0,
+                    Instant::now() + bound,
+                    fs::File::try_lock_shared,
+                );
+                drop(gate);
+                Err((self, back.err().unwrap_or(e)))
+            }
+        }
     }
 }
 

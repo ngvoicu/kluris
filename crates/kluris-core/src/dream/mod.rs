@@ -30,7 +30,7 @@ use std::collections::{BTreeMap, HashSet};
 use crate::brain::change::{Applied, ChangeSet};
 use crate::brain::deprecation::{DeprecationIssue, detect_deprecation_issues};
 use crate::brain::store::{BrainStore, ReadError};
-use crate::git::Git;
+use crate::git::{FileDates, Git};
 use crate::yaml::Date;
 
 /// What dream needs besides the brain.
@@ -198,23 +198,14 @@ fn sync<S: BrainStore>(
         .repo(store.root())
         .map(|repo| git.file_dates(&repo))
         .unwrap_or_default();
-    let neurons = store.neurons().to_vec();
     // v2 counts these after steps 1-3, which change neither the maps nor the
     // set of neurons, so the brain as read gives the same count.
     let orphans_before = linker::orphans(&*store, skipped).len();
-
-    let order = maps::map_order(store.dirs());
-    let mut ws = workspace::Workspace::new(&*store);
-    let dates_updated = sync_dates::sync_dates(&mut ws, &neurons, &dates);
-    let parents_inferred = linker::fix_missing_parents(&mut ws, &neurons);
-    let reverse_synapses_added = linker::fix_reverse_links(&mut ws, &neurons, |_| true);
-    maps::generate_maps(&mut ws, &order, options.today);
-    maps::generate_brain_md(&mut ws, options.name, options.description, options.today);
-    let (changes, ws_skipped) = ws.into_change_set();
-    for (rel, reason) in ws_skipped {
+    let planned = plan(&*store, Some(&dates), options);
+    for (rel, reason) in planned.skipped {
         skipped.entry(rel).or_insert(reason);
     }
-    let (applied, held) = apply_unless_skipped(store, changes, skipped);
+    let (applied, held) = apply_unless_skipped(store, planned.changes, skipped);
     // A fix counts only when its file was written (v2's date pass counts
     // after the write).
     let failed: HashSet<&str> = applied
@@ -232,9 +223,9 @@ fn sync<S: BrainStore>(
             })
             .count()
     };
-    let dates_updated = landed(&dates_updated);
-    let parents_inferred = landed(&parents_inferred);
-    let reverse_synapses_added = landed(&reverse_synapses_added);
+    let dates_updated = landed(&planned.dates_updated);
+    let parents_inferred = landed(&planned.parents_inferred);
+    let reverse_synapses_added = landed(&planned.reverse_synapses_added);
     for failed in &applied.failed {
         skipped
             .entry(failed.rel.clone())
@@ -245,8 +236,51 @@ fn sync<S: BrainStore>(
         parents_inferred,
         reverse_synapses_added,
         orphans_before,
-        order,
+        order: planned.order,
         written: applied.written,
+    }
+}
+
+/// What [`plan`] computed, not applied.
+struct Planned {
+    changes: ChangeSet,
+    /// The files that could not be read or rewritten.
+    skipped: BTreeMap<String, String>,
+    /// The maps' directories, in v2's order.
+    order: Vec<String>,
+    /// The neurons each of steps 1-3 rewrote.
+    dates_updated: Vec<String>,
+    parents_inferred: Vec<String>,
+    reverse_synapses_added: Vec<String>,
+}
+
+/// Dream's writes over `store`, computed and not applied: steps 1-3 with
+/// git's `dates` (`None`: those steps do not run), then every map and
+/// `brain.md`. Each step reads what the earlier ones would write.
+fn plan<S: BrainStore>(store: &S, dates: Option<&FileDates>, options: &DreamOptions) -> Planned {
+    let order = maps::map_order(store.dirs());
+    let mut ws = workspace::Workspace::new(store);
+    let (dates_updated, parents_inferred, reverse_synapses_added) = match dates {
+        Some(dates) => {
+            let neurons = store.neurons().to_vec();
+            (
+                sync_dates::sync_dates(&mut ws, &neurons, dates),
+                linker::fix_missing_parents(&mut ws, &neurons),
+                linker::fix_reverse_links(&mut ws, &neurons, |_| true),
+            )
+        }
+        None => Default::default(),
+    };
+    maps::generate_maps(&mut ws, &order, options.today);
+    maps::generate_brain_md(&mut ws, options.name, options.description, options.today);
+    let (changes, skipped) = ws.into_change_set();
+    Planned {
+        changes,
+        skipped,
+        order,
+        dates_updated,
+        parents_inferred,
+        reverse_synapses_added,
     }
 }
 
@@ -304,11 +338,21 @@ pub(crate) fn map_changes<S: BrainStore>(
     store: &S,
     options: &DreamOptions,
 ) -> (ChangeSet, BTreeMap<String, String>) {
-    let order = maps::map_order(store.dirs());
-    let mut ws = workspace::Workspace::new(store);
-    maps::generate_maps(&mut ws, &order, options.today);
-    maps::generate_brain_md(&mut ws, options.name, options.description, options.today);
-    ws.into_change_set()
+    let planned = plan(store, None, options);
+    (planned.changes, planned.skipped)
+}
+
+/// Every step of dream's writes (1-3 with git's `dates`, then the maps and
+/// `brain.md`), computed over the brain as it is and not applied: the
+/// change set, and the files that could not be read or rewritten. The
+/// housekeeping commit of `dream` and `mri` is this over HEAD's files.
+pub(crate) fn housekeeping_changes<S: BrainStore>(
+    store: &S,
+    dates: &FileDates,
+    options: &DreamOptions,
+) -> (ChangeSet, BTreeMap<String, String>) {
+    let planned = plan(store, Some(dates), options);
+    (planned.changes, planned.skipped)
 }
 
 /// Step 3 alone for the links of the neurons at `sources`: the reverse

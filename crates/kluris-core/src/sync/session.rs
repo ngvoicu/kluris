@@ -27,6 +27,19 @@
 //!   holds up to [`COMMAND_BOUND`], for its fetch, its push and every pull
 //!   the push runs again.
 //!
+//! **Housekeeping** (`dream`, `mri`): once the command's own work is done,
+//! [`housekeeping_commit`] commits the brain's own tidying, built from
+//! HEAD ([`housekeeping`]), whatever the pull did (offline, refused, busy,
+//! a conflict waiting, uncommitted files in the way); with a conflict
+//! waiting it lands on the branch's own commit. The commit moves HEAD, so
+//! the shared tree claim is turned exclusive for it, within
+//! [`READ_BOUND`], through the gate ([`TreeClaim::upgrade`]), so no land
+//! starts in between, and shared again after it. A claim not had in time,
+//! or a hook that stops the commit, leaves the fixes in the work tree and
+//! the brain `busy` or `hook`, unless the pull already left it as it is
+//! for its own reason, which is the one said. A brain the session leaves
+//! alone gets no commit.
+//!
 //! **Closing.** An explicit session pushes what is committed. When the
 //! command committed ([`Session::committed`]), it first lands again, on top
 //! of that commit, the upstream's commit its open fetched (no second
@@ -87,6 +100,7 @@ use super::claim::{COMMAND_BOUND, ClaimError, READ_BOUND, TreeClaim};
 use super::engine::{self, Context};
 use super::fetch::{BACKOFF, STAMP, THROTTLE, back_off, backed_off, fetched_recently, write_stamp};
 use super::git::SyncGit;
+use super::housekeeping;
 use super::land::failed;
 use super::{LeftAsIs, LeftReason, NETWORK_TIME_LIMIT, SyncError, SyncReport, SyncRequest};
 use crate::dream::DreamOptions;
@@ -282,6 +296,56 @@ pub fn open_all<'a>(brains: &[Brain<'a>], intent: Intent, env: &SessionEnv) -> V
         .into_iter()
         .map(|(_, fetched)| settle(fetched, env))
         .collect()
+}
+
+/// Commit the brain's own housekeeping, built from HEAD (see the module
+/// docs and [`housekeeping`]), in the work tree the session reads, its
+/// claim turned exclusive for the commit and back. The files committed,
+/// sorted; none for a brain the session leaves alone, with nothing to
+/// commit, or when the commit was left undone, which the session's report
+/// then says.
+pub fn housekeeping_commit(session: &mut Session, maps: &DreamOptions) -> Vec<String> {
+    let Some(ctx) = &session.ctx else {
+        return Vec::new();
+    };
+    let own = &ctx.dirs().own;
+    let exclusive = match session.claim.take() {
+        Some(claim) => claim.upgrade(own, READ_BOUND).map_err(|(claim, e)| {
+            session.claim = Some(claim);
+            e
+        }),
+        None => TreeClaim::exclusive(own, READ_BOUND),
+    };
+    let claim = match exclusive {
+        Ok(claim) => claim,
+        Err(e) => {
+            add_left(&mut session.report, housekeeping_unclaimed(e));
+            return Vec::new();
+        }
+    };
+    let done = housekeeping::commit(ctx.git(), ctx.repo(), maps);
+    session.claim = if session.intent.throttled() {
+        claim.downgrade(READ_BOUND).ok()
+    } else {
+        Some(claim)
+    };
+    done.unwrap_or_else(|left| {
+        add_left(&mut session.report, left);
+        Vec::new()
+    })
+}
+
+/// Why the housekeeping commit was left undone without the tree claim.
+fn housekeeping_unclaimed(e: ClaimError) -> LeftAsIs {
+    match e {
+        ClaimError::Busy => LeftAsIs::because(
+            LeftReason::Busy,
+            "another kluris command is reading or changing this brain's files, so the housekeeping was not committed and its fixes are in the work tree; run again once it is done",
+        ),
+        ClaimError::Io(e) => failed(format!(
+            "cannot claim the work tree, so the housekeeping was not committed: {e}"
+        )),
+    }
 }
 
 /// End the session: release its claim and say what was done ([`close_all`]).

@@ -599,6 +599,20 @@ The web app refreshes the access token five minutes before it expires.
 their lobe's map, then reports what it could not fix: broken synapses, orphans,
 frontmatter problems.
 
+In a brain with a remote, `kluris dream` and `kluris mri` first bring your
+teammates' commits in, then commit the brain's own housekeeping: what those
+fixes change in the files already committed, as one `kluris: dream` commit
+under your git identity, through your commit hooks, pushed in the
+background. A file you have not committed never reaches it, not even its
+title in a map: the fixes it causes (its line in a map, a link back to it)
+stay in the work tree for your next `kluris commit`. `dream --json` lists
+the committed files in `committed` (`mri --json` in each brain's entry), and
+text says `Committed 4 housekeeping files in acme`. A hook that stops the
+commit, or another command holding the brain, leaves the fixes in the work
+tree and says so in the brain's `sync`; dream's exit code stays its own. A
+brain without git or without a remote is dreamed as before, its fixes left
+for you to commit.
+
 ### YAML neurons
 
 OpenAPI files, JSON Schemas and other machine-readable specs can be neurons

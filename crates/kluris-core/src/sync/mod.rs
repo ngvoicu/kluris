@@ -14,7 +14,8 @@
 //!   leaves waiting;
 //! - [`commit`]: `kluris commit`, and [`settle`]: `kluris commit` in its
 //!   session, a waiting merge finished from the work tree; [`resolve`]:
-//!   `kluris resolve`.
+//!   `kluris resolve`; [`housekeeping`]: the commit of `dream`'s and
+//!   `mri`'s own tidying.
 //!
 //! This module holds the types they share.
 
@@ -26,6 +27,7 @@ pub mod fetch;
 pub mod frontmatter_merge;
 pub mod git;
 pub mod hooks;
+pub mod housekeeping;
 pub mod land;
 pub mod merge;
 pub mod pending;

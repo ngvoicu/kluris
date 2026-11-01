@@ -306,6 +306,54 @@ fn a_downgraded_claim_is_shared_and_keeps_landers_out() {
 }
 
 #[test]
+fn an_upgraded_claim_is_exclusive_and_one_that_cannot_be_stays_shared() {
+    let repo = Repo::new();
+    let git_dir = repo.git_dir(&repo.work);
+    let shared = TreeClaim::shared(&git_dir, Duration::ZERO).unwrap();
+
+    // Another reader holds it: busy once the bound has passed, and the
+    // claim comes back shared.
+    let reader = TreeClaim::shared(&git_dir, Duration::ZERO).unwrap();
+    let started = Instant::now();
+    let (shared, e) = shared.upgrade(&git_dir, SHORT).unwrap_err();
+    assert!(matches!(e, ClaimError::Busy), "{e}");
+    assert!(started.elapsed() >= SHORT);
+    let third = TreeClaim::shared(&git_dir, Duration::ZERO);
+    assert!(third.is_ok(), "{:?}", third.err());
+    assert!(busy(TreeClaim::exclusive(&git_dir, Duration::ZERO)));
+    drop((third, reader));
+
+    // A lander holds the gate: busy, and still shared.
+    let gate = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(git_dir.join(TREE_GATE))
+        .unwrap();
+    gate.try_lock().unwrap();
+    let (shared, e) = shared.upgrade(&git_dir, SHORT).unwrap_err();
+    assert!(matches!(e, ClaimError::Busy), "{e}");
+    let reader = TreeClaim::shared(&git_dir, Duration::ZERO);
+    assert!(reader.is_ok(), "{:?}", reader.err());
+    drop((reader, gate));
+
+    // Alone: exclusive, with the gate, so neither a reader nor a lander
+    // gets in.
+    let exclusive = shared.upgrade(&git_dir, SHORT).unwrap();
+    assert!(busy(TreeClaim::shared(&git_dir, Duration::ZERO)));
+    assert!(busy(TreeClaim::exclusive(&git_dir, Duration::ZERO)));
+    // An exclusive claim upgrades as it is, and turns shared again.
+    let exclusive = exclusive.upgrade(&git_dir, SHORT).unwrap();
+    let shared = exclusive.downgrade(SHORT).unwrap();
+    let reader = TreeClaim::shared(&git_dir, Duration::ZERO);
+    assert!(reader.is_ok(), "{:?}", reader.err());
+    drop((reader, shared));
+    let again = TreeClaim::exclusive(&git_dir, Duration::ZERO);
+    assert!(again.is_ok(), "{:?}", again.err());
+}
+
+#[test]
 fn the_claim_files_are_made_in_the_git_dir_and_never_removed() {
     let repo = Repo::new();
     let git_dir = repo.git_dir(&repo.work);

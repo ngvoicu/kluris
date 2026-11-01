@@ -229,6 +229,18 @@ fn stamp_age(root: &Path, age: i64) {
     fs::write(stamp, format!("{}\n", now - age)).unwrap();
 }
 
+/// What the stderr line adds for the record the background push of the
+/// brain at `root` left: a remote that moved while a conflict waits is
+/// `needs_pull`; nothing where no push ran (on Windows the runner's job
+/// may keep it from starting).
+fn last_push_said(root: &Path) -> &'static str {
+    if git_file(root, "kluris-sync/last-push.json").is_file() {
+        "; last push needs_pull"
+    } else {
+        ""
+    }
+}
+
 /// The `sync` object of `entry`, checked to have its eight keys.
 fn sync_of(entry: &Value) -> &Value {
     let sync = &entry["sync"];
@@ -367,12 +379,14 @@ fn a_conflict_a_read_meets_carries_both_texts_and_its_merge() {
     assert_eq!(c["merge"], recorded_merge(&h).as_str());
     assert_eq!(sync["to_push"], 1);
     assert_eq!(sync["pulled"], 0);
-    // The text says it on stderr.
+    // The text says it on stderr, with what the background push of the
+    // commit waiting found, when one ran.
+    let last = last_push_said(&root);
     let (code, _, err) = h.run_args(&Read::WakeUp.args(&root, false));
     assert_eq!(code, 0);
     assert_eq!(
         err,
-        "kluris: alpha: 1 conflict (notes/first.md); 1 commit to push\n"
+        format!("kluris: alpha: 1 conflict (notes/first.md); 1 commit to push{last}\n")
     );
     wait_for_background(&root);
 }
@@ -394,12 +408,16 @@ fn status_shows_a_waiting_conflict_and_only_then() {
     let sync = sync_of(entry);
     assert_eq!(sync["conflicts"], synced["brains"][0]["sync"]["conflicts"]);
     assert_eq!(sync["behind_conflict"], 0);
+    // The text says it too, with what the background push of the commit
+    // waiting found, once it is done.
+    wait_for_background(&root);
+    let last = last_push_said(&root);
     let (code, out, err) = h.run(&["status", "--brain", "alpha"]);
     assert_eq!(code, 0);
     assert!(!out.contains("Sync:"), "{out}");
     assert_eq!(
         err,
-        "kluris: alpha: 1 conflict (notes/first.md); 1 commit to push\n"
+        format!("kluris: alpha: 1 conflict (notes/first.md); 1 commit to push{last}\n")
     );
     // Once settled and pushed, no conflict and nothing to push is said: no
     // key, or (where the background push ran and found the remote ahead)
@@ -559,6 +577,7 @@ fn doctor_warns_for_a_brain_offline_or_in_conflict_and_never_fails() {
     wait_for_background(&alpha);
     stamp_age(&alpha, 61);
     stamp_age(&beta, 61);
+    let last = last_push_said(&alpha);
     let (code, out, err) = h.run(&["doctor"]);
     assert_eq!(code, quiet);
     assert!(out.contains("  WARN brain:alpha: "), "{out}");
@@ -567,7 +586,7 @@ fn doctor_warns_for_a_brain_offline_or_in_conflict_and_never_fails() {
     assert_eq!(lines.len(), 2, "{err}");
     assert_eq!(
         lines[0],
-        "kluris: alpha: 1 conflict (notes/first.md); 1 commit to push"
+        format!("kluris: alpha: 1 conflict (notes/first.md); 1 commit to push{last}")
     );
     assert!(
         lines[1].starts_with("kluris: beta: left as is (refused): "),

@@ -17,6 +17,7 @@ use kluris_core::dream::DreamOptions;
 use kluris_core::git::SystemGit;
 use kluris_core::json::Json;
 use kluris_core::pyrepr::py_path_str;
+use kluris_core::sync::background::PushResult;
 use kluris_core::sync::session::{self, Alone, Brain, Intent, Session, SessionEnv};
 use kluris_core::sync::{LeftReason, SyncReport};
 use kluris_core::yaml::Date;
@@ -123,6 +124,20 @@ impl<'a> Opened<'a> {
     pub fn first(&mut self) -> Option<&mut Session<'a>> {
         self.sessions.first_mut()
     }
+
+    /// Commit the housekeeping of the brain the target at `target` (its
+    /// place among the targets) opened, built from HEAD with `maps`
+    /// (`session::housekeeping_commit`): the files committed, sorted.
+    pub fn housekeeping(&mut self, target: usize, maps: &DreamOptions) -> Vec<String> {
+        match self
+            .of_target
+            .get(target)
+            .and_then(|at| self.sessions.get_mut(*at))
+        {
+            Some(session) => session::housekeeping_commit(session, maps),
+            None => Vec::new(),
+        }
+    }
 }
 
 /// The folder two paths of one brain resolve to.
@@ -170,7 +185,9 @@ fn plural(n: usize, one: &str, many: &str) -> String {
 }
 
 /// What a brain's sync did, in a few words: `pulled 2 commits; 1 conflict
-/// (notes/c.md)`; `None` when it has nothing to say.
+/// (notes/c.md)`, and what the last background push did (`last push
+/// refused: <why>`, `last push needs_pull`, `pushed 2 commits in the
+/// background`); `None` when it has nothing to say.
 pub fn summary(report: &SyncReport) -> Option<String> {
     let mut parts = Vec::new();
     if report.pulled > 0 {
@@ -213,6 +230,19 @@ pub fn summary(report: &SyncReport) -> Option<String> {
             "{} to push",
             plural(report.to_push, "commit", "commits")
         ));
+    }
+    if let Some(last) = &report.last_push {
+        parts.push(match (last.result, &last.detail) {
+            (PushResult::Pushed, _) => format!(
+                "pushed {} in the background",
+                plural(last.commits, "commit", "commits")
+            ),
+            // The remote moved: the next pull settles it, whatever git said.
+            (result @ PushResult::NeedsPull, _) | (result, None) => {
+                format!("last push {}", result.as_str())
+            }
+            (result, Some(detail)) => format!("last push {}: {detail}", result.as_str()),
+        });
     }
     (!parts.is_empty()).then(|| parts.join("; "))
 }

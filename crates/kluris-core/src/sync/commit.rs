@@ -575,7 +575,7 @@ type Files = (BTreeMap<String, Node>, BTreeMap<String, String>);
 
 /// The files of `rev` under the brain, as the view holds them, and their
 /// modes.
-fn base_nodes<G: Plumbing>(git: &G, repo: &Repo, rev: &str) -> Result<Files, GitError> {
+pub(super) fn base_nodes<G: Plumbing>(git: &G, repo: &Repo, rev: &str) -> Result<Files, GitError> {
     let entries = git.tree_entries(repo, rev)?;
     let nodes = tree_nodes(git, repo, &entries, &BTreeMap::new())?;
     let modes = entries.into_iter().map(|e| (e.rel, e.mode)).collect();
@@ -753,7 +753,7 @@ fn regenerate(
 }
 
 /// Which of `paths` differ between `base` (none: an empty tree) and `tree`.
-fn changed_paths<G: Plumbing>(
+pub(super) fn changed_paths<G: Plumbing>(
     git: &G,
     repo: &Repo,
     base: Option<&str>,
@@ -797,10 +797,10 @@ struct Stamp {
 /// A work-tree file as it was when its cleanliness was checked (`None`:
 /// not there).
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct Seen(Option<(Stamp, Option<Vec<u8>>)>);
+pub(super) struct Seen(Option<(Stamp, Option<Vec<u8>>)>);
 
 impl Seen {
-    fn of(path: &Path) -> Seen {
+    pub(super) fn of(path: &Path) -> Seen {
         Seen(fs::symlink_metadata(path).ok().map(|meta| {
             #[cfg(unix)]
             use std::os::unix::fs::MetadataExt as _;
@@ -816,12 +816,19 @@ impl Seen {
     }
 }
 
-/// Bring the work-tree copy of a file the commit regenerated or linked to
-/// the committed bytes when it had no change of its own (`clean`) and is
-/// still as it was then (`seen`), keeping its line endings, as a checkout
-/// would; a file with changes of its own, or changed since, is left as it
-/// is. A new map is created only where its directory is.
-fn update_worktree_copy(root: &Path, rel: &str, committed: &[u8], clean: bool, seen: &Seen) {
+/// Bring the work-tree copy of a file a commit made (a map it regenerated,
+/// a neuron it linked, a file the housekeeping commit tidied) to the
+/// committed bytes when it had no change of its own (`clean`) and is still
+/// as it was then (`seen`), keeping its line endings, as a checkout would;
+/// a file with changes of its own, or changed since, is left as it is. A
+/// new file is created only where its directory is.
+pub(super) fn update_worktree_copy(
+    root: &Path,
+    rel: &str,
+    committed: &[u8],
+    clean: bool,
+    seen: &Seen,
+) {
     let path = join(root, rel);
     if !clean || Seen::of(&path) != *seen {
         return;
@@ -839,8 +846,8 @@ fn update_worktree_copy(root: &Path, rel: &str, committed: &[u8], clean: bool, s
         None if path.parent().is_some_and(Path::is_dir) => committed.to_vec(),
         None => return,
     };
-    // A failed write leaves the map as it was; it is then listed in
-    // `left_dirty`.
+    // A failed write leaves the file as it was: it stays changed in the
+    // work tree.
     let _ = atomic::write_atomic(&path, &bytes);
 }
 

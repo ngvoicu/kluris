@@ -1,5 +1,9 @@
 //! `kluris dream [--brain NAME|all] [--json] [--broken-only]` (v2
-//! `cli.py:1413-1522`).
+//! `cli.py:1413-1522`): each brain's session brings teammates' commits in
+//! first, dream then runs on the work tree, and the brain's own
+//! housekeeping, built from HEAD, is committed (`committed`, and one stdout
+//! line per brain in text). What each sync did is the `sync` array in JSON
+//! and one stderr line per brain in text; the exit code is dream's alone.
 
 use std::path::Path;
 
@@ -8,8 +12,10 @@ use kluris_core::config::{ConfigErrorKind, read_brain_config};
 use kluris_core::dream::{DreamOptions, DreamReport, Fixes, dream};
 use kluris_core::git::SystemGit;
 use kluris_core::pyrepr::py_path_str;
+use kluris_core::sync::session::Intent;
 use kluris_core::yaml::Date;
 
+use crate::brains::{self, Target};
 use crate::commands::wake_up::issue;
 use crate::error::CliError;
 use crate::output::human::{self, Painter, Style};
@@ -96,6 +102,11 @@ pub fn run(brain: Option<&str>, as_json: bool, broken_only: bool) -> Result<(), 
     }
     // Under `--brain all` a skipped line names its brain.
     let name_brains = brains.len() > 1 || brain == Some("all");
+    let targets: Vec<Target> = brains
+        .iter()
+        .map(|b| Target::new(&b.entry.path, &b.name, &b.entry.description))
+        .collect();
+    let mut opened = brains::open(&targets, Intent::Housekeeping, today, false);
 
     let mut healthy = true;
     let mut fixes = Fixes::default();
@@ -104,17 +115,22 @@ pub fn run(brain: Option<&str>, as_json: bool, broken_only: bool) -> Result<(), 
     let mut broken_detail = Vec::new();
     let mut skipped = Vec::new();
     let mut removed_temp_files = Vec::new();
-    for (brain, (root, config)) in brains.iter().zip(&configs) {
+    let mut committed = Vec::new();
+    for (at, (brain, (root, config))) in brains.iter().zip(&configs).enumerate() {
         let mut store = LocalGitStore::open(Path::new(root));
-        let report = dream(
-            &mut store,
-            &git,
-            &DreamOptions {
-                name: &config.name,
-                description: &config.description,
-                today,
-            },
-        );
+        let options = DreamOptions {
+            name: &config.name,
+            description: &config.description,
+            today,
+        };
+        let report = dream(&mut store, &git, &options);
+        let files = opened.housekeeping(at, &options);
+        committed.extend(files.iter().map(|file| {
+            Json::Object(vec![
+                ("brain".into(), str(&brain.name)),
+                ("file".into(), str(file)),
+            ])
+        }));
         add(&mut fixes, &report.fixes);
         broken += report.broken.len();
         one_way += report.one_way.len();
@@ -149,6 +165,9 @@ pub fn run(brain: Option<&str>, as_json: bool, broken_only: bool) -> Result<(), 
         healthy &= report.healthy();
         if !as_json {
             human::print(&text(painter, &brain.name, &report));
+            if !files.is_empty() {
+                human::print(&committed_line(&brain.name, files.len()));
+            }
             let who = if name_brains {
                 format!("{}: ", brain.name)
             } else {
@@ -166,6 +185,7 @@ pub fn run(brain: Option<&str>, as_json: bool, broken_only: bool) -> Result<(), 
             let _ = std::io::Write::write_all(&mut std::io::stderr(), lines.as_bytes());
         }
     }
+    let closed = brains::close(opened);
 
     if as_json {
         let mut doc = if broken_only {
@@ -197,6 +217,22 @@ pub fn run(brain: Option<&str>, as_json: bool, broken_only: bool) -> Result<(), 
         if !skipped.is_empty() {
             doc.push(("skipped".into(), Json::Array(skipped)));
         }
+        // Then what was committed, and each brain's sync with something to
+        // say.
+        if !committed.is_empty() {
+            doc.push(("committed".into(), Json::Array(committed)));
+        }
+        let synced: Vec<Json> = brains
+            .iter()
+            .zip(&closed)
+            .filter_map(|(brain, closed)| {
+                let report = closed.report.as_ref()?;
+                Some(tagged(&brain.name, report.to_json()))
+            })
+            .collect();
+        if !synced.is_empty() {
+            doc.push(("sync".into(), Json::Array(synced)));
+        }
         human::print(&json::to_line(&Json::Object(doc)));
     } else {
         let mut out = String::new();
@@ -217,12 +253,28 @@ pub fn run(brain: Option<&str>, as_json: bool, broken_only: bool) -> Result<(), 
         };
         out.push_str(&format!("\n{footer}\n"));
         human::print(&out);
+        brains::print_lines(
+            brains
+                .iter()
+                .zip(&closed)
+                .map(|(brain, closed)| (brain.name.as_str(), closed.report.as_ref())),
+        );
     }
     if healthy {
         Ok(())
     } else {
         Err(CliError::exit_only())
     }
+}
+
+/// The stdout line of a brain whose housekeeping was committed.
+pub(crate) fn committed_line(brain: &str, files: usize) -> String {
+    let what = if files == 1 {
+        "housekeeping file"
+    } else {
+        "housekeeping files"
+    };
+    format!("Committed {files} {what} in {brain}\n")
 }
 
 /// A `/`-joined path in native form: the JSON paths are `/`-joined,
