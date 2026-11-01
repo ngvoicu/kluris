@@ -759,6 +759,24 @@ mod tests {
         assert!(started.elapsed() < Duration::from_secs(3));
     }
 
+    /// `cmd` starts with SIGINT, SIGTERM and SIGHUP at their default
+    /// actions, however this test run was started (a background job of a
+    /// shell starts with SIGINT ignored, and an ignored signal stays
+    /// ignored across exec).
+    #[cfg(unix)]
+    fn with_default_signals(cmd: &mut Command) {
+        use std::os::unix::process::CommandExt;
+        // SAFETY: `signal` is async-signal-safe.
+        unsafe {
+            cmd.pre_exec(|| {
+                for signal in [libc::SIGINT, libc::SIGTERM, libc::SIGHUP] {
+                    libc::signal(signal, libc::SIG_DFL);
+                }
+                Ok(())
+            });
+        }
+    }
+
     /// The folder the `interrupted_child` writes its marker in.
     #[cfg(unix)]
     const INTERRUPTED_DIR: &str = "KLURIS_TEST_INTERRUPTED_DIR";
@@ -779,19 +797,19 @@ mod tests {
         use std::os::unix::process::ExitStatusExt;
         for command in 1..=INTERRUPTED_COMMANDS {
             let dir = tempfile::TempDir::new().unwrap();
-            let mut child = Command::new(std::env::current_exe().unwrap())
-                .args([
-                    "--ignored",
-                    "--exact",
-                    "process::tests::interrupted_child",
-                    "--quiet",
-                ])
-                .env(INTERRUPTED_DIR, dir.path())
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .spawn()
-                .unwrap();
+            let mut cmd = Command::new(std::env::current_exe().unwrap());
+            cmd.args([
+                "--ignored",
+                "--exact",
+                "process::tests::interrupted_child",
+                "--quiet",
+            ])
+            .env(INTERRUPTED_DIR, dir.path())
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+            with_default_signals(&mut cmd);
+            let mut child = cmd.spawn().unwrap();
             let bound = Instant::now() + Duration::from_secs(30);
             let ended = |child: &mut std::process::Child, what: &str| {
                 let _ = child.kill();

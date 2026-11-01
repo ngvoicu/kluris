@@ -1475,6 +1475,18 @@ fn interrupted_read(what: &str) {
     let out = w.dir.path().join("read.out");
     let mut cmd = child_command(&w, "read", &out);
     cmd.process_group(0);
+    // SAFETY: `signal` is async-signal-safe. However this test run was
+    // started (a background job of a shell starts with SIGINT ignored, and
+    // an ignored signal stays ignored across exec), the read starts with
+    // the signals it is interrupted by at their default actions.
+    unsafe {
+        cmd.pre_exec(|| {
+            for signal in [libc::SIGINT, libc::SIGTERM, libc::SIGHUP] {
+                libc::signal(signal, libc::SIG_DFL);
+            }
+            Ok(())
+        });
+    }
     let mut reader = cmd.spawn().unwrap();
     let pid = |file: &Path| fs::read_to_string(file).ok().filter(|p| p.ends_with('\n'));
     eventually("the hook", || {
