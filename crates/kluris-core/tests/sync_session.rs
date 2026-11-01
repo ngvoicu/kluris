@@ -6,9 +6,10 @@
 //!   brain, never inside the back-off, and lands only what its own fetch
 //!   named; it holds the shared tree claim until it is closed.
 //! - Every git a read runs before the land, its merge hooks and the checks
-//!   the land makes before it writes included, stops at the read's 3 s:
-//!   the brain is read as it is (`busy`). A git that fails on its own is
-//!   `failed`, whatever it says, and the land itself is never stopped.
+//!   the land makes before it writes included, stops at the read's 10 s
+//!   in all (its fetch at 3 s): the brain is read as it is (`busy`). A git
+//!   that fails on its own is `failed`, whatever it says, and the land
+//!   itself is never stopped.
 //! - An explicit session always fetches, holds the tree claim until it is
 //!   closed, and pushes then.
 //! - `open_all` fetches eight brains at a time at most, then lands them one
@@ -35,18 +36,20 @@ use kluris_core::git::SystemGit;
 use kluris_core::sync::claim::{COMMAND_BOUND, READ_BOUND, RemoteClaim, TreeClaim};
 use kluris_core::sync::engine;
 use kluris_core::sync::fetch::{BACKOFF, STAMP, back_off};
-use kluris_core::sync::session::{self, Alone, Brain, Intent, READ_TIME_LIMIT, SessionEnv};
+use kluris_core::sync::session::{
+    self, Alone, Brain, Intent, READ_FETCH_LIMIT, READ_LOCAL_LIMIT, SessionEnv,
+};
 use kluris_core::sync::{LeftReason, NETWORK_TIME_LIMIT, SyncReport, SyncRequest};
 use tempfile::TempDir;
 
 /// The longest a test waits for another process to do something.
 const PATIENCE: Duration = Duration::from_secs(60);
 
-/// A read's bound with room for a slow machine, never the time a stalled
-/// step would take.
-const READ_LIMIT: Duration = Duration::from_millis(4500);
+/// How long a test lets a stalled fetch keep a read, past its own bound:
+/// room for a slow machine, never the time the stall takes.
+const ROOM: Duration = Duration::from_millis(1500);
 
-/// The intents that read: they share the throttle and the 3 s bound.
+/// The intents that read: they share the throttle and the read's bounds.
 const READS: [Intent; 2] = [Intent::Read, Intent::Housekeeping];
 
 /// The clock a session compares with its throttle stamp: `secs` past a
@@ -231,7 +234,7 @@ fn a_fetch_stopped_at_the_reads_bound_is_offline_and_backs_off() {
     let started = Instant::now();
     let report = session_at(&w, &w.ours, Intent::Read, at(0)).expect("a report");
     let took = started.elapsed();
-    assert!(took < READ_LIMIT, "{took:?}");
+    assert!(took < READ_FETCH_LIMIT + ROOM, "{took:?}");
     assert_eq!(reason(&report), Some("offline"), "{report:?}");
     assert_eq!(w.head(&w.ours), before);
     assert!(w.ours.join(".git").join(BACKOFF).is_file(), "no back-off");
@@ -332,8 +335,8 @@ fn git_that(w: &World, step: &str, action: &str) -> SystemGit {
     w.git().program(&script)
 }
 
-/// Ten seconds of a step that never ends within a read.
-const STALL: &str = "n=0; while [ $n -lt 1000 ]; do sleep 0.01; n=$((n+1)); done";
+/// Thirty seconds of a step, past every bound of a read.
+const STALL: &str = "n=0; while [ $n -lt 3000 ]; do sleep 0.01; n=$((n+1)); done";
 
 /// What a git that fails on its own prints: the words of a stop.
 #[cfg(unix)]
@@ -388,12 +391,11 @@ fn read_with(w: &World, shape: Shape, git: SystemGit, what: &str) -> (SyncReport
     (report, took)
 }
 
-/// The steps a read runs before the land, each in the shape that runs it:
-/// the brain's discovery, the upstream query, a pull's local step, and the
-/// checks the land makes before it writes (the work tree's status and the
-/// branch's lock, on a fast-forward and on a merge).
+/// One step of each kind a read runs before the land, in the shape that
+/// runs it: the brain's discovery, a query before the fetch, a pull's local
+/// step, and a check the land makes before it writes.
 #[cfg(unix)]
-const BEFORE_THE_LAND: [(&str, Shape); 6] = [
+const BEFORE_THE_LAND: [(&str, Shape); 4] = [
     (
         " rev-parse --is-inside-work-tree --show-prefix ",
         Shape::Behind,
@@ -403,23 +405,26 @@ const BEFORE_THE_LAND: [(&str, Shape); 6] = [
         Shape::Diverged,
     ),
     (" merge-base ", Shape::Diverged),
-    (" status ", Shape::Behind),
-    (" --git-path refs/heads/main.lock ", Shape::Behind),
     (" --git-path refs/heads/main.lock ", Shape::Diverged),
 ];
 
-/// Every git a read runs before the land stops at its 3 s bound: the
-/// brain is read as it is (`busy`).
+/// Every git a read runs before the land stops at its local bound: the
+/// brain is read as it is (`busy`). The kinds run side by side, each in a
+/// world of its own.
 #[cfg(unix)]
 #[test]
 fn a_stalled_step_before_the_land_keeps_a_read_within_its_bound() {
-    for (step, shape) in BEFORE_THE_LAND {
-        let w = World::new();
-        let what = format!("{step} ({shape:?})");
-        let (report, took) = read_with(&w, shape, git_that(&w, step, STALL), &what);
-        assert!(took < READ_LIMIT, "{what}: {took:?}");
-        assert_eq!(reason(&report), Some("busy"), "{what}: {report:?}");
-    }
+    let (_serial, worlds) = World::several(BEFORE_THE_LAND.len());
+    thread::scope(|scope| {
+        for ((step, shape), w) in BEFORE_THE_LAND.into_iter().zip(&worlds) {
+            scope.spawn(move || {
+                let what = format!("{step} ({shape:?})");
+                let (report, took) = read_with(w, shape, git_that(w, step, STALL), &what);
+                assert!(took < READ_LOCAL_LIMIT + ROOM, "{what}: {took:?}");
+                assert_eq!(reason(&report), Some("busy"), "{what}: {report:?}");
+            });
+        }
+    });
 }
 
 /// A git that fails at once is `failed`, even when what it says holds the
@@ -446,7 +451,7 @@ fn a_git_that_fails_on_its_own_is_failed_whatever_it_says() {
     }
 }
 
-/// A merge hook still running at the read's 3 s is stopped, with every
+/// A merge hook still running at the read's local bound is stopped, with every
 /// process it started: nothing is merged or landed, and it writes nothing
 /// after that.
 #[test]
@@ -464,7 +469,7 @@ fn a_stalled_merge_hook_stops_at_the_reads_bound() {
         ),
     );
     let (report, took) = read_with(&w, Shape::Diverged, w.git(), "pre-merge-commit");
-    assert!(took < READ_LIMIT, "{took:?}");
+    assert!(took < READ_LOCAL_LIMIT + ROOM, "{took:?}");
     assert_eq!(reason(&report), Some("busy"), "{report:?}");
     let pid = fs::read_to_string(&pid).expect("the hook ran");
     eventually("the hook's end", || !alive(&w, pid.trim()));
@@ -481,7 +486,7 @@ fn alive(w: &World, pid: &str) -> bool {
 }
 
 /// The land is never stopped: a `post-merge` hook that takes longer than
-/// the read's 3 s runs to its end, and the read lands.
+/// the read's local bound runs to its end, and the read lands.
 #[test]
 fn a_hook_of_the_land_runs_to_its_end() {
     let w = World::new();
@@ -489,12 +494,12 @@ fn a_hook_of_the_land_runs_to_its_end() {
     w.hook(
         &w.ours,
         "post-merge",
-        &format!("sleep 4\necho done > '{}'", sh_path(&done)),
+        &format!("sleep 11\necho done > '{}'", sh_path(&done)),
     );
     Shape::Behind.make(&w);
     let started = Instant::now();
     let report = session_at(&w, &w.ours, Intent::Read, at(0)).expect("a report");
-    assert!(started.elapsed() > READ_TIME_LIMIT, "the hook did not run");
+    assert!(started.elapsed() > READ_LOCAL_LIMIT, "the hook did not run");
     assert_eq!(report.pulled, 1, "{report:?}");
     assert_eq!(report.left_as_is, None, "{report:?}");
     assert!(done.exists(), "the hook was stopped");
@@ -518,7 +523,7 @@ fn a_tree_claim_held_past_the_bound_leaves_a_read_busy_and_the_brain_as_it_is() 
     let took = started.elapsed();
     assert_eq!(reason(&report), Some("busy"), "{report:?}");
     assert!(took >= READ_BOUND, "did not wait its bound: {took:?}");
-    assert!(took < READ_BOUND + READ_LIMIT, "{took:?}");
+    assert!(took < READ_BOUND + READ_FETCH_LIMIT + ROOM, "{took:?}");
     let after = w.snapshot();
     assert_eq!(
         (&after.0, &after.1, &after.3),

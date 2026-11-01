@@ -9,12 +9,14 @@
 //!   [`THROTTLE`] per brain (the stamp, [`STAMP`]) and never inside the
 //!   back-off ([`BACKOFF`]); a fetch stopped at its bound starts one. Both
 //!   files are in the repository's common git directory, like the remote
-//!   claim, so one fetch throttles every linked worktree. Every git the
-//!   read runs before it reads stops at [`READ_TIME_LIMIT`]: the queries
-//!   that open the brain, the fetch, and the pull's local steps up to the
-//!   land, its merge commit and that commit's hooks included (each with
-//!   every process it started), and the land's own checks before it
-//!   writes. The land itself, and what follows it, is never stopped: a
+//!   claim, so one fetch throttles every linked worktree. Its fetch stops
+//!   at [`READ_FETCH_LIMIT`], so a slow network never holds a read. Every
+//!   git the read runs before it reads stops at [`READ_LOCAL_LIMIT`] in
+//!   all: the queries that open the brain, the fetch, and the pull's local
+//!   steps up to the land, its merge commit and that commit's hooks
+//!   included (each with every process it started), and the land's own
+//!   checks before it writes. That bound stops a hang (a stalled hook, a
+//!   held lock), never a git that is slow but working. The land itself, and what follows it, is never stopped: a
 //!   land stopped partway would leave the work tree half moved. A step
 //!   stopped at the limit leaves the brain as it is (`busy`); one that
 //!   fails on its own is `failed`, whatever it says. The stop is git's
@@ -110,8 +112,12 @@ use super::{LeftAsIs, LeftReason, NETWORK_TIME_LIMIT, SyncError, SyncReport, Syn
 use crate::dream::DreamOptions;
 use crate::git::SystemGit;
 
-/// How long the gits a read runs before it reads may take, all together.
-pub const READ_TIME_LIMIT: Duration = Duration::from_secs(3);
+/// How long a read's fetch may take.
+pub const READ_FETCH_LIMIT: Duration = Duration::from_secs(3);
+
+/// How long every git a read runs before it reads may take, all together:
+/// the fetch's own [`READ_FETCH_LIMIT`] included.
+pub const READ_LOCAL_LIMIT: Duration = Duration::from_secs(10);
 
 /// How many brains [`open_all`] fetches at once at most.
 pub const PARALLEL_FETCHES: usize = 8;
@@ -131,7 +137,7 @@ impl Intent {
     /// How long its fetch (and its push) may take.
     pub fn network_bound(self) -> Duration {
         match self {
-            Intent::Read | Intent::Housekeeping => READ_TIME_LIMIT,
+            Intent::Read | Intent::Housekeeping => READ_FETCH_LIMIT,
             Intent::Explicit => NETWORK_TIME_LIMIT,
         }
     }
@@ -490,7 +496,7 @@ impl<'a> Fetched<'a> {
 /// to (see the module docs).
 fn fetch<'a>(brain: Brain<'a>, intent: Intent, env: &SessionEnv) -> Fetched<'a> {
     let started = Instant::now();
-    let deadline = intent.throttled().then(|| started + READ_TIME_LIMIT);
+    let deadline = intent.throttled().then(|| started + READ_LOCAL_LIMIT);
     let git = env.git.clone().with_deadline(deadline);
     let request = SyncRequest {
         no_verify: env.no_verify,
@@ -608,7 +614,9 @@ fn settle<'a>(fetched: Fetched<'a>, env: &SessionEnv) -> Session<'a> {
             Ok(claim) => {
                 if let Some(theirs) = theirs {
                     if intent.throttled() {
-                        ctx.until(Some(Instant::now() + READ_TIME_LIMIT.saturating_sub(spent)));
+                        ctx.until(Some(
+                            Instant::now() + READ_LOCAL_LIMIT.saturating_sub(spent),
+                        ));
                     }
                     let mut pulled = engine::pull_fetched(&ctx, &claim, theirs);
                     pulled.left_as_is = pulled.left_as_is.map(in_time);
@@ -643,7 +651,9 @@ fn settle<'a>(fetched: Fetched<'a>, env: &SessionEnv) -> Session<'a> {
         .as_ref()
         .is_none_or(|r| r.pulled == 0 && r.conflicts.is_empty());
     if intent.throttled() && claim.is_some() && quiet {
-        ctx.until(Some(Instant::now() + READ_TIME_LIMIT.saturating_sub(spent)));
+        ctx.until(Some(
+            Instant::now() + READ_LOCAL_LIMIT.saturating_sub(spent),
+        ));
         match engine::waiting(&ctx) {
             Ok(conflicts) if conflicts.is_empty() => {}
             Ok(conflicts) => report.get_or_insert_with(SyncReport::default).conflicts = conflicts,
@@ -687,7 +697,7 @@ fn claim_left(e: ClaimError) -> LeftAsIs {
 }
 
 /// `left` as the session reports it: a step whose git was stopped at the
-/// read's time limit leaves the brain as it is (`busy`). Only a read's
+/// read's [`READ_LOCAL_LIMIT`] leaves the brain as it is (`busy`). Only a read's
 /// gits before the land have a deadline, so nothing else is ever stopped.
 fn in_time(left: LeftAsIs) -> LeftAsIs {
     if !left.stopped {
@@ -697,7 +707,7 @@ fn in_time(left: LeftAsIs) -> LeftAsIs {
         LeftReason::Busy,
         format!(
             "git did not finish within the read's {} s, so nothing was pulled and the brain was read as it is: {}",
-            READ_TIME_LIMIT.as_secs(),
+            READ_LOCAL_LIMIT.as_secs(),
             left.detail.unwrap_or_default()
         ),
     )

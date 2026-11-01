@@ -79,7 +79,8 @@ pub fn neuron(extra: &str, body: &str) -> String {
 pub static SERIAL: Mutex<()> = Mutex::new(());
 
 pub struct World {
-    pub _serial: MutexGuard<'static, ()>,
+    /// `None` for one of [`World::several`], whose caller holds it.
+    pub _serial: Option<MutexGuard<'static, ()>>,
     pub dir: TempDir,
     pub remote: PathBuf,
     pub ours: PathBuf,
@@ -88,7 +89,17 @@ pub struct World {
 
 impl World {
     pub fn new() -> World {
+        World::build(Some(SERIAL.lock().unwrap_or_else(|e| e.into_inner())))
+    }
+
+    /// `count` worlds at once, for a test that runs them side by side, and
+    /// the lock that keeps every other world out meanwhile.
+    pub fn several(count: usize) -> (MutexGuard<'static, ()>, Vec<World>) {
         let serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        (serial, (0..count).map(|_| World::build(None)).collect())
+    }
+
+    fn build(serial: Option<MutexGuard<'static, ()>>) -> World {
         let dir = TempDir::new().unwrap();
         fs::write(dir.path().join("gitconfig"), "").unwrap();
         let w = World {

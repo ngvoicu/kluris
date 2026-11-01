@@ -365,7 +365,8 @@ fn land_into<G: SyncGit>(
     }
 
     report.to_push = count(Some(&theirs), &ours)?;
-    if git.merge_bases(repo, &ours, &theirs)?.is_empty() {
+    let bases = git.merge_bases(repo, &ours, &theirs)?;
+    if bases.is_empty() {
         return Err(unrelated(upstream));
     }
     if let Some(waiting) = waiting.as_ref().filter(|w| w.theirs == theirs) {
@@ -374,29 +375,30 @@ fn land_into<G: SyncGit>(
     }
     let none = BTreeMap::new();
     let maps = &ctx.request.maps;
-    let (tree, index, auto_merged) = match merge_commits(git, repo, &ours, &theirs, maps, &none)? {
-        MergeOutcome::Clean {
-            tree,
-            index,
-            auto_merged,
-        } => (tree, index, auto_merged),
-        MergeOutcome::Conflicts { base, conflicts } => {
-            match waiting {
-                Some(waiting) => {
-                    report.conflicts = texts(git, repo, &waiting)?;
-                    report.behind_conflict = count(Some(&waiting.theirs), &theirs)?;
+    let (tree, index, auto_merged) =
+        match merge_commits(git, repo, &ours, &theirs, &bases, maps, &none)? {
+            MergeOutcome::Clean {
+                tree,
+                index,
+                auto_merged,
+            } => (tree, index, auto_merged),
+            MergeOutcome::Conflicts { base, conflicts } => {
+                match waiting {
+                    Some(waiting) => {
+                        report.conflicts = texts(git, repo, &waiting)?;
+                        report.behind_conflict = count(Some(&waiting.theirs), &theirs)?;
+                    }
+                    None => {
+                        let waiting = Pending::new(base, &ours, &theirs, conflicts);
+                        report.conflicts = texts(git, repo, &waiting)?;
+                        waiting
+                            .write(&pending_path)
+                            .map_err(|e| failed(format!("cannot record the conflict: {e}")))?;
+                    }
                 }
-                None => {
-                    let waiting = Pending::new(base, &ours, &theirs, conflicts);
-                    report.conflicts = texts(git, repo, &waiting)?;
-                    waiting
-                        .write(&pending_path)
-                        .map_err(|e| failed(format!("cannot record the conflict: {e}")))?;
-                }
+                return Ok(());
             }
-            return Ok(());
-        }
-    };
+        };
     let dirty = git.dirty(repo)?;
     let blocked = blocked_paths(git, repo, &ctx.root, &dirty, &ours, &tree)?;
     if !blocked.is_empty() {
@@ -784,8 +786,9 @@ pub fn finish_merge<G: SyncGit>(
     let (ours, theirs) = (&pending.ours, &pending.theirs);
     unchanged(git, repo, branch, ours)?;
     let maps = &ctx.request.maps;
+    let bases = git.merge_bases(repo, ours, theirs)?;
     let MergeOutcome::Clean { tree, index, .. } =
-        merge_commits(git, repo, ours, theirs, maps, finish.choices)?
+        merge_commits(git, repo, ours, theirs, &bases, maps, finish.choices)?
     else {
         return Err(failed(
             "the merge has conflicts the recorded choices do not cover",

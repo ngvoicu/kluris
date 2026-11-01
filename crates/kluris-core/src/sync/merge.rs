@@ -220,13 +220,16 @@ enum Decided {
     Removed,
 }
 
-/// Merge `theirs` into `ours` in memory (see the module docs). A path in
-/// `resolutions` takes the person's choice instead of the rules.
+/// Merge `theirs` into `ours`, whose merge bases are `bases` (`git
+/// merge-base --all`, none for unrelated histories), in memory (see the
+/// module docs). A path in `resolutions` takes the person's choice instead
+/// of the rules.
 pub fn merge_commits<G: SyncGit>(
     git: &G,
     repo: &Repo,
     ours: &str,
     theirs: &str,
+    bases: &[String],
     maps: &DreamOptions,
     resolutions: &BTreeMap<String, ResolvedChoice>,
 ) -> Result<MergeOutcome, GitError> {
@@ -235,12 +238,11 @@ pub fn merge_commits<G: SyncGit>(
     // with several, every path changed on both sides goes to a person
     // (`ambiguous_base`) and only one-sided changes merge, as merge-tree
     // has them (decision of T-146, replacing the first-base rule).
-    let bases = git.merge_bases(repo, ours, theirs)?;
     let ambiguous = bases.len() > 1;
     let base = bases.first().cloned();
     let merged = git.merge_tree(repo, ours, theirs)?;
     let mut ebs = Vec::new();
-    for b in &bases {
+    for b in bases {
         ebs.push(entries(git, repo, b)?);
     }
     let no_base = Entries::new();
