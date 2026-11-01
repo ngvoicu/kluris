@@ -440,6 +440,7 @@ fn finish<G: SyncGit>(
         message: &message,
         hooks: MergeHooks::Merge,
         settled: &Settled::new(),
+        keep_generated: false,
     };
     Ok(engine::finish_merge(ctx, claim, pending, &finish)?)
 }

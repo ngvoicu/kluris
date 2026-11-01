@@ -171,6 +171,7 @@ fn finish<G: SyncGit>(
             message: &message,
             hooks: MergeHooks::Commit,
             settled: &settled,
+            keep_generated: true,
         },
     )
     .map_err(CommitError::Left)?;

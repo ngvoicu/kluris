@@ -252,6 +252,52 @@ fn keys(doc: &Value) -> Vec<String> {
 // --- what it stages ------------------------------------------------------------------
 
 #[test]
+fn commits_only_the_given_paths_and_the_maps_they_change() {
+    let b = Brain::new();
+    let before = b.head();
+    b.write("notes/second.md", &neuron("Second"));
+    b.write("glossary.md", &format!("{GLOSSARY}\n- term: changed\n"));
+    b.write("ideas/draft.md", &neuron("Draft"));
+    let ideas_map = b.read("ideas/map.md");
+
+    let (code, doc) = b.commit("notes/second.md", &[]);
+    assert_eq!(code, 0, "{doc}");
+    assert_eq!(
+        keys(&doc),
+        [
+            "ok",
+            "brain",
+            "committed",
+            "commit",
+            "paths",
+            "regenerated",
+            "linked",
+            "left_dirty"
+        ]
+    );
+    assert_eq!(doc["ok"], true);
+    assert_eq!(doc["brain"], "demo");
+    assert_eq!(doc["committed"], true);
+    let head = b.head();
+    assert_ne!(head, before);
+    assert_eq!(doc["commit"], head.as_str());
+    assert_eq!(doc["paths"], json!(["notes/second.md"]));
+    assert_eq!(doc["regenerated"], json!(["notes/map.md"]));
+    assert_eq!(doc["linked"], json!([]));
+    assert_eq!(doc["left_dirty"], json!(["glossary.md", "ideas/draft.md"]));
+
+    assert_eq!(b.committed("HEAD"), ["notes/map.md", "notes/second.md"]);
+    assert_eq!(b.git(&["rev-parse", "HEAD^"]).trim(), before);
+    assert!(
+        b.read("notes/map.md")
+            .contains("- [second.md](./second.md) — Second")
+    );
+    // A map the paths do not change is not written.
+    assert_eq!(b.read("ideas/map.md"), ideas_map);
+    assert_eq!(b.status(), [" M glossary.md", "?? ideas/draft.md"]);
+}
+
+#[test]
 fn a_file_staged_beforehand_stays_staged_and_out_of_the_commit() {
     let b = Brain::new();
     b.write("glossary.md", &format!("{GLOSSARY}\n- term: staged\n"));
@@ -498,6 +544,29 @@ fn without_a_git_identity_the_fallback_authors_and_approves() {
 }
 
 // --- nothing to commit, not a repo, mid-merge ----------------------------------------
+
+#[test]
+fn nothing_to_commit_exits_0_with_committed_false() {
+    let b = Brain::new();
+    b.write("glossary.md", &format!("{GLOSSARY}\n- term: other\n"));
+    let before = b.head();
+    let (code, doc) = b.commit("notes/first.md", &[]);
+    assert_eq!(code, 0, "{doc}");
+    assert_eq!(
+        doc,
+        json!({
+            "ok": true,
+            "brain": "demo",
+            "committed": false,
+            "commit": null,
+            "paths": ["notes/first.md"],
+            "regenerated": [],
+            "linked": [],
+            "left_dirty": ["glossary.md"],
+        })
+    );
+    assert_eq!(b.head(), before);
+}
 
 #[test]
 fn a_brain_that_is_not_a_git_repo_is_a_clean_error() {
@@ -809,6 +878,35 @@ fn windows_paths_with_backslashes() {
 }
 
 // --- the command surface -------------------------------------------------------------
+
+#[test]
+fn human_output() {
+    let b = Brain::new();
+    b.write("notes/second.md", &neuron("Second"));
+    b.write("glossary.md", &format!("{GLOSSARY}\n- term: other\n"));
+    let (code, out, err) = b.run(
+        &["commit", "--brain", "demo", "--paths", "notes/second.md"],
+        &[],
+    );
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(err, "");
+    let short = &b.head()[..7];
+    assert_eq!(
+        out,
+        format!(
+            "Committed {short} in demo: kluris: update notes/second.md\n  notes/second.md\n  notes/map.md (regenerated)\nLeft uncommitted: glossary.md\n"
+        )
+    );
+    let (code, out, _) = b.run(
+        &["commit", "--brain", "demo", "--paths", "notes/second.md"],
+        &[],
+    );
+    assert_eq!(code, 0);
+    assert_eq!(
+        out,
+        "Nothing to commit in demo.\nLeft uncommitted: glossary.md\n"
+    );
+}
 
 #[test]
 fn brain_all_is_refused() {

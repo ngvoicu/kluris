@@ -7,8 +7,12 @@
 //!
 //! The exit code is the commit's: 0 whenever it landed (or there was
 //! nothing to commit), whatever the sync did, which the `sync` object says;
-//! 1 when nothing was committed. A refusal while a merge waits carries the
-//! `sync` object with that merge's conflicts, their texts and its id.
+//! 1 when nothing was committed. However it ends once the session opened,
+//! the session closes as it does after a commit (it pushes what waits), and
+//! the `sync` object says what it did, in a failure too; a refusal while a
+//! merge waits carries that merge's conflicts, their texts and its id. A
+//! brain with no remote is a brain of this machine alone: its commit says
+//! nothing of a sync.
 
 use std::path::Path;
 
@@ -18,9 +22,9 @@ use kluris_core::git::SystemGit;
 use kluris_core::pyrepr::py_path_str;
 use kluris_core::sync::commit::{CommitError, CommitReport, CommitRequest};
 use kluris_core::sync::engine;
-use kluris_core::sync::session::{Intent, Session};
+use kluris_core::sync::session::{Alone, Intent, Session};
 use kluris_core::sync::settle::commit_in;
-use kluris_core::sync::{LeftAsIs, LeftReason, SyncReport};
+use kluris_core::sync::{ConflictText, LeftAsIs, LeftReason, SyncReport};
 
 use crate::brains::{self, Target};
 use crate::commands::dream::today;
@@ -68,17 +72,13 @@ fn about_the_merge(error: &CommitError) -> bool {
     )
 }
 
-/// The session's report so far, with the waiting merge's conflicts when it
-/// has none of its own (an open that did not fetch reads none).
-fn with_waiting(session: &Session) -> SyncReport {
-    let mut report = session.report().cloned().unwrap_or_default();
-    if report.conflicts.is_empty()
-        && let Some(ctx) = session.context()
-        && let Ok(conflicts) = engine::waiting(ctx)
-    {
-        report.conflicts = conflicts;
+/// The waiting merge's conflicts, for a refusal of it to say (an open that
+/// did not fetch reads none of its own).
+fn waiting_conflicts(session: &Session, error: &CommitError) -> Vec<ConflictText> {
+    match session.context() {
+        Some(ctx) if about_the_merge(error) => engine::waiting(ctx).unwrap_or_default(),
+        _ => Vec::new(),
     }
-    report
 }
 
 pub fn run(options: &Options) -> Result<(), CliError> {
@@ -137,17 +137,34 @@ pub fn run(options: &Options) -> Result<(), CliError> {
         (Some(_), None) => Err(CommitError::Left(busy(session.report()))),
         (None, _) => commit_in(Path::new(&root), &plain, None, &request, options.merge),
     };
+    let waiting = match &committed {
+        Err(e) => waiting_conflicts(session, e),
+        Ok(_) => Vec::new(),
+    };
+    if committed
+        .as_ref()
+        .is_ok_and(|report| report.commit.is_some())
+    {
+        session.committed();
+    }
+    let closed = brains::close(opened).into_iter().next().unwrap_or_default();
+    let mut sync = match closed.alone {
+        Some(Alone::NoRemote) => None,
+        _ => closed.report,
+    };
+    let sync = sync.as_mut().map(|sync| {
+        if sync.conflicts.is_empty() {
+            sync.conflicts = waiting;
+        }
+        &*sync
+    });
     let report = match committed {
         Ok(report) => report,
         Err(e) => {
-            // Nothing was committed, and nothing is pushed.
-            let sync = about_the_merge(&e).then(|| with_waiting(session));
-            drop(opened);
+            // Nothing was committed; what the sync did is said.
             let error = CliError::new(message(&brain.name, &root, &e));
-            if !options.json
-                && let Some(sync) = &sync
-            {
-                brains::print_lines([(brain.name.as_str(), Some(sync))]);
+            if !options.json {
+                brains::print_lines([(brain.name.as_str(), sync)]);
             }
             return Err(match sync {
                 Some(sync) => error.with_fields(vec![("sync".into(), sync.to_json())]),
@@ -155,11 +172,6 @@ pub fn run(options: &Options) -> Result<(), CliError> {
             });
         }
     };
-    if report.commit.is_some() {
-        session.committed();
-    }
-    let closed = brains::close(opened);
-    let sync = closed.first().and_then(|c| c.report.as_ref());
 
     if options.json {
         let doc = Json::Object(vec![

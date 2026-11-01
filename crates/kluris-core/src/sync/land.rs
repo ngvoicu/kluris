@@ -3,11 +3,14 @@
 //! [`blocked_paths`] (the uncommitted, untracked or ignored files the move
 //! would write over) and the locks git holds while it writes.
 //!
-//! A merge a person settled in the work tree ([`Settled`]) lands over the
-//! files they wrote: each settled path is never in the way while its file
-//! still holds the choice, and its index entry is set to the merge's right
-//! before git's move, so git's two-way rule (the index already at the new
-//! tree: kept) keeps it, and the work tree already matches.
+//! A merge a person settled in the work tree lands over what is theirs
+//! ([`Over`]): each settled path is never in the way while its file still
+//! holds the choice, nor is a generated file (`map.md`, `brain.md`) with
+//! changes of its own, such as a map `kluris dream` rewrote; the index
+//! entry of each is set to the merge's right before git's move, so git's
+//! two-way rule (the index already at the new tree: kept) keeps it and
+//! leaves its work-tree copy as it is: a settled file already matches, a
+//! kept generated file stays changed until dream rebuilds it.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -65,17 +68,37 @@ fn still_settled(root: &Path, rel: &str, want: &Option<Vec<u8>>) -> bool {
     }
 }
 
-/// `blocked` without the paths of `settled` whose files still hold the
-/// choice.
-pub fn without_settled(root: &Path, settled: &Settled, blocked: Vec<String>) -> Vec<String> {
-    blocked
-        .into_iter()
-        .filter(|rel| {
-            !settled
-                .get(rel)
-                .is_some_and(|want| still_settled(root, rel, want))
-        })
-        .collect()
+/// What a land goes over in the work tree (nothing for a pull): the
+/// conflicted paths a person settled, and the generated files with changes
+/// of their own whose work-tree copies it keeps.
+#[derive(Debug, Clone, Default)]
+pub struct Over {
+    pub settled: Settled,
+    pub kept: BTreeSet<String>,
+}
+
+impl Over {
+    /// `blocked` without the settled paths whose files still hold the
+    /// choice, and without the kept generated files.
+    pub fn without(&self, root: &Path, blocked: Vec<String>) -> Vec<String> {
+        blocked
+            .into_iter()
+            .filter(|rel| {
+                !self.kept.contains(rel)
+                    && !self
+                        .settled
+                        .get(rel)
+                        .is_some_and(|want| still_settled(root, rel, want))
+            })
+            .collect()
+    }
+
+    /// Every path whose index entry the land sets to the merge's.
+    fn paths(&self) -> Vec<String> {
+        let mut paths: BTreeSet<String> = self.settled.keys().cloned().collect();
+        paths.extend(self.kept.iter().cloned());
+        paths.into_iter().collect()
+    }
 }
 
 /// The uncommitted files (in `dirty`) that moving from `ours` to `target`
@@ -331,10 +354,9 @@ pub fn unchanged<G: SyncGit>(
 /// checks run on `git`, stopped at its deadline when it has one; the move,
 /// the check after it and the reads after a refusal on `landing`, never
 /// stopped: a move stopped partway would leave the work tree half moved.
-/// The caller holds the tree claim. The `settled` paths of a merge a person
-/// settled in the work tree are not in the way while their files still
-/// hold the choice; their index entries are set to `to`'s right before the
-/// move, and back to `ours`'s when git refuses it. Checked right before the move (a hook
+/// The caller holds the tree claim. What the land goes `over` (see the
+/// module docs) is not in the way; its index entries are set to `to`'s
+/// right before the move, and back to `ours`'s when git refuses it. Checked right before the move (a hook
 /// or an editor may have written a file, or switched or moved the branch,
 /// since the pull decided) and again when git refuses (a file written in
 /// between, told apart from what git itself wrote before it stopped): the
@@ -354,12 +376,12 @@ pub fn land<G: SyncGit>(
     branch: &str,
     ours: &str,
     to: &str,
-    settled: &Settled,
+    over: &Over,
 ) -> Result<(), LeftAsIs> {
     let in_the_way = |git: &G| -> Result<Vec<String>, LeftAsIs> {
         let dirty = git.dirty(repo)?;
         let blocked = blocked_paths(git, repo, root, &dirty, ours, to)?;
-        Ok(without_settled(root, settled, blocked))
+        Ok(over.without(root, blocked))
     };
     let blocked = in_the_way(git)?;
     if !blocked.is_empty() {
@@ -375,13 +397,13 @@ pub fn land<G: SyncGit>(
         ));
     }
     unchanged(git, repo, branch, ours)?;
-    let settled_paths: Vec<String> = settled.keys().cloned().collect();
-    landing.reset_paths(repo, to, &settled_paths)?;
+    let over_paths = over.paths();
+    landing.reset_paths(repo, to, &over_paths)?;
     let Err(e) = landing.fast_forward_to(repo, to) else {
         return moved_elsewhere(landing, repo, branch, to);
     };
-    // The index as it was: the settled files are the person's again.
-    let _ = landing.reset_paths(repo, ours, &settled_paths);
+    // The index as it was: the files it went over are the person's again.
+    let _ = landing.reset_paths(repo, ours, &over_paths);
     let blocked = not_written_by_git(landing, repo, root, to, in_the_way(landing)?)?;
     if blocked.is_empty() {
         Err(failed(&e.detail))

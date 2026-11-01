@@ -14,6 +14,9 @@ use std::fs;
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 
+use std::time::Duration;
+
+use kluris_core::sync::claim::TreeClaim;
 use serde_json::{Value, json};
 use sync_home::*;
 
@@ -489,14 +492,32 @@ fn the_text_says_what_was_committed_and_the_shared_line_what_the_sync_did() {
 }
 
 #[test]
-fn a_brain_without_a_remote_commits_and_says_it_has_no_upstream() {
+fn a_brain_without_a_remote_is_local_and_says_nothing_of_a_sync() {
     let (h, root) = team();
     h.git(&root, &["remote", "remove", "origin"]);
     h.write(&root, "notes/second.md", &neuron("Second", BODY));
     let (code, doc) = commit(&h, "notes/second.md", &[]);
     assert_eq!(code, 0, "{doc}");
-    assert_eq!(keys(&doc), COMMIT_KEYS, "{doc}");
+    assert_eq!(keys(&doc), COMMIT_KEYS[..8], "{doc}");
     assert_eq!(doc["committed"], true);
+    h.write(&root, "notes/third.md", &neuron("Third", BODY));
+    let (code, _, err) = h.run(&["commit", "--brain", "alpha", "--paths", "notes/third.md"]);
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(err, "");
+    // A failure says nothing of a sync either.
+    let (code, doc) = commit(&h, "../outside.md", &[]);
+    assert_eq!(code, 1, "{doc}");
+    assert_eq!(keys(&doc), ["ok", "error"], "{doc}");
+}
+
+#[test]
+fn a_brain_with_a_remote_but_no_upstream_says_how_to_set_one() {
+    let (h, root) = team();
+    h.git(&root, &["branch", "--unset-upstream"]);
+    h.write(&root, "notes/second.md", &neuron("Second", BODY));
+    let (code, doc) = commit(&h, "notes/second.md", &[]);
+    assert_eq!(code, 0, "{doc}");
+    assert_eq!(keys(&doc), COMMIT_KEYS, "{doc}");
     let sync = sync_of(&doc);
     assert_eq!(reason(sync), "no_upstream", "{doc}");
     assert_eq!(
@@ -510,6 +531,82 @@ fn a_brain_without_a_remote_commits_and_says_it_has_no_upstream() {
         err,
         "kluris: alpha: left as is (no_upstream): set one with git push -u origin main\n"
     );
+}
+
+// --- a failure after the open says what the sync did ---------------------------------
+
+#[test]
+fn a_path_refused_after_the_open_says_what_the_sync_did_and_pushes_what_waited() {
+    let (h, root) = team();
+    h.teammate_pushes("alpha", "notes/zebra.md", &zebra());
+    // A commit of the person's own, waiting to be pushed.
+    h.commit(&root, "notes/local.md", &neuron("Local", BODY));
+    let (code, doc) = commit(&h, "../outside.md", &[]);
+    assert_eq!(code, 1, "{doc}");
+    assert_eq!(keys(&doc), ["ok", "error", "sync"], "{doc}");
+    assert_eq!(doc["ok"], false);
+    assert!(
+        doc["error"].as_str().unwrap().contains("outside the brain"),
+        "{doc}"
+    );
+    let sync = sync_of(&doc);
+    assert_eq!(sync["pulled"], 1, "{doc}");
+    assert_eq!(sync["pushed"], true, "{doc}");
+    assert_eq!(sync["to_push"], 0, "{doc}");
+    assert_eq!(remote_main(&h), head(&h, &root));
+    assert!(root.join("notes").join("zebra.md").is_file());
+}
+
+#[test]
+fn a_hook_that_stops_the_commit_still_says_what_the_sync_did() {
+    let (h, root) = team();
+    h.teammate_pushes("alpha", "notes/zebra.md", &zebra());
+    let theirs = remote_main(&h);
+    let hooks = root.join(".git").join("hooks");
+    fs::create_dir_all(&hooks).unwrap();
+    let hook = hooks.join("pre-commit");
+    fs::write(&hook, "#!/bin/sh\necho 'no, thanks' >&2\nexit 1\n").unwrap();
+    make_executable(&hook);
+    h.write(&root, "notes/second.md", &neuron("Second", BODY));
+    let (code, doc) = commit(&h, "notes/second.md", &[]);
+    assert_eq!(code, 1, "{doc}");
+    assert!(
+        doc["error"].as_str().unwrap().contains("pre-commit"),
+        "{doc}"
+    );
+    let sync = sync_of(&doc);
+    assert_eq!(sync["pulled"], 1, "{doc}");
+    assert_eq!(
+        head(&h, &root),
+        theirs,
+        "the pull landed, nothing was committed"
+    );
+    // The text: the shared line, then the error.
+    h.teammate_pushes("alpha", "notes/yak.md", &neuron("Yak", BODY));
+    let (code, _, err) = h.run(&["commit", "--brain", "alpha", "--paths", "notes/second.md"]);
+    assert_eq!(code, 1, "{err}");
+    assert!(err.contains("kluris: alpha: pulled 1 commit\n"), "{err}");
+    assert!(err.contains("Error: the pre-commit hook failed"), "{err}");
+}
+
+#[test]
+fn a_work_tree_another_command_holds_refuses_the_commit_and_says_so() {
+    let (h, root) = team();
+    let held = TreeClaim::exclusive(&root.join(".git"), Duration::ZERO).unwrap();
+    h.write(&root, "notes/second.md", &neuron("Second", BODY));
+    let before = head(&h, &root);
+    let (code, doc) = commit(&h, "notes/second.md", &[]);
+    drop(held);
+    assert_eq!(code, 1, "{doc}");
+    assert!(
+        doc["error"]
+            .as_str()
+            .unwrap()
+            .contains("nothing was committed"),
+        "{doc}"
+    );
+    assert_eq!(reason(sync_of(&doc)), "busy", "{doc}");
+    assert_eq!(head(&h, &root), before);
 }
 
 // --- finishing a waiting merge ---------------------------------------------------------
@@ -781,6 +878,100 @@ fn the_text_of_a_finished_merge_names_its_subject_and_paths() {
         "{out}"
     );
     assert_eq!(err, "kluris: alpha: pushed\n");
+}
+
+#[test]
+fn a_map_dream_rewrote_keeps_its_bytes_and_the_merge_lands() {
+    let (h, root) = team();
+    h.conflict("alpha", &root);
+    // The person's side dated as its `updated` says: dream has nothing of
+    // HEAD's to commit, and only rewrites the map from the work tree.
+    h.git(
+        &root,
+        &[
+            "commit",
+            "-q",
+            "--amend",
+            "--no-edit",
+            "--date=2026-01-01T12:00:00",
+        ],
+    );
+    let (merge, ours, theirs) = merge_of(&h, &root);
+    // The settled file retitles the neuron, and an uncommitted draft is
+    // there too: dream's map lists both, the merge's only the first.
+    h.write(
+        &root,
+        "notes/first.md",
+        &neuron("First, settled", &BODY.replace("Three.", "Three, settled.")),
+    );
+    h.write(&root, "notes/draft.md", &neuron("Draft", BODY));
+    let (_, out, err) = h.run(&["dream", "--brain", "alpha", "--json"]);
+    assert_eq!(head(&h, &root), ours, "{out}{err}");
+    let dreamt = h.read(&root, "notes/map.md");
+    assert!(
+        dreamt.contains("draft.md") && dreamt.contains("First, settled"),
+        "{dreamt}"
+    );
+
+    let (code, doc) = commit(&h, "notes/first.md", &["--merge", &merge]);
+    assert_eq!(code, 0, "{doc}");
+    let head = head(&h, &root);
+    assert_eq!(parents(&h, &root, &head), [ours, theirs]);
+    let committed = show(&h, &root, &head, "notes/map.md");
+    assert!(committed.contains("First, settled"), "{committed}");
+    assert!(!committed.contains("draft.md"), "{committed}");
+    assert_eq!(h.read(&root, "notes/map.md"), dreamt);
+    assert_eq!(
+        doc["left_dirty"],
+        json!(["notes/draft.md", "notes/map.md"]),
+        "{doc}"
+    );
+    assert!(!git_file(&root, "kluris-sync/pending.json").exists());
+    assert_eq!(sync_of(&doc)["pushed"], true, "{doc}");
+}
+
+#[test]
+fn a_neuron_in_the_way_of_the_merge_is_refused_and_says_what_the_sync_did() {
+    let (h, root) = team();
+    h.commit(&root, "notes/second.md", &neuron("Second", BODY));
+    h.git(&root, &["push", "-q"]);
+    let mate = h.teammate("alpha");
+    h.git(&mate, &["pull", "-q"]);
+    h.write(
+        &mate,
+        "notes/first.md",
+        &neuron("First", &BODY.replace("Three.", "Three, theirs.")),
+    );
+    h.write(
+        &mate,
+        "notes/second.md",
+        &neuron("Second", &BODY.replace("One.", "One, theirs.")),
+    );
+    h.git(&mate, &["commit", "-q", "-am", "theirs"]);
+    h.git(&mate, &["push", "-q"]);
+    h.commit(
+        &root,
+        "notes/first.md",
+        &neuron("First", &BODY.replace("Three.", "Three, ours.")),
+    );
+    let (merge, ours, _) = merge_of(&h, &root);
+    // The teammate's clean change to second.md would land on the person's
+    // own edit of it.
+    let mine = neuron("Second", &BODY.replace("Five.", "Five, mine."));
+    h.write(&root, "notes/second.md", &mine);
+    h.write(&root, "notes/first.md", &settled());
+    let (code, doc) = commit(&h, "notes/first.md", &["--merge", &merge]);
+    assert_eq!(code, 1, "{doc}");
+    let error = doc["error"].as_str().unwrap();
+    assert!(error.contains("notes/second.md"), "{error}");
+    assert!(error.contains("nothing was committed"), "{error}");
+    let sync = sync_of(&doc);
+    assert_eq!(sync["conflicts"][0]["merge"], merge.as_str(), "{doc}");
+    assert_eq!(head(&h, &root), ours);
+    assert_eq!(h.read(&root, "notes/second.md"), mine);
+    assert_eq!(h.read(&root, "notes/first.md"), settled());
+    // The index is as it was: nothing staged.
+    assert_eq!(h.git(&root, &["diff", "--cached", "--name-only"]), "");
 }
 
 #[test]

@@ -63,7 +63,7 @@ use std::time::SystemTime;
 
 use super::hooks::{HookError, Source, gate, message_hooks};
 use super::land::join;
-use super::merge::tree_nodes;
+use super::merge::{is_generated, tree_nodes};
 use super::pending::WrongMerge;
 use super::{LeftAsIs, LeftReason};
 use crate::atomic;
@@ -545,9 +545,41 @@ impl fmt::Display for CommitError {
                 "the file for {path} cannot be used: {reason}; nothing was committed"
             ),
             CommitError::Left(left) if left.reason == LeftReason::Hook => left.fmt(f),
-            CommitError::Left(left) => write!(f, "{left}; nothing was committed"),
+            CommitError::Left(left) => {
+                write!(f, "{left}; nothing was committed")?;
+                let generated: Vec<&str> = match left.reason {
+                    LeftReason::Uncommitted => left
+                        .paths
+                        .iter()
+                        .map(String::as_str)
+                        .filter(|rel| is_generated(rel))
+                        .collect(),
+                    _ => Vec::new(),
+                };
+                if generated.is_empty() {
+                    return Ok(());
+                }
+                let words: Vec<String> = generated.iter().map(|rel| shell_word(rel)).collect();
+                write!(
+                    f,
+                    "; restore {} with `git checkout -- {}`; dream rebuilds them after the merge",
+                    generated.join(", "),
+                    words.join(" ")
+                )
+            }
             CommitError::Git(e) => e.fmt(f),
         }
+    }
+}
+
+/// `path` as a shell word: quoted when it holds anything but letters,
+/// digits and `._/-`.
+fn shell_word(path: &str) -> String {
+    let plain = |c: char| c.is_ascii_alphanumeric() || "._/-".contains(c);
+    if !path.is_empty() && path.chars().all(plain) {
+        path.to_string()
+    } else {
+        format!("'{}'", path.replace('\'', "'\\''"))
     }
 }
 
@@ -1271,6 +1303,20 @@ mod tests {
             );
             assert_eq!(normalize_path("..\\a.md"), Err(PathProblem::Outside));
         }
+    }
+
+    #[test]
+    fn a_generated_file_in_the_way_says_how_to_restore_it() {
+        let left = super::super::land::uncommitted(strings(&["notes/a.md", "my notes/map.md"]));
+        assert_eq!(
+            CommitError::Left(left).to_string(),
+            "uncommitted changes are in the way: notes/a.md, my notes/map.md; nothing was committed; restore my notes/map.md with `git checkout -- 'my notes/map.md'`; dream rebuilds them after the merge"
+        );
+        let left = super::super::land::uncommitted(strings(&["notes/a.md"]));
+        assert_eq!(
+            CommitError::Left(left).to_string(),
+            "uncommitted changes are in the way: notes/a.md; nothing was committed"
+        );
     }
 
     #[test]

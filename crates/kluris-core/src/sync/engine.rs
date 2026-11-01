@@ -72,7 +72,8 @@ use super::claim::{ClaimError, RemoteClaim, TreeClaim};
 use super::fetch::{self, Fetch};
 use super::git::{GitDirs, PushOutcome, SyncGit, Upstream, one_line};
 use super::hooks::{HookError, MergeHookError, MergeHooks, merge_commit};
-use super::land::{Settled, blocked_paths, failed, land, unchanged, uncommitted, without_settled};
+use super::land::{Over, Settled, blocked_paths, failed, land, unchanged, uncommitted};
+use super::merge::is_generated;
 use super::merge::{MergeOutcome, merge_commits};
 use super::pending::{self, Found, Pending};
 use super::{
@@ -353,7 +354,7 @@ fn land_into<G: SyncGit>(
             branch,
             &ours,
             &theirs,
-            &Settled::new(),
+            &Over::default(),
         )?;
         report.pulled = landed(Some(&ours), &theirs)?;
         return drop_waiting(&pending_path, waiting);
@@ -417,7 +418,7 @@ fn land_into<G: SyncGit>(
         branch,
         &ours,
         &commit,
-        &Settled::new(),
+        &Over::default(),
     )?;
     report.pulled = landed(Some(&ours), &theirs)?;
     report.auto_merged = auto_merged;
@@ -755,6 +756,12 @@ pub struct Finish<'f> {
     /// as the merge has them when it lands ([`land`]). Empty when the
     /// choices were made apart from the work tree.
     pub settled: &'f Settled,
+    /// A generated file (`map.md`, `brain.md`) with changes of its own in
+    /// the way of the land, a map `kluris dream` rewrote say, keeps its
+    /// work-tree copy, which stays changed, and the merge's own is
+    /// committed; otherwise it is in the way. One the merge removes is
+    /// always in the way.
+    pub keep_generated: bool,
 }
 
 /// Finish the waiting merge with a person's choices: merge `ours` with the
@@ -781,8 +788,21 @@ pub fn finish_merge<G: SyncGit>(
         ));
     };
     let dirty = git.dirty(repo)?;
+    let mut over = Over {
+        settled: finish.settled.clone(),
+        kept: Default::default(),
+    };
     let blocked = blocked_paths(git, repo, &ctx.root, &dirty, ours, &tree)?;
-    let blocked = without_settled(&ctx.root, finish.settled, blocked);
+    let mut blocked = over.without(&ctx.root, blocked);
+    if finish.keep_generated {
+        let generated: Vec<String> = blocked
+            .iter()
+            .filter(|rel| is_generated(rel))
+            .cloned()
+            .collect();
+        over.kept = git.tracked(repo, &tree, &generated)?;
+        blocked.retain(|rel| !over.kept.contains(rel));
+    }
     if !blocked.is_empty() {
         return Err(uncommitted(blocked));
     }
@@ -799,16 +819,7 @@ pub fn finish_merge<G: SyncGit>(
     )
     .map_err(merge_stopped)?;
     let landing = &ctx.landing;
-    land(
-        git,
-        landing,
-        repo,
-        &ctx.root,
-        branch,
-        ours,
-        &commit,
-        finish.settled,
-    )?;
+    land(git, landing, repo, &ctx.root, branch, ours, &commit, &over)?;
     if finish.hooks == MergeHooks::Commit {
         // As with `git commit`, post-commit cannot undo or fail the commit.
         let _ = landing.run_hook(repo, None, "post-commit", &[]);
