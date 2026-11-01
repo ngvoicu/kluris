@@ -1,6 +1,5 @@
-//! `kluris wake-up`'s payload. Expected values are frozen values recorded
-//! from Kluris 2.28.11 (`kluris wake-up --json` on copies of the fixture
-//! brains).
+//! `kluris wake-up`'s payload. Expected values are frozen; never
+//! regenerated: the payload of copies of the fixture brains.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -68,7 +67,7 @@ fn recent(path: &str, updated: &str, kind: NeuronKind) -> RecentNeuron {
 }
 
 #[test]
-fn wakeup_fixture_payload_matches_v2() {
+fn wakeup_fixture_payload_matches_the_recorded_payload() {
     let b = brain("wakeup");
     let store = LocalGitStore::open(&b.root);
     let w = wake_up(&store, "wakeup", "/stored/path", "Fixture");
@@ -328,7 +327,7 @@ fn lobe_description_rules() {
     assert_eq!(md("---\nx: [\n---\n# T\nraw\n"), "raw");
     assert_eq!(md("---\n# T\nx: [\n---\nnext\n"), "x: [");
     assert_eq!(md("# T\n\u{0}"), "\u{0}");
-    // Not UTF-8 (v2 raises): empty.
+    // Not UTF-8: empty.
     let tmp = TempDir::new().unwrap();
     fs::create_dir(tmp.path().join("l")).unwrap();
     fs::write(tmp.path().join("l/map.md"), b"# T\n\xff\n").unwrap();

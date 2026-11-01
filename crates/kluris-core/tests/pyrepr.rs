@@ -1,7 +1,7 @@
 //! Python's float formatting: `repr(x)` and `json.dumps(x)`.
 //!
 //! Every expected string is the output of `repr(x)` and `json.dumps(x)` in
-//! Python 3.11, recorded and frozen.
+//! Python 3.11: frozen; never regenerated.
 
 use kluris_core::pyrepr::{float_repr, json_float};
 

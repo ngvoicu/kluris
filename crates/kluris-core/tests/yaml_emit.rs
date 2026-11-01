@@ -1,8 +1,8 @@
 //! The YAML writer against PyYAML 6.0.3: the three emitter profiles, the
 //! markdown framing and the YAML-neuron block, byte for byte.
 //!
-//! The rows are what the code v2 runs writes (PyYAML 6.0.3 under Python
-//! 3.11), recorded and frozen; do not edit.
+//! The rows are what PyYAML 6.0.3 under Python 3.11 writes: frozen; never
+//! regenerated. Do not edit.
 
 use kluris_core::frontmatter::{LineEnding, write_markdown, write_yaml_neuron};
 use kluris_core::yaml::{Date, DateTime, Map, Profile, Value, emit};
@@ -184,7 +184,7 @@ fn markdown_framing_matches_python_frontmatter() {
 }
 
 #[test]
-fn yaml_neuron_block_matches_v2() {
+fn yaml_neuron_block_matches_the_recorded_rows() {
     let rows = yaml_neuron_rows();
     let total = rows.len();
     let failures: Vec<String> = rows
@@ -244,7 +244,8 @@ fn written_frontmatter_reads_back() {
     assert_eq!(read.body, "x: 1\r\n");
 }
 
-// BEGIN GENERATED
+// Frozen; never regenerated: each row's mapping (or markdown and YAML
+// neuron) and the bytes PyYAML 6.0.3 writes for it in each profile.
 
 #[rustfmt::skip]
 fn scalar_rows() -> Vec<Row> {
@@ -1446,4 +1447,4 @@ fn yaml_neuron_rows() -> Vec<NeuronRow> {
     ]
 }
 
-// END GENERATED
+// End of the frozen rows.

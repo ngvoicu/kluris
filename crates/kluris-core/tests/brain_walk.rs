@@ -1,9 +1,9 @@
 //! The brain model: the one walker, the neuron index, glossary parsing,
 //! deprecation detection, the path sandbox and the `BrainStore` read side.
 //!
-//! Expected values are frozen values recorded from Kluris 2.28.11 on the
-//! fixture brains under `tests/fixtures/brains/` (symlinks made from
-//! `links.symlinks`), with its deprecation run in v3's neuron order.
+//! Expected values are frozen; never regenerated: what the fixture brains
+//! under `tests/fixtures/brains/` (symlinks made from `links.symlinks`)
+//! give, with the deprecation run in the store's neuron order.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -41,7 +41,7 @@ fn copy_tree(src: &Path, dst: &Path) {
     }
 }
 
-/// A fixture brain copied into a fresh temp dir (canonical path, as v2's
+/// A fixture brain copied into a fresh temp dir (canonical path, as
 /// `create`/`register` store it), with `outside/` and `outside-the-brain.md`
 /// beside it.
 struct Brain {
@@ -108,7 +108,7 @@ fn links_brain() -> Option<Brain> {
     Some(b)
 }
 
-/// A brain-relative POSIX path in native form, as v2's `str(Path)` prints it.
+/// A brain-relative POSIX path in native form, as Python's `str(Path)` prints it.
 fn native(rel: &str) -> PathBuf {
     rel.split('/').collect()
 }
@@ -314,10 +314,9 @@ fn walker_skips_an_unreadable_directory() {
 // --- the neuron index --------------------------------------------------------
 
 #[test]
-fn neuron_index_matches_v2_on_the_full_brain() {
+fn neuron_index_matches_the_recorded_neurons_on_the_full_brain() {
     let b = brain("full");
-    // v2's neuron_files as a set; v3 lists markdown then YAML neurons (as v2
-    // does), each sorted by path bytes where v2 keeps os.walk order.
+    // Markdown then YAML neurons, each sorted by path bytes.
     let expected = expect_neurons(&[
         (".md", Md),
         ("knowledge-extra/extra.md", Md),
@@ -426,12 +425,12 @@ fn neuron_index_keeps_malformed_neurons() {
 // --- symlinks ----------------------------------------------------------------
 
 #[test]
-fn walker_symlinks_as_v2() {
+fn walker_keeps_only_links_that_resolve_inside() {
     let Some(b) = links_brain() else { return };
     let files = walk(&b.root);
     let names: Vec<&str> = files.iter().map(|f| f.rel.as_str()).collect();
-    // Kept: links that resolve inside the brain, a broken one included (v2's
-    // non-strict resolve() keeps it). Dropped: links that escape, broken
+    // Kept: links that resolve inside the brain, a broken one included
+    // (Python's non-strict resolve() keeps it). Dropped: links that escape, broken
     // links that point outside, loops. Directory links are not descended:
     // an inside target is walked once, at its real path.
     assert_eq!(
@@ -454,7 +453,7 @@ fn walker_symlinks_as_v2() {
 }
 
 #[test]
-fn neuron_index_with_symlinks_matches_v2() {
+fn neuron_index_with_symlinks_matches_the_recorded_neurons() {
     let Some(b) = links_brain() else { return };
     let expected = expect_neurons(&[
         ("lobe/a.md", Md),
@@ -471,7 +470,7 @@ fn neuron_index_with_symlinks_matches_v2() {
 }
 
 #[test]
-fn deprecation_with_symlinks_matches_v2() {
+fn deprecation_with_symlinks_matches_the_recorded_issues() {
     let Some(b) = links_brain() else { return };
     let store = LocalGitStore::open(&b.root);
     let report = detect_deprecation_issues(&store);
@@ -621,8 +620,8 @@ fn store_read_markdown_and_yaml_neurons() {
 }
 
 #[test]
-fn store_read_yaml_neuron_with_a_bad_block_is_empty_metadata_as_in_v2() {
-    // v2's _read_yaml_neuron returns ({}, whole text) on a YAML error.
+fn store_read_yaml_neuron_with_a_bad_block_is_empty_metadata() {
+    // A YAML error reads as no metadata and the whole text as the body.
     let b = brain("full");
     let store = LocalGitStore::open(&b.root);
     let fm = store.read("knowledge/bad-block.yml").unwrap();
@@ -681,7 +680,7 @@ fn full_glossary() -> Vec<GlossaryEntry> {
 }
 
 #[test]
-fn glossary_matches_v2() {
+fn glossary_matches_the_recorded_entries() {
     let b = brain("full");
     let store = LocalGitStore::open(&b.root);
     assert_eq!(store.glossary().unwrap(), full_glossary());
@@ -722,7 +721,7 @@ fn glossary_missing_is_empty_and_unreadable_is_an_error() {
 // --- deprecation -------------------------------------------------------------
 
 #[test]
-fn deprecation_matches_v2_on_the_full_brain() {
+fn deprecation_matches_the_recorded_issues_on_the_full_brain() {
     let b = brain("full");
     let report = detect_deprecation_issues(&LocalGitStore::open(&b.root));
     assert_eq!(
@@ -771,7 +770,7 @@ fn deprecation_skips_malformed_neurons_and_reports_them() {
 }
 
 #[test]
-fn deprecation_issue_kinds_are_v2_names() {
+fn deprecation_issue_kinds_have_their_json_names() {
     assert_eq!(links("a", "b").kind(), "active_links_to_deprecated");
     assert_eq!(without("a").kind(), "deprecated_without_replacement");
     assert_eq!(missing("a", "b").kind(), "replaced_by_missing");

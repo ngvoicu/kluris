@@ -1,12 +1,12 @@
 [package]
 name = "kluris-core"
-description = "Kluris 3 core library: every brain operation, no printing"
+description = "Kluris core library: every brain operation, no printing"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license-file.workspace = true
 repository.workspace = true
-# Kluris 3 ships from GitHub Releases, never crates.io
+# Kluris ships from GitHub Releases, never crates.io
 publish = false
 
 [dependencies]

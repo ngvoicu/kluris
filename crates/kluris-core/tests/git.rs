@@ -272,7 +272,7 @@ fn commit_with_nothing_to_commit_is_an_error() {
     assert!(err.to_string().contains("git commit"), "{err}");
 }
 
-// --- the commit identity fallback (v2 `_commit_env`) ------------------------
+// --- the commit identity fallback -------------------------------------------
 
 fn identity(sb: &Sandbox, dir: &Path) -> String {
     sb.run(dir, &["log", "-1", "--format=%an <%ae> / %cn <%ce>"])
@@ -332,8 +332,8 @@ fn identity_from_global_config_is_kept() {
 
 #[test]
 fn a_half_configured_identity_gets_the_whole_fallback() {
-    // v2 injects all four variables unless BOTH user.name and user.email are
-    // set; the environment then wins over the configured name.
+    // All four variables are set unless BOTH user.name and user.email are
+    // configured; the environment then wins over the configured name.
     let sb = Sandbox::new();
     let brain = sb.repo("brain");
     sb.run(&brain, &["config", "user.name", "Ann"]);
@@ -397,8 +397,8 @@ fn log_lists_the_newest_commits_first_up_to_the_limit() {
 
 #[test]
 fn log_keeps_a_subject_with_pipes() {
-    // v2 split `%H|%s|%aI` on `|`: this subject became "has " and its date
-    // " pipe | char|2026-..." (research-03 §5 item 29).
+    // Split on `|`, this subject would read as "has " and its date as
+    // " pipe | char|..."; NUL-separated fields keep both whole.
     let sb = Sandbox::new();
     let brain = sb.repo("brain");
     sb.commit(&brain, &[("a.md", "a")], "has | pipe | char", DATE);
@@ -431,7 +431,7 @@ fn log_keeps_empty_and_non_ascii_subjects() {
 
 #[test]
 fn log_joins_a_multi_line_message_into_the_subject() {
-    // %s: the first paragraph, its lines joined with spaces (as in v2).
+    // %s: the first paragraph, its lines joined with spaces.
     let sb = Sandbox::new();
     let brain = sb.repo("brain");
     sb.commit(&brain, &[("a.md", "a")], "line one\nline two\n\nbody", DATE);
@@ -442,7 +442,7 @@ fn log_joins_a_multi_line_message_into_the_subject() {
 
 #[test]
 fn log_of_a_repo_without_commits_is_empty() {
-    // v2's `git log` fails there (no HEAD) and `status` ends in a traceback.
+    // `git log` fails there (no HEAD): read as no commits, not an error.
     let sb = Sandbox::new();
     let brain = sb.repo("brain");
     let git = sb.git();
@@ -463,7 +463,7 @@ fn log_keeps_empty_commits_at_the_repo_root() {
 
 #[test]
 fn log_of_a_nested_brain_lists_only_its_own_commits() {
-    // v2 listed the whole outer repo's log (research-03 §5 item 26).
+    // Not the whole outer repo's log.
     let sb = Sandbox::new();
     let outer = sb.repo("outer");
     sb.commit(&outer, &[("README.md", "r")], "outer only", DATE);
@@ -514,8 +514,8 @@ fn status_is_short_status_stripped_like_python() {
 
 #[test]
 fn status_shows_non_ascii_names_unquoted() {
-    // `-c core.quotePath=false`; v2 printed `"\303\251.md"`. A name with a
-    // space is still quoted by git, as in v2.
+    // `-c core.quotePath=false`, so not `"\303\251.md"`. A name with a
+    // space is still quoted by git.
     let sb = Sandbox::new();
     let brain = sb.repo("brain");
     sb.commit(&brain, &[("keep.md", "k")], "first", DATE);
@@ -542,7 +542,7 @@ fn status_of_a_repo_without_commits() {
 
 #[test]
 fn status_of_a_nested_brain_is_scoped_and_brain_relative() {
-    // v2 showed the outer repo's whole status, paths relative to the brain
+    // Not the outer repo's whole status, with paths relative to the brain
     // (`../top.md`).
     let sb = Sandbox::new();
     let outer = sb.repo("outer");
@@ -560,7 +560,7 @@ fn status_of_a_nested_brain_is_scoped_and_brain_relative() {
     assert_eq!(git.status_short(&repo).unwrap(), "M lobe/n.md\n?? new.md");
 }
 
-// --- the batched file dates (v2 `git_log_file_dates`) ----------------------
+// --- the batched file dates -------------------------------------------------
 
 #[test]
 fn file_dates_latest_and_created_per_path() {
@@ -607,8 +607,8 @@ fn file_dates_latest_and_created_per_path() {
 
 #[test]
 fn file_dates_keep_non_ascii_and_odd_names_as_written() {
-    // v2 read `git log --name-only` lines: non-ASCII names came C-quoted
-    // (`"lobe/\303\251.md"`) and never matched a neuron.
+    // Read as plain `git log --name-only` lines, non-ASCII names would come
+    // C-quoted (`"lobe/\303\251.md"`) and never match a neuron.
     let sb = Sandbox::new();
     let brain = sb.repo("brain");
     let mut files = vec![
@@ -632,8 +632,8 @@ fn file_dates_keep_non_ascii_and_odd_names_as_written() {
 
 #[test]
 fn file_dates_of_a_nested_brain_are_brain_relative() {
-    // v2's paths were relative to the outer repo (`brain/a.md`) and never
-    // matched the brain's own `a.md`.
+    // Paths relative to the outer repo (`brain/a.md`) would never match the
+    // brain's own `a.md`.
     let sb = Sandbox::new();
     let outer = sb.repo("outer");
     sb.commit(
@@ -686,7 +686,7 @@ fn file_dates_of_a_repo_without_commits_or_without_git_are_empty() {
 
 #[test]
 fn file_dates_drop_deleted_files_nowhere() {
-    // Like v2: a path that a commit deleted still has its dates (the log
+    // A path that a commit deleted still has its dates (the log
     // lists it); callers look up only the files they have.
     let sb = Sandbox::new();
     let brain = sb.repo("brain");
@@ -734,7 +734,7 @@ fn drop_head_object(sb: &Sandbox, dir: &Path) {
 #[test]
 fn log_of_a_corrupt_repo_is_an_error_naming_the_command() {
     // Only a missing HEAD reads as "no commits"; any other failure is an
-    // error value (v2: a CalledProcessError traceback).
+    // error value.
     let sb = Sandbox::new();
     let brain = sb.repo("brain");
     sb.commit(&brain, &[("a.md", "a")], "first", DATE);
@@ -755,9 +755,9 @@ fn log_of_a_corrupt_repo_is_an_error_naming_the_command() {
 
 #[test]
 fn log_with_a_broken_branch_ref_is_an_error() {
-    // Review T-79 finding 1: the branch ref replaced by `invalid-oid` fails
-    // `rev-parse --verify HEAD` too, but the repo has commits: git says
-    // "your current branch appears to be broken", v2 exits 1.
+    // The branch ref replaced by `invalid-oid` fails `rev-parse --verify
+    // HEAD` too, but the repo has commits: git says "your current branch
+    // appears to be broken", an error.
     let sb = Sandbox::new();
     let brain = sb.repo("brain");
     sb.commit(&brain, &[("a.md", "a")], "first", DATE);
@@ -776,7 +776,7 @@ fn log_with_a_broken_branch_ref_is_an_error() {
 #[test]
 fn log_on_an_orphan_branch_of_a_repo_with_history_is_an_error() {
     // Unborn HEAD, but the repo has other refs and commits: not a fresh
-    // repo, so not "no commits" (v2: a traceback, exit 1).
+    // repo, so not "no commits": an error.
     let sb = Sandbox::new();
     let brain = sb.repo("brain");
     sb.commit(&brain, &[("a.md", "a")], "first", DATE);

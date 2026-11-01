@@ -1,6 +1,5 @@
 //! The Specmint companions: the embedded folders, their install into
-//! `~/.kluris/companions/<name>/` (v2 `core/companions.py` and its tests
-//! `tests/test_companions.py`), and the per-brain opt-ins behind
+//! `~/.kluris/companions/<name>/`, and the per-brain opt-ins behind
 //! `kluris companion add|remove`.
 
 use std::fs;
@@ -64,7 +63,7 @@ fn names_in(dir: &Path) -> Vec<String> {
     names
 }
 
-/// v2's `_fake_vendored` folder for one companion.
+/// A small stand-in for one companion's vendored folder.
 fn fake(name: &str) -> CompanionTree {
     CompanionTree::new()
         .file("SKILL.md", format!("# {name}\n").into_bytes())
@@ -449,7 +448,7 @@ fn installed_lists_existing_paths_and_is_installed_needs_skill_md() {
     assert!(installed(home.path()).is_empty());
     let parent = companions_dir(home.path());
     fs::create_dir_all(&parent).unwrap();
-    // v2 `installed()`: the path exists, whatever it is.
+    // Installed means the path exists, whatever it is.
     fs::write(parent.join("specmint-tdd-html"), "stray").unwrap();
     install("specmint-core", home.path()).unwrap();
     fs::create_dir(parent.join("specmint-tdd")).unwrap();
@@ -523,7 +522,8 @@ fn vendored_folders_match_the_allowlist() {
 
 // --- opt-ins ----------------------------------------------------------------------
 
-const V2_KLURIS_YML: &str = "name: a\ndescription: a knowledge base\nagents:\n  commands_for:\n  - claude\n  - cursor\n  - windsurf\n  - copilot\n  - codex\n  - gemini\n  - hermes\n  - kilocode\n  - junie\ncompanions: []\n";
+/// A `kluris.yml` with the earlier default agent list.
+const EARLIER_KLURIS_YML: &str = "name: a\ndescription: a knowledge base\nagents:\n  commands_for:\n  - claude\n  - cursor\n  - windsurf\n  - copilot\n  - codex\n  - gemini\n  - hermes\n  - kilocode\n  - junie\ncompanions: []\n";
 
 fn brain(root: &Path, name: &str, kluris_yml: Option<&str>) -> ResolvedBrain {
     let path = root.join(name);
@@ -621,7 +621,7 @@ fn add_installs_the_files_and_opts_every_brain_in() {
     )
     .unwrap();
 
-    // v2 rewrites every resolved brain, even one that had the companion.
+    // Every resolved brain is rewritten, even one that had the companion.
     assert_eq!(changed, ["a", "b"]);
     assert_eq!(
         fs::read_to_string(tmp.path().join("a").join("kluris.yml")).unwrap(),
@@ -635,10 +635,14 @@ fn add_installs_the_files_and_opts_every_brain_in() {
 }
 
 #[test]
-fn add_rewrites_a_v2_kluris_yml_keeping_crlf() {
+fn add_rewrites_an_earlier_kluris_yml_keeping_crlf() {
     let tmp = TempDir::new().unwrap();
     let home = tmp.path().join("home");
-    let a = brain(tmp.path(), "a", Some(&V2_KLURIS_YML.replace('\n', "\r\n")));
+    let a = brain(
+        tmp.path(),
+        "a",
+        Some(&EARLIER_KLURIS_YML.replace('\n', "\r\n")),
+    );
     let brains = load_brains(&[a]).unwrap();
 
     companions::add(&brains, &["specmint-core".to_string()], &home).unwrap();
@@ -654,11 +658,11 @@ fn add_rewrites_a_v2_kluris_yml_keeping_crlf() {
 const DEFAULT_WITH_SPECMINT_CORE: &str = "name: a\ndescription: a knowledge base\nagents:\n  commands_for:\n  - claude\n  - cursor\n  - devin\n  - copilot\n  - codex\n  - hermes\n  - kilocode\n  - junie\n  - antigravity\ncompanions:\n- specmint-core\n";
 
 #[test]
-fn add_rewrites_a_kluris_3_0_default_list_as_the_new_default() {
+fn add_rewrites_the_list_with_gemini_and_antigravity_as_the_default() {
     let tmp = TempDir::new().unwrap();
     let home = tmp.path().join("home");
-    let v3_0 = "name: a\ndescription: a knowledge base\nagents:\n  commands_for:\n  - claude\n  - cursor\n  - devin\n  - copilot\n  - codex\n  - gemini\n  - hermes\n  - kilocode\n  - junie\n  - antigravity\ncompanions: []\n";
-    let a = brain(tmp.path(), "a", Some(v3_0));
+    let with_gemini = "name: a\ndescription: a knowledge base\nagents:\n  commands_for:\n  - claude\n  - cursor\n  - devin\n  - copilot\n  - codex\n  - gemini\n  - hermes\n  - kilocode\n  - junie\n  - antigravity\ncompanions: []\n";
+    let a = brain(tmp.path(), "a", Some(with_gemini));
     let brains = load_brains(&[a]).unwrap();
 
     companions::add(&brains, &["specmint-core".to_string()], &home).unwrap();
@@ -671,14 +675,14 @@ fn add_rewrites_a_kluris_3_0_default_list_as_the_new_default() {
 
 #[test]
 fn remove_touches_only_brains_that_had_the_companion() {
-    // research-03 §5 #25: v2 rewrites (and reports) every resolved brain.
+    // Only a brain that had the companion is rewritten and reported.
     let tmp = TempDir::new().unwrap();
     let a = brain(
         tmp.path(),
         "a",
         Some(&yml("a", &["specmint-core", "specmint-tdd"])),
     );
-    let b = brain(tmp.path(), "b", Some(V2_KLURIS_YML));
+    let b = brain(tmp.path(), "b", Some(EARLIER_KLURIS_YML));
     let c = brain(tmp.path(), "c", Some(&yml("c", &["specmint-tdd", "bogus"])));
     let brains = load_brains(&[a, b, c]).unwrap();
 
@@ -691,7 +695,7 @@ fn remove_touches_only_brains_that_had_the_companion() {
     );
     assert_eq!(
         fs::read_to_string(tmp.path().join("b").join("kluris.yml")).unwrap(),
-        V2_KLURIS_YML,
+        EARLIER_KLURIS_YML,
         "a brain without the companion is not rewritten"
     );
     assert_eq!(
@@ -709,7 +713,7 @@ fn remove_touches_only_brains_that_had_the_companion() {
     assert_eq!(
         fs::read_to_string(tmp.path().join("c").join("kluris.yml")).unwrap(),
         yml("c", &[]),
-        "a brain that had it is normalized as v2 does (unknown names dropped)"
+        "a brain that had it is normalized (unknown names dropped)"
     );
 }
 
@@ -755,7 +759,7 @@ fn referenced_reads_known_companions_from_brain_configs() {
     );
 }
 
-// --- the backup survives every failure (T-103 #8) ---------------------------
+// --- the backup survives every failure ----------------------------------------
 
 /// File operations whose renames out of the named entries of the
 /// companions folder fail.
@@ -781,7 +785,7 @@ fn old_install(home: &Path) -> PathBuf {
     dest
 }
 
-/// T-103 `rollback`: both the move in and the move back fail. The old
+/// Both the move in and the move back fail. The old
 /// copy stays in the backup, which the error names; nothing is deleted.
 #[test]
 fn a_failed_restore_keeps_the_backup_and_names_it() {

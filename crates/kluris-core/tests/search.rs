@@ -1,5 +1,5 @@
-//! `kluris search`: BM25F over heading chunks (research-05 §3, §6 rung 1),
-//! with v2's substring hits always kept (research-03 §2.6).
+//! `kluris search`: BM25F over heading chunks, with every substring hit
+//! always kept.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -405,9 +405,9 @@ fn prefix_fallback_finds_longer_words() {
 }
 
 #[test]
-fn every_v2_substring_hit_is_kept() {
+fn every_substring_hit_is_kept() {
     let b = Brain::new();
-    // `auth` inside `oauth` is no word and no prefix: only v2's substring
+    // `auth` inside `oauth` is no word and no prefix: only the substring
     // match finds it.
     b.file(
         "k/oauth.md",
@@ -477,7 +477,7 @@ fn deprecated_neurons_score_half_and_are_never_hidden() {
     assert_eq!(hits[0].replaced_by, None);
 }
 
-// --- items (v2's searchable items) -----------------------------------------------
+// --- the searchable items ---------------------------------------------------------
 
 #[test]
 fn python_title_case() {
@@ -491,7 +491,7 @@ fn python_title_case() {
 }
 
 #[test]
-fn items_are_v2s_neurons_glossary_entries_and_brain_md() {
+fn items_are_neurons_glossary_entries_and_brain_md() {
     let b = Brain::new();
     b.file(
         "brain.md",
@@ -549,7 +549,7 @@ fn substring_match_counts_substrings_by_field() {
 // --- filters and limit ------------------------------------------------------------
 
 #[test]
-fn lobe_and_tag_filters_are_v2s() {
+fn lobe_and_tag_filters_match_whole_lobes_and_exact_tags() {
     let b = Brain::new();
     b.file("glossary.md", "**zebra** - an animal\n");
     b.file("projects/foo/a.md", "---\ntags: [api]\n---\n# zebra a\n");
@@ -731,11 +731,11 @@ fn walk_names(root: &Path) -> Vec<String> {
     out
 }
 
-// --- T-79 review findings ----------------------------------------------------------
+// --- skipped files, body lines, many terms, odd names -----------------------------
 
 #[test]
 fn malformed_neurons_are_skipped_and_reported() {
-    // T-79 finding 2: `related: [` never closes, so the frontmatter does
+    // `related: [` never closes, so the frontmatter does
     // not parse; the neuron is left out of the results and reported.
     use kluris_core::brain::store::ReadError;
     use kluris_core::frontmatter::Problem;
@@ -831,7 +831,7 @@ fn file_name_titles_use_python_title_case() {
 
 #[test]
 fn the_store_says_where_the_body_starts() {
-    // T-79 finding 5: `line` comes from the store's read, not a second read.
+    // `line` comes from the store's read, not a second read.
     use kluris_core::frontmatter::{parse, parse_yaml_neuron};
     assert_eq!(parse("---\na: 1\n---\nbody\n").unwrap().body_line, 3);
     assert_eq!(
@@ -994,7 +994,7 @@ fn search_reads_only_through_the_store() {
 
 #[test]
 fn every_query_term_is_tracked_past_64() {
-    // T-79 P3: 64 absent words, then one that matches.
+    // 64 absent words, then one that matches.
     let b = Brain::new();
     b.file("k/a.md", &neuron("A", "the needle is here"));
     let absent: Vec<String> = (0..64).map(|i| format!("absentword{i}x")).collect();
@@ -1008,8 +1008,8 @@ fn every_query_term_is_tracked_past_64() {
 #[cfg(unix)]
 #[test]
 fn a_backslash_in_a_posix_file_name_is_part_of_the_name() {
-    // T-79 P3: `x\y.md` is one file on POSIX, read by its own name. v2
-    // renders the path with `/` for `\` (`_rel`), so `file` is `k/x/y.md`,
+    // `x\y.md` is one file on POSIX, read by its own name. Its path is
+    // shown with `/` for `\`, so `file` is `k/x/y.md`,
     // and the title comes from the real stem.
     let b = Brain::new();
     b.file("k/x\\y.md", &neuron("Odd name", "zebra"));
@@ -1032,7 +1032,7 @@ fn a_backslash_in_a_posix_file_name_is_part_of_the_name() {
     );
 }
 
-// --- T-84 finding 2: `related` through directory symlinks ---------------------------
+// --- `related` through directory symlinks -----------------------------------------
 
 #[cfg(unix)]
 fn dir_symlink(target: &str, link: &Path) -> std::io::Result<()> {

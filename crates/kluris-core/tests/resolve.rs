@@ -1,5 +1,5 @@
-//! The brain resolver: `_resolve_brains`, `_check_brain_paths` and
-//! `_pick_brain_interactively`, with their exact texts.
+//! The brain resolver: resolving `--brain`, checking the brains' paths and
+//! the interactive picker, with their exact texts.
 
 use std::fs;
 use std::io::Cursor;
@@ -86,7 +86,7 @@ const ALL_NOT_SUPPORTED: &str =
     "--brain all is only supported on dream, status, mri, sync, and companion commands.";
 const NO_BRAINS: &str = "No brains registered. Run 'kluris create <name>' to create one.";
 
-// --- the cases of `_resolve_brains`, in v2's order ---------------------------
+// --- the resolver's cases, in order -----------------------------------------
 
 #[test]
 fn brain_all_without_allow_all_is_refused_first() {

@@ -1,7 +1,7 @@
-//! `kluris dream` in the core (`kluris_core::dream`): v2's `_sync_brain_state`
-//! and validators (research-03 §2.5) with the decided differences (quoted
-//! dates, the file's own line endings, no map.md in pruned directories, paths
-//! `/`-joined). Expected bytes follow v2.28.11's writers.
+//! `kluris dream` in the core (`kluris_core::dream`): its writes and
+//! validators (quoted dates, the file's own line endings, no map.md in
+//! pruned directories, paths `/`-joined). Expected bytes are the writers'
+//! exact output.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -469,7 +469,7 @@ const BETA_MAP: &str = "---\nauto_generated: true\ndescription: Beta things\npar
 const BRAIN_MD: &str = "---\nauto_generated: true\nupdated: '2026-10-26'\n---\n\n# demo\n\nA demo brain\n\n## Lobes\n\n- [alpha-lobe/](./alpha-lobe/map.md) — Alpha described here.\n- [beta/](./beta/map.md) — Beta things\n\n## Reference\n\n- [glossary.md](./glossary.md) — Domain-specific terms, acronyms, and conventions\n";
 
 #[test]
-fn maps_and_brain_md_are_generated_like_v2() {
+fn maps_and_brain_md_are_generated_byte_for_byte() {
     let b = maps_brain();
     let report = b.dream(&FakeGit::none());
     assert_eq!(b.text("alpha-lobe/sub/map.md"), SUB_MAP);
@@ -719,7 +719,7 @@ fn every_write_is_listed_once_and_a_neuron_that_does_not_parse_is_skipped() {
     assert_eq!(changed, ["brain.md", "lobe/good.md", "lobe/map.md"]);
 }
 
-// --- write safety (review T-103) ---------------------------------------------------
+// --- write safety ------------------------------------------------------------------
 
 /// A YAML neuron with a pending date refresh and the byte `FF` in its body.
 const NOT_UTF8_YAML: &[u8] =
@@ -788,7 +788,7 @@ fn an_unparseable_brain_md_is_kept_and_reported() {
     assert!(!report.written.contains(&"brain.md".to_string()));
 }
 
-/// The invariant behind T-103 findings 3 and 4: over every scenario, a path
+/// The invariant of skipped files: over every scenario, a path
 /// dream lists in `skipped` keeps its bytes (through a symlink too) and is
 /// not among the written files.
 #[test]
@@ -882,8 +882,8 @@ fn a_skipped_path_is_never_written() {
 }
 
 /// `create`'s regeneration writes over its own scaffold map even when it does
-/// not parse (v2's product type writes `description: Sub-folder per project:
-/// ...` unquoted), as v2's `_run_dream_on_brain` does; dream keeps such a map.
+/// not parse (the product type's scaffold writes `description: Sub-folder
+/// per project: ...` unquoted); dream keeps such a map.
 #[test]
 fn create_regenerates_its_own_unparseable_scaffold_map() {
     let map = "---\nauto_generated: true\nparent: ../brain.md\ndescription: Sub-folder per project: branches\nupdated: 2026-10-26\n---\n# Projects\n\nSub-folder per project: branches\n";
@@ -904,7 +904,7 @@ fn create_regenerates_its_own_unparseable_scaffold_map() {
     );
 }
 
-// --- temp files an interrupted write left (review T-106) ---------------------------
+// --- temp files an interrupted write left -----------------------------------------
 
 /// Set a file's modification time `secs` seconds into the past.
 fn age(path: &Path, secs: u64) {

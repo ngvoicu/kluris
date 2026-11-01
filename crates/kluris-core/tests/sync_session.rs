@@ -1356,8 +1356,8 @@ fn a_stale_waiting_conflict_is_not_reported_nor_touched() {
     assert!(session_at(&w, &w.ours, Intent::Read, at(0)).is_some());
     let pending = w.ours.join(".git").join(kluris_core::sync::PENDING);
     let recorded = fs::read(&pending).unwrap();
-    // HEAD moves on: the merge was found for a commit that is no longer
-    // the branch's.
+    // HEAD moves on: the merge was found for a commit that is not the
+    // branch's any more.
     w.ours_commit(&[("notes/keep.md", &neuron("", "# Keep, again\n"))], &[]);
     for intent in READS {
         let report = session_at(&w, &w.ours, intent, at(30)).expect("commits to push");

@@ -1,8 +1,7 @@
-//! `kluris mri` in the core (`kluris_core::mri`): v2's `build_graph`, its
-//! title/excerpt/preview rules and `_render_mri_html` (research-03 §2.8) over
-//! the shared walker, with the decided differences (pruned directories and
-//! escaping symlinks are not graphed, `</` cannot end the script, the page is
-//! named after the registered brain).
+//! `kluris mri` in the core (`kluris_core::mri`): the graph, its
+//! title/excerpt/preview rules and the page, over the shared walker (pruned
+//! directories and escaping symlinks are not graphed, `</` cannot end the
+//! script, the page is named after the registered brain).
 
 use std::fs;
 use std::path::Path;
@@ -145,7 +144,7 @@ fn pruned_directories_and_escaping_symlinks_are_not_graphed() {
 // --- node fields ----------------------------------------------------------------
 
 #[test]
-fn neuron_fields_follow_v2() {
+fn neuron_fields_hold_titles_excerpt_content_and_frontmatter() {
     let dir = brain(&[(
         "projects/auth-flow.md",
         "---\ncreated: 2026-01-02\nupdated: '2026-02-03'\nparent: ./map.md\ntags: [auth, 2026-03-04, 7]\nrelated:\n- ./other.md\nstatus: deprecated\nreplaced_by: ./new.md\nextra: null\n---\n\n# OAuth & sessions\n\n## Why\n\n- a list item\nFirst real line.\n\nMore.\n",
@@ -167,7 +166,7 @@ fn neuron_fields_follow_v2() {
     );
     assert_eq!(n.content_preview, n.content_full);
     assert!(!n.content_preview_truncated);
-    // A nested date is written as its ISO text (v2's json.dumps raises).
+    // A nested date is written as its ISO text.
     assert_eq!(
         n.tags,
         vec![
@@ -348,7 +347,7 @@ fn preview_rules() {
 // --- edges ----------------------------------------------------------------------
 
 #[test]
-fn edges_follow_v2() {
+fn edges_come_from_related_and_inline_links() {
     let dir = brain(&[
         ("projects/map.md", "# Projects\n"),
         (
@@ -411,7 +410,7 @@ fn an_absolute_link_inside_the_brain_is_an_edge() {
 // --- JSON and HTML ---------------------------------------------------------------
 
 #[test]
-fn graph_json_has_v2s_shape() {
+fn graph_json_has_nodes_edges_and_edge_counts() {
     let dir = brain(&[
         (
             "projects/a.md",
@@ -542,7 +541,7 @@ fn split_page(html: &str) -> (String, String) {
 }
 
 #[test]
-fn the_page_is_v2s_shell_css_and_js_with_the_data_injected() {
+fn the_page_is_the_shell_css_and_js_with_the_data_injected() {
     let dir = brain(&[
         ("projects/a.md", "# A\n"),
         ("projects/sub/b.md", "---\nparent: ../a.md\n---\n# B\n"),

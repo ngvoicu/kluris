@@ -1,8 +1,7 @@
-//! The global `config.yml` and each brain's `kluris.yml`, read and written as
-//! v2.28.11 does. Every fixture under `fixtures/config/` was written by Kluris
-//! 2.28.11; `*-input.yml` files are the
-//! hand-edited files v2 was given to read, and the matching `*-rewritten.yml`
-//! is what v2 wrote back.
+//! The global `config.yml` and each brain's `kluris.yml`, read and written
+//! byte for byte. Every fixture under `fixtures/config/` is frozen; never
+//! regenerated: `*-input.yml` files are hand-edited files to read, and the
+//! matching `*-rewritten.yml` is what is written back.
 
 use std::ffi::OsStr;
 use std::fs;
@@ -18,15 +17,16 @@ use kluris_core::config::{
 
 const BETA_DESCRIPTION: &str = "Équipe données — connaissances partagées über alles, naïve café façade 日本語 and a long tail to fold";
 
-/// v2's `DEFAULT_AGENT_COMMANDS`, as v2 writes them.
-const V2_DEFAULT_AGENTS: [&str; 9] = [
+/// The default list the fixtures were written with, in its order.
+const FIXTURE_DEFAULT_AGENTS: [&str; 9] = [
     "claude", "cursor", "windsurf", "copilot", "codex", "gemini", "hermes", "kilocode", "junie",
 ];
 
-/// v3's default list: v2's in v2's order, `devin` in place of `windsurf`,
-/// without `gemini`, then `antigravity`. v2's default list (and its
-/// pre-Hermes one) and Kluris 3.0's read as it.
-const V3_DEFAULT_AGENTS: [&str; 9] = [
+/// The default list: the fixtures' list in its order, `devin` in place of
+/// `windsurf`, without `gemini`, then `antigravity`. The fixtures' list (and
+/// the one before Hermes) and [`GEMINI_ANTIGRAVITY_DEFAULT_AGENTS`] read as
+/// it.
+const DEFAULT_AGENTS: [&str; 9] = [
     "claude",
     "cursor",
     "devin",
@@ -38,8 +38,8 @@ const V3_DEFAULT_AGENTS: [&str; 9] = [
     "antigravity",
 ];
 
-/// Kluris 3.0's default list, as 3.0 writes it.
-const V3_0_DEFAULT_AGENTS: [&str; 10] = [
+/// The earlier default list with both `gemini` and `antigravity`.
+const GEMINI_ANTIGRAVITY_DEFAULT_AGENTS: [&str; 10] = [
     "claude",
     "cursor",
     "devin",
@@ -97,12 +97,15 @@ fn commands_yaml(agents: &[&str]) -> String {
     format!("  commands_for:\n{items}")
 }
 
-/// A v2-written file with v2's default agent list as v3 writes it back: the
-/// v3 default list.
-fn as_v3_writes(v2_text: &str) -> String {
-    let v2 = commands_yaml(&V2_DEFAULT_AGENTS);
-    assert!(v2_text.contains(&v2), "not v2's default list: {v2_text}");
-    v2_text.replace(&v2, &commands_yaml(&V3_DEFAULT_AGENTS))
+/// A fixture with the fixtures' default agent list as it is written back:
+/// with the default list.
+fn as_written_back(fixture_text: &str) -> String {
+    let listed = commands_yaml(&FIXTURE_DEFAULT_AGENTS);
+    assert!(
+        fixture_text.contains(&listed),
+        "not the fixtures' default list: {fixture_text}"
+    );
+    fixture_text.replace(&listed, &commands_yaml(&DEFAULT_AGENTS))
 }
 
 fn three_brains() -> GlobalConfig {
@@ -116,7 +119,7 @@ fn three_brains() -> GlobalConfig {
 // --- the global config ------------------------------------------------------
 
 #[test]
-fn reads_v2_global_config_in_registration_order() {
+fn reads_the_global_config_in_registration_order() {
     let cfg = parse_global_config(&fixture("global-three.yml")).unwrap();
     assert_eq!(cfg, three_brains());
     let names: Vec<&str> = cfg.brains.keys().map(String::as_str).collect();
@@ -124,7 +127,7 @@ fn reads_v2_global_config_in_registration_order() {
 }
 
 #[test]
-fn writes_global_config_byte_identical_to_v2() {
+fn writes_the_global_config_byte_identical_to_the_fixture() {
     assert_eq!(
         global_config_to_yaml(&three_brains()),
         fixture("global-three.yml")
@@ -132,7 +135,7 @@ fn writes_global_config_byte_identical_to_v2() {
 }
 
 #[test]
-fn empty_global_config_writes_an_empty_mapping_like_v2() {
+fn empty_global_config_writes_an_empty_mapping() {
     assert_eq!(
         global_config_to_yaml(&GlobalConfig::default()),
         fixture("global-empty.yml")
@@ -190,22 +193,22 @@ fn invalid_global_config_is_an_error_value() {
 // --- brain kluris.yml -------------------------------------------------------
 
 #[test]
-fn reads_v2_brain_configs() {
+fn reads_the_fixture_brain_configs() {
     let cases = [
         (
             "brain-created.yml",
-            brain("alpha", "alpha knowledge base", &V3_DEFAULT_AGENTS, &[]),
+            brain("alpha", "alpha knowledge base", &DEFAULT_AGENTS, &[]),
         ),
         (
             "brain-registered.yml",
-            brain("gamma", "Registered brain", &V3_DEFAULT_AGENTS, &[]),
+            brain("gamma", "Registered brain", &DEFAULT_AGENTS, &[]),
         ),
         (
             "brain-unicode-companions.yml",
             brain(
                 "beta",
                 BETA_DESCRIPTION,
-                &V3_DEFAULT_AGENTS,
+                &DEFAULT_AGENTS,
                 &["specmint-core", "specmint-tdd-html"],
             ),
         ),
@@ -225,18 +228,23 @@ fn reads_v2_brain_configs() {
 }
 
 #[test]
-fn writes_brain_config_byte_identical_to_v2_for_the_same_model() {
+fn writes_brain_config_byte_identical_to_the_fixture_for_the_same_model() {
     let cases = [
         (
             "brain-created.yml",
-            brain("alpha", "alpha knowledge base", &V2_DEFAULT_AGENTS, &[]),
+            brain(
+                "alpha",
+                "alpha knowledge base",
+                &FIXTURE_DEFAULT_AGENTS,
+                &[],
+            ),
         ),
         (
             "brain-unicode-companions.yml",
             brain(
                 "beta",
                 BETA_DESCRIPTION,
-                &V2_DEFAULT_AGENTS,
+                &FIXTURE_DEFAULT_AGENTS,
                 &["specmint-core", "specmint-tdd-html"],
             ),
         ),
@@ -251,7 +259,7 @@ fn writes_brain_config_byte_identical_to_v2_for_the_same_model() {
         ),
         (
             "brain-minimal-rewritten.yml",
-            brain("alpha", "", &V2_DEFAULT_AGENTS, &["specmint-core"]),
+            brain("alpha", "", &FIXTURE_DEFAULT_AGENTS, &["specmint-core"]),
         ),
     ];
     for (name, model) in cases {
@@ -260,28 +268,31 @@ fn writes_brain_config_byte_identical_to_v2_for_the_same_model() {
 }
 
 #[test]
-fn v2_brain_config_round_trips_with_the_v3_default_agents() {
+fn fixture_brain_config_round_trips_with_the_default_agents() {
     for name in [
         "brain-created.yml",
         "brain-registered.yml",
         "brain-unicode-companions.yml",
     ] {
-        let v2 = fixture(name);
-        let cfg = parse_brain_config(&v2).unwrap();
-        assert_eq!(brain_config_to_yaml(&cfg), as_v3_writes(&v2), "{name}");
+        let text = fixture(name);
+        let cfg = parse_brain_config(&text).unwrap();
+        assert_eq!(brain_config_to_yaml(&cfg), as_written_back(&text), "{name}");
     }
     // No windsurf: the round trip is exact.
-    let v2 = fixture("brain-custom-agents.yml");
-    assert_eq!(brain_config_to_yaml(&parse_brain_config(&v2).unwrap()), v2);
+    let text = fixture("brain-custom-agents.yml");
+    assert_eq!(
+        brain_config_to_yaml(&parse_brain_config(&text).unwrap()),
+        text
+    );
 }
 
 #[test]
 fn non_ascii_description_round_trips_byte_identically() {
-    let v2 = fixture("global-three.yml");
-    let cfg = parse_global_config(&v2).unwrap();
+    let text = fixture("global-three.yml");
+    let cfg = parse_global_config(&text).unwrap();
     assert_eq!(cfg.brains["beta"].description, BETA_DESCRIPTION);
-    assert_eq!(global_config_to_yaml(&cfg), v2);
-    assert!(v2.contains("\"\\xC9quipe donn\\xE9es \\u2014"));
+    assert_eq!(global_config_to_yaml(&cfg), text);
+    assert!(text.contains("\"\\xC9quipe donn\\xE9es \\u2014"));
 }
 
 #[test]
@@ -289,23 +300,23 @@ fn stale_brain_keys_are_ignored_and_dropped_on_write() {
     let mut cfg = parse_brain_config(&fixture("brain-stale-input.yml")).unwrap();
     assert_eq!(
         cfg,
-        brain("alpha", "alpha knowledge base", &V3_DEFAULT_AGENTS, &[])
+        brain("alpha", "alpha knowledge base", &DEFAULT_AGENTS, &[])
     );
     cfg.companions.push("specmint-tdd".into());
     assert_eq!(
         brain_config_to_yaml(&cfg),
-        as_v3_writes(&fixture("brain-stale-rewritten.yml"))
+        as_written_back(&fixture("brain-stale-rewritten.yml"))
     );
 }
 
 #[test]
-fn missing_companions_and_agents_take_v2_defaults() {
+fn missing_companions_and_agents_take_the_defaults() {
     let mut cfg = parse_brain_config(&fixture("brain-minimal-input.yml")).unwrap();
-    assert_eq!(cfg, brain("alpha", "", &V3_DEFAULT_AGENTS, &[]));
+    assert_eq!(cfg, brain("alpha", "", &DEFAULT_AGENTS, &[]));
     cfg.companions.push("specmint-core".into());
     assert_eq!(
         brain_config_to_yaml(&cfg),
-        as_v3_writes(&fixture("brain-minimal-rewritten.yml"))
+        as_written_back(&fixture("brain-minimal-rewritten.yml"))
     );
     assert_eq!(
         parse_brain_config("name: x\nagents: {}\n").unwrap().agents,
@@ -314,16 +325,13 @@ fn missing_companions_and_agents_take_v2_defaults() {
 }
 
 #[test]
-fn defaults_are_v2_defaults_with_devin_without_gemini_then_antigravity() {
-    assert_eq!(DEFAULT_AGENT_COMMANDS[..], V3_DEFAULT_AGENTS[..]);
+fn defaults_have_devin_no_gemini_and_antigravity_last() {
+    assert_eq!(DEFAULT_AGENT_COMMANDS[..], DEFAULT_AGENTS[..]);
     assert_eq!(
         AgentsConfig::default().commands_for,
-        strings(&V3_DEFAULT_AGENTS)
+        strings(&DEFAULT_AGENTS)
     );
-    assert_eq!(
-        BrainConfig::new("n"),
-        brain("n", "", &V3_DEFAULT_AGENTS, &[])
-    );
+    assert_eq!(BrainConfig::new("n"), brain("n", "", &DEFAULT_AGENTS, &[]));
 }
 
 #[test]
@@ -360,20 +368,20 @@ fn windsurf_is_read_as_devin_and_unknown_agents_are_kept() {
 }
 
 #[test]
-fn v2_default_lists_migrate_to_the_v3_default() {
+fn earlier_default_lists_read_as_the_default() {
     let cfg = parse_brain_config(&fixture("brain-legacy-input.yml")).unwrap();
     assert_eq!(
         cfg,
-        brain("gamma", "Registered brain", &V3_DEFAULT_AGENTS, &[])
+        brain("gamma", "Registered brain", &DEFAULT_AGENTS, &[])
     );
     let mut cfg = cfg;
     cfg.companions.push("specmint-core".into());
     assert_eq!(
         brain_config_to_yaml(&cfg),
-        as_v3_writes(&fixture("brain-legacy-rewritten.yml"))
+        as_written_back(&fixture("brain-legacy-rewritten.yml"))
     );
-    // v2.28's 9 names, with windsurf or with devin, in any order and with
-    // repeats (compared as a set): the v3 default.
+    // The fixtures' 9 names, with windsurf or with devin, in any order and
+    // with repeats (compared as a set): the default.
     for names in [
         "[claude, cursor, windsurf, copilot, codex, gemini, hermes, kilocode, junie]",
         "[claude, cursor, devin, copilot, codex, gemini, hermes, kilocode, junie]",
@@ -420,7 +428,7 @@ fn v2_default_lists_migrate_to_the_v3_default() {
         parse_brain_config(text).unwrap().agents.commands_for.len(),
         9
     );
-    // With devin instead of windsurf it is not v2's legacy set.
+    // With devin instead of windsurf it is not the list before Hermes.
     let text = "name: b\nagents:\n  commands_for: [claude, cursor, devin, copilot, codex, gemini, kilocode, junie]\n";
     assert_eq!(
         parse_brain_config(text).unwrap().agents.commands_for,
@@ -431,23 +439,23 @@ fn v2_default_lists_migrate_to_the_v3_default() {
 }
 
 #[test]
-fn kluris_3_0_default_list_reads_as_the_new_default() {
+fn the_list_with_gemini_and_antigravity_reads_as_the_default() {
     let text = format!(
         "name: b\ndescription: d\nagents:\n{}companions: []\n",
-        commands_yaml(&V3_0_DEFAULT_AGENTS)
+        commands_yaml(&GEMINI_ANTIGRAVITY_DEFAULT_AGENTS)
     );
     let cfg = parse_brain_config(&text).unwrap();
-    assert_eq!(cfg, brain("b", "d", &V3_DEFAULT_AGENTS, &[]));
+    assert_eq!(cfg, brain("b", "d", &DEFAULT_AGENTS, &[]));
     // Rewritten, the file carries the new default and nothing else changes.
     assert_eq!(
         brain_config_to_yaml(&cfg),
         format!(
             "name: b\ndescription: d\nagents:\n{}companions: []\n",
-            commands_yaml(&V3_DEFAULT_AGENTS)
+            commands_yaml(&DEFAULT_AGENTS)
         )
     );
-    // Compared as a set, as the v2 lists are: any order, repeats. Kluris
-    // 3.0 never wrote `windsurf`, so the list with it is not 3.0's.
+    // Compared as a set, as the earlier lists are: any order, repeats. That
+    // list never held `windsurf`, so a list with it is not that one.
     for names in [
         "[antigravity, junie, kilocode, hermes, gemini, codex, copilot, devin, cursor, claude]",
         "[claude, cursor, devin, copilot, codex, gemini, gemini, hermes, kilocode, junie, antigravity]",
@@ -702,7 +710,7 @@ fn the_first_line_break_decides_the_endings() {
     assert_eq!(fs::read(&path).unwrap(), want.as_bytes());
 }
 
-// --- symlinks (v2's in-place write goes through the link, also a dangling one)
+// --- symlinks (the write goes through the link, also a dangling one)
 
 #[cfg(unix)]
 fn assert_link(link: &Path, to: &Path) {
@@ -886,12 +894,12 @@ fn kluris_config_overrides_the_config_path() {
         ),
         Some(p("/custom/c.yml"))
     );
-    // Used verbatim, even relative (v2 `Path(env_path)`).
+    // Used verbatim, even relative.
     assert_eq!(
         global_config_path(Some(OsStr::new("rel/c.yml")), None, None),
         Some(p("rel/c.yml"))
     );
-    // Empty is unset (v2 `if env_path:`).
+    // Empty is unset.
     assert_eq!(
         global_config_path(Some(OsStr::new("")), Some(OsStr::new("/h")), Some(p("/os"))),
         Some(p("/h").join(".kluris").join("config.yml"))
@@ -934,8 +942,8 @@ fn brain_paths_are_stored_as_given() {
 
 #[test]
 fn the_search_language_key_is_read_and_kept_on_rewrite() {
-    // v2 ignores (and drops) the key; Kluris 3 reads it for `kluris search`
-    // and writes it back after `companions`.
+    // The key is read for `kluris search` and written back after
+    // `companions`.
     let text =
         "name: alpha\ndescription: ''\ncompanions: []\nsearch:\n  language: ro\n  other: 1\n";
     let cfg = parse_brain_config(text).unwrap();
@@ -946,7 +954,7 @@ fn the_search_language_key_is_read_and_kept_on_rewrite() {
         "{written}"
     );
     assert_eq!(parse_brain_config(&written).unwrap(), cfg);
-    // Without the key nothing changes; a malformed key is ignored, as in v2.
+    // Without the key nothing changes; a malformed key is ignored.
     for text in [
         "name: alpha\n",
         "name: alpha\nsearch: 5\n",

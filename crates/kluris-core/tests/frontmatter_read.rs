@@ -1,7 +1,6 @@
-//! Reading markdown frontmatter and YAML neuron blocks. Expected metadata was
-//! checked against v2.28.11 (`kluris_runtime.frontmatter.read_frontmatter`,
-//! python-frontmatter 1.3.0, PyYAML 6.0.3) except where a comment says v3
-//! differs on purpose.
+//! Reading markdown frontmatter and YAML neuron blocks. Expected metadata is
+//! what python-frontmatter 1.3.0 and PyYAML 6.0.3 read, except where a
+//! comment says the reading differs on purpose.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -78,7 +77,7 @@ fn split_empty_frontmatter_and_closing_at_end_of_file() {
 }
 
 #[test]
-fn split_skips_leading_whitespace_like_v2() {
+fn split_skips_leading_whitespace() {
     // python-frontmatter strips the text before looking for `---`.
     assert_eq!(
         split("\n\n  ---\ntitle: x\n---\nbody"),
@@ -104,7 +103,7 @@ fn split_crlf_keeps_the_body_bytes() {
 
 #[test]
 fn split_cr_only_line_breaks() {
-    // v2 reads in text mode, where a lone CR is a line break.
+    // Read as Python's text mode reads it, where a lone CR is a line break.
     assert_eq!(split("---\ra: 1\r---\rbody"), (Some("a: 1\r"), "body"));
 }
 
@@ -128,7 +127,8 @@ fn parse_reads_typed_metadata_and_byte_exact_body() {
             ("parent", str_("./map.md")),
         ])
     );
-    // v2 strips the body (losing the indentation); v3 keeps it byte-exact.
+    // The body keeps its indentation byte-exact (python-frontmatter strips
+    // it).
     assert_eq!(fm.body, "    code first\nmore\n\n");
     assert_eq!(fm.line_ending, LineEnding::Lf);
     assert!(!fm.had_bom);
@@ -153,7 +153,7 @@ fn parse_crlf() {
 
 #[test]
 fn parse_bom_is_detected_and_frontmatter_still_read() {
-    // v2 misses frontmatter behind a BOM; v3 reads it.
+    // Frontmatter behind a BOM is read (python-frontmatter misses it).
     let fm = parse("\u{feff}---\ntitle: x\n---\nbody").unwrap();
     assert_eq!(fm.meta, meta(&[("title", str_("x"))]));
     assert_eq!(fm.body, "body");
@@ -180,8 +180,8 @@ fn parse_without_frontmatter_returns_the_whole_text() {
 
 #[test]
 fn parse_json_and_toml_frontmatter_are_not_frontmatter() {
-    // v2 reads `{` ... `}` as JSON frontmatter (python-frontmatter); v3 does
-    // not. TOML was never read (no `toml` package).
+    // `{` ... `}` is not read as JSON frontmatter (python-frontmatter
+    // reads it), and TOML is not read either.
     for text in ["{\n\"a\": 1\n}\nbody\n", "+++\na = 1\n+++\nbody\n"] {
         let fm = parse(text).unwrap();
         assert!(fm.meta.is_empty(), "{text:?}");
@@ -190,7 +190,7 @@ fn parse_json_and_toml_frontmatter_are_not_frontmatter() {
 }
 
 #[test]
-fn parse_non_mapping_yaml_is_empty_meta_like_v2() {
+fn parse_non_mapping_yaml_is_empty_meta() {
     let fm = parse("---\n- a\n- b\n---\nbody").unwrap();
     assert!(fm.meta.is_empty());
     assert_eq!(fm.body, "body");
@@ -324,7 +324,7 @@ fn yaml_without_a_complete_block_has_no_metadata() {
 
 #[test]
 fn yaml_neuron_invalid_yaml_is_an_error() {
-    // v2 silently reads this as no metadata; v3 reports it.
+    // Reported, not read silently as no metadata.
     let e = parse_yaml_neuron("#---\n# title: Foo: bar\n#---\nk: v\n").unwrap_err();
     assert_eq!(e.line, 1, "{e}");
 }
@@ -387,7 +387,7 @@ fn read_neuron_dispatches_on_the_suffix() {
 }
 
 #[test]
-fn read_yaml_neuron_invalid_utf8_is_replaced_like_v2() {
+fn read_yaml_neuron_invalid_utf8_is_replaced() {
     let dir = TempDir::new().unwrap();
     let path = write(&dir, "x.yml", b"#---\n# a: 1\n#---\nk: caf\xe9\n");
     let fm = read_yaml_neuron(&path).unwrap();

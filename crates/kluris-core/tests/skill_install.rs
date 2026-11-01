@@ -1,9 +1,8 @@
 //! Installing each brain's SKILL.md into the agents' skill folders, in a temp
-//! HOME: the `~/.agents/skills`-first matrix (SPEC acceptance criteria and
-//! decisions 2026-10-24 / 2026-10-25), stage-then-rename per destination,
-//! removal of deselected and stale copies, and the v2 migration. The v2
-//! copies laid out here are v2's own renderings
-//! (`fixtures/skills/v2/*.md`).
+//! HOME: the `~/.agents/skills`-first matrix, stage-then-rename per
+//! destination, removal of deselected and stale copies, and the migration
+//! of what earlier releases installed. The earlier copies laid out here are
+//! an earlier release's own renderings (`fixtures/skills/earlier/*.md`).
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -147,18 +146,18 @@ impl Sandbox {
 
 fn fixture(name: &str) -> String {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/skills/v2")
+        .join("tests/fixtures/skills/earlier")
         .join(name);
     fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()))
 }
 
-/// v2's SKILL.md for brain `name` (the `basic` fixture, renamed the way v2
-/// names it: `name:` and every brain mention).
-fn v2_skill(name: &str) -> String {
+/// An earlier release's SKILL.md for brain `name` (the `basic` fixture,
+/// renamed the way that release names it: `name:` and every brain mention).
+fn earlier_skill(name: &str) -> String {
     fixture("basic.md").replace("acme", name)
 }
 
-/// A real v1/v2 rendering (`fixtures/skills/legacy/`).
+/// A real earlier rendering (`fixtures/skills/legacy/`).
 fn legacy(file: &str) -> String {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/skills/legacy")
@@ -166,7 +165,7 @@ fn legacy(file: &str) -> String {
     fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()))
 }
 
-fn v2_workflow(name: &str) -> String {
+fn earlier_workflow(name: &str) -> String {
     fixture("basic.workflow.md").replace("acme", name)
 }
 
@@ -583,13 +582,13 @@ fn an_old_copy_is_replaced_in_place() {
     s.brain("acme", Some(&["claude"]));
     put(
         &s.h(".claude/skills/kluris-acme/SKILL.md"),
-        &v2_skill("acme"),
+        &earlier_skill("acme"),
     );
     s.install();
-    let v3 = fs::read(s.h(".agents/skills/kluris-acme/SKILL.md")).expect("v3");
+    let current = fs::read(s.h(".agents/skills/kluris-acme/SKILL.md")).expect("current");
     assert_eq!(
         fs::read(s.h(".claude/skills/kluris-acme/SKILL.md")).expect("claude"),
-        v3
+        current
     );
     let leftovers: Vec<String> = s
         .dirs()
@@ -616,11 +615,11 @@ fn stale_staging_folders_from_a_crash_are_cleared() {
     let half = staged("kluris-acme", 3, "tmp");
     put(
         &s.h(".claude/skills").join(&tmp).join("SKILL.md"),
-        &v2_skill("acme"),
+        &earlier_skill("acme"),
     );
     put(
         &s.h(".claude/skills").join(&old).join("SKILL.md"),
-        &v2_skill("acme"),
+        &earlier_skill("acme"),
     );
     put(
         &s.h(".claude/skills").join(&half).join("SKILL.md"),
@@ -654,8 +653,8 @@ fn dest<'a>(report: &'a InstallReport, path: &Path) -> &'a DestinationReport {
         .unwrap_or_else(|| panic!("no report for {}: {report:?}", path.display()))
 }
 
-/// Staging folders an earlier run left next to skills that no longer
-/// exist (a removed brain, or a folder Kluris no longer writes) are
+/// Staging folders an earlier run left next to skills that are gone (a
+/// removed brain, or a folder Kluris writes no skill to) are
 /// removed and reported, in written and cleared folders alike.
 #[test]
 fn stale_staging_folders_of_gone_skills_are_cleared() {
@@ -666,15 +665,15 @@ fn stale_staging_folders_of_gone_skills_are_cleared() {
     let acme_tmp = staged("kluris-acme", 3, "tmp");
     put(
         &s.h(".agents/skills").join(&gone_tmp).join("SKILL.md"),
-        &v2_skill("gone"),
+        &earlier_skill("gone"),
     );
     put(
         &s.h(".agents/skills").join(&gone_old).join("SKILL.md"),
-        &v2_skill("gone"),
+        &earlier_skill("gone"),
     );
     put(
         &s.h(".cursor/skills").join(&acme_tmp).join("SKILL.md"),
-        &v2_skill("acme"),
+        &earlier_skill("acme"),
     );
     let report = s.install();
     assert!(report.ok(), "{report:?}");
@@ -730,7 +729,7 @@ fn staging_like_entries_that_are_not_kluris_are_kept() {
     #[cfg(unix)]
     assert!(fs::symlink_metadata(s.h(".agents/skills/.kluris-f.old")).is_ok());
     assert!(report.destinations[0].removed.is_empty(), "{report:?}");
-    // v2's fixed staging names are near misses; `.kluris-d` and
+    // An earlier release's fixed staging names are near misses; `.kluris-d` and
     // `.kluris-e.tmpx` are not staging names at all.
     let mut near = vec![".kluris-a.tmp", ".kluris-b.tmp", ".kluris-c.old"];
     if cfg!(unix) {
@@ -747,7 +746,7 @@ fn a_failed_destination_keeps_its_old_skill() {
     use std::os::unix::fs::PermissionsExt;
     let mut s = Sandbox::new();
     s.brain("acme", Some(&["claude", "antigravity"]));
-    let old = v2_skill("acme");
+    let old = earlier_skill("acme");
     put(&s.h(".claude/skills/kluris-acme/SKILL.md"), &old);
     let claude = s.h(".claude/skills");
     fs::set_permissions(&claude, fs::Permissions::from_mode(0o555)).expect("chmod");
@@ -807,11 +806,12 @@ fn a_brain_with_an_invalid_kluris_yml_is_reported_and_still_rendered() {
     );
 }
 
-// --- v2 migration ------------------------------------------------------------
+// --- the migration of earlier installs --------------------------------------
 
-/// The folders v2 wrote and v3 no longer uses (research-07: they make real
-/// duplicates), with `~/.copilot/skills` only while `COPILOT_HOME` is unset.
-const V2_ONLY_SKILL_FOLDERS: [&str; 10] = [
+/// The folders earlier releases wrote to and Kluris writes no skill to (an
+/// agent reading both would list each skill twice), with `~/.copilot/skills`
+/// only while `COPILOT_HOME` is unset.
+const EARLIER_ONLY_SKILL_FOLDERS: [&str; 10] = [
     ".codeium/windsurf/skills",
     ".codeium/windsurf-next/skills",
     ".codeium/windsurf-insiders/skills",
@@ -824,19 +824,19 @@ const V2_ONLY_SKILL_FOLDERS: [&str; 10] = [
     ".junie/skills",
 ];
 
-/// Lay out a v2.28 install for brains acme and gone (no longer registered)
-/// plus a user's own skills, workflows and files next to them.
-fn v2_home(s: &Sandbox) {
-    let v2_dirs: Vec<&str> = V2_ONLY_SKILL_FOLDERS
+/// Lay out an earlier install for brains acme and gone (gone is not
+/// registered) plus a user's own skills, workflows and files next to them.
+fn earlier_home(s: &Sandbox) {
+    let dirs: Vec<&str> = EARLIER_ONLY_SKILL_FOLDERS
         .iter()
         .copied()
         .chain([".claude/skills", ".hermes/skills", ".agents/skills"])
         .collect();
-    for dir in v2_dirs {
+    for dir in dirs {
         for brain in ["acme", "gone"] {
             put(
                 &s.h(dir).join(format!("kluris-{brain}/SKILL.md")),
-                &v2_skill(brain),
+                &earlier_skill(brain),
             );
         }
         put(&s.h(dir).join("kluris-notes/SKILL.md"), FOREIGN);
@@ -845,7 +845,7 @@ fn v2_home(s: &Sandbox) {
             "---\nname: my-skill\n---\n",
         );
     }
-    // v1's bare `kluris` skill, as v1.5.1 rendered it.
+    // The single-brain `kluris` skill, as `legacy/v1.5.1.md` holds it.
     put(&s.h(".cursor/skills/kluris/SKILL.md"), &legacy("v1.5.1.md"));
     for wf in [
         ".codeium/windsurf/global_workflows",
@@ -854,32 +854,32 @@ fn v2_home(s: &Sandbox) {
         for brain in ["acme", "gone"] {
             put(
                 &s.h(wf).join(format!("kluris-{brain}.md")),
-                &v2_workflow(brain),
+                &earlier_workflow(brain),
             );
         }
         put(&s.h(wf).join("kluris-notes.md"), "# my own workflow\n");
         put(&s.h(wf).join("deploy.md"), "# deploy\n");
     }
-    // Not a v2 folder: never looked at.
+    // Not a folder Kluris ever wrote to: never looked at.
     put(
         &s.h(".codeium/other/skills/kluris-acme/SKILL.md"),
-        &v2_skill("acme"),
+        &earlier_skill("acme"),
     );
     put(&s.h(".claude/commands/kluris.md"), "# v1 command\n");
 }
 
 #[test]
-fn v2_install_is_migrated_and_nothing_else_is_touched() {
+fn an_earlier_install_is_migrated_and_nothing_else_is_touched() {
     let mut s = Sandbox::new();
     s.brain("acme", Some(&["claude", "cursor", "windsurf", "codex"]));
-    v2_home(&s);
+    earlier_home(&s);
     let before = s.files();
     let report = s.install();
     assert!(report.ok(), "{report:?}");
     let after = s.files();
 
     let mut expected = before.clone();
-    for dir in V2_ONLY_SKILL_FOLDERS {
+    for dir in EARLIER_ONLY_SKILL_FOLDERS {
         expected.remove(&format!("{dir}/kluris-acme/SKILL.md"));
         expected.remove(&format!("{dir}/kluris-gone/SKILL.md"));
     }
@@ -892,9 +892,9 @@ fn v2_install_is_migrated_and_nothing_else_is_touched() {
         expected.remove(&format!("{wf}/kluris-gone.md"));
     }
     // The kept folders: acme rewritten, gone removed; hermes is not selected.
-    let v3 = after[".agents/skills/kluris-acme/SKILL.md"].clone();
+    let current = after[".agents/skills/kluris-acme/SKILL.md"].clone();
     for dir in [".agents/skills", ".claude/skills"] {
-        expected.insert(format!("{dir}/kluris-acme/SKILL.md"), v3.clone());
+        expected.insert(format!("{dir}/kluris-acme/SKILL.md"), current.clone());
         expected.remove(&format!("{dir}/kluris-gone/SKILL.md"));
     }
     expected.remove(".hermes/skills/kluris-acme/SKILL.md");
@@ -909,7 +909,7 @@ fn v2_install_is_migrated_and_nothing_else_is_touched() {
         .collect();
     assert!(diff.is_empty(), "differs from the expected HOME: {diff:?}");
     // Folders are emptied, never removed.
-    for dir in V2_ONLY_SKILL_FOLDERS {
+    for dir in EARLIER_ONLY_SKILL_FOLDERS {
         assert!(s.h(dir).is_dir(), "{dir}");
     }
     let migrated: usize = report
@@ -956,7 +956,7 @@ fn destination_paths_and_failure_messages_are_os_native() {
     s.brain("acme", Some(&["claude"]));
     put(
         &s.h(".cursor/skills/kluris-gone/SKILL.md"),
-        &v2_skill("gone"),
+        &earlier_skill("gone"),
     );
     let clean = s.install();
     let migrated = clean
@@ -985,7 +985,7 @@ fn copilot_folder_is_kept_when_copilot_home_is_set() {
     s.brain("acme", Some(&["claude"]));
     put(
         &s.h(".copilot/skills/kluris-acme/SKILL.md"),
-        &v2_skill("acme"),
+        &earlier_skill("acme"),
     );
     s.copilot_home = Some(s.h(".copilot-custom"));
     s.install();
@@ -997,14 +997,14 @@ fn copilot_folder_is_kept_when_copilot_home_is_set() {
 }
 
 /// The migration runs after the new copies exist: a failure writing
-/// `~/.agents/skills` leaves the v2 copies the agents still read.
+/// `~/.agents/skills` leaves the earlier copies the agents still read.
 #[test]
 fn migration_waits_for_the_universal_copy() {
     let mut s = Sandbox::new();
     s.brain("acme", Some(&["cursor"]));
     put(
         &s.h(".cursor/skills/kluris-acme/SKILL.md"),
-        &v2_skill("acme"),
+        &earlier_skill("acme"),
     );
     put(&s.h(".agents/skills"), "not a folder");
     let report = s.install();
@@ -1037,11 +1037,10 @@ fn report_order_is_universal_agents_deselected_migration() {
     assert!(report.destinations.iter().all(|d| d.path.is_dir()));
 }
 
-// --- ownership: only what Kluris wrote is removed (T-103 #5-#7) -------------
+// --- ownership: only what Kluris wrote is removed ---------------------------
 
-/// T-103 `description-prefix`: a user's own `kluris-notes` whose
-/// description opens like Kluris's is kept, in written, deselected and v2
-/// folders alike, and reported as left in place.
+/// A user's own `kluris-notes` whose description opens like Kluris's is
+/// kept, in written, deselected and earlier releases' folders alike, and reported as left in place.
 #[test]
 fn a_personal_skill_whose_description_opens_like_kluris_is_kept() {
     let mut s = Sandbox::new();
@@ -1070,8 +1069,7 @@ fn a_personal_skill_whose_description_opens_like_kluris_is_kept() {
     assert!(s.h(".agents/skills/kluris-notes/private.md").is_file());
 }
 
-/// T-103 `foreign-staging`: entries named like v2's or an older v3's fixed
-/// staging folders (`.kluris-<brain>.tmp` / `.old`) are not this run's or
+/// Entries named like an earlier release's fixed staging folders (`.kluris-<brain>.tmp` / `.old`) are not this run's or
 /// any run's: kept, whatever they hold, and reported. A case variant
 /// (`.KLURIS-ACME.OLD`) is not even looked at.
 #[test]
@@ -1079,11 +1077,14 @@ fn staging_lookalikes_are_kept_and_reported() {
     let mut s = Sandbox::new();
     s.brain("acme", Some(&["claude"]));
     let skills = s.h(".agents/skills");
-    put(&skills.join(".kluris-acme.tmp/SKILL.md"), &v2_skill("acme"));
+    put(
+        &skills.join(".kluris-acme.tmp/SKILL.md"),
+        &earlier_skill("acme"),
+    );
     put(&skills.join(".kluris-acme.old/SKILL.md"), "my draft");
     put(
         &skills.join(".kluris-notes.old/SKILL.md"),
-        &v2_skill("notes"),
+        &earlier_skill("notes"),
     );
     put(&skills.join(".KLURIS-ACME.OLD/my-file"), "mine");
     let before = s.files();
@@ -1111,23 +1112,35 @@ fn staging_lookalikes_are_kept_and_reported() {
     );
 }
 
-/// A v3 staging name holding anything but one Kluris-written SKILL.md is
+/// A staging name holding anything but one Kluris-written SKILL.md is
 /// kept: other files, a SKILL.md that is a folder, a token that is not a
 /// pid and 16 hex digits.
 #[test]
-fn v3_staging_names_holding_anything_else_are_kept() {
+fn staging_names_holding_anything_else_are_kept() {
     let mut s = Sandbox::new();
     s.brain("acme", Some(&["claude"]));
     let skills = s.h(".agents/skills");
     let extra = staged("kluris-gone", 1, "old");
-    put(&skills.join(&extra).join("SKILL.md"), &v2_skill("gone"));
+    put(
+        &skills.join(&extra).join("SKILL.md"),
+        &earlier_skill("gone"),
+    );
     put(&skills.join(&extra).join("notes.txt"), "mine");
     let other = staged("kluris-gone", 2, "tmp");
-    put(&skills.join(&other).join("SKILL.md"), &v2_skill("other"));
+    put(
+        &skills.join(&other).join("SKILL.md"),
+        &earlier_skill("other"),
+    );
     let bad_token = ".kluris-gone.4242-xyz.tmp".to_string();
-    put(&skills.join(&bad_token).join("SKILL.md"), &v2_skill("gone"));
+    put(
+        &skills.join(&bad_token).join("SKILL.md"),
+        &earlier_skill("gone"),
+    );
     let upper = ".kluris-gone.4242-00000000000000AB.tmp".to_string();
-    put(&skills.join(&upper).join("SKILL.md"), &v2_skill("gone"));
+    put(
+        &skills.join(&upper).join("SKILL.md"),
+        &earlier_skill("gone"),
+    );
     let report = s.install();
     assert!(report.ok(), "{report:?}");
     for name in [&extra, &other, &bad_token, &upper] {
@@ -1149,14 +1162,17 @@ fn a_skill_folder_holding_more_than_skill_md_is_kept() {
     let mut s = Sandbox::new();
     s.brain("acme", Some(&["claude"]));
     for dir in [".claude/skills", ".cursor/skills"] {
-        put(&s.h(dir).join("kluris-acme/SKILL.md"), &v2_skill("acme"));
+        put(
+            &s.h(dir).join("kluris-acme/SKILL.md"),
+            &earlier_skill("acme"),
+        );
         put(&s.h(dir).join("kluris-acme/extra.txt"), "left by someone");
     }
     let report = s.install();
     for dir in [".claude/skills", ".cursor/skills"] {
         assert_eq!(
             fs::read_to_string(s.h(dir).join("kluris-acme/SKILL.md")).expect(dir),
-            v2_skill("acme")
+            earlier_skill("acme")
         );
         assert!(s.h(dir).join("kluris-acme/extra.txt").is_file(), "{dir}");
     }
@@ -1279,12 +1295,12 @@ fn link(target: &str, at: &Path) {
     std::os::unix::fs::symlink(target, at).expect("symlink");
 }
 
-/// T-103 `aliased-skill-dir`: `~/.codex/skills -> ../.agents/skills` is the
+/// `~/.codex/skills -> ../.agents/skills` is the
 /// universal folder; the migration skips it (an alias) instead of removing
 /// the skill it just wrote.
 #[cfg(unix)]
 #[test]
-fn a_v2_folder_linked_to_the_universal_one_keeps_the_new_skill() {
+fn an_earlier_folder_linked_to_the_universal_one_keeps_the_new_skill() {
     let mut s = Sandbox::new();
     s.brain("acme", Some(&[]));
     fs::create_dir_all(s.h(".agents/skills")).expect("agents");
@@ -1332,7 +1348,7 @@ fn purge_skips_linked_folders() {
     let s = Sandbox::new();
     put(
         &s.h(".agents/skills/kluris-acme/SKILL.md"),
-        &v2_skill("acme"),
+        &earlier_skill("acme"),
     );
     link("../.agents/skills", &s.h(".codex/skills"));
     let reports = remove_generated_skills_with(&s.home, None, &RealFs);
@@ -1364,8 +1380,14 @@ fn a_linked_skill_entry_is_unlinked_never_followed() {
     let mut s = Sandbox::new();
     s.brain("acme", Some(&["claude"]));
     let elsewhere = s.root.join("elsewhere");
-    put(&elsewhere.join("kluris-gone/SKILL.md"), &v2_skill("gone"));
-    put(&elsewhere.join("kluris-mine/SKILL.md"), &v2_skill("mine"));
+    put(
+        &elsewhere.join("kluris-gone/SKILL.md"),
+        &earlier_skill("gone"),
+    );
+    put(
+        &elsewhere.join("kluris-mine/SKILL.md"),
+        &earlier_skill("mine"),
+    );
     put(&elsewhere.join("kluris-mine/notes.txt"), "mine");
     let gone = elsewhere.join("kluris-gone");
     let mine = elsewhere.join("kluris-mine");
@@ -1403,7 +1425,7 @@ fn a_linked_skill_entry_in_a_written_folder_is_replaced_by_a_copy() {
     s.brain("acme", Some(&["claude"]));
     put(
         &s.h(".agents/skills/kluris-acme/SKILL.md"),
-        &v2_skill("acme"),
+        &earlier_skill("acme"),
     );
     link(
         "../../.agents/skills/kluris-acme",
@@ -1425,8 +1447,8 @@ fn a_linked_skill_entry_in_a_written_folder_is_replaced_by_a_copy() {
 }
 
 /// The file operations of a run in which `target` is replaced by
-/// `replacement` right before Kluris renames it (T-103 `faults.c`:
-/// "replace-after-check"); with `fail_back`, putting it back fails too.
+/// `replacement` right before Kluris renames it (replaced after its
+/// check); with `fail_back`, putting it back fails too.
 struct SwapBeforeRename {
     target: PathBuf,
     replacement: PathBuf,
@@ -1460,7 +1482,7 @@ fn swap(s: &Sandbox, target: PathBuf, fail_back: bool) -> SwapBeforeRename {
     }
 }
 
-/// T-103 #7 in the sweep: a removed brain's skill swapped for a user's
+/// In the sweep: a removed brain's skill swapped for a user's
 /// folder between the check and the removal is put back, not deleted.
 #[test]
 fn an_entry_swapped_after_its_check_is_put_back() {
@@ -1468,7 +1490,7 @@ fn an_entry_swapped_after_its_check_is_put_back() {
     s.brain("acme", Some(&["claude"]));
     put(
         &s.h(".agents/skills/kluris-gone/SKILL.md"),
-        &v2_skill("gone"),
+        &earlier_skill("gone"),
     );
     let ops = swap(&s, s.h(".agents/skills/kluris-gone"), false);
     let report = s.install_with(&ops);
@@ -1482,7 +1504,7 @@ fn an_entry_swapped_after_its_check_is_put_back() {
     assert_eq!(universal.kept, ["kluris-gone"]);
 }
 
-/// T-103 #7 when replacing: an old copy swapped for a user's folder right
+/// When replacing: an old copy swapped for a user's folder right
 /// before it is moved aside is put back; the skill is reported not written.
 #[test]
 fn a_target_swapped_after_its_check_is_put_back() {
@@ -1490,7 +1512,7 @@ fn a_target_swapped_after_its_check_is_put_back() {
     s.brain("acme", Some(&["claude"]));
     put(
         &s.h(".claude/skills/kluris-acme/SKILL.md"),
-        &v2_skill("acme"),
+        &earlier_skill("acme"),
     );
     let ops = swap(&s, s.h(".claude/skills/kluris-acme"), false);
     let report = s.install_with(&ops);
@@ -1513,7 +1535,7 @@ fn a_swapped_entry_that_cannot_be_put_back_stays_in_quarantine() {
     s.brain("acme", Some(&["claude"]));
     put(
         &s.h(".agents/skills/kluris-gone/SKILL.md"),
-        &v2_skill("gone"),
+        &earlier_skill("gone"),
     );
     let ops = swap(&s, s.h(".agents/skills/kluris-gone"), true);
     let report = s.install_with(&ops);
@@ -1557,7 +1579,7 @@ fn a_quarantine_that_cannot_start_leaves_the_entry() {
     let s = Sandbox::new();
     put(
         &s.h(".agents/skills/kluris-gone/SKILL.md"),
-        &v2_skill("gone"),
+        &earlier_skill("gone"),
     );
     let reports = remove_generated_skills_with(&s.home, None, &NoRename);
     assert!(s.h(".agents/skills/kluris-gone/SKILL.md").is_file());
@@ -1569,7 +1591,7 @@ fn a_quarantine_that_cannot_start_leaves_the_entry() {
     assert_eq!(universal.failed.len(), 1, "{universal:?}");
 }
 
-// --- T-105 follow-up (chief's decisions m-4606) -----------------------------
+// --- what else an entry holds, and entries in the way ----------------------
 
 /// Finder's `.DS_Store`, Explorer's `Thumbs.db` and `desktop.ini` (exact
 /// names, regular files) do not make a Kluris folder someone else's: it is
@@ -1580,12 +1602,12 @@ fn os_metadata_files_go_with_a_kluris_folder() {
     s.brain("acme", Some(&["claude"]));
     put(
         &s.h(".claude/skills/kluris-acme/SKILL.md"),
-        &v2_skill("acme"),
+        &earlier_skill("acme"),
     );
     put(&s.h(".claude/skills/kluris-acme/.DS_Store"), "finder");
     put(
         &s.h(".cursor/skills/kluris-acme/SKILL.md"),
-        &v2_skill("acme"),
+        &earlier_skill("acme"),
     );
     put(&s.h(".cursor/skills/kluris-acme/Thumbs.db"), "explorer");
     put(
@@ -1594,13 +1616,13 @@ fn os_metadata_files_go_with_a_kluris_folder() {
     );
     put(
         &s.h(".agents/skills/kluris-gone/SKILL.md"),
-        &v2_skill("gone"),
+        &earlier_skill("gone"),
     );
     put(&s.h(".agents/skills/kluris-gone/.DS_Store"), "finder");
     let stale = staged("kluris-gone", 7, "old");
     put(
         &s.h(".agents/skills").join(&stale).join("SKILL.md"),
-        &v2_skill("gone"),
+        &earlier_skill("gone"),
     );
     put(
         &s.h(".agents/skills").join(&stale).join(".DS_Store"),
@@ -1642,11 +1664,11 @@ fn other_files_beside_skill_md_still_keep_the_folder() {
     let mut s = Sandbox::new();
     s.brain("acme", Some(&["claude"]));
     let skills = s.h(".cursor/skills");
-    put(&skills.join("kluris-a/SKILL.md"), &v2_skill("a"));
+    put(&skills.join("kluris-a/SKILL.md"), &earlier_skill("a"));
     put(&skills.join("kluris-a/.DS_Store/inner"), "a folder");
-    put(&skills.join("kluris-b/SKILL.md"), &v2_skill("b"));
+    put(&skills.join("kluris-b/SKILL.md"), &earlier_skill("b"));
     put(&skills.join("kluris-b/thumbs.db"), "wrong case");
-    put(&skills.join("kluris-c/SKILL.md"), &v2_skill("c"));
+    put(&skills.join("kluris-c/SKILL.md"), &earlier_skill("c"));
     put(&skills.join("kluris-c/Thumbs.db"), "explorer");
     put(&skills.join("kluris-c/notes.txt"), "mine");
     put(&skills.join("kluris-d/.DS_Store"), "no SKILL.md");
@@ -1667,7 +1689,8 @@ fn other_files_beside_skill_md_still_keep_the_folder() {
 }
 
 /// `kept` lists near misses only: a `kluris*` entry whose SKILL.md (or
-/// workflow) carries the marker's opening or a v1/v2 description opening.
+/// workflow) carries the marker's opening or an earlier release's
+/// description opening.
 /// Entries with nothing of Kluris's are left alone and not listed.
 #[test]
 fn only_near_misses_are_listed_as_kept() {
@@ -1712,7 +1735,7 @@ fn only_near_misses_are_listed_as_kept() {
     }
 }
 
-/// A same-named entry that is not proven Kluris's (here v2's copy with a
+/// A same-named entry that is not proven Kluris's (here an earlier copy with a
 /// file of the user's beside it) is never overwritten and never passes
 /// silently: the folder reports the skill as not written, says how to fix
 /// it, and lists the entry as kept.
@@ -1721,7 +1744,10 @@ fn a_same_named_entry_in_the_way_of_a_skill_is_not_overwritten() {
     let mut s = Sandbox::new();
     s.brain("acme", Some(&["claude"]));
     for dir in [".agents/skills", ".claude/skills"] {
-        put(&s.h(dir).join("kluris-acme/SKILL.md"), &v2_skill("acme"));
+        put(
+            &s.h(dir).join("kluris-acme/SKILL.md"),
+            &earlier_skill("acme"),
+        );
         put(&s.h(dir).join("kluris-acme/mine.txt"), "mine");
     }
     let report = s.install();
@@ -1729,7 +1755,7 @@ fn a_same_named_entry_in_the_way_of_a_skill_is_not_overwritten() {
     for dir in [".agents/skills", ".claude/skills"] {
         assert_eq!(
             fs::read_to_string(s.h(dir).join("kluris-acme/SKILL.md")).expect(dir),
-            v2_skill("acme")
+            earlier_skill("acme")
         );
         assert!(s.h(dir).join("kluris-acme/mine.txt").is_file());
         let d = dest(&report, &s.h(dir));
@@ -1776,7 +1802,7 @@ fn junction(target: &Path, at: &Path) {
 /// migration skips it as an alias instead of removing the new skill.
 #[cfg(windows)]
 #[test]
-fn a_junctioned_v2_folder_is_an_alias_of_the_universal_one() {
+fn a_junctioned_earlier_folder_is_an_alias_of_the_universal_one() {
     let mut s = Sandbox::new();
     s.brain("acme", Some(&[]));
     fs::create_dir_all(s.h(".agents/skills")).expect("agents");
@@ -1800,8 +1826,14 @@ fn a_junctioned_skill_entry_is_unlinked_never_followed() {
     let mut s = Sandbox::new();
     s.brain("acme", Some(&["claude"]));
     let elsewhere = s.root.join("elsewhere");
-    put(&elsewhere.join("kluris-gone/SKILL.md"), &v2_skill("gone"));
-    put(&elsewhere.join("kluris-mine/SKILL.md"), &v2_skill("mine"));
+    put(
+        &elsewhere.join("kluris-gone/SKILL.md"),
+        &earlier_skill("gone"),
+    );
+    put(
+        &elsewhere.join("kluris-mine/SKILL.md"),
+        &earlier_skill("mine"),
+    );
     put(&elsewhere.join("kluris-mine/notes.txt"), "mine");
     junction(
         &elsewhere.join("kluris-gone"),

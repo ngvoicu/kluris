@@ -214,7 +214,7 @@ fn slash(path: &Path) -> String {
 /// earlier release wrote it (kluris-core's fixture).
 fn unmarked_skill(name: &str) -> String {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../kluris-core/tests/fixtures/skills/v2/basic.md");
+        .join("../kluris-core/tests/fixtures/skills/earlier/basic.md");
     fs::read_to_string(&path)
         .unwrap_or_else(|e| panic!("{}: {e}", path.display()))
         .replace("acme", name)
