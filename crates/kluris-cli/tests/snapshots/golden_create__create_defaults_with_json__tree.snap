@@ -2,13 +2,13 @@
 source: crates/kluris-cli/tests/golden_create.rs
 expression: text.as_ref()
 ---
-== home/.agents/skills/kluris-solo/SKILL.md (file, 35556 bytes)
+== home/.agents/skills/kluris-solo/SKILL.md (file, 35357 bytes)
 <snapshot skill_solo_none_at-solo_git>
-== home/.claude/skills/kluris-solo/SKILL.md (file, 35556 bytes)
+== home/.claude/skills/kluris-solo/SKILL.md (file, 35357 bytes)
 <snapshot skill_solo_none_at-solo_git>
-== home/.gemini/config/skills/kluris-solo/SKILL.md (file, 35556 bytes)
+== home/.gemini/config/skills/kluris-solo/SKILL.md (file, 35357 bytes)
 <snapshot skill_solo_none_at-solo_git>
-== home/.hermes/skills/kluris-solo/SKILL.md (file, 35556 bytes)
+== home/.hermes/skills/kluris-solo/SKILL.md (file, 35357 bytes)
 <snapshot skill_solo_none_at-solo_git>
 == home/.kluris/config.yml (file, 80 bytes)
 brains:

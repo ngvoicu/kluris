@@ -239,6 +239,10 @@ pub trait SyncGit: Plumbing + TextMerger + Clone + Sized {
     /// alone: no network.
     fn remote_urls(&self, repo: &Repo, remote: &str) -> Result<Vec<String>, GitError>;
 
+    /// The names of the repository's remotes (`git remote`), from config
+    /// alone.
+    fn remotes(&self, repo: &Repo) -> Result<Vec<String>, GitError>;
+
     /// The object a ref holds; `None` when there is no such ref.
     fn ref_value(&self, repo: &Repo, refname: &str) -> Result<Option<String>, GitError>;
 
@@ -1020,6 +1024,14 @@ impl SyncGit for SystemGit {
 
     fn remote_urls(&self, repo: &Repo, remote: &str) -> Result<Vec<String>, GitError> {
         let out = self.run(&repo.dir, &["ls-remote", "--get-url", remote])?;
+        Ok(String::from_utf8_lossy(&out)
+            .lines()
+            .map(str::to_string)
+            .collect())
+    }
+
+    fn remotes(&self, repo: &Repo) -> Result<Vec<String>, GitError> {
+        let out = self.run(&repo.dir, &["remote"])?;
         Ok(String::from_utf8_lossy(&out)
             .lines()
             .map(str::to_string)

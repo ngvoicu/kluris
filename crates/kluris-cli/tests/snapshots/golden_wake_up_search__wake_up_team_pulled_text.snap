@@ -2,20 +2,22 @@
 source: crates/kluris-cli/tests/golden_wake_up_search.rs
 expression: out
 ---
-== stdout (139 bytes)
+== stdout (163 bytes)
 
 Brain: team
   Path: <ROOT>
 
 Lobes (1)
-  - k/: 1 neurons
+  - k/: 2 neurons
 
-Total neurons: 1
+Total neurons: 2
 
 Glossary (1 terms)
 
-Recently updated (1)
+Recently updated (2)
+  2026-03-01 k/zebra.md
   2026-02-03 k/jwt.md
-== stderr (0 bytes)
+== stderr (30 bytes)
+kluris: team: pulled 1 commit
 == exit 0
 <end of run>

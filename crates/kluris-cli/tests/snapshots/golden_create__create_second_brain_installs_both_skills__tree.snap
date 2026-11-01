@@ -440,21 +440,21 @@ sideways [infrastructure](../infrastructure/map.md) | [knowledge](../knowledge/m
 ## Contents
 
 (empty)
-== home/.agents/skills/kluris-first/SKILL.md (file, 35616 bytes)
+== home/.agents/skills/kluris-first/SKILL.md (file, 35417 bytes)
 <snapshot skill_first_none_at-first>
-== home/.agents/skills/kluris-second/SKILL.md (file, 35673 bytes)
+== home/.agents/skills/kluris-second/SKILL.md (file, 35474 bytes)
 <snapshot skill_second_none_at-second>
-== home/.claude/skills/kluris-first/SKILL.md (file, 35616 bytes)
+== home/.claude/skills/kluris-first/SKILL.md (file, 35417 bytes)
 <snapshot skill_first_none_at-first>
-== home/.claude/skills/kluris-second/SKILL.md (file, 35673 bytes)
+== home/.claude/skills/kluris-second/SKILL.md (file, 35474 bytes)
 <snapshot skill_second_none_at-second>
-== home/.gemini/config/skills/kluris-first/SKILL.md (file, 35616 bytes)
+== home/.gemini/config/skills/kluris-first/SKILL.md (file, 35417 bytes)
 <snapshot skill_first_none_at-first>
-== home/.gemini/config/skills/kluris-second/SKILL.md (file, 35673 bytes)
+== home/.gemini/config/skills/kluris-second/SKILL.md (file, 35474 bytes)
 <snapshot skill_second_none_at-second>
-== home/.hermes/skills/kluris-first/SKILL.md (file, 35616 bytes)
+== home/.hermes/skills/kluris-first/SKILL.md (file, 35417 bytes)
 <snapshot skill_first_none_at-first>
-== home/.hermes/skills/kluris-second/SKILL.md (file, 35673 bytes)
+== home/.hermes/skills/kluris-second/SKILL.md (file, 35474 bytes)
 <snapshot skill_second_none_at-second>
 == home/.kluris/config.yml (file, 161 bytes)
 brains:

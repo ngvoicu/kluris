@@ -1,6 +1,6 @@
 //! `kluris resolve [--brain NAME] PATH --ours|--theirs|--file FILE --merge
-//! ID`, `kluris resolve --abort`, and the open conflict in `kluris status`:
-//! the command surface over real git. The rules are in
+//! ID` and `kluris resolve --abort`: the command surface over real git (the
+//! conflict a read reports is in `read_sync.rs`). The rules are in
 //! `kluris-core/tests/sync_engine/finish.rs`.
 
 use std::fs;
@@ -119,29 +119,32 @@ fn resolving_path_by_path_then_committing_and_pushing() {
 
 #[test]
 fn a_read_during_an_open_conflict_fetches_and_resolve_still_finishes() {
-    // The conflict records its two commits: a fresh read's fetch, which
-    // brings objects and writes no ref, changes nothing it settles.
+    // The conflict records its two commits: a read's fetch, which moves
+    // only the tracking ref, changes nothing it settles; the read reports
+    // the conflicts again, with the teammate's newer commit.
     let mut h = Home::new();
     let root = h.two_conflicts_and_more();
     let pending = root.join(".git").join("kluris-sync").join("pending.json");
     let recorded = fs::read(&pending).unwrap();
     let head = h.git(&root, &["rev-parse", "HEAD"]).trim().to_string();
-    let refs = h.git(&root, &["for-each-ref"]);
-    let mut wake_up = std::process::Command::new(assert_cmd::cargo::cargo_bin!("kluris"));
-    h.hermetic(&mut wake_up);
-    let out = wake_up
-        .env_remove("KLURIS_NO_AUTO_SYNC")
-        .args(["wake-up", "--brain", "alpha", "--json"])
-        .output()
-        .unwrap();
-    assert_eq!(out.status.code(), Some(0));
+    let stamp = root.join(".git").join("kluris-sync").join("fetch-stamp");
+    let _ = fs::remove_file(&stamp);
+    let (code, doc) = h.json(&["wake-up", "--brain", "alpha", "--json"]);
+    assert_eq!(code, 0, "{doc}");
+    let sync = &doc["sync"];
+    assert_eq!(sync["conflicts"].as_array().map(Vec::len), Some(2), "{doc}");
+    assert_eq!(sync["behind_conflict"], 1, "{doc}");
     let mate = h.teammate("alpha");
-    let remote = h.git(&mate, &["rev-parse", "HEAD"]).trim().to_string();
-    let commit = format!("{remote}^{{commit}}");
-    h.git(&root, &["cat-file", "-e", &commit]);
-    assert_eq!(h.git(&root, &["for-each-ref"]), refs, "a ref changed");
+    let remote = h.git(&mate, &["rev-parse", "HEAD"]);
+    assert_eq!(
+        h.git(&root, &["rev-parse", "refs/remotes/origin/main"]),
+        remote
+    );
     assert_eq!(h.git(&root, &["rev-parse", "HEAD"]).trim(), head);
     assert_eq!(fs::read(&pending).unwrap(), recorded);
+    // The read's waiting commit went to a background push: once it lets
+    // the remote go, resolve can push.
+    wait_for_background(&root);
 
     let merge = h.merge("alpha");
     for (rel, side) in [
@@ -289,66 +292,6 @@ fn abort_drops_the_conflict() {
     let (code, out, _) = h.run(&["resolve", "--brain", "alpha", "--abort"]);
     assert_eq!(code, 1, "nothing left to abort");
     assert_eq!(out, "");
-}
-
-#[test]
-fn status_shows_an_open_conflict_and_only_then() {
-    let mut h = Home::new();
-    let root = h.brain("alpha");
-    let (_, clean) = h.json(&["status", "--brain", "alpha", "--json"]);
-    let v2_keys = keys(&clean["brains"][0]);
-    assert!(!v2_keys.contains(&"sync".to_string()), "{clean}");
-    h.conflict("alpha", &root);
-    let (_, synced) = h.json(&["sync", "--brain", "alpha", "--json"]);
-    let (code, doc) = h.json(&["status", "--brain", "alpha", "--json"]);
-    assert_eq!(code, 0, "{doc}");
-    let entry = &doc["brains"][0];
-    let mut expected_keys = v2_keys.clone();
-    expected_keys.push("sync".into());
-    assert_eq!(keys(entry), expected_keys);
-    // The waiting merge's conflicts, each side its blob, with the merge's
-    // id; the sync reported the same paths, id and texts.
-    let pending = root.join(".git").join("kluris-sync").join("pending.json");
-    let recorded: serde_json::Value =
-        serde_json::from_str(&fs::read_to_string(pending).unwrap()).unwrap();
-    let merge = synced["brains"][0]["sync"]["conflicts"][0]["merge"].clone();
-    let mut conflicts = recorded["conflicts"].clone();
-    for c in conflicts.as_array_mut().unwrap() {
-        c["merge"] = merge.clone();
-    }
-    assert_eq!(
-        entry["sync"],
-        json!({"blocked": true, "conflicts": conflicts})
-    );
-    assert_eq!(
-        keys(&entry["sync"]["conflicts"][0]),
-        ["path", "kind", "merge", "base", "ours", "theirs"]
-    );
-    assert_eq!(
-        entry["sync"]["conflicts"][0]["path"],
-        synced["brains"][0]["sync"]["conflicts"][0]["path"]
-    );
-    let merge = h.merge("alpha");
-    let (_, out, _) = h.run(&["status", "--brain", "alpha"]);
-    assert!(
-        out.contains(&format!("  Sync: blocked by 1 conflict; settle it with kluris resolve\n    content: notes/first.md\n      kluris resolve --brain alpha notes/first.md --ours|--theirs|--file FILE --merge {merge}\n")),
-        "{out}"
-    );
-    // Once settled, the key is gone again.
-    let (code, _) = h.json(&[
-        "resolve",
-        "--brain",
-        "alpha",
-        "notes/first.md",
-        "--ours",
-        "--merge",
-        &merge,
-        "--json",
-    ]);
-    assert_eq!(code, 0);
-    let (_, doc) = h.json(&["status", "--brain", "alpha", "--json"]);
-    assert_eq!(keys(&doc["brains"][0]), v2_keys);
-    let _: &Value = &doc;
 }
 
 #[test]

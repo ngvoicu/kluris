@@ -362,7 +362,7 @@ fn wake_up_writes_nothing() {
 }
 
 #[test]
-fn wake_up_fresh_read_with_nothing_new() {
+fn wake_up_of_a_team_brain_with_nothing_new() {
     for (id, text) in [("json", false), ("text", true)] {
         let sb = Sandbox::new();
         let brain = sb.team_brain(false);
@@ -372,31 +372,28 @@ fn wake_up_fresh_read_with_nothing_new() {
         } else {
             wake_up_json(&sb, &brain)
         };
-        assert_unchanged(&files, &tree_files(&sb.work), "the fresh read");
+        assert_unchanged(&files, &tree_files(&sb.work), "the read");
         assert_eq!(sb.team_refs(), refs);
-        insta::assert_snapshot!(format!("wake_up_fresh_read_nothing_new_{id}"), out);
+        insta::assert_snapshot!(format!("wake_up_team_nothing_new_{id}"), out);
     }
 }
 
 #[test]
-fn wake_up_fresh_read_fetches_a_teammates_push() {
-    // The push's objects are fetched, no ref changes, and the brain is read
-    // as it is on disk: without the teammate's `k/zebra.md`.
+fn wake_up_pulls_a_teammates_push() {
+    // The push lands before the read: the brain is read with the
+    // teammate's `k/zebra.md`, and the `sync` object (or the stderr line)
+    // says so.
     for (id, text) in [("json", false), ("text", true)] {
         let sb = Sandbox::new();
         let brain = sb.team_brain(true);
         assert!(!sb.has_remote_main());
-        let (files, refs) = (tree_files(&sb.work), sb.team_refs());
         let out = if text {
             wake_up_text(&sb, &brain)
         } else {
             wake_up_json(&sb, &brain)
         };
-        assert!(sb.has_remote_main(), "the teammate's push was not fetched");
-        assert_unchanged(&files, &tree_files(&sb.work), "the fresh read");
-        assert_eq!(sb.team_refs(), refs);
-        assert!(!brain.join("k/zebra.md").exists());
-        insta::assert_snapshot!(format!("wake_up_fresh_read_pushed_{id}"), out);
+        assert!(brain.join("k/zebra.md").is_file(), "not pulled");
+        insta::assert_snapshot!(format!("wake_up_team_pulled_{id}"), out);
     }
 }
 
@@ -447,6 +444,10 @@ fn check_shape(doc: &Value, brain: &str, query: &str, limit: i64) {
             assert_eq!(s.keys().collect::<Vec<_>>(), ["file", "error"]);
             assert!(s.values().all(Value::is_string), "{s:?}");
         }
+    }
+    if doc.get("sync").is_some() {
+        // What the read's sync did, after the search's own keys.
+        keys.push("sync");
     }
     assert_eq!(map.keys().collect::<Vec<_>>(), keys);
     assert_eq!(doc["ok"], true);
@@ -894,7 +895,7 @@ fn search_reads_a_file_name_with_a_backslash() {
 }
 
 #[test]
-fn search_fresh_read_with_nothing_new() {
+fn search_of_a_team_brain_with_nothing_new() {
     let sb = Sandbox::new();
     sb.team_brain(false);
     let (files, refs) = (tree_files(&sb.work), sb.team_refs());
@@ -903,31 +904,26 @@ fn search_fresh_read_with_nothing_new() {
     assert_eq!(run.stderr, "");
     let doc = parse_json_line(&run.stdout);
     check_shape(&doc, "team", "jwt", 10);
-    assert_unchanged(&files, &tree_files(&sb.work), "the fresh read");
+    assert_unchanged(&files, &tree_files(&sb.work), "the read");
     assert_eq!(sb.team_refs(), refs);
-    insta::assert_snapshot!("search_fresh_read_nothing_new_jwt", found_list(&doc));
+    insta::assert_snapshot!("search_team_nothing_new_jwt", found_list(&doc));
 }
 
 #[test]
-fn search_fresh_read_fetches_a_teammates_push() {
-    // The push's objects are fetched, no ref changes, and the brain is
-    // searched as it is on disk: `zebras` finds nothing yet.
+fn search_pulls_a_teammates_push() {
+    // The push lands before the search: `zebras` finds the teammate's
+    // `k/zebra.md`.
     for query in ["zebras", "jwt"] {
         let sb = Sandbox::new();
-        sb.team_brain(true);
-        let (files, refs) = (tree_files(&sb.work), sb.team_refs());
+        let brain = sb.team_brain(true);
         let run = sb.kluris(&["search", query, "--json"]);
         assert_eq!(run.code, 0, "{}", run.render(&sb.root));
         assert_eq!(run.stderr, "");
         let doc = parse_json_line(&run.stdout);
         check_shape(&doc, "team", query, 10);
-        assert!(sb.has_remote_main(), "the teammate's push was not fetched");
-        assert_unchanged(&files, &tree_files(&sb.work), "the fresh read");
-        assert_eq!(sb.team_refs(), refs);
-        insta::assert_snapshot!(
-            format!("search_fresh_read_pushed_{query}"),
-            found_list(&doc)
-        );
+        assert_eq!(doc["sync"]["pulled"], 1, "{doc}");
+        assert!(brain.join("k/zebra.md").is_file(), "not pulled");
+        insta::assert_snapshot!(format!("search_team_pulled_{query}"), found_list(&doc));
     }
 }
 

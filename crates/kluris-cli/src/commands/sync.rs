@@ -20,6 +20,7 @@ use kluris_core::sync::claim::COMMAND_BOUND;
 use kluris_core::sync::engine::{self, check_git};
 use kluris_core::sync::{LeftAsIs, LeftReason, NETWORK_TIME_LIMIT, SyncReport, SyncRequest};
 
+use crate::brains;
 use crate::commands::dream::today;
 use crate::commands::resolve::command;
 use crate::error::CliError;
@@ -29,54 +30,6 @@ use crate::resolve::resolve_brains;
 
 fn plural(n: usize, one: &str, many: &str) -> String {
     format!("{n} {}", if n == 1 { one } else { many })
-}
-
-/// One brain's line for stderr, `kluris: NAME: ...`; `None` when it has
-/// nothing to say.
-fn summary(name: &str, report: &SyncReport) -> Option<String> {
-    let mut parts = Vec::new();
-    if report.pulled > 0 {
-        parts.push(format!(
-            "pulled {}",
-            plural(report.pulled, "commit", "commits")
-        ));
-    }
-    if !report.auto_merged.is_empty() {
-        parts.push(format!("auto-merged {}", report.auto_merged.join(", ")));
-    }
-    if !report.conflicts.is_empty() {
-        let paths: Vec<&str> = report.conflicts.iter().map(|c| c.path.as_str()).collect();
-        parts.push(format!(
-            "{} ({})",
-            plural(report.conflicts.len(), "conflict", "conflicts"),
-            paths.join(", ")
-        ));
-    }
-    if report.behind_conflict > 0 {
-        parts.push(format!(
-            "{} behind the conflict",
-            plural(report.behind_conflict, "newer commit", "newer commits")
-        ));
-    }
-    if let Some(left) = &report.left_as_is {
-        parts.push(match (left.reason, &left.detail) {
-            (LeftReason::Uncommitted, _) => {
-                format!("left as is (uncommitted): {}", left.paths.join(", "))
-            }
-            (reason, Some(detail)) => format!("left as is ({}): {detail}", reason.as_str()),
-            (reason, None) => format!("left as is ({})", reason.as_str()),
-        });
-    }
-    if report.pushed {
-        parts.push("pushed".into());
-    }
-    if report.to_push > 0 {
-        parts.push(format!(
-            "{} to push",
-            plural(report.to_push, "commit", "commits")
-        ));
-    }
-    (!parts.is_empty()).then(|| format!("kluris: {name}: {}\n", parts.join("; ")))
 }
 
 /// One brain's short text block.
@@ -128,6 +81,7 @@ fn text(name: &str, report: &SyncReport) -> String {
         LeftReason::Offline if report.pulled == 0 => format!("{name}: offline, nothing changed\n"),
         LeftReason::Offline => done(report).replacen('\n', ", offline, not pushed\n", 1),
         LeftReason::NoUpstream => format!("{name}: no upstream, nothing changed; {left}\n"),
+        LeftReason::Busy => format!("{name}: busy: {left}\n"),
         _ => format!("{name}: refused: {left}\n"),
     }
 }
@@ -207,11 +161,7 @@ pub fn run(brain: Option<&str>, no_verify: bool, as_json: bool) -> Result<(), Cl
     } else {
         let out: String = reports.iter().map(|(name, r)| text(name, r)).collect();
         human::print(&out);
-        let lines: String = reports
-            .iter()
-            .filter_map(|(name, r)| summary(name, r))
-            .collect();
-        eprint!("{lines}");
+        brains::print_lines(reports.iter().map(|(name, r)| (name.as_str(), Some(r))));
     }
     if reports.iter().any(|(_, report)| failed(report)) {
         Err(CliError::exit_only())

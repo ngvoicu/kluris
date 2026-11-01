@@ -18,14 +18,3 @@ pub mod status;
 pub mod sync;
 pub mod upgrade;
 pub mod wake_up;
-
-use std::path::Path;
-
-/// Fetch the brain at `path` from its remote before a read
-/// (`kluris_core::sync::fresh`): bounded, quiet, never failing the read and
-/// never changing the brain's files. Off when `KLURIS_NO_AUTO_SYNC` is
-/// exactly `1`.
-pub(crate) fn fresh_read(path: &Path) {
-    let off = std::env::var_os("KLURIS_NO_AUTO_SYNC").is_some_and(|v| v == "1");
-    kluris_core::sync::fresh::refresh(path, off);
-}

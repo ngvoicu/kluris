@@ -16,6 +16,8 @@
 //! - A brain with no git, no upstream, nested in a larger repository or
 //!   shallow is left alone with no report; an explicit session reports
 //!   `no_upstream`.
+//! - A read that lands nothing reports the merge that waits for a person,
+//!   unless the branch has moved on from it.
 //! - Nothing turns a session's network off, and a rewrite of `kluris.yml`
 //!   keeps its `sync:` key as written.
 
@@ -33,7 +35,7 @@ use kluris_core::git::SystemGit;
 use kluris_core::sync::claim::{COMMAND_BOUND, READ_BOUND, RemoteClaim, TreeClaim};
 use kluris_core::sync::engine;
 use kluris_core::sync::fetch::{BACKOFF, STAMP, back_off};
-use kluris_core::sync::session::{self, Brain, Intent, READ_TIME_LIMIT, SessionEnv};
+use kluris_core::sync::session::{self, Alone, Brain, Intent, READ_TIME_LIMIT, SessionEnv};
 use kluris_core::sync::{NETWORK_TIME_LIMIT, SyncReport, SyncRequest};
 use tempfile::TempDir;
 
@@ -336,7 +338,7 @@ const STALL: &str = "n=0; while [ $n -lt 1000 ]; do sleep 0.01; n=$((n+1)); done
 /// What a git that fails on its own prints: the words of a stop.
 #[cfg(unix)]
 const FAILS_WITH_STOP_WORDS: &str =
-    "echo 'the gate hook refused: stopped at the time limit' >&2; exit 1";
+    "echo 'the gate hook refused: `git status` was stopped at its time limit' >&2; exit 1";
 
 /// Where "ours" stands against the remote when a read opens it.
 #[derive(Debug, Clone, Copy)]
@@ -804,6 +806,50 @@ fn brains_without_a_remote_to_sync_get_no_report() {
 }
 
 #[test]
+fn a_session_says_why_it_left_a_brain_alone() {
+    let w = World::new();
+    let plain = w.dir.path().join("plain");
+    fs::create_dir_all(&plain).unwrap();
+    let nested = w.ours.join("notes");
+    let shallow = w.dir.path().join("shallow");
+    let url = file_url(&w);
+    w.run(
+        w.dir.path(),
+        &["clone", "-q", "--depth", "1", &url, &path(&shallow)],
+    );
+    let local = w.dir.path().join("local");
+    fs::create_dir_all(&local).unwrap();
+    w.run(&local, &["init", "-q", "-b", "main"]);
+    w.configure(&local, "Ana Tester", "ana@example.com");
+    w.write(&local, "brain.md", "# local\n");
+    w.run(&local, &["add", "brain.md"]);
+    w.run(&local, &["commit", "-q", "-m", "init"]);
+    let unset = w.dir.path().join("unset");
+    w.run(w.dir.path(), &["clone", "-q", &url, &path(&unset)]);
+    w.run(&unset, &["branch", "--unset-upstream"]);
+    let alone = |root: &Path| {
+        let env = env(&w, at(0));
+        let session = session::open(brain(root), Intent::Read, &env);
+        let why = session.alone().cloned();
+        assert_eq!(session::close(session), None, "{}", root.display());
+        why
+    };
+    assert_eq!(alone(&plain), Some(Alone::NotARepo));
+    assert_eq!(alone(&nested), Some(Alone::Nested));
+    assert_eq!(alone(&shallow), Some(Alone::Shallow));
+    assert_eq!(alone(&local), Some(Alone::NoRemote));
+    let Some(Alone::NoUpstream(left)) = alone(&unset) else {
+        panic!("no upstream: not said");
+    };
+    assert_eq!(left.reason.as_str(), "no_upstream");
+    assert_eq!(
+        left.detail.as_deref(),
+        Some("set one with git push -u origin main")
+    );
+    assert_eq!(alone(&w.ours), None, "a brain it syncs");
+}
+
+#[test]
 fn no_setting_turns_a_sessions_network_off() {
     for (n, settings) in [
         "sync:\n  auto_fetch: false\n",
@@ -964,7 +1010,7 @@ fn a_sync_key_that_cannot_be_moved_as_written_keeps_its_value() {
 }
 
 #[test]
-fn a_kluris_yml_without_a_sync_key_is_written_as_before() {
+fn a_kluris_yml_without_a_sync_key_is_written_from_its_values() {
     let tmp = TempDir::new().unwrap();
     let text = "name: alpha\ndescription: team\nagents:\n  commands_for: [codex, claude]\ncompanions: [specmint-core]\n";
     fs::write(tmp.path().join("kluris.yml"), text).unwrap();
@@ -974,6 +1020,97 @@ fn a_kluris_yml_without_a_sync_key_is_written_as_before() {
         fs::read_to_string(tmp.path().join("kluris.yml")).unwrap(),
         "name: alpha\ndescription: team\nagents:\n  commands_for:\n  - codex\n  - claude\ncompanions:\n- specmint-core\n"
     );
+}
+
+/// The overlapping edit of `notes/first.md` no rule merges: ours
+/// committed, theirs pushed.
+fn overlapping(w: &World) {
+    let base = w.read(&w.ours, "notes/first.md");
+    w.theirs_push(
+        &[("notes/first.md", &base.replace("Three.", "Three, theirs."))],
+        &[],
+    );
+    w.ours_commit(
+        &[("notes/first.md", &base.replace("Three.", "Three, ours."))],
+        &[],
+    );
+}
+
+/// The waiting merge a read reports: one conflict at `notes/first.md`,
+/// with both texts and the merge's id, and nothing pulled.
+fn assert_waiting(report: &SyncReport, merge: &str, what: &str) {
+    assert_eq!(report.conflicts.len(), 1, "{what}: {report:?}");
+    let c = &report.conflicts[0];
+    assert_eq!(c.path, "notes/first.md", "{what}");
+    assert_eq!(c.merge, merge, "{what}");
+    assert!(
+        c.ours
+            .as_deref()
+            .is_some_and(|t| t.contains("Three, ours.")),
+        "{what}: {c:?}"
+    );
+    assert!(
+        c.theirs
+            .as_deref()
+            .is_some_and(|t| t.contains("Three, theirs.")),
+        "{what}: {c:?}"
+    );
+    assert_eq!((report.pulled, report.behind_conflict), (0, 0), "{what}");
+}
+
+#[test]
+fn a_read_that_lands_nothing_reports_the_waiting_conflict() {
+    let w = World::new();
+    overlapping(&w);
+    let found = session_at(&w, &w.ours, Intent::Read, at(0)).expect("a report");
+    let merge = w.merge_id();
+    assert!(!merge.is_empty(), "no waiting merge: {found:?}");
+    assert_waiting(&found, &merge, "the read that met it");
+    let pending = w.ours.join(".git").join(kluris_core::sync::PENDING);
+    let recorded = fs::read(&pending).unwrap();
+    for intent in READS {
+        // Inside the throttle.
+        let report = session_at(&w, &w.ours, intent, at(30)).expect("a report");
+        assert_eq!(report.left_as_is, None, "{intent:?}");
+        assert_waiting(&report, &merge, &format!("{intent:?}, throttled"));
+    }
+    // No newer commit upstream.
+    let report = session_at(&w, &w.ours, Intent::Read, at(100)).expect("a report");
+    assert_waiting(&report, &merge, "nothing new");
+    // Another command holds the remote claim.
+    let held = RemoteClaim::try_take(&w.ours.join(".git")).unwrap();
+    let report = session_at(&w, &w.ours, Intent::Read, at(200)).expect("a report");
+    assert_eq!(reason(&report), Some("busy"), "{report:?}");
+    assert_waiting(&report, &merge, "busy");
+    drop(held);
+    // The remote is gone.
+    let gone = w.dir.path().join("gone.git").display().to_string();
+    w.run(&w.ours, &["remote", "set-url", "origin", &gone]);
+    let report = session_at(&w, &w.ours, Intent::Read, at(300)).expect("a report");
+    assert!(
+        matches!(reason(&report), Some("offline" | "refused")),
+        "{report:?}"
+    );
+    assert_waiting(&report, &merge, "unreachable");
+    assert_eq!(fs::read(&pending).unwrap(), recorded, "the record changed");
+}
+
+#[test]
+fn a_stale_waiting_conflict_is_not_reported_nor_touched() {
+    let w = World::new();
+    overlapping(&w);
+    assert!(session_at(&w, &w.ours, Intent::Read, at(0)).is_some());
+    let pending = w.ours.join(".git").join(kluris_core::sync::PENDING);
+    let recorded = fs::read(&pending).unwrap();
+    // HEAD moves on: the merge was found for a commit that is no longer
+    // the branch's.
+    w.ours_commit(&[("notes/keep.md", &neuron("", "# Keep, again\n"))], &[]);
+    for intent in READS {
+        let report = session_at(&w, &w.ours, intent, at(30)).expect("commits to push");
+        assert_eq!(report.conflicts, [], "{intent:?}");
+        assert_eq!(report.to_push, 2, "{intent:?}");
+    }
+    assert_eq!(fs::read(&pending).unwrap(), recorded, "the record changed");
 }
 
 /// The child's environment: what it does, the world's folder, the brain,

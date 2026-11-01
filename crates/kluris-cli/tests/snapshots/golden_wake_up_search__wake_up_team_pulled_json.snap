@@ -1,0 +1,9 @@
+---
+source: crates/kluris-cli/tests/golden_wake_up_search.rs
+expression: out
+---
+== stdout (715 bytes)
+{"ok": true, "name": "team", "path": "<ROOT>", "description": "", "brain_md": "# team\\n\\n## Lobes\\n\\n- [k](k/map.md)", "lobes": [{"name": "k", "description": "", "neurons": 2, "yaml_count": 0}], "total_neurons": 2, "total_yaml_neurons": 0, "recent": [{"path": "k/zebra.md", "updated": "2026-03-01", "file_type": "markdown"}, {"path": "k/jwt.md", "updated": "2026-02-03", "file_type": "markdown"}], "glossary": [{"term": "JWT", "definition": "JSON Web Token"}], "deprecation_count": 0, "deprecation": [], "parse_errors": 0, "sync": {"pulled": 1, "auto_merged": [], "left_as_is": {"reason": null, "paths": [], "detail": null}, "conflicts": [], "behind_conflict": 0, "to_push": 0, "pushed": false, "last_push": null}}
+== stderr (0 bytes)
+== exit 0
+<end of run>

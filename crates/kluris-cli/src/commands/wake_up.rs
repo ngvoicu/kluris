@@ -1,4 +1,5 @@
-//! `kluris wake-up [--brain NAME] [--json]`.
+//! `kluris wake-up [--brain NAME] [--json]`: the brain's snapshot, read
+//! once its session has brought teammates' commits in.
 
 use std::io::{self, Write};
 use std::path::Path;
@@ -6,8 +7,10 @@ use std::path::Path;
 use kluris_core::brain::deprecation::DeprecationIssue;
 use kluris_core::brain::store::LocalGitStore;
 use kluris_core::pyrepr::py_path_str;
+use kluris_core::sync::session::Intent;
 use kluris_core::wake_up::{WakeUp, wake_up};
 
+use crate::brains::{self, Target};
 use crate::error::CliError;
 use crate::output::json::{self, Json};
 use crate::resolve::resolve_brains;
@@ -18,7 +21,12 @@ pub fn run(brain: Option<&str>, as_json: bool) -> Result<(), CliError> {
         return Ok(());
     };
     let root = py_path_str(&brain.entry.path);
-    super::fresh_read(Path::new(&root));
+    let targets = [Target::new(
+        &brain.entry.path,
+        &brain.name,
+        &brain.entry.description,
+    )];
+    let opened = brains::open_today(&targets, Intent::Read)?;
     let store = LocalGitStore::open(Path::new(&root));
     let payload = wake_up(
         &store,
@@ -26,12 +34,17 @@ pub fn run(brain: Option<&str>, as_json: bool) -> Result<(), CliError> {
         &brain.entry.path,
         &brain.entry.description,
     );
+    let closed = brains::close(opened);
+    let report = closed.first().and_then(|c| c.report.as_ref());
     let text = if as_json {
-        json::to_line(&to_json(&payload))
+        json::to_line(&brains::with_sync(to_json(&payload), report))
     } else {
         human(&payload)
     };
     let _ = io::stdout().write_all(text.as_bytes());
+    if !as_json {
+        brains::print_lines([(brain.name.as_str(), report)]);
+    }
     Ok(())
 }
 

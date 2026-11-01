@@ -147,17 +147,15 @@ or direct file edits the user tells you about.
 
 If the `kluris` CLI is unavailable";
 
-/// A merging sync refreshes the snapshot too; reads fetch, `kluris sync` brings changes in.
+/// A merging sync refreshes the snapshot too; `kluris sync` brings changes in.
 const V3_REFRESH: &str = "\
 this skill's remember/learn intents, `kluris dream{flag}`,
 a `kluris sync{flag}` that reports `merged`,
 or direct file edits the user tells you about.
 
-`kluris wake-up` and `kluris search` read the brain as it is on disk; they
-fetch the teammates' pushes (at most once a minute) without changing any
-file. To bring the teammates' changes in, run `kluris sync{flag} --json`.
+To bring the teammates' changes in, run `kluris sync{flag} --json`.
 The write flow below does it before every write; run it also when the user
-asks for the team's latest. `KLURIS_NO_AUTO_SYNC=1` turns the fetch off.
+asks for the team's latest.
 
 If the `kluris` CLI is unavailable";
 
@@ -283,7 +281,12 @@ fn v2_to_v3(v2: &str, brain_name: &str) -> String {
     );
     let path = brain_path_of(v2);
     let fill = |text: &str| text.replace("{flag}", &flag).replace("{path}", &path);
-    let out = replace_once(&out, &fill(V2_REFRESH), &fill(V3_REFRESH), "fresh reads");
+    let out = replace_once(
+        &out,
+        &fill(V2_REFRESH),
+        &fill(V3_REFRESH),
+        "the refresh rule",
+    );
     let out = replace_once(
         &out,
         &fill(V2_WRITING_RULES),
@@ -425,7 +428,6 @@ fn the_write_flow_syncs_commits_and_resolves() {
             format!("`kluris resolve --brain {b} <path> --ours`"),
             format!("`kluris resolve --brain {b} --abort`"),
             "`KLURIS_AGENT=\"Claude Code\"`".to_string(),
-            "`KLURIS_NO_AUTO_SYNC=1`".to_string(),
             "never pass `--no-verify` unless the human asks for it".to_string(),
             "Brain files never contain conflict markers".to_string(),
             "If its `left_dirty` lists files that\n   `kluris dream` changed".to_string(),

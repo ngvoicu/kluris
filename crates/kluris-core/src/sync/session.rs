@@ -40,6 +40,14 @@
 //! says nothing; while another command holds the remote claim it is
 //! `busy`.
 //!
+//! **A waiting merge.** A read or housekeeping session that lands nothing
+//! (inside the throttle, busy, offline, refused, or with nothing newer)
+//! still reports the conflicts of the merge that waits for a person, with
+//! both texts and its id ([`engine::waiting`]), read under the shared tree
+//! claim within the read's time. Only one found for the pinned branch's
+//! commit now is reported; a stale one is neither reported nor touched.
+//! Without a fetch, `behind_conflict` stays 0.
+//!
 //! **The tree claim.** A read lands under the exclusive tree claim, waited
 //! for up to [`READ_BOUND`] (`busy` past it, and the brain is read as it
 //! is), then turns it shared ([`TreeClaim::downgrade`]) and holds it until
@@ -58,7 +66,7 @@
 //! **Brains left alone**, with no report: one that is not in git, one
 //! nested in a larger repository, a shallow one, one whose branch has no
 //! upstream (an explicit session reports `no_upstream` there), and, for a
-//! read, one whose git is too old to sync.
+//! read, one whose git is too old to sync. [`Session::alone`] says which.
 //!
 //! **No off switch.** Syncing is what every command that opens a git brain
 //! with an upstream does: no setting of the brain's and no environment
@@ -141,10 +149,32 @@ pub struct SessionEnv {
     pub program: Option<PathBuf>,
 }
 
+/// Why a session left a brain alone: it has nothing to sync, and a read
+/// says nothing of it ([`Session::alone`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Alone {
+    /// Not in a git work tree.
+    NotARepo,
+    /// Below the root of a larger repository.
+    Nested,
+    /// A shallow clone.
+    Shallow,
+    /// git is too old to sync.
+    GitTooOld,
+    /// It has no remote: a brain of this machine alone.
+    NoRemote,
+    /// It has a remote, but its branch has no upstream (or HEAD is
+    /// detached): why, with the command that sets one, as an explicit
+    /// session reports it.
+    NoUpstream(LeftAsIs),
+}
+
 /// One brain opened by a command, until [`close`].
 #[derive(Debug)]
 pub struct Session<'a> {
     intent: Intent,
+    /// Why the brain was left alone; `None` for one it syncs.
+    alone: Option<Alone>,
     /// The engine's brain; `None` for a brain left alone, or one that
     /// could not be opened.
     ctx: Option<Context<'a, SystemGit>>,
@@ -164,6 +194,12 @@ impl Session<'_> {
     pub fn report(&self) -> Option<&SyncReport> {
         let report = self.report.as_ref()?;
         (self.intent == Intent::Explicit || !silent(report)).then_some(report)
+    }
+
+    /// Why the brain was left alone, with no report for a read; `None`
+    /// for a brain the session syncs.
+    pub fn alone(&self) -> Option<&Alone> {
+        self.alone.as_ref()
     }
 }
 
@@ -256,6 +292,7 @@ fn push_later(program: &Path, roots: &[PathBuf]) {
 fn finish(session: Session) -> (Option<SyncReport>, Option<(PathBuf, PathBuf)>) {
     let Session {
         intent,
+        alone: _,
         ctx,
         report,
         claim,
@@ -312,6 +349,7 @@ fn last_push(ctx: &Context<SystemGit>, report: &mut SyncReport, intent: Intent, 
 #[derive(Debug)]
 struct Fetched<'a> {
     intent: Intent,
+    alone: Option<Alone>,
     ctx: Option<Context<'a, SystemGit>>,
     report: Option<SyncReport>,
     /// The upstream's commit the fetch named, to land (`Some(None)`: the
@@ -325,11 +363,18 @@ impl<'a> Fetched<'a> {
     fn alone(intent: Intent) -> Fetched<'a> {
         Fetched {
             intent,
+            alone: None,
             ctx: None,
             report: None,
             theirs: None,
             spent: Duration::ZERO,
         }
+    }
+
+    /// Left alone for `why`.
+    fn alone_for(mut self, why: Alone) -> Fetched<'a> {
+        self.alone = Some(why);
+        self
     }
 
     /// Left as it is for `left`.
@@ -357,8 +402,11 @@ fn fetch<'a>(brain: Brain<'a>, intent: Intent, env: &SessionEnv) -> Fetched<'a> 
     let alone = Fetched::alone(intent);
     let mut ctx = match engine::open(brain.root, &git, &request) {
         Ok(ctx) => ctx,
-        Err(SyncError::NotARepo | SyncError::Nested { .. }) => return alone,
-        Err(SyncError::GitTooOld { .. }) if intent.throttled() => return alone,
+        Err(SyncError::NotARepo) => return alone.alone_for(Alone::NotARepo),
+        Err(SyncError::Nested { .. }) => return alone.alone_for(Alone::Nested),
+        Err(SyncError::GitTooOld { .. }) if intent.throttled() => {
+            return alone.alone_for(Alone::GitTooOld);
+        }
         Err(e) => return alone.left(e.into()),
     };
     if !intent.throttled() {
@@ -366,10 +414,15 @@ fn fetch<'a>(brain: Brain<'a>, intent: Intent, env: &SessionEnv) -> Fetched<'a> 
     }
     match ctx.git().is_shallow(ctx.repo()) {
         Ok(false) => {}
-        Ok(true) => return alone,
+        Ok(true) => return alone.alone_for(Alone::Shallow),
         Err(e) => return alone.left(e.into()),
     }
-    if ctx.upstream().is_none() {
+    if let Err(none) = engine::upstream(&ctx) {
+        let why = match ctx.git().remotes(ctx.repo()) {
+            Ok(remotes) if remotes.is_empty() => Alone::NoRemote,
+            _ => Alone::NoUpstream(none),
+        };
+        let alone = alone.alone_for(why);
         return match engine::ready(&ctx) {
             Err(left) if !intent.throttled() => alone.left(left),
             _ => alone,
@@ -422,6 +475,7 @@ fn fetch<'a>(brain: Brain<'a>, intent: Intent, env: &SessionEnv) -> Fetched<'a> 
 fn settle<'a>(fetched: Fetched<'a>, env: &SessionEnv) -> Session<'a> {
     let Fetched {
         intent,
+        alone,
         ctx,
         mut report,
         theirs,
@@ -430,6 +484,7 @@ fn settle<'a>(fetched: Fetched<'a>, env: &SessionEnv) -> Session<'a> {
     let Some(mut ctx) = ctx else {
         return Session {
             intent,
+            alone,
             ctx: None,
             report,
             claim: None,
@@ -480,11 +535,25 @@ fn settle<'a>(fetched: Fetched<'a>, env: &SessionEnv) -> Session<'a> {
             }
         },
     };
+    // A merge that waits for a person is said on every read that brings
+    // nothing to settle it, under the shared claim, so no land is under way.
+    let quiet = report
+        .as_ref()
+        .is_none_or(|r| r.pulled == 0 && r.conflicts.is_empty());
+    if intent.throttled() && claim.is_some() && quiet {
+        ctx.until(Some(Instant::now() + READ_TIME_LIMIT.saturating_sub(spent)));
+        match engine::waiting(&ctx) {
+            Ok(conflicts) if conflicts.is_empty() => {}
+            Ok(conflicts) => report.get_or_insert_with(SyncReport::default).conflicts = conflicts,
+            Err(left) => add_left(&mut report, in_time(left)),
+        }
+    }
     // The read has started: what the command does with the brain next is
     // never stopped.
     ctx.until(None);
     Session {
         intent,
+        alone,
         ctx: Some(ctx),
         report,
         claim,

@@ -245,26 +245,6 @@ fn status_of_a_brain_with_history() {
 }
 
 #[test]
-fn status_shows_an_open_sync_conflict() {
-    let sb = Sandbox::new();
-    let brain = demo_brain(&sb);
-    register(&sb, &[("demo", &brain)]);
-    let pending = brain.join(".git").join("kluris-sync").join("pending.json");
-    fs::create_dir_all(pending.parent().unwrap()).unwrap();
-    let (a, b, c) = ("a".repeat(40), "b".repeat(40), "c".repeat(40));
-    let (one, two, three) = ("1".repeat(40), "2".repeat(40), "3".repeat(40));
-    fs::write(
-        &pending,
-        format!(
-            "{{\"base\": \"{a}\", \"ours\": \"{b}\", \"theirs\": \"{c}\", \"conflicts\": [{{\"path\": \"lobe/a.md\", \"kind\": \"content\", \"base\": \"{one}\", \"ours\": \"{two}\", \"theirs\": \"{three}\"}}], \"created\": \"2026-01-01T00:00:00Z\"}}"
-        ),
-    )
-    .unwrap();
-    golden(&sb, "status_json_open_conflict", &["status", "--json"]);
-    golden(&sb, "status_text_open_conflict", &["status"]);
-}
-
-#[test]
 fn status_of_a_dirty_brain() {
     let sb = Sandbox::new();
     let brain = demo_brain(&sb);

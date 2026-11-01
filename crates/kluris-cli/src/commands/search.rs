@@ -8,7 +8,10 @@ use kluris_core::brain::store::{LocalGitStore, ReadError};
 use kluris_core::config::read_brain_config;
 use kluris_core::pyrepr::py_path_str;
 use kluris_core::search::{Hit, Language, SearchRequest, search};
+use kluris_core::sync::SyncReport;
+use kluris_core::sync::session::Intent;
 
+use crate::brains::{self, Target};
 use crate::error::CliError;
 use crate::output::human::{self, Painter, Style};
 use crate::output::json::{self, Json};
@@ -38,7 +41,12 @@ pub fn run(options: &Options) -> Result<(), CliError> {
         return Ok(());
     };
     let root = py_path_str(&brain.entry.path);
-    super::fresh_read(Path::new(&root));
+    let targets = [Target::new(
+        &brain.entry.path,
+        &brain.name,
+        &brain.entry.description,
+    )];
+    let opened = brains::open_today(&targets, Intent::Read)?;
     let language = read_brain_config(Path::new(&root))
         .ok()
         .and_then(|cfg| cfg.search.language)
@@ -52,13 +60,11 @@ pub fn run(options: &Options) -> Result<(), CliError> {
         language,
     };
     let outcome = search(&store, &request);
+    let closed = brains::close(opened);
+    let report: Option<&SyncReport> = closed.first().and_then(|c| c.report.as_ref());
     if options.json {
-        human::print(&json::to_line(&to_json(
-            &brain.name,
-            options.query,
-            &outcome.hits,
-            &outcome.skipped,
-        )));
+        let doc = to_json(&brain.name, options.query, &outcome.hits, &outcome.skipped);
+        human::print(&json::to_line(&brains::with_sync(doc, report)));
     } else {
         human::print(&text(
             Painter::stdout(),
@@ -71,6 +77,7 @@ pub fn run(options: &Options) -> Result<(), CliError> {
             stderr.push_str(&format!("Skipped {}: {}\n", s.rel, reason(&s.error)));
         }
         let _ = std::io::Write::write_all(&mut std::io::stderr(), stderr.as_bytes());
+        brains::print_lines([(brain.name.as_str(), report)]);
     }
     Ok(())
 }

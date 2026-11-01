@@ -115,13 +115,10 @@ fn resolve(path: &Path) -> Result<PathBuf, RegisterError> {
     sandbox::resolve(path).map_err(|_| failed(format!("Symlink loop from {}", path.display())))
 }
 
-/// Register the brain at `req.source`. `pick` is the companion picker, run
-/// once the brain checks out (the caller passes one that picks nothing when
-/// v2 would not ask).
-pub fn register(
-    req: &RegisterRequest,
-    pick: impl FnOnce() -> Result<Vec<String>, Aborted>,
-) -> Result<Registered, RegisterError> {
+/// The brain folder `req.source` names, with its links resolved: a
+/// directory with a `brain.md`. [`register`] reads it after, so a caller
+/// can bring it up to date in between.
+pub fn locate(req: &RegisterRequest) -> Result<PathBuf, RegisterError> {
     let source = py_path_str(&expand_user(req.source, req.user_home));
     if suffix_lower(&source) == ".zip" {
         return Err(RegisterError::Refused(
@@ -147,7 +144,18 @@ pub fn register(
             root.display()
         )));
     }
+    Ok(root)
+}
 
+/// Register the brain at `root` ([`locate`]). `pick` is the companion
+/// picker, run once the brain checks out (the caller passes one that picks
+/// nothing when v2 would not ask).
+pub fn register(
+    req: &RegisterRequest,
+    root: &Path,
+    pick: impl FnOnce() -> Result<Vec<String>, Aborted>,
+) -> Result<Registered, RegisterError> {
+    let root = root.to_path_buf();
     let dir_name = root
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())

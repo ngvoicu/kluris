@@ -1418,7 +1418,7 @@ fn at(seconds: u64) -> SystemTime {
 #[test]
 fn a_fetch_within_the_last_minute_is_not_repeated() {
     let tmp = tempfile::TempDir::new().unwrap();
-    let stamp = tmp.path().join("kluris-sync").join("last-fetch");
+    let stamp = tmp.path().join("kluris-sync").join("fetch-stamp");
     let throttle = Duration::from_secs(60);
     let now = 1_000_000_000u64;
     assert!(!fetched_recently(&stamp, at(now), throttle), "no stamp");

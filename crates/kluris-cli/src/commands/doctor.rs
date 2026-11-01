@@ -1,11 +1,21 @@
 //! `kluris doctor [--no-refresh] [--json]` (research-03 §1.13; the checks
-//! are `kluris_core::doctor`'s).
+//! are `kluris_core::doctor`'s). Every registered brain is read through its
+//! session: a brain's check carries what its sync did (`sync`), and warns
+//! when the brain was left as it is or a conflict waits; the sync never
+//! fails it.
+
+use std::path::Path;
 
 use kluris_core::agents::install::{DestinationReport, InstallReport};
+use kluris_core::config::read_global_config;
 use kluris_core::doctor::{
     self, Check, CompanionRefresh, DoctorReport, DoctorRequest, Status, home_relative,
 };
+use kluris_core::pyrepr::py_path_str;
+use kluris_core::sync::SyncReport;
+use kluris_core::sync::session::Intent;
 
+use crate::brains::{self, Target};
 use crate::error::CliError;
 use crate::output::human::{self, Painter, Style};
 use crate::output::json::{self, Json};
@@ -23,6 +33,21 @@ pub fn run(no_refresh: bool, as_json: bool) -> Result<(), CliError> {
     if let Some(dir) = current_exe.as_deref().and_then(|exe| exe.parent()) {
         kluris_core::dist::swap::remove_swap_leftovers(dir);
     }
+    // Every registered brain whose folder is there.
+    let (names, targets): (Vec<String>, Vec<Target>) = read_global_config(&config_path)
+        .map(|config| {
+            config
+                .brains
+                .iter()
+                .filter(|(_, entry)| Path::new(&py_path_str(&entry.path)).is_dir())
+                .map(|(name, entry)| {
+                    let target = Target::new(&entry.path, name, &entry.description);
+                    (name.clone(), target)
+                })
+                .unzip()
+        })
+        .unwrap_or_default();
+    let opened = brains::open_today(&targets, Intent::Read)?;
     let mut report = doctor::run(&DoctorRequest {
         config_path: &config_path,
         home: &home,
@@ -37,10 +62,22 @@ pub fn run(no_refresh: bool, as_json: bool) -> Result<(), CliError> {
             .checks
             .extend(crate::commands::upgrade::services_check());
     }
+    let closed = brains::close(opened);
+    let synced: Vec<(String, Option<SyncReport>)> = names
+        .into_iter()
+        .zip(closed)
+        .map(|(name, closed)| (name, closed.report))
+        .collect();
+    for (name, sync) in &synced {
+        if let Some(sync) = sync {
+            warn_for(&mut report.checks, name, sync);
+        }
+    }
     if as_json {
-        human::print(&json::to_line(&report_json(&report)));
+        human::print(&json::to_line(&report_json(&report, &synced)));
     } else {
         human::print(&report_text(&report, &home, Painter::stdout()));
+        brains::print_lines(synced.iter().map(|(n, s)| (n.as_str(), s.as_ref())));
     }
     if report.ok() {
         Ok(())
@@ -53,10 +90,36 @@ fn strings(items: &[String]) -> Json {
     Json::Array(items.iter().map(|s| Json::Str(s.clone())).collect())
 }
 
+/// The check of brain `name` warns when its sync left it as it is or a
+/// conflict waits, its detail then the path, `; ` and what the sync said.
+/// A check that fails stays failed.
+fn warn_for(checks: &mut [Check], name: &str, sync: &SyncReport) {
+    let stuck = sync.left_as_is.is_some() || !sync.conflicts.is_empty();
+    let check = checks
+        .iter_mut()
+        .find(|c| c.name == format!("brain:{name}"));
+    if let (true, Some(check), Some(said)) = (stuck, check, brains::summary(sync))
+        && check.status == Status::Pass
+    {
+        check.status = Status::Warn;
+        check.detail = format!("{}; {said}", check.detail);
+    }
+}
+
 /// `{"ok", "checks", "companions", "skills"}`: v2's first three, then the
 /// install report (`null` when it did not run).
-fn report_json(report: &DoctorReport) -> Json {
-    let checks = report.checks.iter().map(check_json).collect();
+fn report_json(report: &DoctorReport, synced: &[(String, Option<SyncReport>)]) -> Json {
+    let checks = report
+        .checks
+        .iter()
+        .map(|check| {
+            let sync = synced
+                .iter()
+                .find(|(name, _)| check.name == format!("brain:{name}"))
+                .and_then(|(_, sync)| sync.as_ref());
+            check_json(check, sync)
+        })
+        .collect();
     let companions = report.companions.iter().map(companion_json).collect();
     Json::Object(vec![
         ("ok".into(), Json::Bool(report.ok())),
@@ -69,14 +132,16 @@ fn report_json(report: &DoctorReport) -> Json {
     ])
 }
 
-/// `{"name", "passed", "detail"}`, plus `"warning": true` for a warning
-/// (which passes).
-fn check_json(check: &Check) -> Json {
+/// `{"name", "passed", "detail"}`, then a brain's `sync` object when its
+/// sync has something to say, then `"warning": true` for a warning (which
+/// passes).
+fn check_json(check: &Check, sync: Option<&SyncReport>) -> Json {
     let mut fields = vec![
         ("name".into(), Json::Str(check.name.clone())),
         ("passed".into(), Json::Bool(check.status != Status::Fail)),
         ("detail".into(), Json::Str(check.detail.clone())),
     ];
+    fields.extend(brains::sync_field(sync));
     if check.status == Status::Warn {
         fields.push(("warning".into(), Json::Bool(true)));
     }

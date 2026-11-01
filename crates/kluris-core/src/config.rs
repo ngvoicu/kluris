@@ -9,8 +9,7 @@
 //! Two exceptions: a brain's `search: {language: ...}`, which v2 ignores, is
 //! read for `kluris search` and written back after `companions`;
 //! and its `sync:` entry is written back after `search` exactly as written
-//! ([`SyncConfig::entry`]), its `auto_fetch` read for the fresh reads of
-//! `wake-up` and `search`.
+//! ([`SyncConfig::entry`]); nothing in it is read.
 
 use std::collections::BTreeSet;
 use std::ffi::OsStr;
@@ -112,7 +111,7 @@ pub struct BrainConfig {
     pub companions: Vec<String>,
     /// Kluris 3's `search:` settings (v2 ignores the key).
     pub search: SearchConfig,
-    /// Kluris 3.1's `sync:` settings (v2 ignores the key).
+    /// The `sync:` entry (v2 ignores the key).
     pub sync: SyncConfig,
 }
 
@@ -124,12 +123,9 @@ pub struct SearchConfig {
     pub language: Option<String>,
 }
 
-/// A brain's `sync:` settings in `kluris.yml`.
+/// A brain's `sync:` entry in `kluris.yml`, kept as written.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SyncConfig {
-    /// `sync.auto_fetch` as written (`false` turns the fresh reads off);
-    /// `None` when absent or not a boolean.
-    pub auto_fetch: Option<bool>,
     /// The `sync:` entry, written back as it is: its own lines from the
     /// file when they read alone as the same entry, else the entry's value
     /// as the writer writes it. `None` without the key.
@@ -344,13 +340,6 @@ pub fn parse_brain_config(text: &str) -> Result<BrainConfig, String> {
         },
         _ => None,
     };
-    let auto_fetch = match root.get("sync") {
-        Some(Value::Map(sync)) => match sync.get("auto_fetch") {
-            Some(Value::Bool(on)) => Some(*on),
-            _ => None,
-        },
-        _ => None,
-    };
     let entry = root.get("sync").map(|value| sync_entry(text, value));
     Ok(BrainConfig {
         name,
@@ -358,7 +347,7 @@ pub fn parse_brain_config(text: &str) -> Result<BrainConfig, String> {
         agents,
         companions,
         search: SearchConfig { language },
-        sync: SyncConfig { auto_fetch, entry },
+        sync: SyncConfig { entry },
     })
 }
 

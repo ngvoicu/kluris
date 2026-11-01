@@ -95,7 +95,7 @@ impl GitError {
     pub(crate) fn out_of_time(args: &[&str]) -> GitError {
         GitError {
             stopped: true,
-            ..GitError::new(args, None, "stopped at the time limit")
+            ..GitError::new(args, None, "stopped at its time limit")
         }
     }
 }
@@ -103,6 +103,9 @@ impl GitError {
 impl fmt::Display for GitError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let command = format!("git {}", self.args.join(" "));
+        if self.stopped {
+            return write!(f, "`{command}` was stopped at its time limit");
+        }
         match self.code {
             Some(code) => write!(f, "`{command}` failed (exit {code}): {}", self.detail),
             None => write!(f, "`{command}` could not run: {}", self.detail),
@@ -1240,6 +1243,25 @@ fn parse_file_dates(out: &[u8]) -> FileDates {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_git_stopped_at_its_deadline_says_so() {
+        let stopped = GitError::out_of_time(&["status", "--porcelain"]);
+        assert_eq!(
+            stopped.to_string(),
+            "`git status --porcelain` was stopped at its time limit"
+        );
+        let failed = GitError::new(&["status"], Some(128), "fatal: not a git repository");
+        assert_eq!(
+            failed.to_string(),
+            "`git status` failed (exit 128): fatal: not a git repository"
+        );
+        let unstarted = GitError::new(&["status"], None, "No such file or directory");
+        assert_eq!(
+            unstarted.to_string(),
+            "`git status` could not run: No such file or directory"
+        );
+    }
 
     #[test]
     fn parse_log_records() {

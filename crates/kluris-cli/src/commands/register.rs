@@ -1,12 +1,20 @@
-//! `kluris register [SOURCE] [--json]` (research-03 §1.2).
+//! `kluris register [SOURCE] [--json]` (research-03 §1.2): the brain is
+//! found, its session brings teammates' commits in, and then it is read
+//! and registered. A brain whose branch has no upstream says so
+//! (`no_upstream`) and gets none.
 
 use std::io::Write;
 use std::path::PathBuf;
 
+use kluris_core::agents::install::InstallReport;
 use kluris_core::companions::prompt::pick_to_add;
 use kluris_core::create::prompt_text;
-use kluris_core::register::{RegisterRequest, Registered, register};
+use kluris_core::register::{RegisterRequest, Registered, locate, register};
+use kluris_core::scaffold::{fallback_name, read_brain_identity};
+use kluris_core::sync::SyncReport;
+use kluris_core::sync::session::{Alone, Intent};
 
+use crate::brains::{self, Closed, Target};
 use crate::error::CliError;
 use crate::output::human::{self, Painter};
 use crate::output::json::{self, Json};
@@ -68,29 +76,64 @@ pub fn run(source: Option<&str>, as_json: bool) -> Result<(), CliError> {
             Ok(Vec::new())
         }
     };
+    let root = locate(&request).map_err(|e| CliError::new(e.to_string()))?;
+    let dir_name = root
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let (name, description) = read_brain_identity(&root, &fallback_name(&dir_name));
+    let targets = [Target::new(
+        &root.display().to_string(),
+        &name,
+        &description,
+    )];
+    let opened = brains::open_today(&targets, Intent::Read)?;
+    // Read and registered, the skills refreshed, all while the session is
+    // open.
+    let done = register(&request, &root, pick)
+        .map_err(|e| CliError::new(e.to_string()))
+        .and_then(|registered| {
+            Ok(match registered {
+                Registered::Already { name, path } => Done::Already { name, path },
+                Registered::New {
+                    name,
+                    path,
+                    companions,
+                } => Done::New {
+                    name,
+                    path,
+                    companions,
+                    skills: refresh_skills(&home)?,
+                },
+            })
+        });
+    let report = said(brains::close(opened));
+    let report = report.as_ref();
     let painter = Painter::stdout();
-    match register(&request, pick).map_err(|e| CliError::new(e.to_string()))? {
-        Registered::Already { name, path } => {
+    match done? {
+        Done::Already { name, path } => {
             if as_json {
-                human::print(&json::to_line(&Json::Object(vec![
+                let doc = Json::Object(vec![
                     ("ok".into(), Json::Bool(true)),
                     ("name".into(), Json::Str(name)),
                     ("path".into(), Json::Str(path)),
                     ("already_registered".into(), Json::Bool(true)),
-                ])));
+                ]);
+                human::print(&json::to_line(&brains::with_sync(doc, report)));
             } else {
                 human::print(&format!(
                     "Brain {} is already registered at {path}\n",
                     painter.bold(&name)
                 ));
+                brains::print_lines([(name.as_str(), report)]);
             }
         }
-        Registered::New {
+        Done::New {
             name,
             path,
             companions,
+            skills,
         } => {
-            let skills = refresh_skills(&home)?;
             print_failures(&skills, &home);
             if as_json {
                 let companions = companions.into_iter().map(Json::Str).collect();
@@ -100,15 +143,45 @@ pub fn run(source: Option<&str>, as_json: bool) -> Result<(), CliError> {
                     ("path".into(), Json::Str(path)),
                     ("companions".into(), Json::Array(companions)),
                 ]);
-                human::print(&json::to_line(&with_problems(doc, &skills)));
+                let doc = brains::with_sync(with_problems(doc, &skills), report);
+                human::print(&json::to_line(&doc));
             } else {
                 human::print(&format!(
                     "Brain registered: {}\n  Path: {path}\n\n{}",
                     painter.bold(&name),
                     skill_note(painter, &name, &skills)
                 ));
+                brains::print_lines([(name.as_str(), report)]);
             }
         }
     }
     Ok(())
+}
+
+/// What `register` did, with the skill install a new brain gets.
+enum Done {
+    Already {
+        name: String,
+        path: String,
+    },
+    New {
+        name: String,
+        path: String,
+        companions: Vec<String>,
+        skills: InstallReport,
+    },
+}
+
+/// What the brain's sync says, a branch without an upstream included: a
+/// brain is registered to be shared.
+fn said(closed: Vec<Closed>) -> Option<SyncReport> {
+    let closed = closed.into_iter().next()?;
+    match (closed.report, closed.alone) {
+        (Some(report), _) => Some(report),
+        (None, Some(Alone::NoUpstream(left))) => Some(SyncReport {
+            left_as_is: Some(left),
+            ..SyncReport::default()
+        }),
+        (None, _) => None,
+    }
 }

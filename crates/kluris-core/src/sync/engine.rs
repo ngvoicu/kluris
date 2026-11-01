@@ -414,8 +414,9 @@ fn drop_waiting(path: &Path, waiting: Option<Pending>) -> Result<(), LeftAsIs> {
     }
 }
 
-/// The pinned branch's upstream, or why there is none.
-fn upstream<'c, G: SyncGit>(ctx: &'c Context<G>) -> Result<&'c Upstream, LeftAsIs> {
+/// The pinned branch's upstream, or why there is none (`no_upstream`, with
+/// the command that sets one).
+pub fn upstream<'c, G: SyncGit>(ctx: &'c Context<G>) -> Result<&'c Upstream, LeftAsIs> {
     if let Some(upstream) = &ctx.upstream {
         return Ok(upstream);
     }
@@ -482,6 +483,23 @@ fn merge_stopped(e: MergeHookError) -> LeftAsIs {
             LeftAsIs::because(LeftReason::Hook, e.to_string())
         }
     }
+}
+
+/// The conflicts of the worktree's waiting merge, with each side's text
+/// ([`texts`]), when it was found for the pinned branch's commit now;
+/// none when no merge waits, or one waits for a commit the branch has
+/// moved on from (it stays as it is).
+pub fn waiting<G: SyncGit>(ctx: &Context<G>) -> Result<Vec<ConflictText>, LeftAsIs> {
+    let Some(branch) = ctx.branch() else {
+        return Ok(Vec::new());
+    };
+    let Found::Waiting(waiting) = Pending::read(&ctx.pending()) else {
+        return Ok(Vec::new());
+    };
+    if ctx.git.ref_value(&ctx.repo, branch)?.as_deref() != Some(waiting.ours.as_str()) {
+        return Ok(Vec::new());
+    }
+    Ok(texts(&ctx.git, &ctx.repo, &waiting)?)
 }
 
 /// The waiting merge's conflicts with each side's text and the merge's id:

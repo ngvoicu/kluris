@@ -46,19 +46,6 @@ impl Conflict {
             ("theirs".into(), opt(&self.theirs)),
         ])
     }
-
-    /// As `kluris status --json` reports it: `{path, kind, merge, base,
-    /// ours, theirs}`, with the id of the waiting merge it belongs to.
-    pub fn reported_json(&self, merge: &str) -> Json {
-        Json::Object(vec![
-            ("path".into(), Json::Str(self.path.clone())),
-            ("kind".into(), Json::Str(self.kind.as_str().into())),
-            ("merge".into(), Json::Str(merge.into())),
-            ("base".into(), opt(&self.base)),
-            ("ours".into(), opt(&self.ours)),
-            ("theirs".into(), opt(&self.theirs)),
-        ])
-    }
 }
 
 /// The waiting merge: the two commits, their merge base, the conflicts,

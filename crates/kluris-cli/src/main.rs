@@ -1,5 +1,6 @@
 //! The `kluris` binary: parses arguments, calls `kluris-core`, prints.
 
+mod brains;
 mod commands;
 mod error;
 mod output;

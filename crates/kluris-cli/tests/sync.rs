@@ -522,3 +522,21 @@ fn a_push_to_a_missing_remote_named_with_network_words_is_refused_not_offline() 
     assert_eq!(entry["to_push"], 1);
     assert_eq!(h.git(&bare, &["rev-parse", "main"]), remote);
 }
+
+#[test]
+fn a_busy_brain_says_busy_with_its_detail() {
+    let mut h = Home::new();
+    let root = h.brain("alpha");
+    let held = kluris_core::sync::claim::RemoteClaim::try_take(&root.join(".git")).unwrap();
+    let (code, out, err) = h.run(&["sync", "--brain", "alpha"]);
+    drop(held);
+    assert_eq!(code, 1, "{out}{err}");
+    assert!(
+        out.starts_with("alpha: busy: another kluris command is fetching this brain's remote"),
+        "{out}"
+    );
+    assert!(
+        err.starts_with("kluris: alpha: left as is (busy): another kluris command"),
+        "{err}"
+    );
+}

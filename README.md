@@ -506,14 +506,11 @@ kluris wake-up --brain acme
 ```
 
 Before they read, `kluris wake-up` and `kluris search` fetch your team's
-pushes, at most once a minute and one read at a time, within 3 seconds,
-without changing any file or running your git hooks: they read the brain as
-it is on disk. A fetch cut off at 3 seconds (a slow link) pauses these fetches
-for that brain for an hour, doubling up to a day, until a fetch succeeds.
+pushes, at most once a minute, within 3 seconds. A fetch cut off at 3
+seconds (a slow link) pauses these fetches for that brain for an hour,
+doubling up to a day, until a fetch succeeds.
 `kluris sync` brings the changes in; the agent runs it before every write and when you ask for the
 team's latest. A brain inside another project's repository is never fetched.
-Turn the fetch off with `KLURIS_NO_AUTO_SYNC=1` or, for one brain,
-`sync: {auto_fetch: false}` in its `kluris.yml`.
 
 ## Several brains
 
@@ -792,8 +789,6 @@ agents:
 companions: []       # see "Specmint companions"
 search:
   language: en       # en or ro; detected when absent
-sync:
-  auto_fetch: true   # false: wake-up and search read without fetching
 ```
 
 Trim `agents.commands_for` to the agents you use and run `kluris doctor`. The
@@ -805,7 +800,6 @@ shared `~/.agents/skills/` folder always gets every brain's skill.
 |----------|--------|
 | `KLURIS_CONFIG` | Use this file instead of `~/.kluris/config.yml` |
 | `KLURIS_NO_PROMPT=1` | Never prompt; commands that need a choice stop and say what to pass |
-| `KLURIS_NO_AUTO_SYNC=1` | `wake-up` and `search` read without fetching the brain first |
 | `COPILOT_HOME` | Also install the skills into `$COPILOT_HOME/skills` |
 | `KLURIS_GITHUB_TOKEN` | A GitHub token for `self-update` |
 | `KLURIS_VERSION` | The release the install scripts install |

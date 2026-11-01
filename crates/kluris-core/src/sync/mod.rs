@@ -12,8 +12,7 @@
 //! - [`session`]: the one step through which every command that opens a
 //!   brain syncs; [`background`]: the detached push of the commits a read
 //!   leaves waiting;
-//! - [`commit`]: `kluris commit`; [`resolve`]: `kluris resolve`;
-//!   [`fresh`]: the fetch before a read.
+//! - [`commit`]: `kluris commit`; [`resolve`]: `kluris resolve`.
 //!
 //! This module holds the types they share.
 
@@ -22,7 +21,6 @@ pub mod claim;
 pub mod commit;
 pub mod engine;
 pub mod fetch;
-pub mod fresh;
 pub mod frontmatter_merge;
 pub mod git;
 pub mod hooks;

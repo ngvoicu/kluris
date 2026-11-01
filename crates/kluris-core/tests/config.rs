@@ -958,32 +958,3 @@ fn the_search_language_key_is_read_and_kept_on_rewrite() {
         assert!(!brain_config_to_yaml(&cfg).contains("search"), "{text}");
     }
 }
-
-#[test]
-fn the_sync_auto_fetch_key_is_read_for_the_fresh_reads() {
-    // The fresh reads of `wake-up` and `search` read it.
-    // A rewrite keeps the whole `sync:` entry as written (sync_session.rs).
-    for (text, value) in [
-        (
-            "name: alpha\nsync:\n  auto_fetch: false\n  other: 1\n",
-            false,
-        ),
-        ("name: alpha\nsync:\n  auto_fetch: true\n", true),
-        ("name: alpha\nsync:\n  auto_fetch: off\n", false),
-        ("name: alpha\nsync: {auto_fetch: no}\n", false),
-    ] {
-        let cfg = parse_brain_config(text).unwrap();
-        assert_eq!(cfg.sync.auto_fetch, Some(value), "{text}");
-    }
-    // A malformed key is ignored.
-    for text in [
-        "name: alpha\n",
-        "name: alpha\nsync: 5\n",
-        "name: alpha\nsync:\n  auto_fetch: 'false'\n",
-        "name: alpha\nsync:\n  auto_fetch: 0\n",
-        "name: alpha\nsync: {}\n",
-    ] {
-        let cfg = parse_brain_config(text).unwrap();
-        assert_eq!(cfg.sync.auto_fetch, None, "{text}");
-    }
-}

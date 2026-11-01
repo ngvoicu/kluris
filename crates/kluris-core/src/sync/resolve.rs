@@ -230,8 +230,8 @@ fn read_pending(path: &Path) -> Result<Pending, ResolveError> {
     }
 }
 
-/// The waiting merge of the brain at `root`, for `kluris status`; `None`
-/// when none is open (or it cannot be read).
+/// The waiting merge of the brain at `root`; `None` when none is open (or
+/// it cannot be read).
 pub fn waiting_merge(root: &Path, git: &impl SyncGit) -> Option<Pending> {
     let (_, dirs) = locate(root, git).ok()?;
     read_pending(&pending::path(&dirs)).ok()

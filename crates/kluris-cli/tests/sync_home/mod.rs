@@ -7,6 +7,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command as StdCommand;
 use std::sync::{Mutex, MutexGuard};
+use std::time::{Duration, Instant};
 
 use assert_cmd::Command;
 use assert_fs::TempDir;
@@ -70,7 +71,6 @@ impl Home {
                 self.dir.path().join(".kluris").join("config.yml"),
             )
             .env("KLURIS_NO_PROMPT", "1")
-            .env("KLURIS_NO_AUTO_SYNC", "1")
             .env("NO_COLOR", "1");
         for var in ISOLATED_VARS {
             cmd.env_remove(var);
@@ -264,10 +264,18 @@ pub fn refused(sync: &Value) -> Value {
 
 impl Home {
     /// The id of brain `name`'s waiting merge, as `kluris status --json`
-    /// reports it.
+    /// reports it. A status that leaves commits waiting starts a
+    /// background push; it is waited for, so the command after it finds
+    /// the remote free.
     pub fn merge(&self, name: &str) -> String {
         let (_, doc) = self.json(&["status", "--brain", name, "--json"]);
-        let merge = &doc["brains"][0]["sync"]["conflicts"][0]["merge"];
+        let sync = &doc["brains"][0]["sync"];
+        if sync["to_push"].as_u64().is_some_and(|n| n > 0)
+            && let Some((_, root)) = self.brains.iter().find(|(brain, _)| brain == name)
+        {
+            wait_for_background(root);
+        }
+        let merge = &sync["conflicts"][0]["merge"];
         merge
             .as_str()
             .unwrap_or_else(|| panic!("no merge: {doc}"))
@@ -277,4 +285,21 @@ impl Home {
 
 pub fn keys(doc: &Value) -> Vec<String> {
     doc.as_object().unwrap().keys().cloned().collect()
+}
+
+/// Waits, at most a minute, for the background push a read started for
+/// the brain at `root` to end: on Unix until its record is written; on
+/// Windows, where the runner's job may keep it from starting, until no run
+/// holds its lock.
+pub fn wait_for_background(root: &Path) {
+    let dir = root.join(".git").join("kluris-sync");
+    let done = || {
+        !dir.join("background.lock").exists()
+            && (!cfg!(unix) || dir.join("last-push.json").is_file())
+    };
+    let until = Instant::now() + Duration::from_secs(60);
+    while !done() {
+        assert!(Instant::now() < until, "the background push did not end");
+        std::thread::sleep(Duration::from_millis(20));
+    }
 }

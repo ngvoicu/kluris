@@ -6,10 +6,9 @@ use kluris_core::brain::store::LocalGitStore;
 use kluris_core::git::SystemGit;
 use kluris_core::pyrepr::py_path_str;
 use kluris_core::status::{BrainStatus, brain_status};
-use kluris_core::sync::pending::Pending;
-use kluris_core::sync::resolve::waiting_merge;
+use kluris_core::sync::session::Intent;
 
-use crate::commands::resolve::command;
+use crate::brains::{self, Target};
 use crate::error::CliError;
 use crate::output::human::{self, Painter};
 use crate::output::json::{self, Json};
@@ -20,39 +19,60 @@ const TEXT_COMMITS: usize = 5;
 
 pub fn run(brain: Option<&str>, as_json: bool) -> Result<(), CliError> {
     let brains = resolve_brains(brain, true, as_json)?;
+    let targets: Vec<Target> = brains
+        .iter()
+        .map(|b| Target::new(&b.entry.path, &b.name, &b.entry.description))
+        .collect();
+    let opened = brains::open_today(&targets, Intent::Read)?;
     let git = SystemGit::new();
-    let painter = Painter::stdout();
-    let mut results = Vec::new();
+    // Read brain by brain, up to the first that cannot be read.
+    let mut statuses = Vec::new();
+    let mut failure = None;
     for brain in &brains {
         let root = py_path_str(&brain.entry.path);
         let store = LocalGitStore::open(Path::new(&root));
-        let status = brain_status(&store, &git).map_err(|e| CliError::new(e.to_string()))?;
-        // An open sync conflict; nothing when none is open.
-        let open = waiting_merge(Path::new(&root), &git);
-        if !as_json {
-            // Printed brain by brain, as v2 does.
-            human::print(&text(painter, &brain.name, &status, open.as_ref()));
+        match brain_status(&store, &git) {
+            Ok(status) => statuses.push(status),
+            Err(e) => {
+                failure = Some(CliError::new(e.to_string()));
+                break;
+            }
         }
-        results.push(to_json(&brain.name, &status, open.as_ref()));
     }
+    let closed = brains::close(opened);
+    let read = brains.iter().zip(&statuses).zip(&closed);
     if as_json {
+        if let Some(failure) = failure {
+            return Err(failure);
+        }
+        let results = read
+            .map(|((brain, status), closed)| {
+                brains::with_sync(to_json(&brain.name, status), closed.report.as_ref())
+            })
+            .collect();
         human::print(&json::to_line(&Json::Object(vec![
             ("ok".into(), Json::Bool(true)),
             ("brains".into(), Json::Array(results)),
         ])));
+        return Ok(());
     }
-    Ok(())
+    let painter = Painter::stdout();
+    let mut lines = Vec::new();
+    for ((brain, status), closed) in read {
+        human::print(&text(painter, &brain.name, status));
+        lines.push((brain.name.as_str(), closed.report.as_ref()));
+    }
+    brains::print_lines(lines);
+    failure.map_or(Ok(()), Err)
 }
 
 fn count(n: usize) -> Json {
     Json::Int(i64::try_from(n).unwrap_or(i64::MAX))
 }
 
-/// `{"name", "lobes", "neurons", "uncommitted", "git_enabled", "recent_commits"}`,
-/// then `"sync": {"blocked": true, "conflicts": [...]}` while a sync conflict
-/// is open.
-fn to_json(name: &str, s: &BrainStatus, open: Option<&Pending>) -> Json {
-    let mut fields = vec![
+/// `{"name", "lobes", "neurons", "uncommitted", "git_enabled", "recent_commits"}`.
+fn to_json(name: &str, s: &BrainStatus) -> Json {
+    Json::Object(vec![
         ("name".into(), Json::Str(name.to_string())),
         ("lobes".into(), count(s.lobes)),
         ("neurons".into(), count(s.neurons)),
@@ -67,23 +87,11 @@ fn to_json(name: &str, s: &BrainStatus, open: Option<&Pending>) -> Json {
                     .collect(),
             ),
         ),
-    ];
-    if let Some(waiting) = open {
-        let merge = waiting.id();
-        let conflicts = waiting.conflicts.iter().map(|c| c.reported_json(&merge));
-        fields.push((
-            "sync".into(),
-            Json::Object(vec![
-                ("blocked".into(), Json::Bool(true)),
-                ("conflicts".into(), Json::Array(conflicts.collect())),
-            ]),
-        ));
-    }
-    Json::Object(fields)
+    ])
 }
 
 /// v2's wording (`cli.py:1400-1407`).
-fn text(painter: Painter, name: &str, s: &BrainStatus, open: Option<&Pending>) -> String {
+fn text(painter: Painter, name: &str, s: &BrainStatus) -> String {
     let mut out = format!("\n{}\n", painter.bold(name));
     out.push_str(&format!("  Lobes: {}, Neurons: {}\n", s.lobes, s.neurons));
     if !s.git_enabled {
@@ -95,23 +103,6 @@ fn text(painter: Painter, name: &str, s: &BrainStatus, open: Option<&Pending>) -
     for commit in s.recent.iter().take(TEXT_COMMITS) {
         let day: String = commit.date.chars().take(10).collect();
         out.push_str(&format!("  {day} {}\n", commit.subject));
-    }
-    if let Some(waiting) = open {
-        let conflicts = &waiting.conflicts;
-        let merge = waiting.id();
-        let (noun, them) = if conflicts.len() == 1 {
-            ("conflict", "it")
-        } else {
-            ("conflicts", "them")
-        };
-        out.push_str(&format!(
-            "  Sync: blocked by {} {noun}; settle {them} with kluris resolve\n",
-            conflicts.len()
-        ));
-        for c in conflicts {
-            out.push_str(&format!("    {}: {}\n", c.kind.as_str(), c.path));
-            out.push_str(&format!("      {}\n", command(name, &c.path, &merge)));
-        }
     }
     out
 }
