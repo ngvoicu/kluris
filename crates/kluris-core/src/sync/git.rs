@@ -7,10 +7,12 @@
 //!   every run has [`remote_env`] (no terminal prompt, no askpass, no
 //!   interactive credential manager, ssh in batch mode unless the user chose
 //!   an ssh command) and [`NO_BACKGROUND`]. The engine takes it once per
-//!   brain, so no git it starts can prompt: not a fetch or a push, and not a
-//!   merge or a checkout whose lazy fetch (a partial clone) talks to the
-//!   remote. The steps that talk to a remote take it themselves when given
-//!   a git without it.
+//!   brain, after the local queries that open it (git's version, the
+//!   repository, `core.sshCommand`), which talk to no remote; no git it
+//!   starts after them can prompt: not a fetch or a push, and not a merge
+//!   or a checkout whose lazy fetch (a partial clone) talks to the remote.
+//!   The steps that talk to a remote take it themselves when given a git
+//!   without it.
 //! - **stdin closed** for every git ([`SystemGit`]'s runs), so a hook that
 //!   reads it never waits.
 //! - **git's own push:** [`SyncGit::push`] runs `git push --porcelain

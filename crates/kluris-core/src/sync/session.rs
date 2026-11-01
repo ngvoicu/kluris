@@ -50,7 +50,9 @@
 //! all their brains ([`background`]), the program [`SessionEnv::program`]
 //! names, unless that brain's last push failed lately or a background run
 //! holds it. Every session reports the last background push as its record
-//! says: a failure until a push succeeds, a success once.
+//! says ([`background::report_last_push`]): a failure until a push
+//! succeeds, a success by one command at most. An explicit push that
+//! succeeds removes the failure it read before it, and only that one.
 //!
 //! A pull that does not fetch lands nothing: only the commit this
 //! invocation's own `ls-remote` named may land, never what the shared
@@ -407,44 +409,30 @@ fn finish(session: Session) -> (Option<SyncReport>, Option<(PathBuf, PathBuf)>) 
     if let Some(count) = engine::to_push(&ctx) {
         report.to_push = count;
     }
+    let common = &ctx.dirs().common;
     if intent == Intent::Explicit {
         if let (true, Some(theirs), Some(tree)) = (committed, fetched, claim.as_ref()) {
             engine::absorb(&mut report, engine::pull_fetched(&ctx, tree, theirs));
         }
+        // The record as it was before the push: the one a push that
+        // succeeds makes moot.
+        let before = background::LastPush::read(&common.join(background::LAST_PUSH));
         report = engine::share(&ctx, claim.as_ref(), report);
         drop(claim);
-        last_push(&ctx, &mut report, intent, now);
+        match before.filter(|seen| report.pushed && seen.result != background::PushResult::Pushed) {
+            Some(seen) => {
+                background::claim_last_push(common, |claimed| *claimed == seen);
+            }
+            None => report.last_push = background::report_last_push(common),
+        }
         return (Some(report), None);
     }
     drop(claim);
-    last_push(&ctx, &mut report, intent, now);
-    let common = &ctx.dirs().common;
+    report.last_push = background::report_last_push(common);
     let handed = program
         .filter(|_| report.to_push > 0 && background::wanted(common, now))
         .map(|program| (ctx.repo().dir.clone(), program));
     ((!silent(&report)).then_some(report), handed)
-}
-
-/// The last background push, as `report` says it: a failure until a push
-/// succeeds, a success once. A record a live background run may be
-/// replacing stays; one an explicit push that succeeded makes moot goes
-/// unreported.
-fn last_push(ctx: &Context<SystemGit>, report: &mut SyncReport, intent: Intent, now: SystemTime) {
-    let common = &ctx.dirs().common;
-    let path = common.join(background::LAST_PUSH);
-    let Some(record) = background::LastPush::read(&path) else {
-        return;
-    };
-    let running =
-        background::Lock::read(&common.join(background::LOCK)).is_some_and(|lock| lock.live(now));
-    let done = record.result == background::PushResult::Pushed;
-    let moot = !done && intent == Intent::Explicit && report.pushed;
-    if (done || moot) && !running {
-        let _ = std::fs::remove_file(&path);
-    }
-    if !moot {
-        report.last_push = Some(record);
-    }
 }
 
 /// A brain's fetch: what [`open`] does before the land.

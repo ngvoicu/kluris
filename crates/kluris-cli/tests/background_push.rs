@@ -6,16 +6,18 @@
 //!
 //! The sessions are driven through `kluris_core::sync::session`, with this
 //! package's binary as the program a session starts. A command that closes
-//! a read and exits is this test binary run again as a child.
+//! a read and exits is this test binary run again as a child. Every child
+//! is waited for with a bound and ended by its handle on every way out,
+//! and every pipe is read in a thread, waited for with a bound.
 
 mod sync_home;
 
 use std::fs;
-use std::io::Read;
-#[cfg(unix)]
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Command, ExitStatus, Stdio};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
+use std::sync::{Arc, Barrier};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime};
 
@@ -44,6 +46,111 @@ fn eventually(what: &str, mut done: impl FnMut() -> bool) {
             "{what}: not within {PATIENCE:?}"
         );
         thread::sleep(Duration::from_millis(20));
+    }
+}
+
+/// A child process, ended by its handle when dropped unless it ended.
+struct Running(Child);
+
+impl Running {
+    fn start(mut cmd: Command) -> Running {
+        Running(cmd.spawn().unwrap())
+    }
+
+    fn id(&self) -> u32 {
+        self.0.id()
+    }
+
+    /// Its exit, waited for at most [`PATIENCE`].
+    fn wait(&mut self) -> ExitStatus {
+        let start = Instant::now();
+        loop {
+            if let Some(status) = self.0.try_wait().unwrap() {
+                return status;
+            }
+            assert!(start.elapsed() < PATIENCE, "the child did not end");
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    /// Its stdout, read line by line in a thread.
+    fn lines(&mut self) -> Lines {
+        Lines::of(self.0.stdout.take().expect("a piped stdout"))
+    }
+}
+
+impl Drop for Running {
+    fn drop(&mut self) {
+        if !matches!(self.0.try_wait(), Ok(Some(_))) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+}
+
+/// A pipe's lines as a thread reads them; `None` once it closed.
+struct Lines(Receiver<Option<String>>);
+
+impl Lines {
+    fn of(pipe: impl Read + Send + 'static) -> Lines {
+        let (send, receive) = mpsc::channel();
+        thread::spawn(move || {
+            let mut reader = BufReader::new(pipe);
+            loop {
+                let mut line = String::new();
+                match reader.read_line(&mut line) {
+                    Ok(0) | Err(_) => {
+                        let _ = send.send(None);
+                        return;
+                    }
+                    Ok(_) => {
+                        let _ = send.send(Some(line.trim_end().to_string()));
+                    }
+                }
+            }
+        });
+        Lines(receive)
+    }
+
+    /// The lines up to and with `last`, waited for at most [`PATIENCE`].
+    fn until(&self, last: &str) -> Vec<String> {
+        let start = Instant::now();
+        let mut seen = Vec::new();
+        loop {
+            let left = PATIENCE.saturating_sub(start.elapsed());
+            match self.0.recv_timeout(left) {
+                Ok(Some(line)) => {
+                    let done = line == last;
+                    seen.push(line);
+                    if done {
+                        return seen;
+                    }
+                }
+                Ok(None) => panic!("the pipe closed before {last:?}: {seen:?}"),
+                Err(_) => panic!("no {last:?} within {PATIENCE:?}: {seen:?}"),
+            }
+        }
+    }
+
+    /// Whether the pipe closes within `bound`; what it said meanwhile.
+    fn closes_within(&self, bound: Duration) -> Result<Vec<String>, Vec<String>> {
+        let start = Instant::now();
+        let mut seen = Vec::new();
+        loop {
+            match self.0.recv_timeout(bound.saturating_sub(start.elapsed())) {
+                Ok(Some(line)) => seen.push(line),
+                Ok(None) => return Ok(seen),
+                Err(RecvTimeoutError::Timeout | RecvTimeoutError::Disconnected) => {
+                    return Err(seen);
+                }
+            }
+        }
+    }
+
+    /// Everything until the pipe closes, waited for at most [`PATIENCE`].
+    fn all(&self) -> Vec<String> {
+        self.closes_within(PATIENCE)
+            .unwrap_or_else(|seen| panic!("the pipe stayed open: {seen:?}"))
     }
 }
 
@@ -113,19 +220,40 @@ fn remote_head(home: &Home, name: &str) -> String {
     home.git(&bare, &["rev-parse", "main"]).trim().to_string()
 }
 
-/// `kluris sync --background --path <root>...`, run here and waited for.
-fn push_in_foreground(home: &Home, roots: &[&Path]) -> (i32, String, String) {
-    let mut args = vec!["sync".to_string(), "--background".to_string()];
-    for root in roots {
-        args.push("--path".into());
-        args.push(root.to_string_lossy().into_owned());
+/// `kluris sync --background` with `args`, run here in `cwd` and waited
+/// for: its exit code, stdout and stderr.
+fn push_in(home: &Home, cwd: &Path, args: &[&Path]) -> (i32, String, String) {
+    let mut cmd = Command::new(kluris());
+    home.hermetic(&mut cmd);
+    cmd.args(["sync", "--background"]);
+    for arg in args {
+        cmd.arg("--path").arg(arg);
     }
-    let args: Vec<&str> = args.iter().map(String::as_str).collect();
-    home.run(&args)
+    cmd.current_dir(cwd)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = Running::start(cmd);
+    let err = Lines::of(child.0.stderr.take().unwrap());
+    let out = child.lines();
+    let status = child.wait();
+    (
+        status.code().unwrap_or(-1),
+        out.all().join("\n"),
+        err.all().join("\n"),
+    )
 }
 
-/// HEAD, the index, the status and every file of the work tree.
-fn snapshot(home: &Home, root: &Path) -> (String, String, String, Vec<(PathBuf, Vec<u8>)>) {
+/// `kluris sync --background --path <root>...`, run here and waited for.
+fn push_in_foreground(home: &Home, roots: &[&Path]) -> (i32, String, String) {
+    push_in(home, home.dir.path(), roots)
+}
+
+/// HEAD, the index's bytes, the status and every file of the work tree.
+type Snapshot = (String, Vec<u8>, String, Vec<(PathBuf, Vec<u8>)>);
+
+fn snapshot(home: &Home, root: &Path) -> Snapshot {
+    let index = fs::read(root.join(".git").join("index")).unwrap();
     let mut files = Vec::new();
     let mut pending = vec![root.to_path_buf()];
     while let Some(dir) = pending.pop() {
@@ -142,38 +270,59 @@ fn snapshot(home: &Home, root: &Path) -> (String, String, String, Vec<(PathBuf, 
         }
     }
     files.sort();
-    (
-        local_head(home, root),
-        home.git(root, &["ls-files", "--stage"]),
-        home.git(root, &["status", "--porcelain", "--untracked-files=all"]),
-        files,
-    )
+    // The status refreshes no index (no optional locks).
+    let status = home.git(
+        root,
+        &[
+            "--no-optional-locks",
+            "status",
+            "--porcelain",
+            "--untracked-files=all",
+        ],
+    );
+    (local_head(home, root), index, status, files)
+}
+
+/// A script's path as git's shell takes it.
+fn sh_path(path: &Path) -> String {
+    path.display().to_string().replace('\\', "/")
 }
 
 /// A `receive-pack` for the brain's remote that waits until `release`
 /// exists (60 s at most), then receives.
 fn stall_pushes(home: &Home, root: &Path, release: &Path) {
     let script = home.dir.path().join("stalled-receive-pack.sh");
-    let release = release.display().to_string().replace('\\', "/");
     fs::write(
         &script,
         format!(
-            "#!/bin/sh\ni=0\nwhile [ ! -e '{release}' ] && [ $i -lt 1200 ]; do sleep 0.05; i=$((i+1)); done\nexec git receive-pack \"$@\"\n"
+            "#!/bin/sh\ni=0\nwhile [ ! -e '{}' ] && [ $i -lt 1200 ]; do sleep 0.05; i=$((i+1)); done\nexec git receive-pack \"$@\"\n",
+            sh_path(release)
         ),
     )
     .unwrap();
-    let pack = format!("sh '{}'", script.display().to_string().replace('\\', "/"));
+    let pack = format!("sh '{}'", sh_path(&script));
     home.git(root, &["config", "remote.origin.receivepack", &pack]);
+}
+
+/// Writes `release` when dropped, so a stalled child goes on however the
+/// test ends.
+struct Release(PathBuf);
+
+impl Drop for Release {
+    fn drop(&mut self) {
+        let _ = fs::write(&self.0, "");
+    }
 }
 
 /// A hook of the brain's that prints `text` on stderr and exits `code`.
 fn hook(root: &Path, name: &str, text: &str, code: i32) {
+    script_hook(root, name, &format!("echo '{text}' >&2\nexit {code}"));
+}
+
+/// A hook of the brain's running `body`.
+fn script_hook(root: &Path, name: &str, body: &str) {
     let path = root.join(".git").join("hooks").join(name);
-    fs::write(
-        &path,
-        format!("#!/bin/sh\necho '{text}' >&2\nexit {code}\n"),
-    )
-    .unwrap();
+    fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -182,7 +331,7 @@ fn hook(root: &Path, name: &str, text: &str, code: i32) {
 }
 
 /// `kluris sync --background --path <root>` started here, not waited for.
-fn spawn_push(home: &Home, root: &Path) -> Child {
+fn spawn_push(home: &Home, root: &Path) -> Running {
     let mut cmd = Command::new(kluris());
     home.hermetic(&mut cmd);
     cmd.args(["sync", "--background", "--path"])
@@ -190,18 +339,16 @@ fn spawn_push(home: &Home, root: &Path) -> Child {
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
-    cmd.spawn().unwrap()
+    Running::start(cmd)
 }
 
 /// A process id that is no process now.
 fn dead_pid() -> u32 {
-    let mut child = Command::new("git")
-        .arg("--version")
-        .stdout(Stdio::null())
-        .spawn()
-        .unwrap();
+    let mut cmd = Command::new("git");
+    cmd.arg("--version").stdout(Stdio::null());
+    let mut child = Running::start(cmd);
     let pid = child.id();
-    child.wait().unwrap();
+    child.wait();
     pid
 }
 
@@ -214,14 +361,18 @@ fn write_lock(root: &Path, pid: u32, host: &str, started: SystemTime) {
     fs::write(git_file(root, LOCK), text).unwrap();
 }
 
-fn write_record(root: &Path, result: PushResult, at: SystemTime) -> LastPush {
-    let record = LastPush {
+fn a_record(result: PushResult, at: SystemTime, commits: usize) -> LastPush {
+    LastPush {
         at: background::timestamp(at),
         head: "0".repeat(40),
         result,
         detail: (result != PushResult::Pushed).then(|| "why".to_string()),
-        commits: 1,
-    };
+        commits,
+    }
+}
+
+fn write_record(root: &Path, result: PushResult, at: SystemTime) -> LastPush {
+    let record = a_record(result, at, 1);
     fs::create_dir_all(git_file(root, "kluris-sync")).unwrap();
     record.write(&git_file(root, LAST_PUSH)).unwrap();
     record
@@ -229,6 +380,28 @@ fn write_record(root: &Path, result: PushResult, at: SystemTime) -> LastPush {
 
 fn ago(minutes: u64) -> SystemTime {
     SystemTime::now() - Duration::from_secs(60 * minutes)
+}
+
+/// An ssh for the brain's remote that answers as an ssh that cannot reach
+/// the host does, with no network: `Connection refused`, exit 255.
+fn unreachable_ssh(home: &Home, root: &Path) {
+    let script = home.dir.path().join("unreachable-ssh.sh");
+    fs::write(
+        &script,
+        "#!/bin/sh\necho 'ssh: connect to host unreachable.example port 22: Connection refused' >&2\nexit 255\n",
+    )
+    .unwrap();
+    let ssh = format!("sh '{}'", sh_path(&script));
+    home.git(root, &["config", "core.sshCommand", &ssh]);
+    home.git(
+        root,
+        &[
+            "remote",
+            "set-url",
+            "origin",
+            "ssh://git@unreachable.example/x.git",
+        ],
+    );
 }
 
 #[test]
@@ -240,9 +413,8 @@ fn the_push_sends_the_commits_and_records_it_leaving_the_work_tree_alone() {
     assert_eq!(code, 0, "{out}{err}");
     assert_eq!(out, "", "nothing on stdout");
     assert_eq!(remote_head(&home, "alpha"), local_head(&home, &root));
-    assert_eq!(
-        snapshot(&home, &root),
-        before,
+    assert!(
+        snapshot(&home, &root) == before,
         "the work tree, index or HEAD changed"
     );
     let doc = record(&root).expect("a record");
@@ -287,7 +459,7 @@ fn a_remote_that_moved_is_needs_pull_and_nothing_lands() {
         theirs,
         "pushed over the teammate"
     );
-    assert_eq!(snapshot(&home, &root), before, "something landed");
+    assert!(snapshot(&home, &root) == before, "something landed");
 }
 
 #[test]
@@ -295,29 +467,14 @@ fn a_push_the_remote_turns_back_because_it_moved_is_needs_pull() {
     let mut home = Home::new();
     let root = waiting(&mut home, "alpha");
     // The teammate pushes between the child's fetch and its push.
-    let script = home.dir.path().join("racing-pre-push.sh");
-    let mate = home
-        .teammate("alpha")
-        .display()
-        .to_string()
-        .replace('\\', "/");
-    fs::write(
-        &script,
-        format!(
-            "#!/bin/sh\nunset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE\ncd '{mate}' && echo racing >> notes/race.md && git add -A && git commit -q -m race && git push -q >&2\n"
+    let mate = sh_path(&home.teammate("alpha"));
+    script_hook(
+        &root,
+        "pre-push",
+        &format!(
+            "unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE\ncd '{mate}' && echo racing >> notes/race.md && git add -A && git commit -q -m race && git push -q >&2"
         ),
-    )
-    .unwrap();
-    hook(&root, "pre-push", "", 0);
-    let path = root.join(".git").join("hooks").join("pre-push");
-    fs::write(
-        &path,
-        format!(
-            "#!/bin/sh\nsh '{}'\n",
-            script.display().to_string().replace('\\', "/")
-        ),
-    )
-    .unwrap();
+    );
     let before = snapshot(&home, &root);
     let (code, out, err) = push_in_foreground(&home, &[&root]);
     assert_eq!(code, 0, "{out}{err}");
@@ -327,24 +484,16 @@ fn a_push_the_remote_turns_back_because_it_moved_is_needs_pull() {
         "{:?}",
         record(&root)
     );
-    assert_eq!(snapshot(&home, &root), before);
+    assert!(snapshot(&home, &root) == before, "something landed");
 }
 
 #[test]
 fn each_failure_is_recorded_with_its_detail() {
-    // Offline: the remote cannot be reached.
+    // Offline: the remote's host cannot be reached.
     {
         let mut home = Home::new();
         let root = waiting(&mut home, "alpha");
-        home.git(
-            &root,
-            &[
-                "remote",
-                "set-url",
-                "origin",
-                "ssh://git@nonexistent.invalid/x.git",
-            ],
-        );
+        unreachable_ssh(&home, &root);
         let (code, ..) = push_in_foreground(&home, &[&root]);
         assert_eq!(code, 0);
         assert_eq!(
@@ -376,16 +525,11 @@ fn each_failure_is_recorded_with_its_detail() {
         let mut home = Home::new();
         let root = waiting(&mut home, "gamma");
         home.teammate_pushes("gamma", "notes/theirs.md", &neuron("Theirs", "T.\n"));
-        let path = root
-            .join(".git")
-            .join("hooks")
-            .join("reference-transaction");
-        hook(&root, "reference-transaction", "", 0);
-        fs::write(
-            &path,
-            "#!/bin/sh\n[ \"$1\" = prepared ] && grep -q refs/remotes/ && exit 1\nexit 0\n",
-        )
-        .unwrap();
+        script_hook(
+            &root,
+            "reference-transaction",
+            "[ \"$1\" = prepared ] && grep -q refs/remotes/ && exit 1\nexit 0",
+        );
         let (code, ..) = push_in_foreground(&home, &[&root]);
         assert_eq!(code, 0);
         assert_eq!(
@@ -424,8 +568,8 @@ fn the_log_holds_what_git_and_the_hooks_printed_and_each_run_replaces_it() {
 fn the_lock_holds_pid_host_and_start_and_a_live_one_stops_a_second_run() {
     let mut home = Home::new();
     let root = waiting(&mut home, "alpha");
-    let release = home.dir.path().join("release");
-    stall_pushes(&home, &root, &release);
+    let release = Release(home.dir.path().join("release"));
+    stall_pushes(&home, &root, &release.0);
     let mut first = spawn_push(&home, &root);
     eventually("the lock", || git_file(&root, LOCK).exists());
     let lock = Lock::read(&git_file(&root, LOCK)).expect("a lock that reads");
@@ -443,8 +587,8 @@ fn the_lock_holds_pid_host_and_start_and_a_live_one_stops_a_second_run() {
     assert_eq!(Lock::read(&git_file(&root, LOCK)).unwrap().pid, first.id());
     assert_eq!(record(&root), None, "the second run recorded");
 
-    fs::write(&release, "").unwrap();
-    assert!(first.wait().unwrap().success());
+    drop(release);
+    assert!(first.wait().success());
     assert!(!git_file(&root, LOCK).exists(), "the lock stayed");
     assert_eq!(result_of(&root).as_deref(), Some("pushed"));
     assert!(background::wanted(&root.join(".git"), SystemTime::now()));
@@ -534,10 +678,13 @@ fn last_push_is_reported_until_a_push_succeeds_and_a_success_once() {
     let root = home.brain("alpha");
     // A failure, every time, and the record stays.
     let failure = write_record(&root, PushResult::Refused, ago(1));
-    for _ in 0..2 {
+    for _ in 0..3 {
         let report = read(&home, &root).expect("a report");
         assert_eq!(report.last_push.as_ref(), Some(&failure));
-        assert!(git_file(&root, LAST_PUSH).exists());
+        assert_eq!(
+            background::LastPush::read(&git_file(&root, LAST_PUSH)).as_ref(),
+            Some(&failure)
+        );
     }
     let json = read(&home, &root).unwrap().to_json();
     let text = kluris_core::json::to_string(&json);
@@ -553,33 +700,160 @@ fn last_push_is_reported_until_a_push_succeeds_and_a_success_once() {
     assert_eq!(report.last_push.as_ref(), Some(&success));
     assert!(!git_file(&root, LAST_PUSH).exists(), "the success stayed");
     assert_eq!(read(&home, &root), None, "nothing more to say");
+}
 
-    // Not while a live run may be replacing it.
+/// Readers at once on one success: exactly one reports it, and a failure
+/// is reported by every one and stays.
+#[test]
+fn readers_at_once_report_one_success_once_and_every_failure() {
+    let mut home = Home::new();
+    let root = home.brain("alpha");
+    let common = root.join(".git");
+    for round in 0..40 {
+        let success = write_record(&root, PushResult::Pushed, ago(1));
+        let start = Arc::new(Barrier::new(8));
+        let readers: Vec<_> = (0..8)
+            .map(|_| {
+                let (start, common) = (Arc::clone(&start), common.clone());
+                thread::spawn(move || {
+                    start.wait();
+                    background::report_last_push(&common)
+                })
+            })
+            .collect();
+        let reported: Vec<LastPush> = readers
+            .into_iter()
+            .filter_map(|reader| reader.join().unwrap())
+            .collect();
+        assert_eq!(reported, [success], "round {round}");
+        assert!(!git_file(&root, LAST_PUSH).exists(), "round {round}");
+    }
+    let failure = write_record(&root, PushResult::Offline, ago(1));
+    let start = Arc::new(Barrier::new(8));
+    let readers: Vec<_> = (0..8)
+        .map(|_| {
+            let (start, common) = (Arc::clone(&start), common.clone());
+            thread::spawn(move || {
+                start.wait();
+                background::report_last_push(&common)
+            })
+        })
+        .collect();
+    for reader in readers {
+        assert_eq!(reader.join().unwrap().as_ref(), Some(&failure));
+    }
+    assert_eq!(
+        background::LastPush::read(&git_file(&root, LAST_PUSH)).as_ref(),
+        Some(&failure)
+    );
+
+    // Read sessions at once, the same way.
     let success = write_record(&root, PushResult::Pushed, ago(1));
-    write_lock(
-        &root,
-        std::process::id(),
-        &background::this_host(),
-        SystemTime::now(),
+    let start = Arc::new(Barrier::new(4));
+    let sessions: Vec<_> = (0..4)
+        .map(|_| {
+            let (start, root, git) = (Arc::clone(&start), root.clone(), self::git(&home));
+            thread::spawn(move || {
+                let env = SessionEnv {
+                    git,
+                    no_verify: false,
+                    now: SystemTime::now(),
+                    program: None,
+                };
+                let open = session::open(brain(&root), Intent::Read, &env);
+                start.wait();
+                session::close(open).and_then(|r| r.last_push)
+            })
+        })
+        .collect();
+    let reported: Vec<LastPush> = sessions
+        .into_iter()
+        .filter_map(|s| s.join().unwrap())
+        .collect();
+    assert_eq!(reported, [success]);
+}
+
+/// A record that changed between a reader's look and its claim is put
+/// back, unless one newer still is there by then.
+#[test]
+fn a_claimed_record_that_is_not_the_one_wanted_is_put_back() {
+    let mut home = Home::new();
+    let root = home.brain("alpha");
+    let common = root.join(".git");
+    let path = git_file(&root, LAST_PUSH);
+
+    // The claim finds a failure where a success was: it goes back.
+    let failure = write_record(&root, PushResult::Refused, ago(2));
+    let claimed = background::claim_last_push(&common, |record| {
+        assert_eq!(record, &failure);
+        false
+    });
+    assert_eq!(claimed, None);
+    assert_eq!(
+        background::LastPush::read(&path).as_ref(),
+        Some(&failure),
+        "not put back"
     );
-    let report = read(&home, &root).expect("a report");
-    assert_eq!(report.last_push.as_ref(), Some(&success));
-    assert!(
-        git_file(&root, LAST_PUSH).exists(),
-        "removed under a live run"
-    );
+
+    // A newer record published once the claim moved it away stays, and
+    // the claimed one goes.
+    let newer = a_record(PushResult::Offline, ago(1), 2);
+    let claimed = background::claim_last_push(&common, |_| {
+        newer.write(&path).unwrap();
+        false
+    });
+    assert_eq!(claimed, None);
+    assert_eq!(background::LastPush::read(&path).as_ref(), Some(&newer));
+
+    // An accepted claim takes it away; nothing is left beside it.
+    let taken = background::claim_last_push(&common, |_| true);
+    assert_eq!(taken.as_ref(), Some(&newer));
+    assert!(!path.exists());
+    let left: Vec<String> = fs::read_dir(git_file(&root, "kluris-sync"))
+        .unwrap()
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|name| name.starts_with("last-push.json"))
+        .collect();
+    assert!(left.is_empty(), "{left:?}");
+
+    // Nothing to claim: another reader has it.
+    assert_eq!(background::claim_last_push(&common, |_| true), None);
 }
 
 #[test]
-fn an_explicit_push_that_succeeds_removes_a_failure_record() {
+fn an_explicit_push_that_succeeds_removes_the_failure_record_it_read() {
     let mut home = Home::new();
     let root = waiting(&mut home, "alpha");
     write_record(&root, PushResult::Offline, ago(1));
     let open = session::open(brain(&root), Intent::Explicit, &env(&home, Some(kluris())));
     let report = session::close(open).expect("a report");
     assert!(report.pushed, "{report:?}");
+    assert_eq!(report.last_push, None, "a failure the push made moot");
     assert!(!git_file(&root, LAST_PUSH).exists(), "the failure stayed");
     assert_eq!(remote_head(&home, "alpha"), local_head(&home, &root));
+
+    // A record published while the push ran is newer than the one read
+    // before it: it stays.
+    home.commit(&root, "notes/more.md", &neuron("More", "M.\n"));
+    write_record(&root, PushResult::Offline, ago(2));
+    let newer = a_record(PushResult::Refused, ago(1), 3);
+    let path = git_file(&root, LAST_PUSH);
+    let text = fs::read_to_string({
+        let draft = home.dir.path().join("newer.json");
+        newer.write(&draft).unwrap();
+        draft
+    })
+    .unwrap();
+    script_hook(
+        &root,
+        "pre-push",
+        &format!("printf '%s' '{}' > '{}'", text.trim(), sh_path(&path)),
+    );
+    let open = session::open(brain(&root), Intent::Explicit, &env(&home, None));
+    let report = session::close(open).expect("a report");
+    assert!(report.pushed, "{report:?}");
+    assert_eq!(background::LastPush::read(&path).as_ref(), Some(&newer));
 }
 
 #[test]
@@ -610,20 +884,102 @@ fn the_hidden_flags() {
     );
 }
 
-/// The child's environment: what it does, and the brains (joined as
-/// `PATH` is). Its git runs in the home's hermetic environment.
+/// A brain `name` in `dir`, outside the home, pushed to `<dir>/<name>.git`,
+/// with a commit of its own waiting.
+fn decoy(home: &Home, dir: &Path, name: &str) -> PathBuf {
+    let root = dir.join(name);
+    let bare = dir.join(format!("{name}.git"));
+    fs::create_dir_all(&root).unwrap();
+    home.git(&root, &["init", "-q", "-b", "main"]);
+    home.configure(&root, "Dee Coy", "decoy@example.com");
+    home.commit(&root, "decoy.md", "# Decoy\n");
+    home.git(
+        dir,
+        &[
+            "init",
+            "-q",
+            "--bare",
+            "-b",
+            "main",
+            &bare.to_string_lossy(),
+        ],
+    );
+    home.git(&root, &["remote", "add", "origin", &bare.to_string_lossy()]);
+    home.git(&root, &["push", "-q", "-u", "origin", "main"]);
+    home.commit(&root, "waiting.md", "# Waiting\n");
+    root
+}
+
+/// What would show Kluris touched the brain `name` in `dir`: its refs,
+/// its remote's, every file of its work tree with its bytes, and whether
+/// it has a `kluris-sync` folder. (git's own housekeeping in `.git`, a
+/// fixture commit's auto-maintenance, is not Kluris's.)
+type Untouched = (String, String, Vec<(PathBuf, Vec<u8>)>, bool);
+
+fn untouched(home: &Home, dir: &Path, name: &str) -> Untouched {
+    let root = dir.join(name);
+    let bare = dir.join(format!("{name}.git"));
+    let mut files = Vec::new();
+    let mut pending = vec![root.clone()];
+    while let Some(folder) = pending.pop() {
+        for entry in fs::read_dir(&folder).unwrap().flatten() {
+            let path = entry.path();
+            if entry.file_name() == ".git" {
+                continue;
+            }
+            if path.is_dir() {
+                pending.push(path);
+            } else {
+                files.push((path.clone(), fs::read(&path).unwrap()));
+            }
+        }
+    }
+    files.sort();
+    (
+        home.git(&root, &["for-each-ref"]),
+        home.git(&bare, &["for-each-ref"]),
+        files,
+        root.join(".git").join("kluris-sync").exists(),
+    )
+}
+
+#[test]
+fn a_relative_path_is_refused_and_nothing_in_it_is_touched() {
+    let mut home = Home::new();
+    let root = waiting(&mut home, "alpha");
+    let before = untouched(&home, home.dir.path(), "alpha");
+    let (code, out, err) = push_in(&home, home.dir.path(), &[Path::new("alpha")]);
+    assert_eq!(code, 0, "{out}{err}");
+    assert_eq!(record(&root), None);
+    assert!(!git_file(&root, LOCK).exists());
+    assert!(!git_file(&root, LOG).exists());
+    assert!(untouched(&home, home.dir.path(), "alpha") == before);
+}
+
+/// The child's environment: what it does, the brains (joined as `PATH`
+/// is), and the program to start. Its git runs in the home's hermetic
+/// environment.
 const CHILD_ACTION: &str = "KLURIS_TEST_BACKGROUND_ACTION";
 const CHILD_ROOTS: &str = "KLURIS_TEST_BACKGROUND_ROOTS";
+const CHILD_PROGRAM: &str = "KLURIS_TEST_BACKGROUND_PROGRAM";
 /// The process whose console `console-of` looks at (Windows).
 #[cfg(windows)]
 const CHILD_PID: &str = "KLURIS_TEST_BACKGROUND_PID";
 
-/// This test binary run again as a command that ends: `read` opens the
-/// brains for a read, closes them, prints `done` and exits; `start-in-job`
-/// (Windows) joins a kill-on-close job that forbids breakaway, then
-/// prints what a start and a read's close did; `console-of` (Windows)
-/// prints whether the process [`CHILD_PID`] names has a console. Without those variables it
-/// does nothing.
+/// This test binary run again as a command that ends, in the home:
+/// - `read` opens the brains for a read and closes them, printing each
+///   `to_push`, then `done`;
+/// - `late-descriptor` (Unix) starts the program with a descriptor opened
+///   as the start forks (`pthread_atfork`), then prints `done`;
+/// - `start-in-job` (Windows) joins a kill-on-close job that forbids
+///   breakaway, then prints what a start and a read's close did;
+/// - `read-in-job` (Windows) joins a job that forbids breakaway and does
+///   not kill on close, nested in the one it is in, then reads as `read`
+///   does;
+/// - `console-of` (Windows) prints whether the process `CHILD_PID` names
+///   has a console.
+///
+/// Without those variables it does nothing.
 #[test]
 #[ignore = "run only as the child of the background tests"]
 fn child_command() {
@@ -634,31 +990,43 @@ fn child_command() {
         return;
     };
     let roots: Vec<PathBuf> = std::env::split_paths(&roots).collect();
+    let program = std::env::var_os(CHILD_PROGRAM).map_or_else(kluris, PathBuf::from);
     let env = SessionEnv {
         git: SystemGit::new(),
         no_verify: false,
         now: SystemTime::now(),
-        program: Some(kluris()),
+        program: Some(program.clone()),
+    };
+    let read = |env: &SessionEnv| {
+        let brains: Vec<Brain> = roots.iter().map(|root| brain(root)).collect();
+        let sessions = session::open_all(&brains, Intent::Read, env);
+        for report in session::close_all(sessions) {
+            println!("to_push {}", report.map_or(0, |r| r.to_push));
+        }
+        println!("done");
     };
     match action.as_str() {
-        "read" => {
-            let brains: Vec<Brain> = roots.iter().map(|root| brain(root)).collect();
-            let sessions = session::open_all(&brains, Intent::Read, &env);
-            let reports = session::close_all(sessions);
-            for report in reports {
-                println!("to_push {}", report.map_or(0, |r| r.to_push));
-            }
+        "read" => read(&env),
+        #[cfg(unix)]
+        "late-descriptor" => {
+            late::open_as_the_start_forks();
+            println!("start {:?}", background::start(&program, &[]));
             println!("done");
         }
         #[cfg(windows)]
         "start-in-job" => {
             windows_job::join_kill_on_close_job();
-            match background::start(&kluris(), &roots) {
+            match background::start(&program, &roots) {
                 background::Start::Refused(_) => println!("refused"),
                 other => println!("not refused: {other:?}"),
             }
             let report = session::close(session::open(brain(&roots[0]), Intent::Read, &env));
             println!("to_push {}", report.map_or(0, |r| r.to_push));
+        }
+        #[cfg(windows)]
+        "read-in-job" => {
+            windows_job::join_job_that_keeps_children();
+            read(&env);
         }
         #[cfg(windows)]
         "console-of" => {
@@ -669,12 +1037,8 @@ fn child_command() {
     }
 }
 
-/// The child command doing `action` on `roots`, its stdout piped.
-fn command(home: &Home, action: &str, roots: &[&Path]) -> Child {
-    command_line(home, action, roots).spawn().unwrap()
-}
-
-/// [`command`], not started yet.
+/// The child command doing `action` on `roots` in the home, its stdout
+/// piped; not started yet.
 fn command_line(home: &Home, action: &str, roots: &[&Path]) -> Command {
     let mut cmd = Command::new(std::env::current_exe().unwrap());
     home.hermetic(&mut cmd);
@@ -685,12 +1049,20 @@ fn command_line(home: &Home, action: &str, roots: &[&Path]) -> Command {
         "--quiet",
         "--nocapture",
     ])
+    .current_dir(home.dir.path())
     .env(CHILD_ACTION, action)
     .env(CHILD_ROOTS, std::env::join_paths(roots).unwrap())
     .stdin(Stdio::null())
     .stdout(Stdio::piped())
     .stderr(Stdio::null());
     cmd
+}
+
+/// The child command, started, and its stdout's lines.
+fn command(home: &Home, action: &str, roots: &[&Path]) -> (Running, Lines) {
+    let mut child = Running::start(command_line(home, action, roots));
+    let lines = child.lines();
+    (child, lines)
 }
 
 /// A read closed with commits waiting in two brains starts one child for
@@ -702,17 +1074,11 @@ fn one_child_pushes_every_brain_with_commits_waiting() {
     let alpha = waiting(&mut home, "alpha");
     let beta = waiting(&mut home, "beta");
     let gamma = home.brain("gamma");
-    let mut child = command(&home, "read", &[&alpha, &beta, &gamma]);
-    let mut out = String::new();
-    child
-        .stdout
-        .take()
-        .unwrap()
-        .read_to_string(&mut out)
-        .unwrap();
-    assert!(child.wait().unwrap().success());
-    let counts: Vec<&str> = out.lines().filter(|l| l.starts_with("to_push")).collect();
-    assert_eq!(counts, ["to_push 1", "to_push 1", "to_push 0"], "{out}");
+    let (mut child, lines) = command(&home, "read", &[&alpha, &beta, &gamma]);
+    let out = lines.all();
+    assert!(child.wait().success());
+    let counts: Vec<&String> = out.iter().filter(|l| l.starts_with("to_push")).collect();
+    assert_eq!(counts, ["to_push 1", "to_push 1", "to_push 0"], "{out:?}");
     for (name, root) in [("alpha", &alpha), ("beta", &beta)] {
         eventually(&format!("{name}'s push"), || result_of(root).is_some());
         assert_eq!(result_of(root).as_deref(), Some("pushed"), "{name}");
@@ -738,27 +1104,14 @@ fn one_child_pushes_every_brain_with_commits_waiting() {
 fn the_commands_stdout_closes_while_the_child_pushes_in_its_own_session() {
     let mut home = Home::new();
     let root = waiting(&mut home, "alpha");
-    let release = home.dir.path().join("release");
-    stall_pushes(&home, &root, &release);
-    let mut command = command(&home, "read", &[&root]);
-    let mut out = BufReader::new(command.stdout.take().unwrap());
-    let mut line = String::new();
-    loop {
-        line.clear();
-        assert!(out.read_line(&mut line).unwrap() > 0, "no done");
-        if line.trim() == "done" {
-            break;
-        }
+    let release = Release(home.dir.path().join("release"));
+    stall_pushes(&home, &root, &release.0);
+    let (mut command, lines) = command(&home, "read", &[&root]);
+    lines.until("done");
+    if let Err(seen) = lines.closes_within(Duration::from_secs(1)) {
+        panic!("stdout still open 1 s after done: {seen:?}");
     }
-    let done = Instant::now();
-    let mut rest = Vec::new();
-    out.read_to_end(&mut rest).unwrap();
-    let closed = done.elapsed();
-    assert!(
-        closed < Duration::from_secs(1),
-        "stdout closed after {closed:?}"
-    );
-    assert!(command.wait().unwrap().success());
+    assert!(command.wait().success());
 
     eventually("the child's lock", || git_file(&root, LOCK).exists());
     let lock = Lock::read(&git_file(&root, LOCK)).unwrap();
@@ -769,10 +1122,125 @@ fn the_commands_stdout_closes_while_the_child_pushes_in_its_own_session() {
     assert_eq!(its, pid, "not a session leader");
     assert_ne!(its, ours);
 
-    fs::write(&release, "").unwrap();
+    drop(release);
     eventually("the push", || result_of(&root).is_some());
     assert_eq!(result_of(&root).as_deref(), Some("pushed"));
     eventually("the lock to go", || !git_file(&root, LOCK).exists());
+}
+
+/// A brain opened by a relative path is the one pushed: the child, which
+/// runs in the temp folder, is handed the path the command opened, never
+/// one that names a brain of the same name there.
+#[cfg(unix)]
+#[test]
+fn a_brain_opened_by_a_relative_path_is_the_one_pushed() {
+    let mut home = Home::new();
+    let root = waiting(&mut home, "alpha");
+    let temp = home.dir.path().join("temp");
+    fs::create_dir_all(&temp).unwrap();
+    decoy(&home, &temp, "alpha");
+    let before = untouched(&home, &temp, "alpha");
+    let mut cmd = command_line(&home, "read", &[Path::new("alpha")]);
+    for var in ["TMPDIR", "TMP", "TEMP"] {
+        cmd.env(var, &temp);
+    }
+    let mut command = Running::start(cmd);
+    let out = command.lines().all();
+    assert!(command.wait().success());
+    assert!(out.iter().any(|l| l == "to_push 1"), "{out:?}");
+    eventually("the push", || result_of(&root).is_some());
+    assert_eq!(result_of(&root).as_deref(), Some("pushed"));
+    assert_eq!(remote_head(&home, "alpha"), local_head(&home, &root));
+    eventually("the lock to go", || !git_file(&root, LOCK).exists());
+    assert!(
+        untouched(&home, &temp, "alpha") == before,
+        "the brain of the same name in the temp folder was touched"
+    );
+}
+
+/// Started with a descriptor opened as it forks, the child still holds
+/// nothing of this process's but what it was given: the command's stdout
+/// closes when it ends.
+#[cfg(unix)]
+#[test]
+fn a_descriptor_opened_as_the_child_forks_is_closed_in_it() {
+    let home = Home::new();
+    let report = home.dir.path().join("descriptor");
+    let release = Release(home.dir.path().join("release"));
+    let program = home.dir.path().join("holder.sh");
+    fs::write(
+        &program,
+        format!(
+            "#!/bin/sh\nif [ -e /dev/fd/{fd} ]; then echo open; else echo closed; fi > '{report}'\ni=0\nwhile [ ! -e '{release}' ] && [ $i -lt 1200 ]; do sleep 0.05; i=$((i+1)); done\n",
+            fd = late::FD,
+            report = sh_path(&report),
+            release = sh_path(&release.0),
+        ),
+    )
+    .unwrap();
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&program, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let mut cmd = command_line(&home, "late-descriptor", &[]);
+    cmd.env(CHILD_PROGRAM, &program);
+    let mut command = Running::start(cmd);
+    let lines = command.lines();
+    let said = lines.until("done");
+    assert!(
+        said.iter().any(|l| l.starts_with("start Started")),
+        "{said:?}"
+    );
+    if let Err(seen) = lines.closes_within(Duration::from_secs(1)) {
+        panic!("stdout still open 1 s after done: {seen:?}");
+    }
+    assert!(command.wait().success());
+    eventually("the child's look", || {
+        fs::read_to_string(&report).is_ok_and(|t| t.ends_with('\n'))
+    });
+    assert_eq!(fs::read_to_string(&report).unwrap().trim(), "closed");
+}
+
+/// A descriptor opened by the fork itself, as another thread could open
+/// one between a list and the fork.
+#[cfg(unix)]
+mod late {
+    /// The descriptor opened as a copy of stdout.
+    pub const FD: i32 = 200;
+
+    unsafe extern "C" {
+        fn pthread_atfork(
+            prepare: Option<unsafe extern "C" fn()>,
+            parent: Option<unsafe extern "C" fn()>,
+            child: Option<unsafe extern "C" fn()>,
+        ) -> i32;
+        fn dup2(from: i32, to: i32) -> i32;
+        fn close(fd: i32) -> i32;
+    }
+
+    unsafe extern "C" fn prepare() {
+        // SAFETY: a copy of this process's stdout at a free number.
+        unsafe {
+            dup2(1, FD);
+        }
+    }
+
+    unsafe extern "C" fn parent() {
+        // SAFETY: the copy `prepare` made.
+        unsafe {
+            close(FD);
+        }
+    }
+
+    /// From now on every fork of this process opens [`FD`] as it forks.
+    pub fn open_as_the_start_forks() {
+        // SAFETY: registers two handlers that only copy and close one
+        // descriptor.
+        assert_eq!(
+            unsafe { pthread_atfork(Some(prepare), Some(parent), None) },
+            0
+        );
+    }
 }
 
 /// A start from this process, judged by this process's own job, read as
@@ -787,8 +1255,8 @@ fn on_windows_the_job_this_process_is_in_decides_the_start() {
     let job = windows_job::Job::ours();
     let mut home = Home::new();
     let root = waiting(&mut home, "alpha");
-    let release = home.dir.path().join("release");
-    stall_pushes(&home, &root, &release);
+    let release = Release(home.dir.path().join("release"));
+    stall_pushes(&home, &root, &release.0);
     let started = background::start(&kluris(), std::slice::from_ref(&root));
     if job.refuses_children() {
         let background::Start::Refused(_) = started else {
@@ -815,22 +1283,23 @@ fn on_windows_the_job_this_process_is_in_decides_the_start() {
         job.keeps_children(),
         "{job}: the child's place in this process's job"
     );
-    let mut probe = command_line(&home, "console-of", &[&root])
-        .env(CHILD_PID, pid.to_string())
-        .spawn()
-        .unwrap();
-    let mut out = String::new();
-    probe
-        .stdout
-        .take()
-        .unwrap()
-        .read_to_string(&mut out)
-        .unwrap();
-    assert!(probe.wait().unwrap().success(), "{out}");
-    assert!(out.lines().any(|l| l == "no console"), "{job}: {out}");
-    fs::write(&release, "").unwrap();
+    assert_eq!(console_of(&home, pid), "no console", "{job}");
+    drop(release);
     eventually("the push", || result_of(&root).is_some());
     assert_eq!(result_of(&root).as_deref(), Some("pushed"), "{job}");
+}
+
+/// What the `console-of` child says of `pid`'s console.
+#[cfg(windows)]
+fn console_of(home: &Home, pid: u32) -> String {
+    let mut cmd = command_line(home, "console-of", &[]);
+    cmd.env(CHILD_PID, pid.to_string());
+    let mut probe = Running::start(cmd);
+    let out = probe.lines().all();
+    assert!(probe.wait().success(), "{out:?}");
+    out.into_iter()
+        .find(|l| l == "no console" || l == "attached" || l.starts_with("not attached"))
+        .unwrap_or_else(|| "nothing said".into())
 }
 
 /// In a kill-on-close job that forbids breakaway, nothing starts and the
@@ -840,27 +1309,105 @@ fn on_windows_the_job_this_process_is_in_decides_the_start() {
 fn in_a_kill_on_close_job_nothing_starts_and_the_commits_stay_counted() {
     let mut home = Home::new();
     let root = waiting(&mut home, "alpha");
-    let mut child = command(&home, "start-in-job", &[&root]);
-    let mut out = String::new();
-    child
-        .stdout
-        .take()
-        .unwrap()
-        .read_to_string(&mut out)
-        .unwrap();
-    assert!(child.wait().unwrap().success(), "{out}");
-    let lines: Vec<&str> = out
-        .lines()
+    let (mut child, lines) = command(&home, "start-in-job", &[&root]);
+    let out = lines.all();
+    assert!(child.wait().success(), "{out:?}");
+    let said: Vec<&String> = out
+        .iter()
         .filter(|l| *l == "refused" || l.starts_with("to_push") || l.starts_with("not refused"))
         .collect();
-    assert_eq!(lines, ["refused", "to_push 1"], "{out}");
+    assert_eq!(said, ["refused", "to_push 1"], "{out:?}");
     assert!(!git_file(&root, LOCK).exists());
     assert_eq!(record(&root), None);
 }
 
+/// From a job that forbids breakaway and does not end its processes when
+/// it closes (nested in the one this process is in), the start runs the
+/// child in that job, from a program in a folder with a space, for a
+/// brain the command opened by a relative path: the child has no console,
+/// the command's stdout closes as it ends, and the push is recorded.
+#[cfg(windows)]
+#[test]
+fn on_windows_a_start_the_job_keeps_runs_the_child_in_it() {
+    let mut home = Home::new();
+    let root = waiting(&mut home, "alpha");
+    let release = Release(home.dir.path().join("release"));
+    stall_pushes(&home, &root, &release.0);
+    let folder = home.dir.path().join("with space");
+    fs::create_dir_all(&folder).unwrap();
+    let program = folder.join("kluris.exe");
+    fs::copy(kluris(), &program).unwrap();
+    let temp = home.dir.path().join("temp");
+    fs::create_dir_all(&temp).unwrap();
+    decoy(&home, &temp, "alpha");
+    let before = untouched(&home, &temp, "alpha");
+
+    let mut cmd = command_line(&home, "read-in-job", &[Path::new("alpha")]);
+    cmd.env(CHILD_PROGRAM, &program);
+    for var in ["TMPDIR", "TMP", "TEMP"] {
+        cmd.env(var, &temp);
+    }
+    let mut command = Running::start(cmd);
+    let lines = command.lines();
+    let said = lines.until("done");
+    assert!(said.iter().any(|l| l == "to_push 1"), "{said:?}");
+    if let Err(seen) = lines.closes_within(Duration::from_secs(1)) {
+        panic!("stdout still open 1 s after done: {seen:?}");
+    }
+    assert!(command.wait().success());
+
+    eventually("the child's lock", || git_file(&root, LOCK).exists());
+    let pid = Lock::read(&git_file(&root, LOCK)).unwrap().pid;
+    assert_eq!(console_of(&home, pid), "no console");
+    drop(release);
+    eventually("the push", || result_of(&root).is_some());
+    assert_eq!(result_of(&root).as_deref(), Some("pushed"));
+    assert_eq!(remote_head(&home, "alpha"), local_head(&home, &root));
+    eventually("the lock to go", || !git_file(&root, LOCK).exists());
+    assert!(
+        untouched(&home, &temp, "alpha") == before,
+        "the brain of the same name in the temp folder was touched"
+    );
+}
+
+/// The command line the start builds reads back, argument by argument, as
+/// Windows reads it: a program and brains whose paths hold spaces and
+/// quotes, and backslashes before them.
+#[cfg(windows)]
+#[test]
+fn on_windows_the_command_line_reads_back_as_its_arguments() {
+    use std::ffi::OsString;
+    let program = OsString::from(r"C:\Program Files\kluris here\kluris.exe");
+    let args: Vec<OsString> = [
+        "sync",
+        "--background",
+        "--path",
+        r"C:\brains\my brain",
+        "--path",
+        r#"C:\brains\a "quoted" brain\"#,
+        "--path",
+        r"C:\trailing\\",
+        "--path",
+        "",
+    ]
+    .into_iter()
+    .map(OsString::from)
+    .collect();
+    let line = background::command_line(&program, &args);
+    let read = windows_job::split_command_line(&line);
+    let mut expected = vec![program];
+    expected.extend(args);
+    assert_eq!(read, expected);
+}
+
 #[cfg(windows)]
 mod windows_job {
-    use windows_sys::Win32::Foundation::{CloseHandle, ERROR_INVALID_HANDLE, FALSE, GetLastError};
+    use std::ffi::OsString;
+    use std::os::windows::ffi::OsStringExt;
+
+    use windows_sys::Win32::Foundation::{
+        CloseHandle, ERROR_INVALID_HANDLE, FALSE, GetLastError, LocalFree,
+    };
     use windows_sys::Win32::System::Console::{AttachConsole, FreeConsole};
     use windows_sys::Win32::System::JobObjects::{
         AssignProcessToJobObject, CreateJobObjectW, IsProcessInJob, JOB_OBJECT_LIMIT_BREAKAWAY_OK,
@@ -872,6 +1419,7 @@ mod windows_job {
     use windows_sys::Win32::System::Threading::{
         GetCurrentProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
     };
+    use windows_sys::Win32::UI::Shell::CommandLineToArgvW;
 
     /// Join a new job that ends its processes when its last handle closes
     /// and forbids breakaway; its handle is kept for the process's life.
@@ -894,6 +1442,41 @@ mod windows_job {
                 0
             );
             assert_ne!(AssignProcessToJobObject(job, GetCurrentProcess()), 0);
+        }
+    }
+
+    /// Join a new job with no limits, nested in the one this process is in:
+    /// it forbids breakaway and does not end its processes when it closes,
+    /// so the children it keeps outlive this process.
+    pub fn join_job_that_keeps_children() {
+        // SAFETY: a job handle made here and this process's pseudo handle;
+        // the handle is left open on purpose.
+        unsafe {
+            let job = CreateJobObjectW(std::ptr::null(), std::ptr::null());
+            assert!(!job.is_null());
+            assert_ne!(AssignProcessToJobObject(job, GetCurrentProcess()), 0);
+        }
+    }
+
+    /// `line` (NUL-terminated) split into arguments as Windows reads a
+    /// command line (`CommandLineToArgvW`).
+    pub fn split_command_line(line: &[u16]) -> Vec<OsString> {
+        assert_eq!(line.last(), Some(&0), "not NUL-terminated");
+        // SAFETY: `line` is NUL-terminated; the array Windows gives back is
+        // read for its `count` entries, each NUL-terminated, then freed.
+        unsafe {
+            let mut count = 0i32;
+            let argv = CommandLineToArgvW(line.as_ptr(), &raw mut count);
+            assert!(!argv.is_null());
+            let args = (0..usize::try_from(count).unwrap())
+                .map(|i| {
+                    let arg = *argv.add(i);
+                    let len = (0..).take_while(|&n| *arg.add(n) != 0).count();
+                    OsString::from_wide(std::slice::from_raw_parts(arg, len))
+                })
+                .collect();
+            LocalFree(argv.cast());
+            args
         }
     }
 

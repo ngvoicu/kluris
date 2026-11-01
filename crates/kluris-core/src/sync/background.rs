@@ -25,25 +25,45 @@
 //!    moved is `needs_pull` too;
 //! 4. it writes [`LAST_PUSH`] whole ([`crate::atomic`]).
 //!
-//! Every git it starts has the engine's remote environment, so none
-//! prompts: the variables are in git's environment, and so in every
-//! hook's and every git a hook starts.
+//! A brain's root reaches it absolute: [`start`] resolves each against the
+//! caller's working directory, since the child runs in the temp folder,
+//! and [`run`] skips a root that is not absolute, touching nothing of it.
+//!
+//! None of the gits it starts can prompt. The first, local queries (git's
+//! version, the repository, `core.sshCommand`) run before the engine's
+//! remote environment is taken; every git after them has it, the fetch and
+//! the push among them, and so does every hook and every git a hook
+//! starts, since the variables are in git's own environment.
+//!
+//! **Reporting the record** ([`report_last_push`]): a failure is reported
+//! by every command until a push succeeds, and never removed by one; a
+//! success is reported by one command at most. That one claims it
+//! ([`claim_last_push`]): under the lock of [`LAST_PUSH_CLAIM`], it moves
+//! the record to a name of its own, reads it there, and removes it only
+//! when it is what it meant to take; else it puts it back, unless a newer
+//! record is there by then. An explicit
+//! push that succeeds removes the failure it read before the push the same
+//! way, and only that one.
 //!
 //! The lock, the log and the record belong to the remote, so they are in
 //! the repository's common git directory, like the remote claim.
 //!
 //! **Detaching** ([`start`]): Unix, a session of its own (`setsid`), null
-//! standard streams and every other descriptor it would inherit closed at
-//! `exec`; Windows, a detached process in a group of its own, out of this
-//! process's job, with this process's standard handles kept from it. Where
-//! the job forbids breakaway and ends its processes with it, nothing is
-//! started: the commits stay counted in `to_push`. The child is never
-//! waited for, and a failed start never fails the command.
+//! standard streams, and every descriptor from 3 up closed at `exec`, set
+//! so in the child itself; Windows, `CreateProcessW` with no handle
+//! inherited, detached, in a group of its own, out of this process's job.
+//! Where the job forbids breakaway and ends its processes with it, or
+//! cannot be read, nothing is started: the commits stay counted in
+//! `to_push`. The child is never waited for, and a failed start never
+//! fails the command.
 
+#[cfg(windows)]
+use std::ffi::OsStr;
+use std::ffi::OsString;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use super::claim::COMMAND_BOUND;
@@ -65,6 +85,11 @@ pub const LOG: &str = "kluris-sync/background.log";
 /// What the last background push did, relative to the common git
 /// directory.
 pub const LAST_PUSH: &str = "kluris-sync/last-push.json";
+
+/// The file whose OS lock one claim of the record holds at a time,
+/// relative to the common git directory; made when missing, never
+/// removed.
+pub const LAST_PUSH_CLAIM: &str = "kluris-sync/last-push.claim";
 
 /// How old a lock is when it is stale, whatever its pid.
 pub const STALE: Duration = Duration::from_secs(10 * 60);
@@ -278,27 +303,82 @@ pub enum Start {
 }
 
 /// Start `program sync --background --path <root>...`, detached (see the
-/// module docs), and never wait for it.
+/// module docs), and never wait for it. Each root is made absolute against
+/// this process's working directory first; one that cannot be is left out.
 pub fn start(program: &Path, roots: &[PathBuf]) -> Start {
-    let mut cmd = Command::new(program);
-    cmd.args(["sync", "--background"]);
+    let mut args: Vec<OsString> = vec!["sync".into(), "--background".into()];
     for root in roots {
-        cmd.arg("--path").arg(root);
+        if let Ok(root) = std::path::absolute(root) {
+            args.push("--path".into());
+            args.push(root.into_os_string());
+        }
     }
     // No folder of a brain's is kept in use by the child.
-    cmd.current_dir(std::env::temp_dir())
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
-    detach::spawn(cmd)
+    detach::spawn(program, &args, &std::env::temp_dir())
 }
 
 /// The child: push each brain at `roots` in turn (see the module docs),
-/// with `git` as the base of every git it runs.
+/// with `git` as the base of every git it runs. A root that is not
+/// absolute is skipped: it names a folder of this process's working
+/// directory, not the brain the command opened.
 pub fn run(roots: &[PathBuf], git: &SystemGit) {
-    for root in roots {
+    for root in roots.iter().filter(|root| root.is_absolute()) {
         push_brain(root, git);
     }
+}
+
+/// What a command reports of the last background push of the brain whose
+/// common git directory is `common`: a failure as it is, left in place; a
+/// success once, claimed ([`claim_last_push`]); `None` when there is
+/// none, or another command claimed it.
+pub fn report_last_push(common: &Path) -> Option<LastPush> {
+    let record = LastPush::read(&common.join(LAST_PUSH))?;
+    if record.result != PushResult::Pushed {
+        return Some(record);
+    }
+    claim_last_push(common, |claimed| claimed.result == PushResult::Pushed)
+}
+
+/// Take the record of the brain whose common git directory is `common` if
+/// `accept` says it is the one to take: it is moved to a name of this
+/// call's own (so no other caller takes it too), read there, and removed
+/// when accepted. One not accepted (a newer record, published between the
+/// caller's look and this claim) is put back, unless a newer one still is
+/// there by then (a link never replaces a file). `None` when nothing was
+/// taken: none was there (another caller claimed it), or it was put back.
+///
+/// One claim runs at a time, under the OS lock of [`LAST_PUSH_CLAIM`]: on
+/// Windows a rename goes through a handle opened on the file first, so two
+/// renames of one record, started together, could each move it in turn.
+/// The move still guards against the background run, which publishes a
+/// new record without taking that lock.
+pub fn claim_last_push(common: &Path, accept: impl FnOnce(&LastPush) -> bool) -> Option<LastPush> {
+    static CLAIMS: AtomicU64 = AtomicU64::new(0);
+    let gate = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(common.join(LAST_PUSH_CLAIM))
+        .ok()?;
+    gate.lock().ok()?;
+    let path = common.join(LAST_PUSH);
+    let mut name = path.as_os_str().to_owned();
+    name.push(format!(
+        ".claimed-{}-{}",
+        std::process::id(),
+        CLAIMS.fetch_add(1, Ordering::Relaxed)
+    ));
+    let claimed = PathBuf::from(name);
+    fs::rename(&path, &claimed).ok()?;
+    let taken = LastPush::read(&claimed).filter(|record| accept(record));
+    if taken.is_none() {
+        let _ = fs::hard_link(&claimed, &path);
+    }
+    let _ = fs::remove_file(&claimed);
+    // Closing the file unlocks it too.
+    let _ = gate.unlock();
+    taken
 }
 
 /// What the maps a merge rebuilds would say: the background push merges
@@ -551,50 +631,89 @@ mod log {
 
 #[cfg(unix)]
 mod detach {
+    use std::ffi::{OsString, c_int};
     use std::io;
-    use std::os::fd::BorrowedFd;
     use std::os::unix::process::CommandExt;
-    use std::process::Command;
+    use std::path::Path;
+    use std::process::{Command, Stdio};
 
     use super::Start;
 
-    /// The descriptors this process has open from 3 up, read now: they are
-    /// closed in the child at `exec`.
-    fn inherited() -> Vec<i32> {
-        let listed = ["/proc/self/fd", "/dev/fd"].iter().find_map(|dir| {
-            let entries = std::fs::read_dir(dir).ok()?;
-            Some(
-                entries
-                    .flatten()
-                    .filter_map(|e| e.file_name().to_str()?.parse::<i32>().ok())
-                    .filter(|fd| *fd >= 3)
-                    .collect::<Vec<i32>>(),
-            )
-        });
-        listed.unwrap_or_else(|| {
-            let most = rustix::process::getrlimit(rustix::process::Resource::Nofile)
-                .current
-                .unwrap_or(1024)
-                .min(65_536);
-            (3..i32::try_from(most).unwrap_or(1024)).collect()
-        })
+    const F_SETFD: c_int = 2;
+    const FD_CLOEXEC: c_int = 1;
+
+    /// The most descriptors the loop marks, however high the limit.
+    const MOST: c_int = 1 << 20;
+
+    unsafe extern "C" {
+        fn fcntl(fd: c_int, cmd: c_int, ...) -> c_int;
+        fn getdtablesize() -> c_int;
     }
 
-    /// `cmd` in a session of its own, every descriptor from 3 up closed at
-    /// `exec`.
-    pub fn spawn(mut cmd: Command) -> Start {
-        let fds = inherited();
+    #[cfg(target_os = "linux")]
+    mod range {
+        use std::ffi::c_long;
+
+        const SYS_CLOSE_RANGE: c_long = 436;
+        const CLOSE_RANGE_CLOEXEC: c_long = 4;
+
+        unsafe extern "C" {
+            fn syscall(number: c_long, ...) -> c_long;
+        }
+
+        /// Every descriptor from 3 up set to close at `exec` in one call
+        /// (`close_range`, Linux 5.11 and newer); false where it is
+        /// missing.
+        pub fn close_on_exec_from_3() -> bool {
+            // SAFETY: a system call with plain integer arguments; it
+            // touches only this process's descriptor flags.
+            unsafe {
+                syscall(
+                    SYS_CLOSE_RANGE,
+                    3 as c_long,
+                    c_long::from(u32::MAX),
+                    CLOSE_RANGE_CLOEXEC,
+                ) == 0
+            }
+        }
+    }
+
+    /// Every descriptor from 3 below `limit` set to close at `exec`, as
+    /// the child runs it between fork and exec: only async-signal-safe
+    /// calls, nothing allocated. std's own pipe for an exec error is
+    /// already close-on-exec, so it still reports one.
+    fn close_on_exec_from_3(limit: c_int) {
+        #[cfg(target_os = "linux")]
+        if range::close_on_exec_from_3() {
+            return;
+        }
+        for fd in 3..limit {
+            // SAFETY: `fcntl` on a number that may name no descriptor,
+            // which only fails (EBADF).
+            unsafe {
+                fcntl(fd, F_SETFD, FD_CLOEXEC);
+            }
+        }
+    }
+
+    /// `program` with `args` in `dir`, in a session of its own, with null
+    /// standard streams and nothing else of this process's open in it.
+    pub fn spawn(program: &Path, args: &[OsString], dir: &Path) -> Start {
+        // SAFETY: no preconditions; read here, before the fork.
+        let limit = unsafe { getdtablesize() }.clamp(3, MOST);
+        let mut cmd = Command::new(program);
+        cmd.args(args)
+            .current_dir(dir)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
         // SAFETY: the closure runs between fork and exec and calls only
-        // `setsid` and `fcntl`, which are async-signal-safe; it allocates
-        // nothing. A descriptor closed since it was listed gives EBADF,
-        // which is ignored.
+        // `setsid`, `syscall` and `fcntl`, which are async-signal-safe; it
+        // allocates nothing.
         unsafe {
             cmd.pre_exec(move || {
                 rustix::process::setsid().map_err(io::Error::from)?;
-                for fd in &fds {
-                    let fd = BorrowedFd::borrow_raw(*fd);
-                    let _ = rustix::io::fcntl_setfd(fd, rustix::io::FdFlags::CLOEXEC);
-                }
+                close_on_exec_from_3(limit);
                 Ok(())
             });
         }
@@ -607,21 +726,19 @@ mod detach {
 
 #[cfg(windows)]
 mod detach {
-    use std::os::windows::process::CommandExt;
-    use std::process::Command;
+    use std::ffi::OsString;
+    use std::io;
+    use std::os::windows::ffi::OsStrExt;
+    use std::path::Path;
 
-    use windows_sys::Win32::Foundation::{
-        GetHandleInformation, HANDLE, HANDLE_FLAG_INHERIT, SetHandleInformation,
-    };
-    use windows_sys::Win32::System::Console::{
-        GetStdHandle, STD_ERROR_HANDLE, STD_INPUT_HANDLE, STD_OUTPUT_HANDLE,
-    };
+    use windows_sys::Win32::Foundation::{CloseHandle, FALSE};
     use windows_sys::Win32::System::JobObjects::{
         JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
         JobObjectExtendedLimitInformation, QueryInformationJobObject,
     };
     use windows_sys::Win32::System::Threading::{
-        CREATE_BREAKAWAY_FROM_JOB, CREATE_NEW_PROCESS_GROUP, DETACHED_PROCESS,
+        CREATE_BREAKAWAY_FROM_JOB, CREATE_NEW_PROCESS_GROUP, CreateProcessW, DETACHED_PROCESS,
+        PROCESS_CREATION_FLAGS, PROCESS_INFORMATION, STARTUPINFOW,
     };
 
     use super::Start;
@@ -629,84 +746,229 @@ mod detach {
     /// `ERROR_ACCESS_DENIED`: the job forbids breakaway.
     const DENIED: i32 = 5;
 
-    /// This process's standard handles kept from children until dropped,
-    /// then given back their inheritance as it was.
-    struct Kept(Vec<(HANDLE, u32)>);
-
-    impl Kept {
-        fn now() -> Kept {
-            let mut kept = Vec::new();
-            for which in [STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE] {
-                // SAFETY: plain queries and changes of this process's own
-                // standard handles; the flags go to a local.
-                unsafe {
-                    let handle = GetStdHandle(which);
-                    let mut flags = 0u32;
-                    if handle.is_null()
-                        || handle as isize == -1
-                        || GetHandleInformation(handle, &raw mut flags) == 0
-                    {
-                        continue;
-                    }
-                    if SetHandleInformation(handle, HANDLE_FLAG_INHERIT, 0) != 0 {
-                        kept.push((handle, flags & HANDLE_FLAG_INHERIT));
-                    }
-                }
-            }
-            Kept(kept)
-        }
-    }
-
-    impl Drop for Kept {
-        fn drop(&mut self) {
-            for (handle, flags) in &self.0 {
-                // SAFETY: the same standard handle, its flag as it was.
-                unsafe {
-                    SetHandleInformation(*handle, HANDLE_FLAG_INHERIT, *flags);
-                }
-            }
-        }
-    }
-
-    /// Whether this process's job ends its processes when it closes.
-    fn job_kills_on_close() -> bool {
+    /// Whether this process's job ends its processes when it closes;
+    /// `None` when it cannot be read.
+    fn job_kills_on_close() -> Option<bool> {
         // SAFETY: a query of this process's own job into a local of its
         // size.
         unsafe {
             let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
-            let size = u32::try_from(std::mem::size_of_val(&info)).unwrap_or(0);
-            QueryInformationJobObject(
+            let size = u32::try_from(std::mem::size_of_val(&info)).ok()?;
+            let read = QueryInformationJobObject(
                 std::ptr::null_mut(),
                 JobObjectExtendedLimitInformation,
                 (&raw mut info).cast(),
                 size,
                 std::ptr::null_mut(),
-            ) != 0
-                && info.BasicLimitInformation.LimitFlags & JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE != 0
+            );
+            (read != 0).then_some(
+                info.BasicLimitInformation.LimitFlags & JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE != 0,
+            )
         }
     }
 
-    /// `cmd` detached, in a group of its own, out of this process's job.
-    pub fn spawn(mut cmd: Command) -> Start {
-        let _kept = Kept::now();
-        let detached = DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP;
-        cmd.creation_flags(detached | CREATE_BREAKAWAY_FROM_JOB);
-        match cmd.spawn() {
-            Ok(child) => Start::Started(child.id()),
-            Err(e) if e.raw_os_error() == Some(DENIED) => {
-                if job_kills_on_close() {
-                    return Start::Refused(
-                        "this process's job ends its processes with it and forbids leaving it"
-                            .into(),
-                    );
-                }
-                cmd.creation_flags(detached);
-                match cmd.spawn() {
-                    Ok(child) => Start::Started(child.id()),
-                    Err(e) => Start::Failed(e),
-                }
+    /// `path` as a NUL-terminated wide string.
+    fn wide(path: &Path) -> Vec<u16> {
+        path.as_os_str().encode_wide().chain([0]).collect()
+    }
+
+    /// `program` with `args` in `dir`, started with `flags` and no handle
+    /// inherited (no standard handles either): its process id.
+    fn create(
+        program: &Path,
+        args: &[OsString],
+        dir: &Path,
+        flags: PROCESS_CREATION_FLAGS,
+    ) -> io::Result<u32> {
+        let application = wide(program);
+        let mut line = super::command_line(program.as_os_str(), args);
+        let dir = wide(dir);
+        // SAFETY: every string is NUL-terminated and outlives the call, the
+        // command line is a buffer Windows may write into, and the two
+        // structures are locals of their size; the handles it gives back
+        // are closed here.
+        unsafe {
+            let mut startup: STARTUPINFOW = std::mem::zeroed();
+            startup.cb = u32::try_from(std::mem::size_of::<STARTUPINFOW>()).unwrap_or(0);
+            let mut info: PROCESS_INFORMATION = std::mem::zeroed();
+            let made = CreateProcessW(
+                application.as_ptr(),
+                line.as_mut_ptr(),
+                std::ptr::null(),
+                std::ptr::null(),
+                FALSE,
+                flags,
+                std::ptr::null(),
+                dir.as_ptr(),
+                &raw const startup,
+                &raw mut info,
+            );
+            if made == 0 {
+                return Err(io::Error::last_os_error());
             }
+            CloseHandle(info.hThread);
+            CloseHandle(info.hProcess);
+            Ok(info.dwProcessId)
+        }
+    }
+
+    /// `program` with `args` in `dir`: detached, in a group of its own,
+    /// out of this process's job when the job lets it leave; in it when the
+    /// job keeps it but does not end it with this process.
+    pub fn spawn(program: &Path, args: &[OsString], dir: &Path) -> Start {
+        let detached = DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP;
+        match create(program, args, dir, detached | CREATE_BREAKAWAY_FROM_JOB) {
+            Ok(pid) => Start::Started(pid),
+            Err(e) if e.raw_os_error() == Some(DENIED) => match job_kills_on_close() {
+                Some(false) => match create(program, args, dir, detached) {
+                    Ok(pid) => Start::Started(pid),
+                    Err(e) => Start::Failed(e),
+                },
+                Some(true) => Start::Refused(
+                    "this process's job ends its processes with it and forbids leaving it".into(),
+                ),
+                None => Start::Refused(
+                    "this process's job forbids leaving it and could not be read".into(),
+                ),
+            },
             Err(e) => Start::Failed(e),
         }
+    }
+}
+
+/// The Windows command line of `program` with `args`, NUL-terminated: the
+/// program quoted (a Windows path holds no quote), each argument as the C
+/// runtime and `CommandLineToArgvW` read it back ([`quote`]).
+#[cfg(windows)]
+pub fn command_line(program: &OsStr, args: &[OsString]) -> Vec<u16> {
+    use std::os::windows::ffi::OsStrExt;
+    let mut line = vec![u16::from(b'"')];
+    line.extend(program.encode_wide());
+    line.push(u16::from(b'"'));
+    for arg in args {
+        line.push(u16::from(b' '));
+        quote(&arg.encode_wide().collect::<Vec<u16>>(), &mut line);
+    }
+    line.push(0);
+    line
+}
+
+/// `arg` appended to a Windows command line: as it is when it has no
+/// space, tab, line break or quote and is not empty; else in quotes, each
+/// quote escaped with a backslash, and the backslashes before a quote or
+/// the closing quote doubled.
+#[cfg(any(windows, test))]
+fn quote(arg: &[u16], line: &mut Vec<u16>) {
+    let [space, tab, newline, vtab, quote, backslash] =
+        [b' ', b'\t', b'\n', 0x0b, b'"', b'\\'].map(u16::from);
+    let plain = !arg.is_empty()
+        && !arg
+            .iter()
+            .any(|c| [space, tab, newline, vtab, quote].contains(c));
+    if plain {
+        line.extend_from_slice(arg);
+        return;
+    }
+    line.push(quote);
+    let mut backslashes = 0;
+    for &c in arg {
+        if c == backslash {
+            backslashes += 1;
+        } else {
+            if c == quote {
+                line.extend(std::iter::repeat_n(backslash, backslashes + 1));
+            }
+            backslashes = 0;
+        }
+        line.push(c);
+    }
+    line.extend(std::iter::repeat_n(backslash, backslashes));
+    line.push(quote);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::quote;
+
+    /// `line` split into arguments by the C runtime's rules for every
+    /// argument after the program's: a backslash run before a quote is
+    /// halved (an odd one escapes the quote), quotes open and close, and
+    /// spaces and tabs outside quotes split.
+    fn split(line: &str) -> Vec<String> {
+        let chars: Vec<char> = line.chars().collect();
+        let (mut args, mut arg, mut quoted, mut any) = (Vec::new(), String::new(), false, false);
+        let mut i = 0;
+        while i < chars.len() {
+            let c = chars[i];
+            if c == '\\' {
+                let run = chars[i..].iter().take_while(|&&c| c == '\\').count();
+                if chars.get(i + run) == Some(&'"') {
+                    arg.extend(std::iter::repeat_n('\\', run / 2));
+                    if run % 2 == 1 {
+                        arg.push('"');
+                        i += run + 1;
+                    } else {
+                        i += run;
+                    }
+                } else {
+                    arg.extend(std::iter::repeat_n('\\', run));
+                    i += run;
+                }
+                any = true;
+                continue;
+            }
+            if c == '"' {
+                quoted = !quoted;
+                any = true;
+            } else if (c == ' ' || c == '\t') && !quoted {
+                if any {
+                    args.push(std::mem::take(&mut arg));
+                    any = false;
+                }
+            } else {
+                arg.push(c);
+                any = true;
+            }
+            i += 1;
+        }
+        if any {
+            args.push(arg);
+        }
+        args
+    }
+
+    fn quoted(arg: &str) -> String {
+        let mut line = Vec::new();
+        quote(&arg.encode_utf16().collect::<Vec<u16>>(), &mut line);
+        String::from_utf16(&line).unwrap()
+    }
+
+    #[test]
+    fn each_argument_is_quoted_as_windows_reads_it_back() {
+        for (arg, expected) in [
+            ("sync", "sync"),
+            ("", r#""""#),
+            (r"C:\brains\alpha", r"C:\brains\alpha"),
+            (r"C:\my brains\alpha", r#""C:\my brains\alpha""#),
+            (r#"a "quoted" brain"#, r#""a \"quoted\" brain""#),
+            (r#"back\"slash"#, r#""back\\\"slash""#),
+            (r"trailing space\", r#""trailing space\\""#),
+            ("tab\there", "\"tab\there\""),
+        ] {
+            assert_eq!(quoted(arg), expected, "{arg:?}");
+        }
+        let args = [
+            "sync",
+            "--path",
+            r"C:\my brains\alpha",
+            r#"C:\brains\a "quoted" brain\"#,
+            r"C:\trailing\\",
+            r#"\\"#,
+            r#"x\\\"y"#,
+            "",
+            "plain",
+        ];
+        let line = args.iter().map(|a| quoted(a)).collect::<Vec<_>>().join(" ");
+        assert_eq!(split(&line), args, "{line}");
     }
 }
