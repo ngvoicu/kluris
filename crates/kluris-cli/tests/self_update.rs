@@ -886,7 +886,8 @@ fn a_newer_release_without_binaries_never_wins() {
     let f = Fixture::new();
     // A release newer than this build (3.1.1 itself would be no update).
     let binary = marked_binary(&f, "3.1.2", "v3");
-    // Newest first, as GitHub lists them: v2.29.0 (no binaries) came later.
+    // Newest first, as GitHub lists them: the release without binaries came
+    // later.
     let no_binaries = Release {
         tag: "v2.29.0".into(),
         assets: Vec::new(),

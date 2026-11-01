@@ -139,7 +139,7 @@ fn wake_up_of_an_empty_brain() {
 }
 
 /// `updated` values YAML reads as every kind of scalar and collection, and
-/// strings that only look like dates. `2026-02-30` is a timestamp no YAML
+/// strings that only look like dates. A February 30th is a timestamp no YAML
 /// reader can construct: that neuron does not read.
 const ODD_UPDATED: [&str; 30] = [
     "[2026-01-01, x]",

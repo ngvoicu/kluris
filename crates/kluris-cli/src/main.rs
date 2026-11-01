@@ -485,8 +485,8 @@ Checks that git runs, that the first kluris on PATH is this one, and that \
 the config and every registered brain's kluris.yml read. Then refreshes the \
 companion playbooks and re-installs every brain's agent skill \
 (~/.agents/skills, plus the folders of the selected agents), removing the \
-copies Kluris 2 left in folders it no longer uses, and removes the \
-background sync services an earlier release installed. This is the step \
+copies an earlier release left in folders Kluris does not use, and removes \
+the background sync services an earlier release installed. This is the step \
 after an upgrade: run `kluris doctor` and everything is back in sync.
 
 Pass --no-refresh to run only the read-only checks.";

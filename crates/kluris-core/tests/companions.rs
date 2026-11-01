@@ -372,7 +372,7 @@ fn refresh_replaces_old_single_file_install_with_the_embedded_folder() {
 }
 
 #[test]
-fn refresh_drops_files_no_longer_vendored() {
+fn refresh_drops_files_the_vendored_tree_lacks() {
     let home = TempDir::new().unwrap();
     install_tree("specmint-core", &fake("specmint-core"), home.path()).unwrap();
     let dest = installed_dir("specmint-core", home.path());

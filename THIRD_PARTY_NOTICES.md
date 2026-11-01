@@ -1,12 +1,11 @@
 # Third-party notices
 
-Kluris 3 contains code ported from the projects below. Their licenses are
+Kluris contains code ported from the projects below. Their licenses are
 kept next to the ported code.
 
 ## PyYAML 6.0.3
 
-- Source: https://github.com/yaml/pyyaml (the 6.0.3 release, the one Kluris
-  2.28.11 runs on).
+- Source: https://github.com/yaml/pyyaml (the 6.0.3 release).
 - License: MIT. Copyright (c) 2017-2021 Ingy döt Net; Copyright (c) 2006-2016
   Kirill Simonov. Full text: `crates/kluris-core/src/yaml/LICENSE-PyYAML`.
 - Ported in `crates/kluris-core/src/yaml/`: `reader.rs` (`reader.py`),
@@ -27,8 +26,7 @@ kept next to the ported code.
 
 ## CPython 3.11
 
-- Source: https://github.com/python/cpython/tree/3.11 (the Python 3.11 that
-  Kluris 2.28.11 runs on).
+- Source: https://github.com/python/cpython/tree/3.11.
 - License: Python Software Foundation License Version 2. Copyright (c)
   2001-2023 Python Software Foundation. Full text:
   `crates/kluris-core/src/LICENSE-PSF` and
@@ -46,7 +44,7 @@ kept next to the ported code.
   not shipped in the `kluris` binary): `Lib/difflib.py`'s `SequenceMatcher`
   matching blocks, opcodes and grouped opcodes, `unified_diff` and
   `_format_range_unified`, so `cargo xtask sync-specmint --diff` prints
-  what v2's `scripts/sync-specmint.py` prints.
+  its diffs as Python's `difflib` prints them.
 
 ## Unicode Character Database 14.0
 
