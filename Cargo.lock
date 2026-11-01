@@ -1379,6 +1379,7 @@ dependencies = [
  "indexmap",
  "insta",
  "jiff",
+ "libc",
  "num-bigint",
  "proptest",
  "regex",

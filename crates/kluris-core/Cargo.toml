@@ -26,6 +26,10 @@ unicode-segmentation.workspace = true
 # tempfile.
 [target.'cfg(unix)'.dependencies]
 rustix.workspace = true
+# The interrupt handler that ends a run's process groups before the command
+# dies of the signal (sigaction, killpg, raise); already in the graph
+# through signal-hook.
+libc.workspace = true
 
 # A timed-out git's process tree ends with its job object.
 [target.'cfg(windows)'.dependencies]

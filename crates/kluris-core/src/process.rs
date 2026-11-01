@@ -8,6 +8,18 @@
 //! group TERM first and KILL once the program has exited or half a second
 //! has passed, so git removes the lock files it holds; on Windows the job
 //! is terminated at once.
+//!
+//! On Unix a SIGINT, SIGTERM or SIGHUP to the command ends every group
+//! still running before the command dies of it ([`interrupts`]), so nothing
+//! a run started outlives the claims the command holds. A SIGKILL to the
+//! command cannot be handled: its groups are left running to their own end
+//! or the next machine restart.
+//!
+//! On Windows the program starts suspended, joins its job, and only then
+//! runs, so nothing it starts is outside the job. When the job cannot be
+//! made or the program cannot join it, the program still runs, uncontained:
+//! its deadline then ends the program alone, never what it started, and
+//! the run is not failed for it.
 
 use std::io::{self, Read, Write};
 use std::process::{Command, ExitStatus, Stdio};
@@ -73,9 +85,7 @@ fn run(
     if capture {
         cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
     }
-    tree::isolate(&mut cmd);
-    let mut child = cmd.spawn().map_err(RunError::Spawn)?;
-    let tree = tree::Tree::adopt(&child);
+    let (mut child, tree) = tree::Tree::start(&mut cmd).map_err(RunError::Spawn)?;
     // Written from a thread: the program may fill its output before it has
     // read all of its input. A program stopped first ends the write.
     if let (Some(mut stdin), Some(input)) = (child.stdin.take(), input) {
@@ -152,32 +162,55 @@ fn drain(pipe: Option<impl Read + Send + 'static>) -> Receiver<Vec<u8>> {
 
 #[cfg(unix)]
 mod tree {
+    use std::io;
     use std::os::unix::process::CommandExt;
     use std::process::{Child, Command};
+    use std::sync::atomic::AtomicI32;
     use std::time::Duration;
 
     use rustix::process::{Pid, Signal, kill_process_group};
 
+    use super::interrupts;
+
     /// How long a stopped program has to exit after TERM before KILL.
     pub const GRACE: Duration = Duration::from_millis(500);
 
-    /// The program leads a new process group.
-    pub fn isolate(cmd: &mut Command) {
-        cmd.process_group(0);
+    /// The process group of a started program, known to the interrupt
+    /// handler ([`interrupts`]) until the run ends.
+    pub struct Tree {
+        group: Option<Pid>,
+        registered: Option<&'static AtomicI32>,
     }
 
-    /// The process group of a started program.
-    pub struct Tree(Option<Pid>);
-
     impl Tree {
-        pub fn adopt(child: &Child) -> Tree {
-            Tree(i32::try_from(child.id()).ok().and_then(Pid::from_raw))
+        /// Start `cmd` leading a new process group, with the group known to
+        /// the interrupt handler before any signal it handles can be taken.
+        /// No program starts once the command is being interrupted.
+        pub fn start(cmd: &mut Command) -> io::Result<(Child, Tree)> {
+            cmd.process_group(0);
+            let starting = interrupts::Starting::begin()?;
+            let mask = starting.mask_before();
+            // SAFETY: `sigprocmask` is async-signal-safe, and `mask` a copy.
+            unsafe {
+                cmd.pre_exec(move || {
+                    // The program gets the mask this thread had before the
+                    // handled signals were blocked to start it.
+                    libc::sigprocmask(libc::SIG_SETMASK, &mask, std::ptr::null_mut());
+                    Ok(())
+                });
+            }
+            let child = cmd.spawn()?;
+            let group = i32::try_from(child.id()).ok().and_then(Pid::from_raw);
+            let registered =
+                group.and_then(|group| interrupts::register(group.as_raw_nonzero().get()));
+            drop(starting);
+            Ok((child, Tree { group, registered }))
         }
 
         /// Ask every process in the group to stop (TERM).
         pub fn interrupt(&self) {
-            if let Some(pid) = self.0 {
-                let _ = kill_process_group(pid, Signal::TERM);
+            if let Some(group) = self.group {
+                let _ = kill_process_group(group, Signal::TERM);
             }
         }
 
@@ -185,61 +218,269 @@ mod tree {
         /// reused while one of its processes lives, and an empty group is
         /// gone (ESRCH, ignored).
         pub fn end(&self) {
-            if let Some(pid) = self.0 {
-                let _ = kill_process_group(pid, Signal::KILL);
+            if let Some(group) = self.group {
+                let _ = kill_process_group(group, Signal::KILL);
             }
+        }
+    }
+
+    impl Drop for Tree {
+        /// The run is over and its program reaped: the group is forgotten.
+        fn drop(&mut self) {
+            if let Some(registered) = self.registered.take() {
+                interrupts::forget(registered);
+            }
+        }
+    }
+}
+
+/// What a SIGINT, SIGTERM or SIGHUP does to a command that runs programs
+/// here: the groups they lead (see the module documentation) are outside
+/// the command's own, so the terminal's Ctrl-C never reaches them, and a
+/// command that died of the signal would leave them running past its
+/// claims. The handler, installed on the first run (a signal the command
+/// ignores stays ignored), ends every live group first: TERM, then KILL
+/// once [`tree::GRACE`] has passed (none for a group gone sooner). Then the
+/// command ends as the signal ends it by default, with the status the shell
+/// expects. It calls only `kill`, `killpg`, `nanosleep`, `sigaction` and
+/// `raise`, and reads atomics.
+///
+/// A prompt's own handler (the CLI's `AbortOnInterrupt`, through
+/// signal-hook) is installed for the prompt's time on top of this one and
+/// calls it first: with no run going it ends nothing, and the prompt still
+/// prints `Aborted!` and exits 1 before the default action comes.
+#[cfg(unix)]
+mod interrupts {
+    use std::io;
+    use std::sync::Once;
+    use std::sync::atomic::{AtomicBool, AtomicI32, AtomicUsize, Ordering::SeqCst};
+
+    use libc::c_int;
+
+    use super::{POLL, tree::GRACE};
+
+    /// The signals that end a command and are handled here.
+    const SIGNALS: [c_int; 3] = [libc::SIGINT, libc::SIGTERM, libc::SIGHUP];
+
+    /// The groups of the runs going, one per slot (0: free). More runs at
+    /// once than slots go unknown to the handler.
+    static GROUPS: [AtomicI32; 64] = [const { AtomicI32::new(0) }; 64];
+
+    /// How many runs are between starting their program and registering
+    /// its group.
+    static STARTING: AtomicUsize = AtomicUsize::new(0);
+
+    /// A handled signal arrived: no program starts any more.
+    static INTERRUPTED: AtomicBool = AtomicBool::new(false);
+
+    /// How long the handler waits for a run starting its program to
+    /// register its group.
+    const STARTING_BOUND: std::time::Duration = std::time::Duration::from_secs(1);
+
+    /// A run starting its program: until dropped, the handled signals are
+    /// blocked on this thread (the handler never waits for its own thread),
+    /// and the handler waits for the run to register its group.
+    pub struct Starting(libc::sigset_t);
+
+    impl Starting {
+        pub fn begin() -> io::Result<Starting> {
+            install();
+            // SAFETY: plain libc calls on locals of the stated types.
+            let old = unsafe {
+                let mut block: libc::sigset_t = std::mem::zeroed();
+                libc::sigemptyset(&mut block);
+                for signal in SIGNALS {
+                    libc::sigaddset(&mut block, signal);
+                }
+                let mut old: libc::sigset_t = std::mem::zeroed();
+                libc::pthread_sigmask(libc::SIG_BLOCK, &block, &mut old);
+                old
+            };
+            let starting = Starting(old);
+            STARTING.fetch_add(1, SeqCst);
+            if INTERRUPTED.load(SeqCst) {
+                return Err(io::Error::new(
+                    io::ErrorKind::Interrupted,
+                    "the command is being interrupted",
+                ));
+            }
+            Ok(starting)
+        }
+    }
+
+    impl Starting {
+        /// This thread's signal mask before [`Starting::begin`].
+        pub fn mask_before(&self) -> libc::sigset_t {
+            self.0
+        }
+    }
+
+    impl Drop for Starting {
+        fn drop(&mut self) {
+            STARTING.fetch_sub(1, SeqCst);
+            // SAFETY: the mask this thread had before `begin`.
+            unsafe {
+                libc::pthread_sigmask(libc::SIG_SETMASK, &self.0, std::ptr::null_mut());
+            }
+        }
+    }
+
+    /// Make `group` known to the handler; its slot, or `None` when every
+    /// slot is taken.
+    pub fn register(group: i32) -> Option<&'static AtomicI32> {
+        GROUPS
+            .iter()
+            .find(|slot| slot.compare_exchange(0, group, SeqCst, SeqCst).is_ok())
+    }
+
+    /// The group in `slot` is over.
+    pub fn forget(slot: &AtomicI32) {
+        slot.store(0, SeqCst);
+    }
+
+    /// The handler for [`SIGNALS`], once per process.
+    fn install() {
+        static ONCE: Once = Once::new();
+        ONCE.call_once(|| {
+            for signal in SIGNALS {
+                // SAFETY: `on_signal` is an `extern "C" fn(c_int)`, and
+                // every pointer is to a local of the stated type.
+                unsafe {
+                    let mut ours: libc::sigaction = std::mem::zeroed();
+                    ours.sa_sigaction = on_signal as extern "C" fn(c_int) as libc::sighandler_t;
+                    libc::sigemptyset(&mut ours.sa_mask);
+                    for blocked in SIGNALS {
+                        libc::sigaddset(&mut ours.sa_mask, blocked);
+                    }
+                    ours.sa_flags = libc::SA_RESTART;
+                    let mut old: libc::sigaction = std::mem::zeroed();
+                    if libc::sigaction(signal, &ours, &mut old) == 0
+                        && old.sa_sigaction == libc::SIG_IGN
+                    {
+                        libc::sigaction(signal, &old, std::ptr::null_mut());
+                    }
+                }
+            }
+        });
+    }
+
+    /// Sleep for [`POLL`], in the handler.
+    fn nap() {
+        // SAFETY: a zeroed timespec (some targets pad it) given its
+        // nanoseconds, and a null remainder.
+        unsafe {
+            let mut pause: libc::timespec = std::mem::zeroed();
+            pause.tv_nsec = libc::c_long::try_from(POLL.as_nanos()).unwrap_or(5_000_000);
+            libc::nanosleep(&pause, std::ptr::null_mut());
+        }
+    }
+
+    /// Whether `group` (0: none) has a process left.
+    fn alive(group: i32) -> bool {
+        // SAFETY: a signal 0 sends nothing; it only asks.
+        group > 0 && unsafe { libc::kill(-group, 0) } == 0
+    }
+
+    /// `signal` to every live group, each read once: a group is never 0
+    /// here, which would be the command's own.
+    fn send(signal: c_int) {
+        for slot in &GROUPS {
+            let group = slot.load(SeqCst);
+            if alive(group) {
+                // SAFETY: async-signal-safe; a gone group is ESRCH.
+                unsafe {
+                    libc::killpg(group, signal);
+                }
+            }
+        }
+    }
+
+    /// End every live group, then end the command as `signal` does by
+    /// default (see the module documentation).
+    extern "C" fn on_signal(signal: c_int) {
+        INTERRUPTED.store(true, SeqCst);
+        let polls = |bound: std::time::Duration| bound.as_millis() / POLL.as_millis().max(1);
+        let mut left = polls(STARTING_BOUND);
+        while STARTING.load(SeqCst) > 0 && left > 0 {
+            nap();
+            left -= 1;
+        }
+        send(libc::SIGTERM);
+        let mut left = polls(GRACE);
+        while GROUPS.iter().any(|slot| alive(slot.load(SeqCst))) && left > 0 {
+            nap();
+            left -= 1;
+        }
+        send(libc::SIGKILL);
+        // SAFETY: the default action back, then the signal again: it is
+        // blocked while this handler runs, so it ends the command once the
+        // handler returns.
+        unsafe {
+            let mut default: libc::sigaction = std::mem::zeroed();
+            default.sa_sigaction = libc::SIG_DFL;
+            libc::sigemptyset(&mut default.sa_mask);
+            libc::sigaction(signal, &default, std::ptr::null_mut());
+            libc::raise(signal);
         }
     }
 }
 
 #[cfg(windows)]
 mod tree {
+    use std::io;
     use std::os::windows::io::AsRawHandle;
+    use std::os::windows::process::CommandExt;
     use std::process::{Child, Command};
     use std::time::Duration;
 
-    use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
+    use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, INVALID_HANDLE_VALUE};
+    use windows_sys::Win32::System::Diagnostics::ToolHelp::{
+        CreateToolhelp32Snapshot, TH32CS_SNAPTHREAD, THREADENTRY32, Thread32First, Thread32Next,
+    };
     use windows_sys::Win32::System::JobObjects::{
         AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
         JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
         SetInformationJobObject, TerminateJobObject,
     };
+    use windows_sys::Win32::System::Threading::{
+        CREATE_SUSPENDED, OpenThread, ResumeThread, THREAD_SUSPEND_RESUME,
+    };
 
     /// No grace: a job has no signal to ask its processes to stop with.
     pub const GRACE: Duration = Duration::ZERO;
 
-    /// Nothing to set before the start: the job is joined right after it.
-    pub fn isolate(_: &mut Command) {}
+    /// How many times a thread snapshot is taken before resuming fails.
+    const SNAPSHOT_TRIES: usize = 5;
 
-    /// A job object holding the program (and so everything it starts),
-    /// killed when the job's handle closes.
+    #[cfg(test)]
+    thread_local! {
+        /// Makes the job fail on this thread: a job's failure has no other
+        /// way to be made where nested jobs are allowed.
+        pub static JOB_FAILS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    }
+
+    /// The job object holding a started program (and so everything it
+    /// starts), killed when the job's handle closes; `None` when it could
+    /// not be made or the program could not join it, and the program runs
+    /// uncontained (see the module documentation).
     pub struct Tree(Option<HANDLE>);
 
     impl Tree {
-        pub fn adopt(child: &Child) -> Tree {
-            // SAFETY: plain Win32 calls on a handle created here and the
-            // child's process handle, which `child` keeps open; every
-            // pointer is to a live local of the stated size.
-            unsafe {
-                let job = CreateJobObjectW(std::ptr::null(), std::ptr::null());
-                if job.is_null() {
-                    return Tree(None);
-                }
-                let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
-                info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-                let set = SetInformationJobObject(
-                    job,
-                    JobObjectExtendedLimitInformation,
-                    (&raw const info).cast(),
-                    u32::try_from(std::mem::size_of_val(&info)).unwrap_or(0),
-                );
-                let process = child.as_raw_handle() as HANDLE;
-                if set == 0 || AssignProcessToJobObject(job, process) == 0 {
-                    CloseHandle(job);
-                    return Tree(None);
-                }
-                Tree(Some(job))
+        /// Start `cmd` suspended, put it in a new job, then let it run, so
+        /// nothing it starts is ever outside the job. The flags `cmd` was
+        /// created with are this one (`CREATE_SUSPENDED`).
+        pub fn start(cmd: &mut Command) -> io::Result<(Child, Tree)> {
+            cmd.creation_flags(CREATE_SUSPENDED);
+            let mut child = cmd.spawn()?;
+            let tree = Tree(job_for(&child));
+            if !resume(child.id()) {
+                let error = io::Error::last_os_error();
+                drop(tree);
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(error);
             }
+            Ok((child, tree))
         }
 
         /// Nothing: [`Tree::end`] terminates the job.
@@ -253,6 +494,75 @@ mod tree {
                     TerminateJobObject(job, 1);
                 }
             }
+        }
+    }
+
+    /// A job that kills its processes when closed, with `child` in it.
+    fn job_for(child: &Child) -> Option<HANDLE> {
+        #[cfg(test)]
+        if JOB_FAILS.with(std::cell::Cell::get) {
+            return None;
+        }
+        // SAFETY: plain Win32 calls on a handle created here and the child's
+        // process handle, which `child` keeps open; every pointer is to a
+        // live local of the stated size.
+        unsafe {
+            let job = CreateJobObjectW(std::ptr::null(), std::ptr::null());
+            if job.is_null() {
+                return None;
+            }
+            let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
+            info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+            let set = SetInformationJobObject(
+                job,
+                JobObjectExtendedLimitInformation,
+                (&raw const info).cast(),
+                u32::try_from(std::mem::size_of_val(&info)).unwrap_or(0),
+            );
+            let process = child.as_raw_handle() as HANDLE;
+            if set == 0 || AssignProcessToJobObject(job, process) == 0 {
+                CloseHandle(job);
+                return None;
+            }
+            Some(job)
+        }
+    }
+
+    /// Let the suspended process `pid` run: its one thread, found in a
+    /// thread snapshot, resumed. Whether it was.
+    fn resume(pid: u32) -> bool {
+        // SAFETY: plain Win32 calls on handles opened and closed here;
+        // `entry` is a live local whose size is given.
+        unsafe {
+            // A snapshot taken while threads come and go can fail at once
+            // (ERROR_BAD_LENGTH): it is taken again, a few times at most.
+            let mut snapshot = INVALID_HANDLE_VALUE;
+            for _ in 0..SNAPSHOT_TRIES {
+                snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+                if snapshot != INVALID_HANDLE_VALUE {
+                    break;
+                }
+            }
+            if snapshot == INVALID_HANDLE_VALUE {
+                return false;
+            }
+            let mut entry: THREADENTRY32 = std::mem::zeroed();
+            entry.dwSize = u32::try_from(std::mem::size_of::<THREADENTRY32>()).unwrap_or(0);
+            let mut resumed = false;
+            let mut more = Thread32First(snapshot, &mut entry) != 0;
+            while more {
+                if entry.th32OwnerProcessID == pid {
+                    let thread = OpenThread(THREAD_SUSPEND_RESUME, 0, entry.th32ThreadID);
+                    if !thread.is_null() {
+                        resumed = ResumeThread(thread) != u32::MAX;
+                        CloseHandle(thread);
+                    }
+                    break;
+                }
+                more = Thread32Next(snapshot, &mut entry) != 0;
+            }
+            CloseHandle(snapshot);
+            resumed
         }
     }
 
@@ -449,6 +759,63 @@ mod tests {
             !dir.path().join("survived").exists(),
             "the grandchild outlived the deadline"
         );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_grandchild_started_at_once_is_ended_with_the_program() {
+        // The program starts a child at once, which runs a grandchild
+        // (ping) holding held.txt open: the file can be removed only once
+        // neither runs.
+        let dir = tempfile::TempDir::new().unwrap();
+        std::fs::write(
+            dir.path().join("child.bat"),
+            "@echo off\r\nping -n 60 127.0.0.1 >\"%~dp0held.txt\"\r\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("outer.bat"),
+            "@echo off\r\nstart \"\" /B cmd /C \"%~dp0child.bat\"\r\nping -n 60 127.0.0.1 >nul\r\n",
+        )
+        .unwrap();
+        let mut cmd = Command::new("cmd");
+        cmd.arg("/C").arg(dir.path().join("outer.bat"));
+        let started = Instant::now();
+        let result = run_until(cmd, started + Duration::from_secs(2));
+        assert!(matches!(result, Err(RunError::TimedOut)), "{result:?}");
+        let held = dir.path().join("held.txt");
+        assert!(
+            held.exists(),
+            "the grandchild never ran: the test proves nothing"
+        );
+        let until = Instant::now() + Duration::from_secs(10);
+        while std::fs::remove_file(&held).is_err() {
+            assert!(
+                Instant::now() < until,
+                "the grandchild outlived the deadline"
+            );
+            thread::sleep(Duration::from_millis(50));
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_program_whose_job_fails_still_runs_and_ends_at_the_deadline() {
+        let dir = tempfile::TempDir::new().unwrap();
+        std::fs::write(
+            dir.path().join("run.bat"),
+            "@echo off\r\necho x> \"%~dp0ran\"\r\nping -n 10 127.0.0.1 >nul\r\n",
+        )
+        .unwrap();
+        let mut cmd = Command::new("cmd");
+        cmd.arg("/C").arg(dir.path().join("run.bat"));
+        tree::JOB_FAILS.with(|fails| fails.set(true));
+        let started = Instant::now();
+        let result = run_until(cmd, started + Duration::from_secs(2));
+        tree::JOB_FAILS.with(|fails| fails.set(false));
+        assert!(matches!(result, Err(RunError::TimedOut)), "{result:?}");
+        assert!(started.elapsed() < Duration::from_secs(4));
+        assert!(dir.path().join("ran").exists(), "it never ran");
     }
 
     #[test]

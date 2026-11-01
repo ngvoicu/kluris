@@ -22,7 +22,6 @@
 mod common;
 
 use std::fs;
-use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::thread;
@@ -986,11 +985,12 @@ const CHILD_OUT: &str = "KLURIS_TEST_SESSION_OUT";
 
 /// This test binary run again as a child, without the world's lock, that
 /// `read`s the brain through a session (with `KLURIS_NO_AUTO_SYNC=1` in
-/// its environment); `land`s what a pull brings: it fetches, writes
+/// its environment), or `land`s what a pull brings: it fetches, writes
 /// [`claiming`] right before it takes the tree claim, then waits for it up
-/// to an explicit command's bound, and writes `<pulled> <milliseconds when
-/// done>`; or `hold`s the remote claim until its stdin closes, writing an
-/// empty file once it holds it. Without those variables it does nothing.
+/// to an explicit command's bound; either writes `<pulled> <milliseconds
+/// when done>`. Or it opens an `explicit` session, writing [`opening`] right
+/// before, closes it and writes `<pulled> <pushed> <milliseconds when it
+/// was open>`. Without those variables it does nothing.
 #[test]
 #[ignore = "run only as the child of the cross-process tests"]
 fn child_session() {
@@ -1038,11 +1038,19 @@ fn child_session() {
             let tree = ctx.claim_tree().unwrap();
             engine::pull_fetched(&ctx, &tree, theirs).pulled
         }
-        "hold" => {
-            let _claim = RemoteClaim::try_take(&root.join(".git")).unwrap();
-            fs::write(&out, "").unwrap();
-            let mut rest = Vec::new();
-            let _ = std::io::stdin().read_to_end(&mut rest);
+        "explicit" => {
+            let env = SessionEnv {
+                git,
+                no_verify: false,
+                now: SystemTime::now(),
+                program: None,
+            };
+            fs::write(opening(Path::new(&out)), "").unwrap();
+            let open = session::open(brain(&root), Intent::Explicit, &env);
+            let opened = millis(SystemTime::now());
+            let pulled = open.report().map_or(0, |report| report.pulled);
+            let pushed = session::close(open).is_some_and(|report| report.pushed);
+            fs::write(&out, format!("{pulled} {pushed} {opened}\n")).unwrap();
             return;
         }
         other => panic!("no action {other}"),
@@ -1058,8 +1066,18 @@ fn claiming(out: &Path) -> PathBuf {
     out.with_extension("claiming")
 }
 
+/// What the `explicit` child writes right before it opens its session.
+fn opening(out: &Path) -> PathBuf {
+    out.with_extension("opening")
+}
+
 /// The child doing `action` on "ours", writing to `out`.
 fn child(w: &World, action: &str, out: &Path) -> Child {
+    child_command(w, action, out).spawn().unwrap()
+}
+
+/// The command of [`child`].
+fn child_command(w: &World, action: &str, out: &Path) -> Command {
     let mut cmd = Command::new(std::env::current_exe().unwrap());
     cmd.args(["--ignored", "--exact", "child_session", "--quiet"])
         .env(CHILD_ACTION, action)
@@ -1070,59 +1088,104 @@ fn child(w: &World, action: &str, out: &Path) -> Child {
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
-    cmd.spawn().unwrap()
+    cmd
 }
 
-/// A child holding "ours"' remote claim, once it holds it; it lets go when
-/// its stdin closes.
-fn holder(w: &World) -> Child {
-    let held = w.dir.path().join("remote-held");
-    let mut cmd = Command::new(std::env::current_exe().unwrap());
-    cmd.args(["--ignored", "--exact", "child_session", "--quiet"])
-        .env(CHILD_ACTION, "hold")
-        .env(CHILD_WORLD, w.dir.path())
-        .env(CHILD_BRAIN, &w.ours)
-        .env(CHILD_OUT, &held)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
-    let mut child = cmd.spawn().unwrap();
-    eventually("the child holding the remote claim", || {
-        assert_running(&mut child);
-        held.exists()
-    });
-    child
-}
+/// How long the remote claim stays held once the explicit session's child
+/// says it opens the session.
+const HELD_PAST_OPENING: Duration = Duration::from_secs(1);
 
+/// An explicit session waits for a remote claim held from before it opens
+/// until it is let go, then fetches and pushes: one that tried the claim
+/// once would be busy.
 #[test]
 fn an_explicit_session_waits_for_a_remote_claim_let_go_within_its_bound() {
     let w = World::new();
     teammate_pushes(&w, "ideas/first-new.md");
-    let mut held = holder(&w);
-    // Let go half a second after the session starts waiting.
-    let stdin = held.stdin.take();
-    let letting_go = thread::spawn(move || {
-        thread::sleep(Duration::from_millis(500));
-        drop(stdin);
-    });
-    let started = Instant::now();
-    let open = session::open(brain(&w.ours), Intent::Explicit, &env(&w, at(0)));
-    assert!(
-        started.elapsed() >= Duration::from_millis(400),
-        "did not wait"
-    );
-    assert_eq!(
-        open.report().map(|r| r.pulled),
-        Some(1),
-        "{:?}",
-        open.report()
-    );
     w.ours_commit(&[("notes/second.md", &neuron("", "# Second\n"))], &[]);
-    let report = session::close(open).expect("a report");
-    assert!(report.pushed, "{report:?}");
+    let held = RemoteClaim::try_take(&w.ours.join(".git")).unwrap();
+    let out = w.dir.path().join("explicit.out");
+    let mut explicit = child(&w, "explicit", &out);
+    eventually("the session's opening", || {
+        assert_running(&mut explicit);
+        opening(&out).exists()
+    });
+    thread::sleep(HELD_PAST_OPENING);
+    let released = millis(SystemTime::now());
+    drop(held);
+    assert!(wait_bounded(&mut explicit, "the session", PATIENCE).success());
+    let text = fs::read_to_string(&out).unwrap();
+    let fields: Vec<&str> = text.split_whitespace().collect();
+    assert_eq!(fields[..2], ["1", "true"], "pulled and pushed: {text:?}");
+    let opened: u128 = fields[2].parse().unwrap();
+    assert!(
+        opened >= released,
+        "open at {opened}, before the claim was let go at {released}"
+    );
     assert_eq!(w.remote_head(), w.head(&w.ours));
-    letting_go.join().unwrap();
-    assert!(wait_bounded(&mut held, "the holder", PATIENCE).success());
+    assert_eq!(w.parents(&w.ours, "HEAD"), 2, "a merge of the moved remote");
+}
+
+/// A read interrupted while a merge hook runs (SIGINT to its command's
+/// process group, as Ctrl-C sends it) ends the hook and everything the hook
+/// started, then dies of the signal: the tree claim is free only once they
+/// are gone, and nothing landed.
+#[cfg(unix)]
+#[test]
+fn an_interrupted_read_ends_its_hooks_before_it_lets_go_of_the_brain() {
+    use rustix::process::{Pid, Signal, kill_process_group};
+    use std::os::unix::process::{CommandExt, ExitStatusExt};
+    let w = World::new();
+    let hook = w.dir.path().join("hook.pid");
+    let started = w.dir.path().join("started.pid");
+    let late = w.dir.path().join("hook.late");
+    w.hook(
+        &w.ours,
+        "pre-merge-commit",
+        &format!(
+            "sleep 20 &\necho $! > '{}'\necho $$ > '{}'\n{STALL}\necho late > '{}'",
+            sh_path(&started),
+            sh_path(&hook),
+            sh_path(&late)
+        ),
+    );
+    diverged(&w);
+    let before = w.head(&w.ours);
+    let out = w.dir.path().join("read.out");
+    let mut cmd = child_command(&w, "read", &out);
+    cmd.process_group(0);
+    let mut reader = cmd.spawn().unwrap();
+    let pid = |file: &Path| fs::read_to_string(file).ok().filter(|p| p.ends_with('\n'));
+    eventually("the hook", || {
+        assert_running(&mut reader);
+        pid(&hook).is_some()
+    });
+    let pids = [pid(&hook).unwrap(), pid(&started).unwrap()];
+    let group = Pid::from_raw(i32::try_from(reader.id()).unwrap()).unwrap();
+    kill_process_group(group, Signal::INT).unwrap();
+    let own = w.ours.join(".git");
+    eventually("the tree claim", || {
+        TreeClaim::exclusive(&own, Duration::ZERO).is_ok()
+    });
+    for pid in &pids {
+        assert!(gone(pid.trim()), "{} outlived the read", pid.trim());
+    }
+    let status = wait_bounded(&mut reader, "the reader", PATIENCE);
+    assert_eq!(status.signal(), Some(Signal::INT.as_raw()), "{status:?}");
+    assert_eq!(w.head(&w.ours), before);
+    assert!(!late.exists(), "the hook went on");
+}
+
+/// Whether the process `pid` is gone: none runs under it, or it is a
+/// zombie, ended and waiting to be reaped.
+#[cfg(unix)]
+fn gone(pid: &str) -> bool {
+    let out = Command::new("ps")
+        .args(["-o", "stat=", "-p", pid])
+        .output()
+        .unwrap();
+    let stat = String::from_utf8_lossy(&out.stdout);
+    stat.trim().is_empty() || stat.trim_start().starts_with('Z')
 }
 
 #[test]
