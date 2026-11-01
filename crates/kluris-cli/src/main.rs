@@ -250,6 +250,9 @@ enum Command {
             allow_hyphen_values = true
         )]
         message: Option<String>,
+        /// Finish the waiting merge with this id from the settled files
+        #[arg(long = "merge", value_name = "ID", allow_hyphen_values = true)]
+        merge: Option<String>,
         /// Skip the pre-commit and commit-msg hooks
         #[arg(long = "no-verify")]
         no_verify: bool,
@@ -560,23 +563,35 @@ companions, the agent skills and every brain.
 asking (--yes skips the question; it is required when not interactive). \
 Brains are never removed.";
 
-/// `commit` (new in v3.1).
+/// `commit`.
 const COMMIT_HELP: &str = "Commit approved brain files and the maps they change.
 
-Commits only the given files (written or deleted, relative to the brain) and \
-the map.md/brain.md files the map step regenerates because of them. Every \
-other changed file is left as it is, staged or not, and listed as left \
-uncommitted. The author is your git identity; the message ends with a \
-Kluris-Approved-By trailer (git user.name) and, when KLURIS_AGENT is set, a \
-Co-Authored-By trailer naming the agent. The maps are built from what is \
-committed, so an uncommitted file never shows up in them. The repository's \
-pre-commit, prepare-commit-msg, commit-msg and post-commit hooks run as git \
-commit runs them, and git's reference-transaction and post-index-change \
-hooks run on every ref and index update (--no-verify skips pre-commit and \
-commit-msg). Needs git 2.38 or newer.
+Brings teammates' commits in first, then commits only the given files \
+(written or deleted, relative to the brain), the map.md/brain.md files the \
+map step regenerates because of them and the reverse related links they \
+call for in neurons with no change of their own, then pulls what came in \
+since and pushes. Every other changed file is left as it is, staged or not, \
+and listed as left uncommitted. The author is your git identity; the \
+message ends with a Kluris-Approved-By trailer (git user.name) and, when \
+KLURIS_AGENT is set, a Co-Authored-By trailer naming the agent. The maps are \
+built from what is committed, so an uncommitted file never shows up in \
+them.
+
+While a merge waits for you (a command that met a conflict shows its id), \
+--merge ID finishes it: --paths names every conflicted file, as you settled \
+it in the work tree (a file you deleted is a deletion), and nothing else. \
+The exit code is the commit's: 0 when it landed, whatever the sync did, \
+which the sync object says. The repository's pre-commit, \
+prepare-commit-msg, commit-msg and post-commit hooks run as git commit runs \
+them (prepare-commit-msg with merge when it finishes a merge), post-merge \
+and pre-push as git's pull and push run them, and git's \
+reference-transaction and post-index-change hooks run on every ref and \
+index update (--no-verify skips pre-commit and commit-msg). Needs git 2.38 \
+or newer.
 
   kluris commit --brain acme --paths knowledge/auth.md,knowledge/oauth.md
-  kluris commit --brain acme --paths old.md -m \"Remove the old note\" --json";
+  kluris commit --brain acme --paths old.md -m \"Remove the old note\" --json
+  kluris commit --brain acme --paths notes/a.md --merge 1a2b3c4d5e6f --json";
 
 /// v2's `wake-up` docstring.
 const WAKE_UP_HELP: &str = "Compact brain snapshot for agent session bootstrap.
@@ -987,12 +1002,14 @@ fn run(cli: Cli) -> Result<(), CliError> {
             brain,
             paths,
             message,
+            merge,
             no_verify,
             json,
         } => commands::commit::run(&commands::commit::Options {
             brain: brain.as_deref(),
             paths: &paths,
             message: message.as_deref(),
+            merge: merge.as_deref(),
             no_verify,
             json,
         }),

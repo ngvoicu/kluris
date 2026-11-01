@@ -274,10 +274,10 @@ for everything worth keeping, one at a time. Use it at the end of a working
 session.
 
 Before it writes, the agent syncs the brain with your team; after you approve,
-it commits exactly the files it wrote with `kluris commit` and pushes them with
-`kluris sync`. If a teammate changed the same thing, it shows you both
-versions, asks which to keep (or proposes a merge), and settles it with
-`kluris resolve`.
+it commits exactly the files it wrote with `kluris commit`, which brings your
+teammates' commits in and pushes. If a teammate changed the same thing, it
+shows you both versions, asks which to keep (or proposes a merge), writes
+the file you chose and finishes the merge with `kluris commit --merge`.
 
 ### Use the brain while coding
 
@@ -311,9 +311,15 @@ kluris mri       # write the brain's visual map and print its link
 A brain is a git repository: commit, push and pull it with `git` like any
 other. Run `kluris dream` before you commit structural changes so the
 regenerated maps go into the same commit, or let `kluris commit --brain
-<name> --paths a.md,b.md` do it: it commits just those files and the
-`map.md`/`brain.md` files they change, under your git identity, and leaves
-every other change in the brain as it is.
+<name> --paths a.md,b.md` do it: it brings your teammates' commits in, commits
+just those files, the `map.md`/`brain.md` files they change and the reverse
+`related` links they call for in neurons with no change of their own, under
+your git identity, pulls what came in meanwhile and pushes, and leaves every
+other change in the brain as it is. Its exit code is the commit's: offline,
+refused or in conflict, a commit that landed exits 0, and its `sync` object
+says what the sync did. While a merge waits for you, `kluris commit --merge
+<id> --paths <every conflicted file>` finishes it from the files as you
+settled them (a file you deleted is a deletion).
 
 ### Keep it in sync with your team
 
@@ -743,7 +749,7 @@ from disk or send it to a colleague.
 | `kluris wake-up` | The compact snapshot agents load at the start of a session (`--brain`) |
 | `kluris dream` | Regenerate maps, fix what is safe to fix, validate links (`--brain`, `--broken-only` with `--json`) |
 | `kluris mri` | Write the brain's visual map and print its link (`--brain`, `--output`) |
-| `kluris commit` | Commit only the files you name and the maps they change (`--brain`, `--paths`, `--message`, `--no-verify`) |
+| `kluris commit` | Commit only the files you name and the maps and links they change, pull and push (`--brain`, `--paths`, `--message`, `--merge`, `--no-verify`) |
 | `kluris sync` | Fetch, merge and push a brain, or every brain (`--brain`, `--no-verify`) |
 | `kluris resolve <path>` | Settle an open sync conflict path by path (`--ours`, `--theirs`, `--file`, `--abort`, `--no-verify`) |
 | `kluris companion list` | The companion playbooks, which are installed, and which brains use them (`--brain`) |

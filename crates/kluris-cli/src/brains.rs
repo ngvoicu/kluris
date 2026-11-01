@@ -68,8 +68,10 @@ pub struct Closed {
 }
 
 /// Open each target for `intent`: one brain alone, several at once
-/// (`session::open_all`); a root two targets share once.
-pub fn open<'a>(targets: &'a [Target], intent: Intent, today: Date) -> Opened<'a> {
+/// (`session::open_all`); a root two targets share once. `no_verify` skips
+/// the `pre-merge-commit` and `commit-msg` hooks of the merges its pulls
+/// make.
+pub fn open<'a>(targets: &'a [Target], intent: Intent, today: Date, no_verify: bool) -> Opened<'a> {
     let mut roots: Vec<(PathBuf, &'a Target)> = Vec::new();
     let mut of_target = Vec::new();
     for target in targets {
@@ -96,7 +98,7 @@ pub fn open<'a>(targets: &'a [Target], intent: Intent, today: Date) -> Opened<'a
         .collect();
     let env = SessionEnv {
         git: SystemGit::new(),
-        no_verify: false,
+        no_verify,
         now: SystemTime::now(),
         program: std::env::current_exe().ok(),
     };
@@ -110,9 +112,17 @@ pub fn open<'a>(targets: &'a [Target], intent: Intent, today: Date) -> Opened<'a
     }
 }
 
-/// [`open`] with today's date.
+/// [`open`] with today's date, every hook running.
 pub fn open_today(targets: &[Target], intent: Intent) -> Result<Opened<'_>, CliError> {
-    Ok(open(targets, intent, today()?))
+    Ok(open(targets, intent, today()?, false))
+}
+
+impl<'a> Opened<'a> {
+    /// The session of the first brain opened: the one brain of a command
+    /// that opens one.
+    pub fn first(&mut self) -> Option<&mut Session<'a>> {
+        self.sessions.first_mut()
+    }
 }
 
 /// The folder two paths of one brain resolve to.

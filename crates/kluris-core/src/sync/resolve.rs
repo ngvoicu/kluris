@@ -31,6 +31,8 @@ use super::claim::{ClaimError, TreeClaim};
 use super::commit::{PathProblem, normalize_path};
 use super::engine;
 use super::git::{GitDirs, SyncGit};
+use super::hooks::MergeHooks;
+use super::land::Settled;
 use super::pending::{self, Found, Pending};
 use super::{
     ConflictKind, ConflictText, LeftAsIs, LeftReason, ResolvedChoice, SyncError, SyncRequest,
@@ -260,7 +262,7 @@ pub fn abort(
 }
 
 /// Why a person's file cannot be kept for `rel`.
-fn validate(rel: &str, bytes: &[u8]) -> Result<(), String> {
+pub(crate) fn validate(rel: &str, bytes: &[u8]) -> Result<(), String> {
     let lower = rel.to_ascii_lowercase();
     let markdown = lower.ends_with(".md");
     let yaml = lower.ends_with(".yml") || lower.ends_with(".yaml");
@@ -433,7 +435,11 @@ fn finish<G: SyncGit>(
         "kluris: sync (resolved)\n\nKluris-Sync: resolved\nKluris-Resolved-By: {}\n",
         resolver.replace(['\r', '\n'], " ")
     );
-    Ok(engine::finish_merge(
-        ctx, claim, pending, &choices, &message,
-    )?)
+    let finish = engine::Finish {
+        choices: &choices,
+        message: &message,
+        hooks: MergeHooks::Merge,
+        settled: &Settled::new(),
+    };
+    Ok(engine::finish_merge(ctx, claim, pending, &finish)?)
 }

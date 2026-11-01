@@ -207,7 +207,7 @@ fn sync<S: BrainStore>(
     let mut ws = workspace::Workspace::new(&*store);
     let dates_updated = sync_dates::sync_dates(&mut ws, &neurons, &dates);
     let parents_inferred = linker::fix_missing_parents(&mut ws, &neurons);
-    let reverse_synapses_added = linker::fix_reverse_links(&mut ws, &neurons);
+    let reverse_synapses_added = linker::fix_reverse_links(&mut ws, &neurons, |_| true);
     maps::generate_maps(&mut ws, &order, options.today);
     maps::generate_brain_md(&mut ws, options.name, options.description, options.today);
     let (changes, ws_skipped) = ws.into_change_set();
@@ -308,6 +308,20 @@ pub(crate) fn map_changes<S: BrainStore>(
     let mut ws = workspace::Workspace::new(store);
     maps::generate_maps(&mut ws, &order, options.today);
     maps::generate_brain_md(&mut ws, options.name, options.description, options.today);
+    ws.into_change_set()
+}
+
+/// Step 3 alone for the links of the neurons at `sources`: the reverse
+/// `related` links they call for in other neurons, computed over the brain
+/// as it is and not applied: the change set, and the files that could not
+/// be read or rewritten. `kluris commit` takes the ones its paths call for.
+pub(crate) fn link_changes<S: BrainStore>(
+    store: &S,
+    sources: &[String],
+) -> (ChangeSet, BTreeMap<String, String>) {
+    let neurons = store.neurons().to_vec();
+    let mut ws = workspace::Workspace::new(store);
+    linker::fix_reverse_links(&mut ws, &neurons, |rel| sources.iter().any(|s| s == rel));
     ws.into_change_set()
 }
 

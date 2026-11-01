@@ -2,6 +2,12 @@
 //! a file that is not committed ([`land`]), and the checks it makes:
 //! [`blocked_paths`] (the uncommitted, untracked or ignored files the move
 //! would write over) and the locks git holds while it writes.
+//!
+//! A merge a person settled in the work tree ([`Settled`]) lands over the
+//! files they wrote: each settled path is never in the way while its file
+//! still holds the choice, and its index entry is set to the merge's right
+//! before git's move, so git's two-way rule (the index already at the new
+//! tree: kept) keeps it, and the work tree already matches.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -41,6 +47,35 @@ fn exactly_on_disk(root: &Path, rel: &str) -> bool {
         dir = dir.join(part);
     }
     true
+}
+
+/// The conflicted paths a person settled in the work tree, each with what
+/// its file holds (`None`: no file there).
+pub type Settled = BTreeMap<String, Option<Vec<u8>>>;
+
+/// Whether the work tree's file at `rel` still holds `want`.
+fn still_settled(root: &Path, rel: &str, want: &Option<Vec<u8>>) -> bool {
+    let path = join(root, rel);
+    match want {
+        None => fs::symlink_metadata(&path).is_err(),
+        Some(bytes) => {
+            fs::symlink_metadata(&path).is_ok_and(|meta| meta.is_file())
+                && fs::read(&path).is_ok_and(|now| now == *bytes)
+        }
+    }
+}
+
+/// `blocked` without the paths of `settled` whose files still hold the
+/// choice.
+pub fn without_settled(root: &Path, settled: &Settled, blocked: Vec<String>) -> Vec<String> {
+    blocked
+        .into_iter()
+        .filter(|rel| {
+            !settled
+                .get(rel)
+                .is_some_and(|want| still_settled(root, rel, want))
+        })
+        .collect()
 }
 
 /// The uncommitted files (in `dirty`) that moving from `ours` to `target`
@@ -296,7 +331,10 @@ pub fn unchanged<G: SyncGit>(
 /// checks run on `git`, stopped at its deadline when it has one; the move,
 /// the check after it and the reads after a refusal on `landing`, never
 /// stopped: a move stopped partway would leave the work tree half moved.
-/// The caller holds the tree claim. Checked right before the move (a hook
+/// The caller holds the tree claim. The `settled` paths of a merge a person
+/// settled in the work tree are not in the way while their files still
+/// hold the choice; their index entries are set to `to`'s right before the
+/// move, and back to `ours`'s when git refuses it. Checked right before the move (a hook
 /// or an editor may have written a file, or switched or moved the branch,
 /// since the pull decided) and again when git refuses (a file written in
 /// between, told apart from what git itself wrote before it stopped): the
@@ -307,6 +345,7 @@ pub fn unchanged<G: SyncGit>(
 /// edit made then is found by git's refusal or the second check, and a
 /// switch made then by the check after the write ([`moved_elsewhere`]),
 /// which reports it; nothing is undone.
+#[allow(clippy::too_many_arguments)]
 pub fn land<G: SyncGit>(
     git: &G,
     landing: &G,
@@ -315,10 +354,12 @@ pub fn land<G: SyncGit>(
     branch: &str,
     ours: &str,
     to: &str,
+    settled: &Settled,
 ) -> Result<(), LeftAsIs> {
     let in_the_way = |git: &G| -> Result<Vec<String>, LeftAsIs> {
         let dirty = git.dirty(repo)?;
-        Ok(blocked_paths(git, repo, root, &dirty, ours, to)?)
+        let blocked = blocked_paths(git, repo, root, &dirty, ours, to)?;
+        Ok(without_settled(root, settled, blocked))
     };
     let blocked = in_the_way(git)?;
     if !blocked.is_empty() {
@@ -334,9 +375,13 @@ pub fn land<G: SyncGit>(
         ));
     }
     unchanged(git, repo, branch, ours)?;
+    let settled_paths: Vec<String> = settled.keys().cloned().collect();
+    landing.reset_paths(repo, to, &settled_paths)?;
     let Err(e) = landing.fast_forward_to(repo, to) else {
         return moved_elsewhere(landing, repo, branch, to);
     };
+    // The index as it was: the settled files are the person's again.
+    let _ = landing.reset_paths(repo, ours, &settled_paths);
     let blocked = not_written_by_git(landing, repo, root, to, in_the_way(landing)?)?;
     if blocked.is_empty() {
         Err(failed(&e.detail))

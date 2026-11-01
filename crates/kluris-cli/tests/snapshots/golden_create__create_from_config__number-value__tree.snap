@@ -404,13 +404,13 @@ up [brain.md](../brain.md)
 ## Contents
 
 (empty)
-== home/.agents/skills/kluris-demo/SKILL.md (file, 35357 bytes)
+== home/.agents/skills/kluris-demo/SKILL.md (file, 35230 bytes)
 <snapshot skill_demo_none_at-demo_git>
-== home/.claude/skills/kluris-demo/SKILL.md (file, 35357 bytes)
+== home/.claude/skills/kluris-demo/SKILL.md (file, 35230 bytes)
 <snapshot skill_demo_none_at-demo_git>
-== home/.gemini/config/skills/kluris-demo/SKILL.md (file, 35357 bytes)
+== home/.gemini/config/skills/kluris-demo/SKILL.md (file, 35230 bytes)
 <snapshot skill_demo_none_at-demo_git>
-== home/.hermes/skills/kluris-demo/SKILL.md (file, 35357 bytes)
+== home/.hermes/skills/kluris-demo/SKILL.md (file, 35230 bytes)
 <snapshot skill_demo_none_at-demo_git>
 == home/.kluris/config.yml (file, 80 bytes)
 brains:

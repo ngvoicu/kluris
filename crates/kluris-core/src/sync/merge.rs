@@ -147,7 +147,7 @@ pub enum MergeOutcome {
 }
 
 /// The generated files: every directory's `map.md` and the root `brain.md`.
-fn is_generated(rel: &str) -> bool {
+pub(crate) fn is_generated(rel: &str) -> bool {
     rel == "brain.md" || rel.ends_with("/map.md")
 }
 
@@ -375,6 +375,12 @@ pub fn merge_commits<G: SyncGit>(
                 }
                 decided.insert(p.clone(), blob_entry(p, oid, eo.get(p).or(et.get(p))));
             }
+            Some(ResolvedChoice::Removed) => {
+                for x in all.iter().filter(|x| is_synthetic(x)) {
+                    decided.insert(x.clone(), Decided::Removed);
+                }
+                decided.insert(p.clone(), Decided::Removed);
+            }
             None => conflicts.push(Conflict {
                 path: p.clone(),
                 kind: ConflictKind::Structure,
@@ -396,6 +402,9 @@ pub fn merge_commits<G: SyncGit>(
             }
             Some(ResolvedChoice::Blob(oid)) => {
                 decided.insert(p.clone(), blob_entry(p, oid, o.or(t)));
+            }
+            Some(ResolvedChoice::Removed) => {
+                decided.insert(p.clone(), Decided::Removed);
             }
             None => conflicts.push(Conflict {
                 path: p.clone(),
@@ -447,8 +456,8 @@ pub fn merge_commits<G: SyncGit>(
             continue;
         }
         if let Some(choice) = resolutions.get(path.as_str()) {
-            // A person's choice (`kluris resolve`): their version, or the
-            // side's, a deletion included.
+            // A person's choice (`kluris resolve`, or the file `kluris
+            // commit --merge` takes): their version, a side's, or none.
             let chosen = match choice {
                 ResolvedChoice::Ours => take(o),
                 ResolvedChoice::Theirs => take(t),
@@ -459,6 +468,7 @@ pub fn merge_commits<G: SyncGit>(
                         .map_or_else(|| "100644".to_string(), |e| e.mode.clone()),
                     oid: oid.clone(),
                 }),
+                ResolvedChoice::Removed => Decided::Removed,
             };
             decided.insert(path.clone(), chosen);
             continue;

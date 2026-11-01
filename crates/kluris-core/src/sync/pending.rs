@@ -189,6 +189,7 @@ impl Pending {
                     "ours" => ResolvedChoice::Ours,
                     "theirs" => ResolvedChoice::Theirs,
                     "file" => ResolvedChoice::Blob(str_field(item, "blob")?),
+                    "removed" => ResolvedChoice::Removed,
                     _ => return None,
                 };
                 resolved.push((str_field(item, "path")?, choice));

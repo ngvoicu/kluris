@@ -27,7 +27,12 @@
 //!   holds up to [`COMMAND_BOUND`], for its fetch, its push and every pull
 //!   the push runs again.
 //!
-//! **Closing.** An explicit session pushes what is committed. The commits
+//! **Closing.** An explicit session pushes what is committed. When the
+//! command committed ([`Session::committed`]), it first lands again, on top
+//! of that commit, the upstream's commit its open fetched (no second
+//! fetch), so what the open left as it is (the person's files in the way,
+//! a waiting merge the commit finished) is pulled in, and the report says
+//! where the brain ended rather than each step. The commits
 //! the reads closed together leave waiting go to one background push for
 //! all their brains ([`background`]), the program [`SessionEnv::program`]
 //! names, unless that brain's last push failed lately or a background run
@@ -182,13 +187,41 @@ pub struct Session<'a> {
     report: Option<SyncReport>,
     /// Shared for a read, exclusive for an explicit command.
     claim: Option<TreeClaim>,
+    /// The upstream's commit an explicit session's open fetched, as
+    /// [`Fetched::theirs`] has it, landed again at [`close`] once the
+    /// command committed.
+    fetched: Option<Option<String>>,
+    /// The command committed ([`Session::committed`]).
+    committed: bool,
     /// [`SessionEnv::program`].
     program: Option<PathBuf>,
     /// [`SessionEnv::now`].
     now: SystemTime,
 }
 
-impl Session<'_> {
+impl<'a> Session<'a> {
+    /// The engine's brain, for a command that works with it under the
+    /// session's claim; `None` for a brain left alone, or one that could
+    /// not be opened.
+    pub fn context(&self) -> Option<&Context<'a, SystemGit>> {
+        self.ctx.as_ref()
+    }
+
+    /// The tree claim the session holds until [`close`]: exclusive for an
+    /// explicit session, so the command's own writes and its push are one;
+    /// `None` when it could not be had (another command held it past the
+    /// bound: the report says `busy`).
+    pub fn claim(&self) -> Option<&TreeClaim> {
+        self.claim.as_ref()
+    }
+
+    /// Say that the command committed to the pinned branch: an explicit
+    /// session's [`close`] then lands again what its open fetched before it
+    /// pushes (see the module docs).
+    pub fn committed(&mut self) {
+        self.committed = true;
+    }
+
     /// What the session has to say so far: for an explicit session of a
     /// brain it syncs, always; for a read, when something is to be said.
     pub fn report(&self) -> Option<&SyncReport> {
@@ -296,6 +329,8 @@ fn finish(session: Session) -> (Option<SyncReport>, Option<(PathBuf, PathBuf)>) 
         ctx,
         report,
         claim,
+        fetched,
+        committed,
         program,
         now,
     } = session;
@@ -309,6 +344,9 @@ fn finish(session: Session) -> (Option<SyncReport>, Option<(PathBuf, PathBuf)>) 
         report.to_push = count;
     }
     if intent == Intent::Explicit {
+        if let (true, Some(theirs), Some(tree)) = (committed, fetched, claim.as_ref()) {
+            engine::absorb(&mut report, engine::pull_fetched(&ctx, tree, theirs));
+        }
         report = engine::share(&ctx, claim.as_ref(), report);
         drop(claim);
         last_push(&ctx, &mut report, intent, now);
@@ -488,11 +526,14 @@ fn settle<'a>(fetched: Fetched<'a>, env: &SessionEnv) -> Session<'a> {
             ctx: None,
             report,
             claim: None,
+            fetched: None,
+            committed: false,
             program: env.program.clone(),
             now: env.now,
         };
     };
     let own = ctx.dirs().own.clone();
+    let fetched = (!intent.throttled()).then(|| theirs.clone()).flatten();
     let claim = match theirs {
         // Nothing to land: read under the shared claim.
         None if intent.throttled() => match TreeClaim::shared(&own, intent.tree_bound()) {
@@ -557,6 +598,8 @@ fn settle<'a>(fetched: Fetched<'a>, env: &SessionEnv) -> Session<'a> {
         ctx: Some(ctx),
         report,
         claim,
+        fetched,
+        committed: false,
         program: env.program.clone(),
         now: env.now,
     }

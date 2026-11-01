@@ -387,13 +387,13 @@ agents:
   - antigravity
 companions:
 - specmint-core-html
-== home/.agents/skills/kluris-demo/SKILL.md (file, 36392 bytes)
+== home/.agents/skills/kluris-demo/SKILL.md (file, 36265 bytes)
 <snapshot skill_demo_specmint-core-html_git_desc-d>
-== home/.claude/skills/kluris-demo/SKILL.md (file, 36392 bytes)
+== home/.claude/skills/kluris-demo/SKILL.md (file, 36265 bytes)
 <snapshot skill_demo_specmint-core-html_git_desc-d>
-== home/.gemini/config/skills/kluris-demo/SKILL.md (file, 36392 bytes)
+== home/.gemini/config/skills/kluris-demo/SKILL.md (file, 36265 bytes)
 <snapshot skill_demo_specmint-core-html_git_desc-d>
-== home/.hermes/skills/kluris-demo/SKILL.md (file, 36392 bytes)
+== home/.hermes/skills/kluris-demo/SKILL.md (file, 36265 bytes)
 <snapshot skill_demo_specmint-core-html_git_desc-d>
 == home/.kluris/companions/specmint-core-html/SKILL.md (file, 42542 bytes)
 <vendored/specmint-core-html/SKILL.md>

@@ -4,12 +4,13 @@
 //! file ([`message_hooks`]); the message is what they leave there, cleaned
 //! up as `git commit` does.
 //!
-//! A merge commit ([`merge_commit`]) runs `pre-merge-commit` (unless
-//! `no_verify`) as its gate and `prepare-commit-msg` with `merge`, against
-//! the merged index. A hook that changes that index stops the merge: the
-//! hooks see the old work tree, so an ordinary `git add -A` would stage it
-//! over the incoming files. A merge hook may change the message, never the
-//! files.
+//! A merge commit ([`merge_commit`]) runs its gate (unless `no_verify`)
+//! and `prepare-commit-msg` with `merge`, against the merged index: as
+//! `git merge` runs them, `pre-merge-commit`; as `git commit` concluding a
+//! merge runs them, `pre-commit` ([`MergeHooks`]), then `post-commit` once
+//! it landed. A hook that changes that index stops the merge: the hooks see
+//! the old work tree, so an ordinary `git add -A` would stage it over the
+//! incoming files. A merge hook may change the message, never the files.
 
 use std::fmt;
 use std::fs;
@@ -190,8 +191,28 @@ pub fn message_hooks<G: Plumbing, E: From<HookError>>(
     Ok(done)
 }
 
+/// Which command's hooks a merge commit runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MergeHooks {
+    /// `git merge`'s: `pre-merge-commit` is the gate.
+    Merge,
+    /// `git commit`'s, concluding a merge: `pre-commit` is the gate, and
+    /// `post-commit` runs once the merge landed.
+    Commit,
+}
+
+impl MergeHooks {
+    fn gate(self) -> &'static str {
+        match self {
+            MergeHooks::Merge => "pre-merge-commit",
+            MergeHooks::Commit => "pre-commit",
+        }
+    }
+}
+
 /// The merge commit of the tree in `index` (`merged_tree`) on `parents`,
-/// with the hooks `git merge` runs (see the module docs); its commit.
+/// with the hooks of `hooks` (see the module docs); its commit.
+#[allow(clippy::too_many_arguments)]
 pub fn merge_commit<G: Plumbing>(
     git: &G,
     repo: &Repo,
@@ -200,6 +221,7 @@ pub fn merge_commit<G: Plumbing>(
     parents: [&str; 2],
     message: &str,
     no_verify: bool,
+    hooks: MergeHooks,
 ) -> Result<String, MergeHookError> {
     let unchanged = |name: &'static str| -> Result<(), MergeHookError> {
         if git.write_tree(repo, index)? == merged_tree {
@@ -209,8 +231,9 @@ pub fn merge_commit<G: Plumbing>(
         }
     };
     if !no_verify {
-        gate(git, repo, index, "pre-merge-commit", &[])?;
-        unchanged("pre-merge-commit")?;
+        let name = hooks.gate();
+        gate(git, repo, index, name, &[])?;
+        unchanged(name)?;
     }
     let message = message_hooks(
         git,

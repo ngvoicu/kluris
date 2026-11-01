@@ -1,6 +1,7 @@
-//! `kluris commit` (SPEC Phase 7, item 44): commit the files a person
-//! approved, plus the `map.md`/`brain.md` files the map step regenerates
-//! because of them, and nothing else.
+//! `kluris commit`: commit the files a person approved, plus the
+//! `map.md`/`brain.md` files the map step regenerates because of them and
+//! the reverse `related` links they call for in other neurons, and nothing
+//! else.
 //!
 //! The model is a [`CommitSet`]: the paths, the base revision it is built
 //! on, the author and the approver (and the agent that co-authored it).
@@ -18,7 +19,17 @@
 //! paths create or remove (its `map.md` is new, or is in the base but the
 //! directory is gone from the work tree), its parent's map (`brain.md` at the
 //! top) and its siblings' maps (their `sideways` links). Only those are
-//! committed. A map is known by the path in the tree that holds its bytes: a
+//! committed.
+//!
+//! The reverse links are dream's link step over the same view, for the
+//! given paths' own `related` entries alone: a neuron of the base revision
+//! that one of them links to and that does not link back gets the link
+//! back, in the commit and then in its work-tree copy, when it is not
+//! given itself and has no change of its own (committing its fix would
+//! commit the person's other edits too); a neuron with changes of its own
+//! is left as it is.
+//!
+//! A map is known by the path in the tree that holds its bytes: a
 //! `map.md` that is a symlink in the brain (`notes/map.md -> ../maps/x.md`)
 //! is regenerated, staged and reported as its target (`maps/x.md`), and the
 //! link stays as it is. Afterwards a regenerated map's work-tree copy gets
@@ -53,11 +64,13 @@ use std::time::SystemTime;
 use super::hooks::{HookError, Source, gate, message_hooks};
 use super::land::join;
 use super::merge::tree_nodes;
+use super::pending::WrongMerge;
+use super::{LeftAsIs, LeftReason};
 use crate::atomic;
 use crate::brain::sandbox;
 use crate::brain::store::BrainStore;
 use crate::brain::tree_store::{Node, TreeStore};
-use crate::dream::{DreamOptions, map_changes};
+use crate::dream::{DreamOptions, link_changes, map_changes};
 use crate::frontmatter::{LineEnding, line_ending};
 use crate::git::{
     GitError, Identity, InProgress, MIN_SYNC_VERSION, Plumbing, Repo, StagedBlob, parse_version,
@@ -138,7 +151,7 @@ pub fn normalize_path(raw: &str) -> Result<String, PathProblem> {
 /// Check a normalized path against the work tree: inside the brain once
 /// symlinks are followed, a file (or a symlink) or a file the base revision
 /// has that is gone now.
-fn check_on_disk(root: &Path, rel: &str, in_base: bool) -> Result<(), PathProblem> {
+pub(crate) fn check_on_disk(root: &Path, rel: &str, in_base: bool) -> Result<(), PathProblem> {
     let path = join(root, rel);
     let resolved_root = sandbox::resolve(root).map_err(|_| PathProblem::LinkOutside)?;
     let resolved = sandbox::resolve(&path).map_err(|_| PathProblem::LinkOutside)?;
@@ -261,7 +274,7 @@ pub fn default_message(paths: &[String]) -> String {
 }
 
 /// A trailer value on one line: line breaks become spaces.
-fn one_line(value: &str) -> String {
+pub(crate) fn one_line(value: &str) -> String {
     value
         .split(['\r', '\n'])
         .map(str::trim)
@@ -360,6 +373,9 @@ pub struct CommitReport {
     pub paths: Vec<String>,
     /// The generated files committed because of them, sorted.
     pub regenerated: Vec<String>,
+    /// The neurons committed with the reverse links the paths call for,
+    /// sorted.
+    pub linked: Vec<String>,
     /// The brain's files still changed or untracked after the commit,
     /// sorted.
     pub left_dirty: Vec<String>,
@@ -414,6 +430,36 @@ pub enum CommitError {
         commit: String,
         error: GitError,
     },
+    /// A merge waits for a person (`merge`, its id): it is finished with
+    /// `--merge`, its conflicted `paths` settled in the work tree.
+    MergeWaits {
+        merge: String,
+        paths: Vec<String>,
+    },
+    /// `--merge` names a merge that is not the waiting one.
+    WrongMerge(WrongMerge),
+    /// `--merge` while no merge waits.
+    NoMergeWaits {
+        given: String,
+    },
+    /// The waiting merge's conflicted paths that `--paths` leaves out.
+    Unsettled(Vec<String>),
+    /// Paths given with the waiting merge that are not its conflicts.
+    Unrelated {
+        conflicted: Vec<String>,
+        rest: Vec<String>,
+    },
+    /// A conflict one file cannot settle (a file on one side where the
+    /// other has a directory, or a rename).
+    Structure(String),
+    /// A settled file that cannot be kept.
+    InvalidFile {
+        path: String,
+        reason: String,
+    },
+    /// The merge was left as it is (files in the way, a hook, another
+    /// command).
+    Left(LeftAsIs),
     Git(GitError),
 }
 
@@ -464,6 +510,42 @@ impl fmt::Display for CommitError {
                 f,
                 "committed {commit}, but the index was not updated for its paths ({error})"
             ),
+            CommitError::MergeWaits { merge, paths } => write!(
+                f,
+                "a merge waits to be finished (merge {merge}): settle {} in the work tree, then run kluris commit --merge {merge} --paths {}; nothing was committed",
+                paths.join(", "),
+                paths.join(",")
+            ),
+            CommitError::WrongMerge(wrong) => write!(
+                f,
+                "merge {} is not the waiting merge: this brain waits on merge {} now; settle its conflicts from their sides, then give --merge {}; nothing was committed",
+                wrong.given, wrong.current, wrong.current
+            ),
+            CommitError::NoMergeWaits { given } => write!(
+                f,
+                "no merge waits in this brain, so --merge {given} answers none; nothing was committed"
+            ),
+            CommitError::Unsettled(paths) => write!(
+                f,
+                "settle these too: {}; nothing was committed",
+                paths.join(", ")
+            ),
+            CommitError::Unrelated { conflicted, rest } => write!(
+                f,
+                "a merge waits: commit the conflicted paths first ({}), then the rest ({}); nothing was committed",
+                conflicted.join(", "),
+                rest.join(", ")
+            ),
+            CommitError::Structure(path) => write!(
+                f,
+                "{path} is a file on one side and a directory on the other, or a rename: settle it with `kluris resolve {path} --ours|--theirs`; nothing was committed"
+            ),
+            CommitError::InvalidFile { path, reason } => write!(
+                f,
+                "the file for {path} cannot be used: {reason}; nothing was committed"
+            ),
+            CommitError::Left(left) if left.reason == LeftReason::Hook => left.fmt(f),
+            CommitError::Left(left) => write!(f, "{left}; nothing was committed"),
             CommitError::Git(e) => e.fmt(f),
         }
     }
@@ -593,6 +675,42 @@ fn overlay_from_tree<G: Plumbing>(
     Ok(())
 }
 
+/// The reverse `related` links the given `paths` call for in the neurons of
+/// the base revision (`modes`) that are not given, nor symlinks: each as
+/// the blob to stage, by path.
+fn reverse_links(
+    view: &TreeStore,
+    paths: &[String],
+    modes: &BTreeMap<String, String>,
+) -> Vec<StagedBlob> {
+    let (changes, _) = link_changes(view, paths);
+    changes
+        .writes
+        .into_iter()
+        .filter(|write| !paths.contains(&write.rel))
+        .filter_map(|write| {
+            let mode = modes.get(&write.rel)?;
+            (mode != "120000").then(|| StagedBlob {
+                mode: mode.clone(),
+                rel: write.rel,
+                bytes: Some(write.contents),
+            })
+        })
+        .collect()
+}
+
+/// `view` with the `links` in its neurons.
+fn with_links(root: &Path, view: TreeStore, links: &[StagedBlob]) -> TreeStore {
+    if links.is_empty() {
+        return view;
+    }
+    let mut nodes = view.nodes().clone();
+    for blob in links {
+        nodes.insert(blob.rel.clone(), Node::File(blob.bytes.clone()));
+    }
+    TreeStore::new(root, nodes)
+}
+
 /// The maps to stage: the map step over `view`, limited to `affected` (each
 /// map by the path in the tree that holds its bytes), and the `removed` maps
 /// deleted. A map the step could not regenerate stops the commit when it is
@@ -698,12 +816,12 @@ impl Seen {
     }
 }
 
-/// Bring a regenerated map's work-tree copy to the committed bytes when it
-/// had no change of its own (`clean`) and is still as it was then (`seen`),
-/// keeping its line endings, as a checkout would; a map with changes of its
-/// own, or changed since, is left as it is. A new map is created only where
-/// its directory is.
-fn update_worktree_map(root: &Path, rel: &str, committed: &[u8], clean: bool, seen: &Seen) {
+/// Bring the work-tree copy of a file the commit regenerated or linked to
+/// the committed bytes when it had no change of its own (`clean`) and is
+/// still as it was then (`seen`), keeping its line endings, as a checkout
+/// would; a file with changes of its own, or changed since, is left as it
+/// is. A new map is created only where its directory is.
+fn update_worktree_copy(root: &Path, rel: &str, committed: &[u8], clean: bool, seen: &Seen) {
     let path = join(root, rel);
     if !clean || Seen::of(&path) != *seen {
         return;
@@ -869,6 +987,9 @@ pub fn commit<G: Plumbing>(
     }
     let removed_maps = drop_removed_lobes(root, &paths, &mut nodes);
     let view = TreeStore::new(root, nodes);
+    // The reverse links the paths call for, before the neurons' cleanliness
+    // is known.
+    let candidates = reverse_links(&view, &paths, &modes);
 
     // The map step over the view, limited to the generated files the paths
     // change.
@@ -882,6 +1003,22 @@ pub fn commit<G: Plumbing>(
         .iter()
         .map(|rel| view.real_rel(rel).unwrap_or_else(|| rel.clone()))
         .collect();
+    // Each map and linked neuron as it is before its cleanliness is
+    // checked, so one changed after the check is never replaced.
+    let seen: BTreeMap<String, Seen> = affected
+        .iter()
+        .chain(candidates.iter().map(|blob| &blob.rel))
+        .map(|rel| (rel.clone(), Seen::of(&join(root, rel))))
+        .collect();
+    let dirty_before: BTreeSet<String> = git.dirty(&repo)?.into_iter().collect();
+    // A neuron with changes of its own gets no link: they would be
+    // committed with it.
+    let mut links: Vec<StagedBlob> = candidates
+        .into_iter()
+        .filter(|blob| !dirty_before.contains(&blob.rel))
+        .collect();
+    let link_set: BTreeSet<String> = links.iter().map(|blob| blob.rel.clone()).collect();
+    let view = with_links(root, view, &links);
     let mut generated = regenerate(
         &view,
         &request.maps,
@@ -890,34 +1027,30 @@ pub fn commit<G: Plumbing>(
         &removed_maps,
         &modes,
     )?;
-    // Each map as it is before its cleanliness is checked, so one changed
-    // after the check is never replaced.
-    let seen: BTreeMap<String, Seen> = affected
-        .iter()
-        .map(|rel| (rel.clone(), Seen::of(&join(root, rel))))
-        .collect();
-    let dirty_before: BTreeSet<String> = git.dirty(&repo)?.into_iter().collect();
 
     let index = git.staging_index(&repo, base.as_deref())?;
     git.stage_worktree(&repo, &index, &paths)?;
     git.stage_blobs(&repo, &index, &generated)?;
-    let stage_of = |generated: &[StagedBlob]| {
+    git.stage_blobs(&repo, &index, &links)?;
+    let stage_of = |generated: &[StagedBlob], links: &[StagedBlob]| {
         let mut stage = paths.clone();
         stage.extend(
             generated
                 .iter()
+                .chain(links)
                 .filter(|blob| !paths.contains(&blob.rel))
                 .map(|blob| blob.rel.clone()),
         );
         stage
     };
-    let mut stage = stage_of(&generated);
+    let mut stage = stage_of(&generated, &links);
     let staged = git.write_tree(&repo, &index)?;
     if changed_paths(git, &repo, base.as_deref(), &staged, &stage)?.is_empty() {
         return Ok(CommitReport {
             commit: None,
             paths,
             regenerated: Vec::new(),
+            linked: Vec::new(),
             left_dirty: git.dirty(&repo)?,
             set: None,
             message: None,
@@ -932,6 +1065,7 @@ pub fn commit<G: Plumbing>(
     let mut tree = git.write_tree(&repo, &index)?;
     let mut allowed = paths.clone();
     allowed.extend(affected.iter().filter(|rel| !paths.contains(rel)).cloned());
+    allowed.extend(link_set.iter().cloned());
     let unapproved = unapproved_changes(git, &repo, base.as_deref(), &tree, &allowed)?;
     if !unapproved.is_empty() {
         return Err(CommitError::Unapproved { paths: unapproved });
@@ -948,6 +1082,13 @@ pub fn commit<G: Plumbing>(
             nodes.remove(rel);
         }
         let view = TreeStore::new(root, nodes);
+        // The links as the paths the hook left call for them, in the
+        // neurons already found clean.
+        links = reverse_links(&view, &paths, &modes)
+            .into_iter()
+            .filter(|blob| link_set.contains(&blob.rel))
+            .collect();
+        let view = with_links(root, view, &links);
         generated = regenerate(
             &view,
             &request.maps,
@@ -963,8 +1104,12 @@ pub fn commit<G: Plumbing>(
         };
         let mut restored = Vec::new();
         let mut gone = Vec::new();
-        for rel in affected.iter().filter(|rel| !paths.contains(rel)) {
-            if generated.iter().any(|blob| blob.rel == *rel) {
+        let replaced = affected
+            .iter()
+            .filter(|rel| !paths.contains(rel))
+            .chain(&link_set);
+        for rel in replaced {
+            if generated.iter().chain(&links).any(|blob| blob.rel == *rel) {
                 continue;
             }
             match in_base.get(rel) {
@@ -977,15 +1122,21 @@ pub fn commit<G: Plumbing>(
             }
         }
         git.stage_blobs(&repo, &index, &generated)?;
+        git.stage_blobs(&repo, &index, &links)?;
         git.stage_entries(&repo, &index, &restored)?;
         git.stage_blobs(&repo, &index, &gone)?;
-        stage = stage_of(&generated);
+        stage = stage_of(&generated, &links);
         tree = git.write_tree(&repo, &index)?;
     }
     let changed = changed_paths(git, &repo, base.as_deref(), &tree, &stage)?;
     let regenerated: Vec<String> = affected
         .iter()
         .filter(|rel| changed.contains(*rel) && !paths.contains(rel))
+        .cloned()
+        .collect();
+    let linked: Vec<String> = link_set
+        .iter()
+        .filter(|rel| changed.contains(*rel))
         .cloned()
         .collect();
 
@@ -1038,13 +1189,13 @@ pub fn commit<G: Plumbing>(
             commit: new.clone(),
             error,
         })?;
-    for blob in &generated {
+    for blob in generated.iter().chain(&links) {
         if let Some(bytes) = &blob.bytes
-            && regenerated.contains(&blob.rel)
+            && (regenerated.contains(&blob.rel) || linked.contains(&blob.rel))
             && let Some(seen) = seen.get(&blob.rel)
         {
             let clean = !dirty_before.contains(&blob.rel);
-            update_worktree_map(root, &blob.rel, bytes, clean, seen);
+            update_worktree_copy(root, &blob.rel, bytes, clean, seen);
         }
     }
     // As with `git commit`, post-commit cannot undo or fail the commit.
@@ -1053,6 +1204,7 @@ pub fn commit<G: Plumbing>(
         commit: Some(new),
         paths,
         regenerated,
+        linked,
         left_dirty: git.dirty(&repo)?,
         set: Some(set),
         message: Some(final_message),

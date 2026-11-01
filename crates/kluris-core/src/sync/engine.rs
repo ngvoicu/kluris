@@ -71,8 +71,8 @@ use super::background::LastPush;
 use super::claim::{ClaimError, RemoteClaim, TreeClaim};
 use super::fetch::{self, Fetch};
 use super::git::{GitDirs, PushOutcome, SyncGit, Upstream, one_line};
-use super::hooks::{HookError, MergeHookError, merge_commit};
-use super::land::{blocked_paths, failed, land, unchanged, uncommitted};
+use super::hooks::{HookError, MergeHookError, MergeHooks, merge_commit};
+use super::land::{Settled, blocked_paths, failed, land, unchanged, uncommitted, without_settled};
 use super::merge::{MergeOutcome, merge_commits};
 use super::pending::{self, Found, Pending};
 use super::{
@@ -345,7 +345,16 @@ fn land_into<G: SyncGit>(
         return drop_waiting(&pending_path, waiting);
     }
     if !ahead {
-        land(git, landing, repo, &ctx.root, branch, &ours, &theirs)?;
+        land(
+            git,
+            landing,
+            repo,
+            &ctx.root,
+            branch,
+            &ours,
+            &theirs,
+            &Settled::new(),
+        )?;
         report.pulled = landed(Some(&ours), &theirs)?;
         return drop_waiting(&pending_path, waiting);
     }
@@ -397,9 +406,19 @@ fn land_into<G: SyncGit>(
         [&ours, &theirs],
         MESSAGE,
         no_verify,
+        MergeHooks::Merge,
     )
     .map_err(merge_stopped)?;
-    land(git, landing, repo, &ctx.root, branch, &ours, &commit)?;
+    land(
+        git,
+        landing,
+        repo,
+        &ctx.root,
+        branch,
+        &ours,
+        &commit,
+        &Settled::new(),
+    )?;
     report.pulled = landed(Some(&ours), &theirs)?;
     report.auto_merged = auto_merged;
     report.to_push = landed(Some(&theirs), &commit)?;
@@ -490,16 +509,26 @@ fn merge_stopped(e: MergeHookError) -> LeftAsIs {
 /// none when no merge waits, or one waits for a commit the branch has
 /// moved on from (it stays as it is).
 pub fn waiting<G: SyncGit>(ctx: &Context<G>) -> Result<Vec<ConflictText>, LeftAsIs> {
+    match waiting_merge(ctx)? {
+        Some(waiting) => Ok(texts(&ctx.git, &ctx.repo, &waiting)?),
+        None => Ok(Vec::new()),
+    }
+}
+
+/// The worktree's waiting merge, when it was found for the pinned branch's
+/// commit now; `None` when no merge waits, or one waits for a commit the
+/// branch has moved on from (it stays as it is).
+pub fn waiting_merge<G: SyncGit>(ctx: &Context<G>) -> Result<Option<Pending>, LeftAsIs> {
     let Some(branch) = ctx.branch() else {
-        return Ok(Vec::new());
+        return Ok(None);
     };
     let Found::Waiting(waiting) = Pending::read(&ctx.pending()) else {
-        return Ok(Vec::new());
+        return Ok(None);
     };
     if ctx.git.ref_value(&ctx.repo, branch)?.as_deref() != Some(waiting.ours.as_str()) {
-        return Ok(Vec::new());
+        return Ok(None);
     }
-    Ok(texts(&ctx.git, &ctx.repo, &waiting)?)
+    Ok(Some(waiting))
 }
 
 /// The waiting merge's conflicts with each side's text and the merge's id:
@@ -684,7 +713,7 @@ pub fn share<G: SyncGit>(
 
 /// `total` with a later pull's `report`: the commits and paths it brought
 /// added, the rest as it says now.
-fn absorb(total: &mut SyncReport, report: SyncReport) {
+pub fn absorb(total: &mut SyncReport, report: SyncReport) {
     total.pulled += report.pulled;
     for path in report.auto_merged {
         if !total.auto_merged.contains(&path) {
@@ -711,17 +740,33 @@ pub fn to_push<G: SyncGit>(ctx: &Context<G>) -> Option<usize> {
     git.count(repo, remote.as_deref(), &tip).ok()
 }
 
-/// Finish the waiting merge with a person's `choices`: merge `ours` with
-/// the pinned `theirs`, check the files in the way, make the merge commit
-/// with `message` through the merge hooks, and land it; its commit. The
-/// caller holds the tree claim (`_claim`) from reading the waiting merge to
-/// removing it, so the merge and the record it answers stay one.
+/// How a waiting merge is finished ([`finish_merge`]).
+#[derive(Debug, Clone, Copy)]
+pub struct Finish<'f> {
+    /// A choice for every conflicted path.
+    pub choices: &'f BTreeMap<String, ResolvedChoice>,
+    /// The merge commit's message, its trailers included.
+    pub message: &'f str,
+    /// The hooks the merge commit runs: `git merge`'s, or `git commit`'s
+    /// concluding a merge (`post-commit` once it landed).
+    pub hooks: MergeHooks,
+    /// The conflicted paths settled in the work tree, each with what its
+    /// file holds: never in the way while it still does, and in the index
+    /// as the merge has them when it lands ([`land`]). Empty when the
+    /// choices were made apart from the work tree.
+    pub settled: &'f Settled,
+}
+
+/// Finish the waiting merge with a person's choices: merge `ours` with the
+/// pinned `theirs`, check the files in the way, make the merge commit with
+/// its message through its hooks, and land it; its commit. The caller holds
+/// the tree claim (`_claim`) from reading the waiting merge to removing it,
+/// so the merge and the record it answers stay one.
 pub fn finish_merge<G: SyncGit>(
     ctx: &Context<G>,
     _claim: &TreeClaim,
     pending: &Pending,
-    choices: &BTreeMap<String, ResolvedChoice>,
-    message: &str,
+    finish: &Finish,
 ) -> Result<String, LeftAsIs> {
     let (git, repo) = (&ctx.git, &ctx.repo);
     let branch = ctx.pinned()?;
@@ -729,7 +774,7 @@ pub fn finish_merge<G: SyncGit>(
     unchanged(git, repo, branch, ours)?;
     let maps = &ctx.request.maps;
     let MergeOutcome::Clean { tree, index, .. } =
-        merge_commits(git, repo, ours, theirs, maps, choices)?
+        merge_commits(git, repo, ours, theirs, maps, finish.choices)?
     else {
         return Err(failed(
             "the merge has conflicts the recorded choices do not cover",
@@ -737,13 +782,37 @@ pub fn finish_merge<G: SyncGit>(
     };
     let dirty = git.dirty(repo)?;
     let blocked = blocked_paths(git, repo, &ctx.root, &dirty, ours, &tree)?;
+    let blocked = without_settled(&ctx.root, finish.settled, blocked);
     if !blocked.is_empty() {
         return Err(uncommitted(blocked));
     }
     let no_verify = ctx.request.no_verify;
-    let commit = merge_commit(git, repo, &index, &tree, [ours, theirs], message, no_verify)
-        .map_err(merge_stopped)?;
-    land(git, &ctx.landing, repo, &ctx.root, branch, ours, &commit)?;
+    let commit = merge_commit(
+        git,
+        repo,
+        &index,
+        &tree,
+        [ours, theirs],
+        finish.message,
+        no_verify,
+        finish.hooks,
+    )
+    .map_err(merge_stopped)?;
+    let landing = &ctx.landing;
+    land(
+        git,
+        landing,
+        repo,
+        &ctx.root,
+        branch,
+        ours,
+        &commit,
+        finish.settled,
+    )?;
+    if finish.hooks == MergeHooks::Commit {
+        // As with `git commit`, post-commit cannot undo or fail the commit.
+        let _ = landing.run_hook(repo, None, "post-commit", &[]);
+    }
     Ok(commit)
 }
 

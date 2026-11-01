@@ -12,7 +12,9 @@
 //! - [`session`]: the one step through which every command that opens a
 //!   brain syncs; [`background`]: the detached push of the commits a read
 //!   leaves waiting;
-//! - [`commit`]: `kluris commit`; [`resolve`]: `kluris resolve`.
+//! - [`commit`]: `kluris commit`, and [`settle`]: `kluris commit` in its
+//!   session, a waiting merge finished from the work tree; [`resolve`]:
+//!   `kluris resolve`.
 //!
 //! This module holds the types they share.
 
@@ -29,6 +31,7 @@ pub mod merge;
 pub mod pending;
 pub mod resolve;
 pub mod session;
+pub mod settle;
 
 use std::fmt;
 use std::time::Duration;
@@ -129,6 +132,8 @@ pub enum ResolvedChoice {
     Theirs,
     /// The person's own content, stored as this blob.
     Blob(String),
+    /// No file at the path: the person deleted it.
+    Removed,
 }
 
 impl ResolvedChoice {
@@ -137,6 +142,7 @@ impl ResolvedChoice {
             ResolvedChoice::Ours => "ours",
             ResolvedChoice::Theirs => "theirs",
             ResolvedChoice::Blob(_) => "file",
+            ResolvedChoice::Removed => "removed",
         }
     }
 }

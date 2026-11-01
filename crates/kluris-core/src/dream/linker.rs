@@ -76,11 +76,12 @@ pub(crate) fn fix_missing_parents<S: BrainStore>(
 /// source's path relative to the target's directory to the target's
 /// `related` (a `related` that is not a list is replaced). Sources in the
 /// store's neuron order; each target is read again for every link,
-/// so it collects all its reverse links in one run. Returns the target of
-/// each link added.
+/// so it collects all its reverse links in one run. Only the sources whose
+/// path `from` takes add links. Returns the target of each link added.
 pub(crate) fn fix_reverse_links<S: BrainStore>(
     ws: &mut Workspace<'_, S>,
     neurons: &[Neuron],
+    from: impl Fn(&str) -> bool,
 ) -> Vec<String> {
     // v2's `{neuron.resolve(): neuron}`: one entry per file, the last walked
     // path of it, at the first one's position.
@@ -93,6 +94,9 @@ pub(crate) fn fix_reverse_links<S: BrainStore>(
     let mut fixed = Vec::new();
     let sources: Vec<(PathBuf, &Neuron)> = by_file.iter().map(|(k, v)| (k.clone(), *v)).collect();
     for (source_file, source) in sources {
+        if !from(&source.rel) {
+            continue;
+        }
         let Some(fm) = ws.read_for_write(&source.rel) else {
             continue;
         };
