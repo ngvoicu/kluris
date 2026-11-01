@@ -8,6 +8,7 @@ use std::time::Duration;
 
 use kluris_core::git::Git;
 use kluris_core::sync::claim::{RemoteClaim, TreeClaim};
+#[cfg(unix)]
 use kluris_core::sync::engine::check_git;
 use kluris_core::sync::engine::{self, open};
 use kluris_core::sync::git::SyncGit;

@@ -7,12 +7,15 @@ use std::fs;
 use std::time::Duration;
 
 use kluris_core::sync::claim::TreeClaim;
+#[cfg(unix)]
 use kluris_core::sync::engine;
 use kluris_core::sync::resolve::{Choice, ResolveError, ResolveRequest, abort, resolve};
 use kluris_core::sync::{LeftReason, PENDING, SyncRequest};
 
+#[cfg(unix)]
+use crate::chosen;
 use crate::common::*;
-use crate::{chosen, two_conflicts};
+use crate::two_conflicts;
 
 fn pending(w: &World) -> Vec<u8> {
     fs::read(w.ours.join(".git").join(PENDING)).unwrap()

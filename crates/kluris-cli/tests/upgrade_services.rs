@@ -177,7 +177,7 @@ fn sweep_calls(brain: &str) -> Vec<String> {
     ]
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(all(unix, not(target_os = "macos")))]
 fn sweep_calls(brain: &str) -> Vec<String> {
     vec![
         format!("systemctl --user disable --now kluris-sync-{brain}.service (there)"),

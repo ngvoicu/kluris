@@ -168,6 +168,7 @@ fn stalling_http_server() -> u16 {
 
 /// A loopback http server that answers every request with 401 and a Basic
 /// challenge, as a host asking for credentials does.
+#[cfg(unix)]
 fn auth_server() -> u16 {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();

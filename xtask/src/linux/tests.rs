@@ -10,6 +10,7 @@ use std::time::Duration;
 use super::options::{self, Options, Parsed};
 use super::run::{self, Ctx};
 use super::script::{self, Layout, Spec};
+#[cfg(unix)]
 use crate::exec_files;
 use crate::ssh_ci::fake::{Answer, Clock, Fake, NOW, said, tickets, timed_out};
 use crate::ssh_ci::queue::{Queues, Who};
