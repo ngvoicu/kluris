@@ -16,8 +16,9 @@ use std::fs;
 use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
-use std::sync::{Arc, Barrier};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime};
 
@@ -702,8 +703,60 @@ fn last_push_is_reported_until_a_push_succeeds_and_a_success_once() {
     assert_eq!(read(&home, &root), None, "nothing more to say");
 }
 
-/// Readers at once on one success: exactly one reports it, and a failure
-/// is reported by every one and stays.
+/// The lock every write and claim of the brain's record takes, held by
+/// this test until the file is dropped.
+fn hold_record_lock(root: &Path) -> fs::File {
+    fs::create_dir_all(git_file(root, "kluris-sync")).unwrap();
+    let gate = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(git_file(root, background::LAST_PUSH_CLAIM))
+        .unwrap();
+    gate.lock().unwrap();
+    gate
+}
+
+/// No file of a claim is left beside the record.
+fn no_claimed_files(root: &Path) {
+    let left: Vec<String> = fs::read_dir(git_file(root, "kluris-sync"))
+        .unwrap()
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|name| name.starts_with("last-push.json") && name != "last-push.json")
+        .collect();
+    assert!(left.is_empty(), "{left:?}");
+}
+
+/// `jobs` run on threads that start together, each result waited for at
+/// most [`PATIENCE`]: a job that never ends fails the test, never hangs it.
+fn together<T: Send + 'static>(jobs: Vec<Box<dyn FnOnce() -> T + Send>>) -> Vec<T> {
+    let go = Arc::new(AtomicBool::new(false));
+    let (send, receive) = mpsc::channel();
+    let count = jobs.len();
+    for job in jobs {
+        let (go, send) = (Arc::clone(&go), send.clone());
+        thread::spawn(move || {
+            let start = Instant::now();
+            while !go.load(Ordering::Acquire) && start.elapsed() < PATIENCE {
+                thread::yield_now();
+            }
+            let _ = send.send(job());
+        });
+    }
+    go.store(true, Ordering::Release);
+    (0..count)
+        .map(|n| {
+            receive
+                .recv_timeout(PATIENCE)
+                .unwrap_or_else(|_| panic!("job {n} of {count} did not end within {PATIENCE:?}"))
+        })
+        .collect()
+}
+
+/// Readers at once on one success: one reports it, and a failure is
+/// reported by every one and stays; threads and processes alike.
 #[test]
 fn readers_at_once_report_one_success_once_and_every_failure() {
     let mut home = Home::new();
@@ -711,36 +764,27 @@ fn readers_at_once_report_one_success_once_and_every_failure() {
     let common = root.join(".git");
     for round in 0..40 {
         let success = write_record(&root, PushResult::Pushed, ago(1));
-        let start = Arc::new(Barrier::new(8));
-        let readers: Vec<_> = (0..8)
+        let jobs = (0..8)
             .map(|_| {
-                let (start, common) = (Arc::clone(&start), common.clone());
-                thread::spawn(move || {
-                    start.wait();
-                    background::report_last_push(&common)
-                })
+                let common = common.clone();
+                Box::new(move || background::report_last_push(&common))
+                    as Box<dyn FnOnce() -> Option<LastPush> + Send>
             })
             .collect();
-        let reported: Vec<LastPush> = readers
-            .into_iter()
-            .filter_map(|reader| reader.join().unwrap())
-            .collect();
+        let reported: Vec<LastPush> = together(jobs).into_iter().flatten().collect();
         assert_eq!(reported, [success], "round {round}");
         assert!(!git_file(&root, LAST_PUSH).exists(), "round {round}");
     }
     let failure = write_record(&root, PushResult::Offline, ago(1));
-    let start = Arc::new(Barrier::new(8));
-    let readers: Vec<_> = (0..8)
+    let jobs = (0..8)
         .map(|_| {
-            let (start, common) = (Arc::clone(&start), common.clone());
-            thread::spawn(move || {
-                start.wait();
-                background::report_last_push(&common)
-            })
+            let common = common.clone();
+            Box::new(move || background::report_last_push(&common))
+                as Box<dyn FnOnce() -> Option<LastPush> + Send>
         })
         .collect();
-    for reader in readers {
-        assert_eq!(reader.join().unwrap().as_ref(), Some(&failure));
+    for reported in together(jobs) {
+        assert_eq!(reported.as_ref(), Some(&failure));
     }
     assert_eq!(
         background::LastPush::read(&git_file(&root, LAST_PUSH)).as_ref(),
@@ -749,76 +793,166 @@ fn readers_at_once_report_one_success_once_and_every_failure() {
 
     // Read sessions at once, the same way.
     let success = write_record(&root, PushResult::Pushed, ago(1));
-    let start = Arc::new(Barrier::new(4));
-    let sessions: Vec<_> = (0..4)
+    let jobs = (0..4)
         .map(|_| {
-            let (start, root, git) = (Arc::clone(&start), root.clone(), self::git(&home));
-            thread::spawn(move || {
+            let (root, git) = (root.clone(), self::git(&home));
+            Box::new(move || {
                 let env = SessionEnv {
                     git,
                     no_verify: false,
                     now: SystemTime::now(),
                     program: None,
                 };
-                let open = session::open(brain(&root), Intent::Read, &env);
-                start.wait();
-                session::close(open).and_then(|r| r.last_push)
-            })
+                session::close(session::open(brain(&root), Intent::Read, &env))
+                    .and_then(|r| r.last_push)
+            }) as Box<dyn FnOnce() -> Option<LastPush> + Send>
         })
         .collect();
-    let reported: Vec<LastPush> = sessions
-        .into_iter()
-        .filter_map(|s| s.join().unwrap())
-        .collect();
+    let reported: Vec<LastPush> = together(jobs).into_iter().flatten().collect();
     assert_eq!(reported, [success]);
+
+    // Commands at once, each its own process.
+    let success = write_record(&root, PushResult::Pushed, ago(1));
+    let mut readers: Vec<(Running, Lines)> =
+        (0..4).map(|_| command(&home, "report", &[&root])).collect();
+    let said: Vec<String> = readers
+        .iter_mut()
+        .flat_map(|(child, lines)| {
+            let said = lines.all();
+            assert!(child.wait().success(), "{said:?}");
+            said
+        })
+        .filter(|line| line.starts_with("report "))
+        .collect();
+    let reports = said.iter().filter(|l| l.contains("Some(LastPush")).count();
+    assert_eq!(reports, 1, "{said:?}");
+    assert!(said.iter().any(|l| l.contains(&success.at)), "{said:?}");
+    no_claimed_files(&root);
 }
 
-/// A record that changed between a reader's look and its claim is put
-/// back, unless one newer still is there by then.
+/// A record the background run writes while a claim holds the lock waits
+/// for it, then lands, and survives: a failure is never lost.
 #[test]
-fn a_claimed_record_that_is_not_the_one_wanted_is_put_back() {
+fn a_record_written_while_a_claim_holds_the_lock_lands_after_it() {
+    let mut home = Home::new();
+    let root = waiting(&mut home, "alpha");
+    let success = write_record(&root, PushResult::Pushed, ago(2));
+    hook(&root, "pre-push", "not today", 1);
+    let gate = hold_record_lock(&root);
+    let mut child = spawn_push(&home, &root);
+    // The push is refused: the child's next step is its record.
+    eventually("the refused push", || {
+        fs::read_to_string(git_file(&root, LOG)).is_ok_and(|log| log.contains("not today"))
+    });
+    let held = Instant::now();
+    while held.elapsed() < Duration::from_millis(500) {
+        assert_eq!(
+            background::LastPush::read(&git_file(&root, LAST_PUSH)).as_ref(),
+            Some(&success),
+            "written while the lock was held"
+        );
+        thread::sleep(Duration::from_millis(25));
+    }
+    // The claim takes the success it read, then lets the lock go.
+    fs::remove_file(git_file(&root, LAST_PUSH)).unwrap();
+    drop(gate);
+    assert!(child.wait().success());
+    assert_eq!(result_of(&root).as_deref(), Some("refused"));
+    for _ in 0..2 {
+        let report = read(&home, &root).expect("a report");
+        assert_eq!(
+            report.last_push.map(|r| r.result),
+            Some(PushResult::Refused)
+        );
+    }
+    assert_eq!(result_of(&root).as_deref(), Some("refused"));
+    no_claimed_files(&root);
+}
+
+/// A read that finds the lock held never waits for it: it reports a
+/// failure it can read, leaves a success for another command, and ends in
+/// its own time.
+#[test]
+fn a_held_lock_never_holds_a_read_up() {
+    let mut home = Home::new();
+    let root = home.brain("alpha");
+    let gate = hold_record_lock(&root);
+    let reading = |home: &Home| {
+        let (root, git) = (root.clone(), git(home));
+        let jobs = vec![Box::new(move || {
+            let env = SessionEnv {
+                git,
+                no_verify: false,
+                now: SystemTime::now(),
+                program: None,
+            };
+            let started = Instant::now();
+            let report = session::close(session::open(brain(&root), Intent::Read, &env));
+            (report, started.elapsed())
+        })
+            as Box<dyn FnOnce() -> (Option<SyncReport>, Duration) + Send>];
+        together(jobs).pop().unwrap()
+    };
+    let failure = write_record(&root, PushResult::Refused, ago(1));
+    let (report, took) = reading(&home);
+    assert!(took < Duration::from_secs(5), "{took:?}");
+    assert_eq!(report.and_then(|r| r.last_push), Some(failure));
+
+    let success = write_record(&root, PushResult::Pushed, ago(1));
+    let (report, took) = reading(&home);
+    assert!(took < Duration::from_secs(5), "{took:?}");
+    assert_eq!(report.and_then(|r| r.last_push), None);
+    assert_eq!(
+        background::LastPush::read(&git_file(&root, LAST_PUSH)).as_ref(),
+        Some(&success),
+        "a success taken under another's lock"
+    );
+
+    drop(gate);
+    let (report, _) = reading(&home);
+    assert_eq!(report.and_then(|r| r.last_push), Some(success));
+    assert!(!git_file(&root, LAST_PUSH).exists());
+    no_claimed_files(&root);
+}
+
+/// Taking the record removes it only when it is the one meant, under the
+/// lock; with the lock held past the bound nothing is taken.
+#[test]
+fn the_record_is_taken_only_when_it_is_the_one_meant() {
     let mut home = Home::new();
     let root = home.brain("alpha");
     let common = root.join(".git");
     let path = git_file(&root, LAST_PUSH);
-
-    // The claim finds a failure where a success was: it goes back.
-    let failure = write_record(&root, PushResult::Refused, ago(2));
-    let claimed = background::claim_last_push(&common, |record| {
-        assert_eq!(record, &failure);
-        false
-    });
-    assert_eq!(claimed, None);
+    let seen = write_record(&root, PushResult::Offline, ago(2));
+    let newer = a_record(PushResult::Refused, ago(1), 2);
+    newer.write(&path).unwrap();
+    let bound = Duration::from_millis(200);
     assert_eq!(
-        background::LastPush::read(&path).as_ref(),
-        Some(&failure),
-        "not put back"
+        background::take_last_push(&common, bound, |r| *r == seen),
+        None
     );
-
-    // A newer record published once the claim moved it away stays, and
-    // the claimed one goes.
-    let newer = a_record(PushResult::Offline, ago(1), 2);
-    let claimed = background::claim_last_push(&common, |_| {
-        newer.write(&path).unwrap();
-        false
-    });
-    assert_eq!(claimed, None);
     assert_eq!(background::LastPush::read(&path).as_ref(), Some(&newer));
 
-    // An accepted claim takes it away; nothing is left beside it.
-    let taken = background::claim_last_push(&common, |_| true);
-    assert_eq!(taken.as_ref(), Some(&newer));
-    assert!(!path.exists());
-    let left: Vec<String> = fs::read_dir(git_file(&root, "kluris-sync"))
-        .unwrap()
-        .flatten()
-        .map(|e| e.file_name().to_string_lossy().into_owned())
-        .filter(|name| name.starts_with("last-push.json"))
-        .collect();
-    assert!(left.is_empty(), "{left:?}");
+    let gate = hold_record_lock(&root);
+    let started = Instant::now();
+    let (common_held, newer_held) = (common.clone(), newer.clone());
+    let jobs =
+        vec![
+            Box::new(move || background::take_last_push(&common_held, bound, |r| *r == newer_held))
+                as Box<dyn FnOnce() -> Option<LastPush> + Send>,
+        ];
+    assert_eq!(together(jobs).pop().unwrap(), None);
+    assert!(started.elapsed() >= bound, "did not wait its bound");
+    assert!(path.exists(), "taken under another's lock");
+    drop(gate);
 
-    // Nothing to claim: another reader has it.
-    assert_eq!(background::claim_last_push(&common, |_| true), None);
+    assert_eq!(
+        background::take_last_push(&common, bound, |r| *r == newer).as_ref(),
+        Some(&newer)
+    );
+    assert!(!path.exists());
+    assert_eq!(background::take_last_push(&common, bound, |_| true), None);
+    no_claimed_files(&root);
 }
 
 #[test]
@@ -969,8 +1103,11 @@ const CHILD_PID: &str = "KLURIS_TEST_BACKGROUND_PID";
 /// This test binary run again as a command that ends, in the home:
 /// - `read` opens the brains for a read and closes them, printing each
 ///   `to_push`, then `done`;
+/// - `report` prints what reporting the first brain's record gives;
 /// - `late-descriptor` (Unix) starts the program with a descriptor opened
 ///   as the start forks (`pthread_atfork`), then prints `done`;
+/// - `lowered-limit` (Unix) starts the program with a descriptor open
+///   above a descriptor limit lowered after it opened, then prints `done`;
 /// - `start-in-job` (Windows) joins a kill-on-close job that forbids
 ///   breakaway, then prints what a start and a read's close did;
 /// - `read-in-job` (Windows) joins a job that forbids breakaway and does
@@ -1007,9 +1144,19 @@ fn child_command() {
     };
     match action.as_str() {
         "read" => read(&env),
+        "report" => {
+            let common = roots[0].join(".git");
+            println!("report {:?}", background::report_last_push(&common));
+        }
         #[cfg(unix)]
         "late-descriptor" => {
             late::open_as_the_start_forks();
+            println!("start {:?}", background::start(&program, &[]));
+            println!("done");
+        }
+        #[cfg(unix)]
+        "lowered-limit" => {
+            late::open_above_a_lowered_limit();
             println!("start {:?}", background::start(&program, &[]));
             println!("done");
         }
@@ -1158,12 +1305,11 @@ fn a_brain_opened_by_a_relative_path_is_the_one_pushed() {
     );
 }
 
-/// Started with a descriptor opened as it forks, the child still holds
-/// nothing of this process's but what it was given: the command's stdout
-/// closes when it ends.
+/// The command doing `action` starts a program that says whether it holds
+/// descriptor `fd`: it holds none, and the command's stdout closes when it
+/// ends.
 #[cfg(unix)]
-#[test]
-fn a_descriptor_opened_as_the_child_forks_is_closed_in_it() {
+fn no_descriptor_reaches_the_child(action: &str, fd: i32) {
     let home = Home::new();
     let report = home.dir.path().join("descriptor");
     let release = Release(home.dir.path().join("release"));
@@ -1172,7 +1318,6 @@ fn a_descriptor_opened_as_the_child_forks_is_closed_in_it() {
         &program,
         format!(
             "#!/bin/sh\nif [ -e /dev/fd/{fd} ]; then echo open; else echo closed; fi > '{report}'\ni=0\nwhile [ ! -e '{release}' ] && [ $i -lt 1200 ]; do sleep 0.05; i=$((i+1)); done\n",
-            fd = late::FD,
             report = sh_path(&report),
             release = sh_path(&release.0),
         ),
@@ -1182,7 +1327,7 @@ fn a_descriptor_opened_as_the_child_forks_is_closed_in_it() {
         use std::os::unix::fs::PermissionsExt;
         fs::set_permissions(&program, fs::Permissions::from_mode(0o755)).unwrap();
     }
-    let mut cmd = command_line(&home, "late-descriptor", &[]);
+    let mut cmd = command_line(&home, action, &[]);
     cmd.env(CHILD_PROGRAM, &program);
     let mut command = Running::start(cmd);
     let lines = command.lines();
@@ -1201,8 +1346,25 @@ fn a_descriptor_opened_as_the_child_forks_is_closed_in_it() {
     assert_eq!(fs::read_to_string(&report).unwrap().trim(), "closed");
 }
 
-/// A descriptor opened by the fork itself, as another thread could open
-/// one between a list and the fork.
+/// Started with a descriptor opened as it forks, the child still holds
+/// nothing of this process's but what it was given.
+#[cfg(unix)]
+#[test]
+fn a_descriptor_opened_as_the_child_forks_is_closed_in_it() {
+    no_descriptor_reaches_the_child("late-descriptor", late::FD);
+}
+
+/// A descriptor opened before the descriptor limit was lowered below it is
+/// still open, and is closed in the child all the same.
+#[cfg(unix)]
+#[test]
+fn a_descriptor_above_a_lowered_limit_is_closed_in_the_child() {
+    no_descriptor_reaches_the_child("lowered-limit", late::ABOVE);
+}
+
+/// Descriptors a start must keep from its child: one opened by the fork
+/// itself, as another thread could open one meanwhile, and one open above
+/// a lowered descriptor limit.
 #[cfg(unix)]
 mod late {
     /// The descriptor opened as a copy of stdout.
@@ -1230,6 +1392,26 @@ mod late {
         unsafe {
             close(FD);
         }
+    }
+
+    /// The descriptor left open above the lowered limit.
+    pub const ABOVE: i32 = 201;
+
+    /// Open [`ABOVE`] as a copy of stdout, then lower this process's
+    /// descriptor limit to 128, below it.
+    pub fn open_above_a_lowered_limit() {
+        use rustix::process::{Resource, Rlimit, getrlimit, setrlimit};
+        // SAFETY: a copy of this process's stdout at a free number.
+        assert_eq!(unsafe { dup2(1, ABOVE) }, ABOVE);
+        let limit = getrlimit(Resource::Nofile);
+        setrlimit(
+            Resource::Nofile,
+            Rlimit {
+                current: Some(128),
+                maximum: limit.maximum,
+            },
+        )
+        .unwrap();
     }
 
     /// From now on every fork of this process opens [`FD`] as it forks.

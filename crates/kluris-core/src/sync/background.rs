@@ -37,13 +37,13 @@
 //!
 //! **Reporting the record** ([`report_last_push`]): a failure is reported
 //! by every command until a push succeeds, and never removed by one; a
-//! success is reported by one command at most. That one claims it
-//! ([`claim_last_push`]): under the lock of [`LAST_PUSH_CLAIM`], it moves
-//! the record to a name of its own, reads it there, and removes it only
-//! when it is what it meant to take; else it puts it back, unless a newer
-//! record is there by then. An explicit
-//! push that succeeds removes the failure it read before the push the same
-//! way, and only that one.
+//! success is reported by one command at most, the one that reads it and
+//! removes it under the record's lock ([`LAST_PUSH_CLAIM`]). Every write of
+//! the record takes that lock too ([`publish_last_push`]), so a claim's
+//! read and removal see one record, never a newer one between them. A
+//! read only tries the lock: while another holds it, a success waits for
+//! the next command. An explicit push that succeeds removes the failure it
+//! read before the push, and only that one ([`take_last_push`]).
 //!
 //! The lock, the log and the record belong to the remote, so they are in
 //! the repository's common git directory, like the remote claim.
@@ -63,10 +63,10 @@ use std::ffi::OsString;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::thread;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use super::claim::COMMAND_BOUND;
+use super::claim::{COMMAND_BOUND, STEP};
 use super::engine::{self, Pushed};
 use super::git::SyncGit;
 use super::{LeftAsIs, LeftReason, NETWORK_TIME_LIMIT, SyncRequest};
@@ -86,9 +86,9 @@ pub const LOG: &str = "kluris-sync/background.log";
 /// directory.
 pub const LAST_PUSH: &str = "kluris-sync/last-push.json";
 
-/// The file whose OS lock one claim of the record holds at a time,
-/// relative to the common git directory; made when missing, never
-/// removed.
+/// The file whose OS lock every write of the record and every claim of
+/// it holds, relative to the common git directory; made when missing,
+/// never removed.
 pub const LAST_PUSH_CLAIM: &str = "kluris-sync/last-push.claim";
 
 /// How old a lock is when it is stale, whatever its pid.
@@ -329,56 +329,91 @@ pub fn run(roots: &[PathBuf], git: &SystemGit) {
 
 /// What a command reports of the last background push of the brain whose
 /// common git directory is `common`: a failure as it is, left in place; a
-/// success once, claimed ([`claim_last_push`]); `None` when there is
-/// none, or another command claimed it.
+/// success once, taken under the record's lock ([`LAST_PUSH_CLAIM`]),
+/// which a read only tries: while another holds it, a success is left for
+/// another command and nothing is reported; a failure still is. `None`
+/// when there is nothing to report.
 pub fn report_last_push(common: &Path) -> Option<LastPush> {
-    let record = LastPush::read(&common.join(LAST_PUSH))?;
+    let path = common.join(LAST_PUSH);
+    let seen = LastPush::read(&path)?;
+    if seen.result != PushResult::Pushed {
+        return Some(seen);
+    }
+    let _gate = RecordLock::take(common, Duration::ZERO)?;
+    // Read again under the lock: a newer record may have replaced it.
+    let record = LastPush::read(&path)?;
     if record.result != PushResult::Pushed {
         return Some(record);
     }
-    claim_last_push(common, |claimed| claimed.result == PushResult::Pushed)
+    fs::remove_file(&path).ok()?;
+    Some(record)
 }
 
-/// Take the record of the brain whose common git directory is `common` if
-/// `accept` says it is the one to take: it is moved to a name of this
-/// call's own (so no other caller takes it too), read there, and removed
-/// when accepted. One not accepted (a newer record, published between the
-/// caller's look and this claim) is put back, unless a newer one still is
-/// there by then (a link never replaces a file). `None` when nothing was
-/// taken: none was there (another caller claimed it), or it was put back.
-///
-/// One claim runs at a time, under the OS lock of [`LAST_PUSH_CLAIM`]: on
-/// Windows a rename goes through a handle opened on the file first, so two
-/// renames of one record, started together, could each move it in turn.
-/// The move still guards against the background run, which publishes a
-/// new record without taking that lock.
-pub fn claim_last_push(common: &Path, accept: impl FnOnce(&LastPush) -> bool) -> Option<LastPush> {
-    static CLAIMS: AtomicU64 = AtomicU64::new(0);
-    let gate = fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .open(common.join(LAST_PUSH_CLAIM))
-        .ok()?;
-    gate.lock().ok()?;
+/// Take the record of the brain whose common git directory is `common`
+/// when `accept` says it is the one meant: read and removed under the
+/// record's lock ([`LAST_PUSH_CLAIM`]), waited for up to `bound`, so no
+/// newer record can take its place in between. `None` when nothing was
+/// taken: the lock stayed held, there is no record, or it is another.
+pub fn take_last_push(
+    common: &Path,
+    bound: Duration,
+    accept: impl FnOnce(&LastPush) -> bool,
+) -> Option<LastPush> {
+    let _gate = RecordLock::take(common, bound)?;
     let path = common.join(LAST_PUSH);
-    let mut name = path.as_os_str().to_owned();
-    name.push(format!(
-        ".claimed-{}-{}",
-        std::process::id(),
-        CLAIMS.fetch_add(1, Ordering::Relaxed)
-    ));
-    let claimed = PathBuf::from(name);
-    fs::rename(&path, &claimed).ok()?;
-    let taken = LastPush::read(&claimed).filter(|record| accept(record));
-    if taken.is_none() {
-        let _ = fs::hard_link(&claimed, &path);
+    let record = LastPush::read(&path).filter(|record| accept(record))?;
+    fs::remove_file(&path).ok()?;
+    Some(record)
+}
+
+/// Write `record` as the brain's last push, whole, under the record's lock
+/// ([`LAST_PUSH_CLAIM`]), waited for up to [`COMMAND_BOUND`]: no claim is
+/// between its read and its removal then. Past the bound it is written
+/// anyway, since a newer result is never dropped.
+pub fn publish_last_push(common: &Path, record: &LastPush) -> io::Result<()> {
+    let _gate = RecordLock::take(common, COMMAND_BOUND);
+    record.write(&common.join(LAST_PUSH))
+}
+
+/// The record's lock, held until dropped (closing the file unlocks it).
+struct RecordLock(fs::File);
+
+impl RecordLock {
+    /// The lock of the record in `common`, tried every [`STEP`] until
+    /// `bound` has passed (once for a zero bound); `None` while another
+    /// holds it, or when its file cannot be made.
+    fn take(common: &Path, bound: Duration) -> Option<RecordLock> {
+        let path = common.join(LAST_PUSH_CLAIM);
+        if let Some(folder) = path.parent() {
+            fs::create_dir_all(folder).ok()?;
+        }
+        let file = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(path)
+            .ok()?;
+        let deadline = Instant::now() + bound;
+        loop {
+            match file.try_lock() {
+                Ok(()) => return Some(RecordLock(file)),
+                Err(fs::TryLockError::WouldBlock) => {}
+                Err(fs::TryLockError::Error(_)) => return None,
+            }
+            let now = Instant::now();
+            if now >= deadline {
+                return None;
+            }
+            thread::sleep(STEP.min(deadline - now));
+        }
     }
-    let _ = fs::remove_file(&claimed);
-    // Closing the file unlocks it too.
-    let _ = gate.unlock();
-    taken
+}
+
+impl Drop for RecordLock {
+    fn drop(&mut self) {
+        let _ = self.0.unlock();
+    }
 }
 
 /// What the maps a merge rebuilds would say: the background push merges
@@ -416,7 +451,7 @@ fn push_brain(root: &Path, git: &SystemGit) {
         root.display()
     );
     if let Some(record) = push(&ctx)
-        && let Err(e) = record.write(&common.join(LAST_PUSH))
+        && let Err(e) = publish_last_push(&common, &record)
     {
         eprintln!("kluris: cannot record the push: {e}");
     }
@@ -642,12 +677,68 @@ mod detach {
     const F_SETFD: c_int = 2;
     const FD_CLOEXEC: c_int = 1;
 
-    /// The most descriptors the loop marks, however high the limit.
-    const MOST: c_int = 1 << 20;
-
     unsafe extern "C" {
         fn fcntl(fd: c_int, cmd: c_int, ...) -> c_int;
         fn getdtablesize() -> c_int;
+    }
+
+    /// The most descriptors this process could have open, read before the
+    /// fork: every open descriptor is numbered below it. The soft limit
+    /// alone is not that bound, since a descriptor opened before the limit
+    /// was lowered stays open above it; the larger of the soft limit and
+    /// the system's ceiling for this process is.
+    fn most_descriptors() -> c_int {
+        // SAFETY: no preconditions.
+        let soft = u64::try_from(unsafe { getdtablesize() }).unwrap_or(0);
+        let most = soft.max(ceiling());
+        c_int::try_from(most).unwrap_or(c_int::MAX).max(3)
+    }
+
+    /// macOS: `kern.maxfilesperproc`, the most descriptors a process may
+    /// have whatever its limits; 0 when it cannot be read.
+    #[cfg(target_os = "macos")]
+    fn ceiling() -> u64 {
+        use std::ffi::{c_char, c_void};
+        unsafe extern "C" {
+            fn sysctlbyname(
+                name: *const c_char,
+                old: *mut c_void,
+                old_len: *mut usize,
+                new: *mut c_void,
+                new_len: usize,
+            ) -> c_int;
+        }
+        let mut most: c_int = 0;
+        let mut len = std::mem::size_of::<c_int>();
+        // SAFETY: a NUL-terminated name, and a value of the size given.
+        let read = unsafe {
+            sysctlbyname(
+                c"kern.maxfilesperproc".as_ptr(),
+                (&raw mut most).cast(),
+                &raw mut len,
+                std::ptr::null_mut(),
+                0,
+            )
+        };
+        if read == 0 {
+            u64::try_from(most).unwrap_or(0)
+        } else {
+            0
+        }
+    }
+
+    /// Elsewhere: the hard limit, the most the soft limit can be raised
+    /// to; when it is unlimited, the system's own ceiling
+    /// (`/proc/sys/fs/nr_open` on Linux); 0 when neither can be read.
+    #[cfg(not(target_os = "macos"))]
+    fn ceiling() -> u64 {
+        match rustix::process::getrlimit(rustix::process::Resource::Nofile).maximum {
+            Some(hard) => hard,
+            None => std::fs::read_to_string("/proc/sys/fs/nr_open")
+                .ok()
+                .and_then(|text| text.trim().parse().ok())
+                .unwrap_or(0),
+        }
     }
 
     #[cfg(target_os = "linux")]
@@ -678,7 +769,8 @@ mod detach {
         }
     }
 
-    /// Every descriptor from 3 below `limit` set to close at `exec`, as
+    /// Every descriptor from 3 below `limit` ([`most_descriptors`]) set to
+    /// close at `exec`, as
     /// the child runs it between fork and exec: only async-signal-safe
     /// calls, nothing allocated. std's own pipe for an exec error is
     /// already close-on-exec, so it still reports one.
@@ -699,8 +791,7 @@ mod detach {
     /// `program` with `args` in `dir`, in a session of its own, with null
     /// standard streams and nothing else of this process's open in it.
     pub fn spawn(program: &Path, args: &[OsString], dir: &Path) -> Start {
-        // SAFETY: no preconditions; read here, before the fork.
-        let limit = unsafe { getdtablesize() }.clamp(3, MOST);
+        let limit = most_descriptors();
         let mut cmd = Command::new(program);
         cmd.args(args)
             .current_dir(dir)

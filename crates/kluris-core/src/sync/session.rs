@@ -476,7 +476,7 @@ fn finish(session: Session) -> (Option<SyncReport>, Option<(PathBuf, PathBuf)>) 
         drop(claim);
         match before.filter(|seen| report.pushed && seen.result != background::PushResult::Pushed) {
             Some(seen) => {
-                background::claim_last_push(common, |claimed| *claimed == seen);
+                background::take_last_push(common, COMMAND_BOUND, |taken| *taken == seen);
             }
             None => report.last_push = background::report_last_push(common),
         }
