@@ -2,18 +2,18 @@
 //! (never a library), behind the [`Git`] trait so tests and later phases can
 //! swap it.
 //!
-//! The calls are v2's (`core/git.py`, research-03 §1.15), with four fixes:
-//! - `log` reads NUL-separated fields: v2 split `%H|%s|%aI` on `|`, so a
-//!   subject containing `|` was cut short and its date corrupted.
-//! - `-c core.quotePath=false` on the calls that print paths: v2 got
-//!   non-ASCII names C-quoted (`"\303\251.md"`).
+//! How the calls read git's output:
+//! - `log` reads NUL-separated fields, so a subject containing `|` or any
+//!   other character is read whole and its date stays its own.
+//! - `-c core.quotePath=false` on the calls that print paths, so non-ASCII
+//!   names come back as they are, not C-quoted (`"\303\251.md"`).
 //! - `file_dates` gives paths relative to the brain (`--relative`, NUL
-//!   separated): for a brain in a subdirectory of a larger repo v2 got
-//!   repo-relative paths that never matched a neuron.
+//!   separated), so a brain in a subdirectory of a larger repo matches its
+//!   neurons.
 //! - for such a nested brain, `log` and `status_short` are scoped to the
-//!   brain directory (`-- .`); v2 showed the whole outer repo. A brain at the
-//!   repo root runs v2's exact commands (`git log -- .` there would drop
-//!   empty commits).
+//!   brain directory (`-- .`), not the whole outer repo. A brain at the repo
+//!   root runs them unscoped (`git log -- .` there would drop empty
+//!   commits).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
@@ -119,7 +119,7 @@ impl std::error::Error for GitError {}
 pub trait Git {
     /// The work tree `dir` is in (`git rev-parse --is-inside-work-tree
     /// --show-prefix`); `None` outside one, inside a `.git` directory, or
-    /// when git cannot run (v2's `is_git_repo`).
+    /// when git cannot run.
     fn repo(&self, dir: &Path) -> Option<Repo>;
 
     /// Whether `dir` is inside a git work tree.
@@ -127,8 +127,7 @@ pub trait Git {
         self.repo(dir).is_some()
     }
 
-    /// `git init`, then `git checkout -b main` (v2's `git_init`; no
-    /// identity is set).
+    /// `git init`, then `git checkout -b main` (no identity is set).
     fn init(&self, dir: &Path) -> Result<(), GitError>;
 
     /// `git checkout -b <branch>`.
@@ -141,10 +140,10 @@ pub trait Git {
     /// `branch.<branch>.remote` and `branch.<branch>.merge`.
     fn set_upstream(&self, dir: &Path, branch: &str, remote: &str) -> Result<(), GitError>;
 
-    /// `git add <pathspec>` (v2 always passes `-A`).
+    /// `git add <pathspec>`.
     fn add(&self, dir: &Path, pathspec: &str) -> Result<(), GitError>;
 
-    /// `git commit -m <message>`, with v2's identity fallback: when git
+    /// `git commit -m <message>`, with the identity fallback: when git
     /// config (as seen from `dir`) lacks `user.name` or `user.email`, the
     /// author is `kluris <kluris@local>` and the committer the author, each
     /// variable only when the environment does not set it already.
@@ -156,12 +155,12 @@ pub trait Git {
     fn log(&self, repo: &Repo, limit: usize) -> Result<Vec<Commit>, GitError>;
 
     /// `git status --short`, stripped as Python's `str.strip()` strips it
-    /// (so the first line's leading space goes, as in v2); empty when clean.
+    /// (so the first line's leading space goes); empty when clean.
     /// Scoped to the brain, with brain-relative paths, when it is nested.
     fn status_short(&self, repo: &Repo) -> Result<String, GitError>;
 
     /// The latest and created author date of every path in the history of
-    /// `HEAD`, from one `git log` (v2's `git_log_file_dates`); empty when
+    /// `HEAD`, from one `git log`; empty when
     /// the log fails (no commits, no git).
     fn file_dates(&self, repo: &Repo) -> FileDates;
 
@@ -193,7 +192,7 @@ impl Default for SystemGit {
     }
 }
 
-/// v2's commit identity fallback, in `setdefault` order.
+/// The commit identity fallback, in the order the variables are set.
 const IDENTITY_FALLBACK: [(&str, &str); 2] = [
     ("GIT_AUTHOR_NAME", "kluris"),
     ("GIT_AUTHOR_EMAIL", "kluris@local"),
@@ -334,15 +333,14 @@ impl SystemGit {
             .map(|out| out.stdout)
     }
 
-    /// A config value as seen from `dir`; `None` when unset or empty
-    /// (v2's `_read_git_config`).
+    /// A config value as seen from `dir`; `None` when unset or empty.
     fn config_value(&self, dir: &Path, key: &str) -> Option<String> {
         let out = self.run(dir, &["config", "--get", key]).ok()?;
         let value = String::from_utf8_lossy(&out).trim().to_string();
         (!value.is_empty()).then_some(value)
     }
 
-    /// v2's identity fallback on `cmd`: when git config (as seen from `dir`)
+    /// The identity fallback on `cmd`: when git config (as seen from `dir`)
     /// lacks `user.name` or `user.email`, the author is `kluris
     /// <kluris@local>` and the committer the author, each variable only when
     /// the environment does not set it already.
@@ -718,7 +716,7 @@ pub trait Plumbing: Git {
         paths: &[String],
     ) -> Result<BTreeSet<String>, GitError>;
 
-    /// The identity a commit made now is authored by, with v2's fallback
+    /// The identity a commit made now is authored by, with the fallback
     /// (`kluris <kluris@local>`) when git config has none.
     fn author(&self, repo: &Repo) -> Result<Identity, GitError>;
 

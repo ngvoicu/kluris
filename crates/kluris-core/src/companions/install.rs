@@ -1,11 +1,10 @@
-//! Installing a companion folder into `~/.kluris/companions/<name>/` (v2
-//! `companions.install`): copy the allowlisted entries into a staging
+//! Installing a companion folder into `~/.kluris/companions/<name>/`: copy the allowlisted entries into a staging
 //! folder, verify it, move the old copy (folder, file or link) aside to
 //! `.<name>.old`, rename the staging folder in, then drop the old copy.
 //! Any failure leaves the old copy: in place, or, when it cannot be moved
 //! back, in `.<name>.old`, which the error names and the next install
-//! (`kluris doctor` included) restores first (SPEC decision 2026-10-26,
-//! T-103: the backup is deleted only once the new copy is in place).
+//! (`kluris doctor` included) restores first: the backup is deleted only
+//! once the new copy is in place.
 
 use std::path::{Path, PathBuf};
 use std::{fmt, fs, io};
@@ -27,7 +26,7 @@ pub enum CompanionError {
     Unknown(String),
     /// The source tree of the named companion has no `SKILL.md`.
     MissingSkill(String),
-    /// A staged copy that breaks the allowlist (v2 `_verify_runtime_dir`).
+    /// A staged copy that breaks the allowlist.
     Invalid(String),
     /// A file-system operation on `path` failed.
     Io { path: PathBuf, error: io::Error },
@@ -84,13 +83,12 @@ pub fn installed_dir(name: &str, home: &Path) -> PathBuf {
     home.join(".kluris").join("companions").join(name)
 }
 
-/// Whether the companion's runtime `SKILL.md` exists (v2 `is_installed`).
+/// Whether the companion's runtime `SKILL.md` exists.
 pub fn is_installed(name: &str, home: &Path) -> bool {
     installed_dir(name, home).join("SKILL.md").is_file()
 }
 
-/// The known companions whose runtime path exists, whatever it is (v2
-/// `installed`).
+/// The known companions whose runtime path exists, whatever it is.
 pub fn installed(home: &Path) -> Vec<String> {
     KNOWN
         .iter()
@@ -100,7 +98,7 @@ pub fn installed(home: &Path) -> Vec<String> {
 }
 
 /// The known companions the registered brains opt into; a brain whose
-/// `kluris.yml` is missing or does not read is skipped (v2 `referenced`).
+/// `kluris.yml` is missing or does not read is skipped.
 pub fn referenced(config: &GlobalConfig) -> Vec<String> {
     let mut refs = Vec::new();
     for entry in config.brains.values() {
@@ -159,7 +157,7 @@ fn remove_any(path: &Path) {
 
 /// Whether `rel` (POSIX, relative to the companion folder) is part of what
 /// is installed: `SKILL.md`, or an entry inside `references/` or `assets/`
-/// none of whose names is hidden or `__pycache__` (v2 `_stage_copy`).
+/// none of whose names is hidden or `__pycache__`.
 fn allowlisted(rel: &str, is_dir: bool) -> bool {
     let parts: Vec<&str> = rel.split('/').collect();
     match parts.as_slice() {
@@ -193,7 +191,7 @@ fn stage(tree: &CompanionTree, staging: &Path) -> Result<(), CompanionError> {
     Ok(())
 }
 
-/// Check a companion folder (v2 `_verify_runtime_dir`): `SKILL.md` is a
+/// Check a companion folder: `SKILL.md` is a
 /// file, the only other top-level entries are the `references/` and
 /// `assets/` folders, and nothing inside is a link or a hidden name.
 pub fn verify_runtime_dir(path: &Path) -> Result<(), CompanionError> {

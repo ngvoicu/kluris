@@ -43,7 +43,7 @@ pub struct DreamOptions<'a> {
     pub today: Date,
 }
 
-/// The automatic fixes, v2's `fixes`.
+/// The automatic fixes, counted by kind.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Fixes {
     pub dates_updated: usize,
@@ -71,7 +71,7 @@ pub struct OneWaySynapse {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FieldProblem {
     Missing,
-    /// Present with the wrong type (v2's `kind: "type"`).
+    /// Present with the wrong type (`kind: "type"`).
     Type,
 }
 
@@ -95,7 +95,8 @@ pub struct SkippedFile {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DreamReport {
     pub fixes: Fixes,
-    /// Every directory a map was generated for, in v2's order, `/`-joined.
+    /// Every directory a map was generated for, in the order the maps are
+    /// written (deepest first, then by path), `/`-joined.
     pub maps_regenerated: Vec<String>,
     /// The top-level lobes after the run.
     pub lobes: Vec<String>,
@@ -124,20 +125,21 @@ impl DreamReport {
     }
 }
 
-/// v2's `_sync_brain_state` alone, the preflight `kluris mri` runs: dream's
-/// writes without its validators. `orphan_references_added` compares the
-/// orphans before the maps with the orphans after the writes, as v2 does.
+/// Dream's writes alone, the preflight `kluris mri` runs: dream without its
+/// validators. `orphan_references_added` compares the orphans before the
+/// maps with the orphans after the writes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SyncReport {
     pub fixes: Fixes,
-    /// Every directory a map was generated for, in v2's order, `/`-joined.
+    /// Every directory a map was generated for, in the order the maps are
+    /// written (deepest first, then by path), `/`-joined.
     pub maps_regenerated: Vec<String>,
     /// The files written, by path.
     pub written: Vec<String>,
     pub skipped: Vec<SkippedFile>,
 }
 
-/// Run the writes of dream on a brain (v2's `_sync_brain_state`), as one
+/// Run the writes of dream on a brain, as one
 /// change set, without validating the result.
 pub fn sync_brain_state<S: BrainStore>(
     store: &mut S,
@@ -198,16 +200,15 @@ fn sync<S: BrainStore>(
         .repo(store.root())
         .map(|repo| git.file_dates(&repo))
         .unwrap_or_default();
-    // v2 counts these after steps 1-3, which change neither the maps nor the
-    // set of neurons, so the brain as read gives the same count.
+    // Counted before steps 1-3, which change neither the maps nor the set of
+    // neurons, so the brain as read gives the count after them.
     let orphans_before = linker::orphans(&*store, skipped).len();
     let planned = plan(&*store, Some(&dates), options);
     for (rel, reason) in planned.skipped {
         skipped.entry(rel).or_insert(reason);
     }
     let (applied, held) = apply_unless_skipped(store, planned.changes, skipped);
-    // A fix counts only when its file was written (v2's date pass counts
-    // after the write).
+    // A fix counts only when its file was written.
     let failed: HashSet<&str> = applied
         .failed
         .iter()
@@ -246,7 +247,7 @@ struct Planned {
     changes: ChangeSet,
     /// The files that could not be read or rewritten.
     skipped: BTreeMap<String, String>,
-    /// The maps' directories, in v2's order.
+    /// The maps' directories, in the order the maps are written.
     order: Vec<String>,
     /// The neurons each of steps 1-3 rewrote.
     dates_updated: Vec<String>,
@@ -312,11 +313,11 @@ fn apply_unless_skipped<S: BrainStore>(
     (store.apply(&changes), held)
 }
 
-/// v2's `_run_dream_on_brain`, what `create` runs on a new brain: every
+/// What `create` runs on a new brain: every
 /// directory's `map.md`, twice, then `brain.md` (steps 5 and 6 alone, no
 /// dates or link fixes), as one change set. Every structure file there is
-/// the scaffold's own, so one that does not parse is regenerated as in v2. Returns the files it could not
-/// read or write.
+/// the scaffold's own, so one that does not parse is regenerated. Returns
+/// the files it could not read or write.
 pub fn regenerate_maps<S: BrainStore>(store: &mut S, options: &DreamOptions) -> Vec<SkippedFile> {
     let order = maps::map_order(store.dirs());
     let mut ws = workspace::Workspace::for_new_brain(&*store);

@@ -114,11 +114,11 @@ impl std::fmt::Display for UninstallError {
 impl std::error::Error for UninstallError {}
 
 /// Remove what the installers wrote, in an order that keeps what a retry
-/// needs (T-111), once every change is checked (T-119):
+/// needs, once every change is checked:
 ///
 /// 0. Nothing is done unless the receipt is Kluris's
 ///    ([`Receipt::check_kluris`]); a purge that would remove a registered
-///    brain is refused too.
+///    brain is refused as well.
 ///
 /// The pre-flight then builds the whole plan from reads alone and checks
 /// it ([`preflight`]): anything in the way (a path that cannot be looked

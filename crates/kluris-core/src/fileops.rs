@@ -149,8 +149,8 @@ mod tests {
     /// `under` joins a `/`-string component by component, so the stored
     /// path's separators are the OS's own: a plain `join` keeps the `/`
     /// inside one component (`C:\u\.agents/skills` on Windows), which
-    /// `display()` then shows (SPEC 2026-10-27: absolute paths are native;
-    /// only `~/` labels and JSON `path` values are `/`-joined).
+    /// `display()` then shows (absolute paths are native; only `~/` labels
+    /// and JSON `path` values are `/`-joined).
     #[test]
     fn under_joins_a_slash_path_component_by_component() {
         let base = Path::new(if cfg!(windows) { r"C:\u" } else { "/u" });

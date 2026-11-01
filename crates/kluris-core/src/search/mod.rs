@@ -142,7 +142,7 @@ pub struct SearchRequest {
 }
 
 impl SearchRequest {
-    /// A request with v2's defaults: no filters, limit 10.
+    /// A request with the defaults: no filters, limit 10.
     pub fn new(query: impl Into<String>) -> SearchRequest {
         SearchRequest {
             query: query.into(),
@@ -197,7 +197,7 @@ struct UnitInfo {
     sequences: [Vec<u32>; 3],
 }
 
-/// An item's text for chunking and snippets: v2's body with `\n` breaks.
+/// An item's text for chunking and snippets: the searched body with `\n` breaks.
 fn item_text(item: &Item) -> String {
     items::universal_newlines(&item.body)
 }

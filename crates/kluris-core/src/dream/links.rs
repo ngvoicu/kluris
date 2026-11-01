@@ -14,7 +14,7 @@ use std::sync::LazyLock;
 
 use regex::Regex;
 
-/// v2's `LINK_PATTERN`.
+/// A markdown link: `[text](target)`.
 static LINK: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"\[([^\]]*)\]\(([^)]+)\)").unwrap_or_else(|e| panic!("LINK is valid: {e}"))
 });
@@ -177,7 +177,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn v2_rules_kept() {
+    fn markdown_links_are_the_local_targets() {
         assert_eq!(
             markdown_links(
                 "[a](x.md#h) [b](https://e.com) [c](y.md?q) [d](#top) [e](z.md) ![i](p.png)"

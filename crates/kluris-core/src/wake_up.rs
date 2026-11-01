@@ -47,7 +47,7 @@ pub struct RecentNeuron {
     pub kind: NeuronKind,
 }
 
-/// The wake-up payload, in v2's field order.
+/// The wake-up payload, in its fixed field order.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WakeUp {
     pub name: String,
@@ -160,7 +160,7 @@ fn brain_md(store: &impl BrainStore) -> String {
     }
 }
 
-/// v2's cap: over [`BRAIN_MD_MAX_BYTES`] UTF-8 bytes, the text is cut there
+/// The cap: over [`BRAIN_MD_MAX_BYTES`] UTF-8 bytes, the text is cut there
 /// (a character the cut splits is dropped) and `\n\n[... truncated]` added.
 pub fn truncate_brain_md(body: &str) -> String {
     if body.len() <= BRAIN_MD_MAX_BYTES {

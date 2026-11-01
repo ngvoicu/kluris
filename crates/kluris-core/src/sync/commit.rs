@@ -639,7 +639,7 @@ fn overlay_from_disk(root: &Path, rel: &str, nodes: &mut BTreeMap<String, Node>)
     }
 }
 
-/// A lobe on the way to a given path that the work tree no longer has, and
+/// A lobe on the way to a given path that is gone from the work tree, and
 /// whose only files left in the view are maps, goes with them: they are
 /// taken out of the view and returned, to be deleted in the commit.
 fn drop_removed_lobes(

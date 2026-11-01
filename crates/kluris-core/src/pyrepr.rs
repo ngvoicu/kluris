@@ -1,4 +1,4 @@
-//! Python's text forms that v2's output carries: `repr(x)` of a float (PyYAML's
+//! Python's text forms the output carries: `repr(x)` of a float (PyYAML's
 //! float representer builds on it) and `json.dumps(x)`, `str()` and `repr()`
 //! of the values YAML gives, and `str(Path(text))`.
 
@@ -77,7 +77,7 @@ pub fn json_float(value: f64) -> String {
 /// The characters Python's `str.isprintable()` refuses: Unicode categories
 /// Cc, Cf, Cs, Co, Cn, Zl, Zp and Zs (the space excepted, which is ASCII).
 /// The table is the `regex` crate's Unicode version, not Python 3.11's 14.0:
-/// a character assigned since then is printable here and escaped by v2.
+/// a character assigned since then is printable here and escaped by Python 3.11.
 static NON_PRINTABLE: LazyLock<Option<Regex>> =
     LazyLock::new(|| Regex::new(r"^[\p{Cc}\p{Cf}\p{Co}\p{Cn}\p{Zl}\p{Zp}\p{Zs}]$").ok());
 
@@ -241,9 +241,9 @@ pub fn py_repr(value: &Value) -> String {
     out
 }
 
-/// Python's `str()` of a top-level frontmatter value after v2's
-/// `_normalize_metadata`, which turns a top-level date or datetime into its
-/// `isoformat()` text: a string is itself, everything else its `repr()`.
+/// Python's `str()` of a top-level frontmatter value as it is read, a
+/// top-level date or datetime turned into its `isoformat()` text: a string
+/// is itself, everything else its `repr()`.
 pub fn py_str(value: &Value) -> String {
     match value {
         Value::Str(s) => s.clone(),

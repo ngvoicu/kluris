@@ -1,8 +1,7 @@
-//! Each brain's SKILL.md, rendered as v2.28.11's `agents.render_skill` does
-//! with the decided changes: the `{brain, file,
-//! target}` braces no longer leak, values are substituted in one pass, a
-//! marker comment follows the frontmatter, and the search advice is
-//! research-05's "Search" paragraph.
+//! Each brain's SKILL.md, rendered from the template: values are
+//! substituted in one pass (so a `{brain, file, target}` in the text stays
+//! as written), a marker comment follows the frontmatter, and the search
+//! advice is the "Search" paragraph.
 //!
 //! Also here: recognising the skills and Windsurf workflows Kluris wrote
 //! (the marker at its place, or the full template of an earlier release,
@@ -15,18 +14,18 @@
 use crate::companions;
 use crate::upgrade;
 
-/// The SKILL.md template: frontmatter, marker and v2's `SKILL_BODY` with the
-/// decided changes. Placeholders are `{name}` (see [`fill`]).
+/// The SKILL.md template: frontmatter, marker and the skill's body.
+/// Placeholders are `{name}` (see [`fill`]).
 const SKILL_TEMPLATE: &str = include_str!("../../templates/skill.md");
-/// v2's `SKILL_DESCRIPTION` (one line; its `\` continuations joined).
+/// The skill's `description` (one line).
 const SKILL_DESCRIPTION: &str = include_str!("../../templates/skill_description.txt");
-/// v2's `_FLAG_HINT_BLOCK` (it starts with three newlines).
+/// The flag hint block (it starts with three newlines).
 const FLAG_HINT: &str = include_str!("../../templates/flag_hint.md");
-/// v2's `_build_specmint_block` text around the routing lines.
+/// The companion block's text around the routing lines.
 const COMPANION_BLOCK: &str = include_str!("../../templates/companion_block.md");
 
-/// The marker comment v3 writes right after the frontmatter; a SKILL.md is
-/// v3's when this whole line is in that place.
+/// The marker comment written right after the frontmatter; a SKILL.md is
+/// Kluris's when this whole line is in that place.
 pub const MARKER: &str = "<!-- kluris:generated -- Kluris writes this skill and `kluris doctor` rewrites it; edits here are lost. -->";
 
 /// What a brain's skill is rendered from.
@@ -111,7 +110,7 @@ fn fill(template: &str, values: &[(&str, &str)]) -> String {
     out
 }
 
-/// What each companion is for, in the routing lines (v2 `_COMPANION_LABELS`).
+/// What each companion is for, in the routing lines.
 fn companion_label(name: &str) -> &'static str {
     match name {
         "specmint-core" => "general spec-driven work with markdown specs",
@@ -122,7 +121,7 @@ fn companion_label(name: &str) -> &'static str {
 }
 
 /// The "Spec-worthy work first" block for the brain's known companions, in
-/// canonical order; empty without one (v2 `_build_specmint_block`).
+/// canonical order; empty without one.
 fn companion_block(names: &[String], companion_home: &str) -> String {
     let selected = companions::normalize(names);
     let Some(first) = selected.first() else {
@@ -152,8 +151,8 @@ fn companion_block(names: &[String], companion_home: &str) -> String {
 
 // --- paths --------------------------------------------------------------------
 
-/// `p` in POSIX form, as v2's `agents._posix_path` writes brain and companion
-/// paths into SKILL.md: a path with a backslash or a second character `:` is
+/// `p` in POSIX form, as brain and companion paths are written into
+/// SKILL.md: a path with a backslash or a second character `:` is
 /// read as Python 3.11's `PureWindowsPath` (`C:\Users\x` becomes
 /// `C:/Users/x`), any other as `PurePosixPath`; both drop empty and `.`
 /// parts and a trailing separator, and never resolve `..`.
@@ -261,7 +260,7 @@ pub(crate) fn lf(text: &str) -> std::borrow::Cow<'_, str> {
     }
 }
 
-/// How v3's marker opens.
+/// How the marker opens.
 const MARKER_OPENING: &str = "<!-- kluris:generated";
 
 /// Whether `text` (a SKILL.md or workflow) carries a trait of Kluris's:
@@ -316,7 +315,7 @@ mod tests {
     }
 
     #[test]
-    fn templates_are_lf_and_ascii_where_v2_is() {
+    fn templates_are_lf_with_their_fixed_ends() {
         for t in [
             SKILL_TEMPLATE,
             SKILL_DESCRIPTION,

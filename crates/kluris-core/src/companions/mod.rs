@@ -1,4 +1,4 @@
-//! The Specmint companion playbooks (v2 `core/companions.py`).
+//! The Specmint companion playbooks.
 //!
 //! The four companions are embedded from `vendored/` at build time and
 //! installed on opt-in to `~/.kluris/companions/<name>/`: `SKILL.md` plus the
@@ -21,7 +21,7 @@ pub use install::{
 };
 pub use optin::{BrainOptIns, OptInBrain, add, enabled, listing, load_brains, remove};
 
-/// Known companions, in canonical order (v2 `companions.KNOWN`).
+/// Known companions, in canonical order.
 pub const KNOWN: [&str; 4] = [
     "specmint-core",
     "specmint-tdd",
@@ -30,7 +30,7 @@ pub const KNOWN: [&str; 4] = [
 ];
 
 /// Known companion names, de-duplicated, in canonical order; unknown names
-/// are dropped (v2 `companions.normalize`).
+/// are dropped.
 pub fn normalize<S: AsRef<str>>(names: &[S]) -> Vec<String> {
     KNOWN
         .iter()

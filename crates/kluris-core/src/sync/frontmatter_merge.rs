@@ -1,5 +1,4 @@
-//! A neuron's frontmatter merged field by field, never line by line (SPEC
-//! Phase 7 conflict rules):
+//! A neuron's frontmatter merged field by field, never line by line:
 //! - `created`: the earlier of the two sides, `updated`: the later, as the
 //!   quoted `'YYYY-MM-DD'` text dream writes;
 //! - `related` and `tags`: the union of both lists, ours first, then the

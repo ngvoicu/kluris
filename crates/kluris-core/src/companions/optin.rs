@@ -1,10 +1,9 @@
 //! A brain's companion opt-ins: the `companions` list of its `kluris.yml`,
-//! changed by `kluris companion add|remove` (v2 `cli.py:930-1056`).
+//! changed by `kluris companion add|remove`.
 //!
 //! Every resolved brain's `kluris.yml` is read before anything is written,
 //! so a brain whose file is missing or does not read stops the command
-//! with an error and no change (v2 rewrote the brains before it, then
-//! ended in a traceback).
+//! with an error and no change to any brain.
 
 use std::path::{Path, PathBuf};
 
@@ -41,7 +40,7 @@ pub fn load_brains(brains: &[ResolvedBrain]) -> Result<Vec<OptInBrain>, ConfigEr
 }
 
 /// The companions enabled on any of `brains`, known ones only, in canonical
-/// order (v2 `_enabled_union`).
+/// order.
 pub fn enabled(brains: &[OptInBrain]) -> Vec<String> {
     let all: Vec<&str> = brains
         .iter()
@@ -58,8 +57,7 @@ fn write(brain: &OptInBrain, companions: Vec<String>) -> Result<(), CompanionErr
 }
 
 /// Install each of `selected` into `home`, then opt every brain into them
-/// (`normalize(old + selected)`); returns the brains written: all of them,
-/// as v2 does.
+/// (`normalize(old + selected)`); returns the brains written: all of them.
 pub fn add(
     brains: &[OptInBrain],
     selected: &[String],
@@ -108,7 +106,7 @@ pub struct BrainOptIns {
     /// As stored in `config.yml`.
     pub path: String,
     /// The known companions it opts into; `None` when its `kluris.yml` is
-    /// missing or does not read (v2 `_read_companion_state`).
+    /// missing or does not read.
     pub companions: Option<Vec<String>>,
 }
 

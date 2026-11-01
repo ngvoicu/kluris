@@ -1,4 +1,4 @@
-//! Glossary entries: v2's `search.parse_glossary_entries`.
+//! Glossary entries, as search reads them from `glossary.md`.
 //!
 //! Each line of `glossary.md`'s body (Python `str.splitlines`, then
 //! `str.strip`) that is not blank and does not start with `#` is tried as:

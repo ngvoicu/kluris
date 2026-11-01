@@ -1,13 +1,13 @@
 //! The global config (`~/.kluris/config.yml`) and each brain's `kluris.yml`,
-//! read and written exactly as v2's `core/config.py` does.
+//! byte for byte in the format every existing install already holds.
 //!
-//! Reading follows v2's pydantic models: `yaml.safe_load(text) or {}`, string
-//! fields must be YAML strings, unknown keys are ignored (and so dropped by
-//! the next write). Writing is `yaml.dump(model_dump(), sort_keys=False)`:
-//! the [`Profile::Config`] emitter, in the models' field order.
+//! Reading: the text is loaded as `yaml.safe_load(text) or {}` loads it,
+//! string fields must be YAML strings, unknown keys are ignored (and so
+//! dropped by the next write). Writing is what `yaml.dump(..., sort_keys=False)`
+//! prints: the [`Profile::Config`] emitter, in the fields' fixed order.
 //!
-//! Two exceptions: a brain's `search: {language: ...}`, which v2 ignores, is
-//! read for `kluris search` and written back after `companions`;
+//! Two keys are kept apart: a brain's `search: {language: ...}` is read for
+//! `kluris search` and written back after `companions`;
 //! and its `sync:` entry is written back after `search` exactly as written
 //! ([`SyncConfig::entry`]); nothing in it is read.
 
@@ -22,10 +22,10 @@ use crate::atomic;
 use crate::companions;
 use crate::yaml::{self, Map, Profile, Value};
 
-/// The default `commands_for`: v2's `DEFAULT_AGENT_COMMANDS` in v2's order
-/// with `devin` in place of `windsurf` (Windsurf became Devin) and without
-/// `gemini` (Antigravity is the Google agent Kluris supports), then
-/// `antigravity`.
+/// The default `commands_for`, in this order: `devin` stands where
+/// `windsurf` stood (Windsurf became Devin), there is no `gemini`
+/// (Antigravity is the Google agent Kluris supports), and `antigravity`
+/// comes last.
 pub const DEFAULT_AGENT_COMMANDS: [&str; 9] = [
     "claude",
     "cursor",
@@ -40,21 +40,21 @@ pub const DEFAULT_AGENT_COMMANDS: [&str; 9] = [
 
 /// Earlier default lists: a `commands_for` with exactly one of these sets of
 /// names reads as [`DEFAULT_AGENT_COMMANDS`], so upgraded brains get the new
-/// agents (v2 did the same for its pre-Hermes list).
+/// agents.
 const LEGACY_DEFAULT_AGENT_COMMANDS: [&[&str]; 4] = [
-    // v2 before Hermes (`_LEGACY_DEFAULT_AGENT_COMMANDS`).
+    // The list before Hermes.
     &[
         "claude", "cursor", "windsurf", "copilot", "codex", "gemini", "kilocode", "junie",
     ],
-    // v2.28 (`DEFAULT_AGENT_COMMANDS`).
+    // With Hermes.
     &[
         "claude", "cursor", "windsurf", "copilot", "codex", "gemini", "hermes", "kilocode", "junie",
     ],
-    // v2.28 with windsurf read as devin.
+    // With Hermes, windsurf read as devin.
     &[
         "claude", "cursor", "devin", "copilot", "codex", "gemini", "hermes", "kilocode", "junie",
     ],
-    // Kluris 3.0.
+    // With devin, gemini, Hermes and antigravity.
     &[
         "claude",
         "cursor",
@@ -69,23 +69,22 @@ const LEGACY_DEFAULT_AGENT_COMMANDS: [&[&str]; 4] = [
     ],
 ];
 
-/// One registered brain (v2 `BrainEntry`).
+/// One registered brain.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BrainEntry {
-    /// Exactly as stored in config.yml (v2 stores `str(path)`); never
-    /// re-resolved.
+    /// Exactly as stored in config.yml; never re-resolved.
     pub path: String,
     pub description: String,
 }
 
-/// The global config (v2 `GlobalConfig`); brains in file order, which is
+/// The global config; brains in file order, which is
 /// registration order.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct GlobalConfig {
     pub brains: IndexMap<String, BrainEntry>,
 }
 
-/// Agent installation settings for a brain (v2 `AgentsConfig`).
+/// Agent installation settings for a brain.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentsConfig {
     /// Agent names as written, except `windsurf`, which reads as `devin`.
@@ -101,7 +100,7 @@ impl Default for AgentsConfig {
     }
 }
 
-/// A brain's local `kluris.yml` (v2 `BrainConfig`).
+/// A brain's local `kluris.yml`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BrainConfig {
     pub name: String,
@@ -109,9 +108,9 @@ pub struct BrainConfig {
     pub agents: AgentsConfig,
     /// As written; [`companions::normalize`] gives the known ones.
     pub companions: Vec<String>,
-    /// Kluris 3's `search:` settings (v2 ignores the key).
+    /// The `search:` settings.
     pub search: SearchConfig,
-    /// The `sync:` entry (v2 ignores the key).
+    /// The `sync:` entry.
     pub sync: SyncConfig,
 }
 
@@ -204,8 +203,8 @@ impl std::error::Error for ConfigError {}
 // --- paths ------------------------------------------------------------------
 
 /// The home directory: `HOME` when set and non-empty, else the OS home
-/// (`os_home`, e.g. `std::env::home_dir()`). One rule on every OS, also on
-/// Windows, where v2 used `$HOME` for skills and `Path.home()` for the config.
+/// (`os_home`, e.g. `std::env::home_dir()`). One rule on every OS and for
+/// every file: skills and the config alike.
 pub fn home_dir(home: Option<&OsStr>, os_home: Option<PathBuf>) -> Option<PathBuf> {
     match home.filter(|h| !h.is_empty()) {
         Some(h) => Some(PathBuf::from(h)),
@@ -229,7 +228,7 @@ pub fn global_config_path(
 
 // --- reading ----------------------------------------------------------------
 
-/// Parse a YAML document the way v2's `yaml.safe_load(text) or {}` does
+/// Parse a YAML document the way `yaml.safe_load(text) or {}` does
 /// (YAML 1.1 types): any falsy document (empty, `null`, `false`, `0`, `""`,
 /// `[]`) is an empty mapping; more than one document is an error.
 fn load_mapping(text: &str) -> Result<Map, String> {
@@ -299,8 +298,8 @@ pub fn read_global_config(path: &Path) -> Result<GlobalConfig, ConfigError> {
     parse_global_config(&text).map_err(|e| ConfigError::new(path, ConfigErrorKind::Invalid, e))
 }
 
-/// v2's `AgentsConfig` validation plus the v3 rename: an earlier default set
-/// (compared as written, like v2's `frozenset`) becomes the default list;
+/// The `commands_for` list as it is read: an earlier default set (compared
+/// as a set of the names as written) becomes the default list;
 /// any other list is kept, with each `windsurf` read as `devin`.
 fn agent_commands(names: Vec<String>) -> Vec<String> {
     let written: BTreeSet<&str> = names.iter().map(String::as_str).collect();
@@ -316,7 +315,7 @@ fn agent_commands(names: Vec<String>) -> Vec<String> {
         .collect()
 }
 
-/// Parse a brain's `kluris.yml` text the way v2's `BrainConfig` model does.
+/// Parse a brain's `kluris.yml` text.
 pub fn parse_brain_config(text: &str) -> Result<BrainConfig, String> {
     let root = load_mapping(text)?;
     let name = string_field(&root, "name", None)?;
@@ -332,7 +331,7 @@ pub fn parse_brain_config(text: &str) -> Result<BrainConfig, String> {
         Some(_) => return Err("'agents' must be a mapping".into()),
     };
     let companions = string_list_field(&root, "companions")?.unwrap_or_default();
-    // Never an error: v2 ignores the key, so a brain v2 reads must read here.
+    // Never an error: a brain whose `search:` is not what this reads still reads.
     let language = match root.get("search") {
         Some(Value::Map(search)) => match search.get("language") {
             Some(Value::Str(language)) => Some(language.clone()),
@@ -416,7 +415,7 @@ fn brain_config_file(brain_path: &Path) -> PathBuf {
 }
 
 /// Read the `kluris.yml` of the brain at `brain_path`; a missing file is a
-/// [`ConfigErrorKind::NotFound`] error (v2 raises).
+/// [`ConfigErrorKind::NotFound`] error.
 pub fn read_brain_config(brain_path: &Path) -> Result<BrainConfig, ConfigError> {
     let path = brain_config_file(brain_path);
     let text = fs::read_to_string(&path).map_err(|e| ConfigError::read(&path, &e))?;
@@ -424,7 +423,7 @@ pub fn read_brain_config(brain_path: &Path) -> Result<BrainConfig, ConfigError> 
 }
 
 /// Companions from a brain's `kluris.yml` text, normalized; `None` when the
-/// text does not validate as a brain config (v2 `_read_companion_state`).
+/// text does not validate as a brain config.
 pub fn parse_brain_companions(text: &str) -> Option<Vec<String>> {
     parse_brain_config(text)
         .ok()
@@ -449,7 +448,7 @@ fn str_seq(items: &[String]) -> Value {
     Value::Seq(items.iter().map(|s| str_value(s)).collect())
 }
 
-/// The global config as v2 writes it (`model_dump` order: brains, then each
+/// The global config as it is written (brains, then each
 /// entry's `path` and `description`).
 pub fn global_config_to_yaml(config: &GlobalConfig) -> String {
     let brains = config
@@ -467,7 +466,7 @@ pub fn global_config_to_yaml(config: &GlobalConfig) -> String {
     yaml::emit(&root, Profile::Config)
 }
 
-/// A brain's `kluris.yml` as v2 writes it (`model_dump` order: name,
+/// A brain's `kluris.yml` as it is written (name,
 /// description, agents.commands_for, companions), then `search` when it has
 /// a language and the `sync:` entry as it was written.
 pub fn brain_config_to_yaml(config: &BrainConfig) -> String {
@@ -516,7 +515,7 @@ pub fn register_brain(path: &Path, name: &str, entry: BrainEntry) -> Result<(), 
 }
 
 /// Remove a brain from the global config at `path`, keeping the others'
-/// order; an unknown name still rewrites the file, as v2 does.
+/// order; an unknown name still rewrites the file.
 pub fn unregister_brain(path: &Path, name: &str) -> Result<(), ConfigError> {
     let mut config = read_global_config(path)?;
     config.brains.shift_remove(name);
@@ -540,8 +539,7 @@ fn with_endings_of(target: &Path, text: &str) -> String {
 
 /// Replace `path` with `text` through [`atomic::write_atomic`] (a symlink
 /// is followed and kept, permissions are kept, the old file is left as it was
-/// on failure), keeping the old file's line endings as v2's in-place
-/// `write_text` keeps the file.
+/// on failure), keeping the old file's line endings.
 fn write_atomic(path: &Path, text: &str) -> io::Result<()> {
     let target = atomic::resolve_link_target(path)?;
     atomic::write_atomic(path, with_endings_of(&target, text).as_bytes())

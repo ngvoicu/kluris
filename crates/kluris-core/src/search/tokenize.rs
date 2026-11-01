@@ -1,4 +1,4 @@
-//! The search tokenizer (research-05 §3 "Tokenizer").
+//! The search tokenizer.
 //!
 //! - Words are Unicode word segments (UAX #29), each split again at every
 //!   character that is neither alphanumeric nor a combining mark, so
@@ -25,7 +25,7 @@ use unicode_segmentation::UnicodeSegmentation;
 
 use super::Language;
 
-/// English stop words (folded): the list research-05 measured with.
+/// English stop words (folded): the list the search evaluation measures with.
 pub const STOP_EN: &[&str] = &[
     "a", "an", "and", "are", "as", "at", "be", "by", "can", "do", "does", "for", "from", "has",
     "have", "how", "i", "if", "in", "into", "is", "it", "its", "may", "me", "must", "my", "no",

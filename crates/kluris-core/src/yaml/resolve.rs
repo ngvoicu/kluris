@@ -60,7 +60,7 @@ static TIMESTAMP: LazyLock<Regex> = LazyLock::new(|| {
 
 static VALUE: LazyLock<Regex> = LazyLock::new(|| pattern(r"^(?:=)$"));
 
-/// `SafeConstructor.timestamp_regexp`, used to take a matched timestamp apart.
+/// `SafeConstructor.timestamp_regexp`, which takes a matched timestamp apart.
 static TIMESTAMP_PARTS: LazyLock<Regex> = LazyLock::new(|| {
     pattern(concat!(
         r"^(?P<year>[0-9][0-9][0-9][0-9])",
@@ -177,8 +177,9 @@ fn sign(value: &str) -> (bool, &str) {
     }
 }
 
-/// Generated from the Unicode Character Database (Unicode 14.0.0) via
-/// Python 3.11; see LICENSE-Unicode.
+/// The zero of every decimal digit run in the Unicode Character Database
+/// (Unicode 14.0.0, as Python 3.11 has it); frozen, never regenerated; see
+/// LICENSE-Unicode.
 const DIGIT_ZEROS: [u32; 66] = [
     0x00030, 0x00660, 0x006F0, 0x007C0, 0x00966, 0x009E6, 0x00A66, 0x00AE6, 0x00B66, 0x00BE6,
     0x00C66, 0x00CE6, 0x00D66, 0x00DE6, 0x00E50, 0x00ED0, 0x00F20, 0x01040, 0x01090, 0x017E0,

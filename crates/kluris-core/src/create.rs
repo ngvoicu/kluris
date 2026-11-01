@@ -1,10 +1,9 @@
-//! `kluris create`: v2's wizard and command (research-03 §1.1, `cli.py:492-665`).
+//! `kluris create`: the wizard and the command.
 //!
-//! In v2's order: the wizard asks for what the command line left out, the
+//! In this order: the wizard asks for what the command line left out, the
 //! name and target are checked, the brain is scaffolded ([`scaffold`]), the
-//! companion picker may run, then git, the maps (v2's `_run_dream_on_brain`),
-//! the first commit, and the registration. Differences from v2, each
-//! decided:
+//! companion picker may run, then git, the maps (dream on the new brain),
+//! the first commit, and the registration. Along the way:
 //! - the wizard's brain type is checked like `--type` (asked again);
 //! - the caller runs the wizard only on a terminal (not with `--json` or
 //!   `KLURIS_NO_PROMPT=1`); without one a missing name is an error;
@@ -12,8 +11,8 @@
 //! - `--from-config` lobe names that are paths and nested values are refused;
 //! - the brain is registered last, after the commit: a failure after the
 //!   scaffold (git above all) is an error naming what is left on disk, and
-//!   nothing is registered (v2 raised, and registered before committing);
-//! - a target that exists as a file is an error (v2 raised).
+//!   nothing is registered;
+//! - a target that exists as a file is an error.
 //!
 //! [`scaffold`]: crate::scaffold
 
@@ -53,7 +52,7 @@ fn missing(value: &Option<String>) -> bool {
 }
 
 impl CreateInput {
-    /// v2's condition for the companion picker (with a terminal): any of the
+    /// When the companion picker runs (with a terminal): any of the
     /// name, description, path, type or git choice left out.
     pub fn wants_companion_prompt(&self) -> bool {
         missing(&self.name)
@@ -88,9 +87,9 @@ pub fn prompt_text(
     }
 }
 
-/// v2's wizard: ask for each value `given` leaves out, then end with a blank
+/// The wizard: ask for each value `given` leaves out, then end with a blank
 /// line. `cwd` is the default location. The brain type is checked like
-/// `--type` (Click's `Choice` message, then asked again); v2 took any text.
+/// `--type` (Click's `Choice` message, then asked again).
 pub fn wizard(
     mut given: CreateInput,
     cwd: &Path,
@@ -173,20 +172,20 @@ pub struct Created {
     /// As registered (`str(brain_path)`).
     pub path: String,
     pub brain_type: String,
-    /// v2's count: the lobes of the brain type, whatever `--from-config` gave.
+    /// The lobes of the brain type, whatever `--from-config` gave.
     pub lobes: usize,
     pub companions: Vec<String>,
-    /// v2's `Warning: dream failed: ...` lines.
+    /// The `Warning: dream failed: ...` lines.
     pub warnings: Vec<String>,
 }
 
 /// Why `create` stopped.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CreateError {
-    /// Nothing was written; the message is v2's (or the decided fix's).
+    /// Nothing was written; the message says why.
     Refused(String),
     Config(ConfigError),
-    /// End of input at the companion picker (the scaffold is left, as in v2).
+    /// End of input at the companion picker (the scaffold is left).
     Aborted,
     /// A step after the scaffold failed: the files are left at `path`, and
     /// the brain is not registered.
@@ -225,7 +224,7 @@ fn resolve(path: &Path) -> Result<PathBuf, CreateError> {
     })
 }
 
-/// v2's target checks (5-7): the brain's path, refused when `--path` is not
+/// The target checks: the brain's path, refused when `--path` is not
 /// a usable directory, the target is inside a registered brain, or the
 /// target is not an empty directory.
 fn target_path(
@@ -270,8 +269,7 @@ fn target_path(
                 brain_path.display()
             )));
         }
-        // A directory that cannot be listed is not taken for an empty one
-        // (v2 stops there with a `PermissionError`).
+        // A directory that cannot be listed is not taken for an empty one.
         let not_empty = match fs::read_dir(&brain_path) {
             Ok(mut entries) => entries.next().is_some(),
             Err(e) => {
@@ -314,7 +312,7 @@ fn lobes(req: &CreateRequest) -> Result<Vec<Lobe>, CreateError> {
 }
 
 /// Create the brain: check it, scaffold it, ask for companions (`pick`, run
-/// only when the caller wants v2's picker), set up git, write the maps,
+/// only when the caller wants the picker), set up git, write the maps,
 /// commit (with a remote, then set the branch's upstream), register.
 /// Pushing to the remote and installing the agent skills are the caller's
 /// last steps.
@@ -403,7 +401,7 @@ pub fn create(
     })
 }
 
-/// v2's `_run_dream_on_brain` on the new brain; what fails is a warning.
+/// Dream on the new brain; what fails is a warning.
 fn regenerate(brain_path: &Path, today: Date) -> Vec<String> {
     let config = match read_brain_config(brain_path) {
         Ok(config) => config,

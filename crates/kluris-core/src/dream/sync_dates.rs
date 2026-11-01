@@ -1,5 +1,4 @@
-//! Step 1 of dream: `updated` and `created` from git (v2 `_sync_brain_state`,
-//! `cli.py:156-195`).
+//! Step 1 of dream: `updated` and `created` from git.
 //!
 //! For each neuron with a commit, `updated` becomes the first 10 characters
 //! of its newest commit's author date (the author's own time zone) when
@@ -17,8 +16,9 @@ fn day(date: &str) -> String {
     date.chars().take(10).collect()
 }
 
-/// v2's `str(meta.get("updated", "")) != day`, for the values whose `str()`
-/// can be a date: a string, or a date (read as its ISO text).
+/// Whether `str(updated)` is `day`, as Python's `str()` prints it, for the
+/// values whose `str()` can be a date: a string, or a date (read as its ISO
+/// text).
 fn same_day(updated: Option<&Value>, day: &str) -> bool {
     match updated {
         Some(Value::Str(text)) => text == day,

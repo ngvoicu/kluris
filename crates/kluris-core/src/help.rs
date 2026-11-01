@@ -1,6 +1,5 @@
-//! `kluris help`: the command table without `pack`, then the commands new
-//! in v3. A command the table names that the binary does not have yet is
-//! listed like the rest.
+//! `kluris help`: the command table. A command the table names that the
+//! binary does not have yet is listed like the rest.
 
 /// One row of the table.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -13,8 +12,9 @@ const fn row(name: &'static str, description: &'static str) -> CommandHelp {
     CommandHelp { name, description }
 }
 
-/// Every command: v2's, in v2's order, then v3's own (`commit` first, the
-/// installer's `self-update` and `self-uninstall` last).
+/// Every command, in the order help lists them: the brain commands, then
+/// `commit` and the rest, the installer's `self-update` and
+/// `self-uninstall` last.
 pub const COMMANDS: [CommandHelp; 17] = [
     row("create", "Create a new brain (--type, --remote, --no-git)"),
     row("register", "Register an existing brain directory on disk"),

@@ -1,7 +1,6 @@
-//! The MRI's text rules: v2's `neuron_excerpt.extract` (title and first-line
-//! excerpt) and `mri._build_content_preview`, with Python's string semantics
-//! (`splitlines`, `strip`, slicing by code point) and v2's two anchor
-//! patterns written out by hand.
+//! The MRI's text rules: a neuron's title and first-line excerpt, and its
+//! content preview, with Python's string semantics (`splitlines`, `strip`,
+//! slicing by code point) and the two anchor patterns written out by hand.
 
 use crate::frontmatter::py_splitlines;
 use crate::search::items::stem_title;
@@ -132,7 +131,7 @@ fn id_anchor(text: &str) -> Option<usize> {
     Some(at)
 }
 
-/// v2's `neuron_excerpt.extract(path, body)`: the first `# ` heading (or the
+/// A neuron's title and excerpt: the first `# ` heading (or the
 /// file's stem title) and the first line that is not blank, a heading, a list
 /// item, a fence, a ruler or a navigation line, capped at 220 characters.
 /// Empty `<a ...></a>` tags are removed from each line first.
@@ -166,7 +165,7 @@ pub fn excerpt(file_name: &str, body: &str) -> (String, String) {
     (title, take_chars(&found, EXCERPT_CHARS).to_string())
 }
 
-/// v2's `_build_content_preview(content)`: `(full body, preview, truncated)`.
+/// The content preview: `(full body, preview, truncated)`.
 /// The first `# ` line and the blank lines before the body are dropped and
 /// `<a id=...></a>` anchors removed; the preview keeps at most 48 lines and
 /// 2800 characters (cut back to a line end) and ends in `\n\n...` when cut.

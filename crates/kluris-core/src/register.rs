@@ -1,9 +1,8 @@
-//! `kluris register` and `kluris remove` (research-03 §1.2, §1.12; v2
-//! `cli.py:677-796`, `cli.py:1875-1897`).
+//! `kluris register` and `kluris remove`.
 //!
 //! `register` takes a brain directory where it is: its identity comes from
-//! `brain.md` ([`scaffold::read_brain_identity`], v2's name rule, so a
-//! brain v2 made keeps its name), a missing `kluris.yml` is written, and the
+//! `brain.md` ([`scaffold::read_brain_identity`], the rule for existing
+//! names, so a brain an earlier release made keeps its name), a missing `kluris.yml` is written, and the
 //! brain is added to the global config. `remove` takes it out again; the
 //! files stay. Both leave the skill install to the caller, as its last step.
 //!
@@ -21,7 +20,7 @@ use crate::config::{
 use crate::pycase;
 use crate::pyrepr::py_path_str;
 use crate::resolve::ResolveError;
-use crate::scaffold::{fallback_name, is_valid_v2_name, read_brain_identity};
+use crate::scaffold::{fallback_name, is_valid_existing_name, read_brain_identity};
 
 /// What `register` works with.
 #[derive(Debug, Clone, Copy)]
@@ -49,11 +48,11 @@ pub enum Registered {
     Already { name: String, path: String },
 }
 
-/// Why `register` stopped; `Display` is v2's message.
+/// Why `register` stopped; `Display` is the message.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RegisterError {
     Refused(String),
-    /// v2's `Register failed: <exception>`.
+    /// `Register failed: <why>`.
     Failed(String),
 }
 
@@ -149,7 +148,7 @@ pub fn locate(req: &RegisterRequest) -> Result<PathBuf, RegisterError> {
 
 /// Register the brain at `root` ([`locate`]). `pick` is the companion
 /// picker, run once the brain checks out (the caller passes one that picks
-/// nothing when v2 would not ask).
+/// nothing when no picker should ask).
 pub fn register(
     req: &RegisterRequest,
     root: &Path,
@@ -161,7 +160,7 @@ pub fn register(
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_default();
     let (name, description) = read_brain_identity(&root, &fallback_name(&dir_name));
-    if !is_valid_v2_name(&name) {
+    if !is_valid_existing_name(&name) {
         return Err(RegisterError::Refused(format!(
             "Brain name '{name}' (from brain.md) is not a valid kluris brain name. Edit brain.md \
              so the H1 heading is lowercase alphanumeric + hyphens (max 48 chars, not 'all')."
@@ -196,7 +195,7 @@ pub fn register(
         local.description = description.clone();
         write_brain_config(&root, &local).map_err(failed)?;
     }
-    // v2 catches Click's `Abort` here too: `Register failed: ` and nothing more.
+    // An aborted picker fails the same way: `Register failed: ` and nothing more.
     let selected = companions::normalize(&pick().map_err(|Aborted| failed(""))?);
     if !selected.is_empty() {
         let mut config = read_brain_config(&root).map_err(failed)?;

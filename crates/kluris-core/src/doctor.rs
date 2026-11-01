@@ -34,7 +34,7 @@ pub enum Status {
     Fail,
 }
 
-/// One check: v2's `{name, passed, detail}`, with a warning state.
+/// One check: `{name, passed, detail}`, with a warning state.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Check {
     pub name: String,
@@ -68,7 +68,7 @@ pub struct DoctorRequest<'a> {
     pub refresh: bool,
 }
 
-/// One companion refresh (v2's `companions[]` entry).
+/// One companion refresh (a `companions[]` entry).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CompanionRefresh {
     pub name: String,
@@ -164,8 +164,7 @@ pub fn run(req: &DoctorRequest) -> DoctorReport {
     report
 }
 
-/// `git`: `git --version` (`program`) must run and exit 0; v2 passed any
-/// git that ran.
+/// `git`: `git --version` (`program`) must run and exit 0.
 pub fn check_git(program: &OsStr) -> Check {
     let out = match Command::new(program).arg("--version").output() {
         Ok(out) => out,
@@ -276,7 +275,7 @@ fn same_file(a: &Path, b: &Path) -> bool {
     }
 }
 
-/// v2: refresh each known companion that is installed or referenced, and
+/// Refresh each known companion that is installed or referenced, and
 /// each one a failed refresh left a backup of.
 fn refresh_companions(config: &GlobalConfig, home: &Path, report: &mut DoctorReport) {
     let mut targets = companions::installed(home);
@@ -309,8 +308,9 @@ fn refresh_companions(config: &GlobalConfig, home: &Path, report: &mut DoctorRep
     }
 }
 
-/// `skills`: v2's detail, `<n> files written for <agents> agents across
-/// <brains> brain(s)[ (failed: <folders>)]`, counted the v3 way.
+/// `skills`: the detail `<n> files written for <agents> agents across
+/// <brains> brain(s)[ (failed: <folders>)]`, where `<n>` counts every
+/// skill file written, in `~/.agents/skills` and the agents' own folders.
 fn skills_check(skills: &InstallReport, config: &GlobalConfig, home: &Path) -> Check {
     let mut detail = format!(
         "{} files written for {} agents across {} brain(s)",
@@ -340,7 +340,7 @@ pub fn home_relative(path: &Path, home: &Path) -> String {
     }
 }
 
-/// `path` with `/` between components (the JSON form, interview-01 #7).
+/// `path` with `/` between components (the JSON form, on every OS).
 pub fn slashed(path: &Path) -> String {
     let text = path.to_string_lossy();
     if cfg!(windows) {

@@ -1,9 +1,9 @@
 //! The pending writes of one dream, over the store.
 //!
-//! v2 writes each fix to disk and the next step reads it back. Kluris 3 keeps
-//! every write here, as the bytes it would write, and reads through it with
-//! the same parser it uses for files on disk, so each step sees exactly what
-//! v2's re-read would see. The writes become one change set at the end.
+//! Every write stays here, as the bytes it would write, and each step reads
+//! through it with the same parser used for files on disk, so it sees
+//! exactly what reading the earlier steps' files back from disk would give.
+//! The writes become one change set at the end.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -15,8 +15,9 @@ use crate::frontmatter::{
 };
 use crate::yaml::{Map, Value, date_iso, datetime_iso};
 
-/// How a file is read: as v2's `read_frontmatter` reads it (a YAML neuron
-/// whose block does not parse reads as no metadata), or strictly, as dream
+/// How a file is read: leniently, as [`frontmatter::read_frontmatter`]
+/// reads it (a YAML neuron whose block does not parse reads as no
+/// metadata), or strictly, as dream
 /// reads a file it may rewrite (that block is an error, and the file is
 /// skipped rather than given a second block).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -32,8 +33,7 @@ pub(crate) struct Workspace<'a, S: BrainStore> {
     /// Files left alone, with why.
     pub(crate) skipped: BTreeMap<String, String>,
     /// Every structure file was written by this run (a new brain's
-    /// scaffold), so one that does not parse is regenerated, as v2 does,
-    /// rather than kept.
+    /// scaffold), so one that does not parse is regenerated rather than kept.
     pub(crate) own_structure: bool,
 }
 
@@ -64,9 +64,9 @@ pub(crate) fn parse(rel: &str, bytes: &[u8], how: Read) -> Result<Frontmatter, S
     frontmatter::parse(utf8(bytes)?).map_err(|e| format!("invalid frontmatter: {e}"))
 }
 
-/// The metadata as v2's dream path writes it back: every top-level date and
-/// datetime as its ISO text (v2's `_normalize_metadata`), so it is written
-/// quoted (interview-01 #2). Nested values keep their types.
+/// The metadata as dream writes it back: every top-level date and datetime
+/// as its ISO text, so it is written quoted. Nested values keep their
+/// types.
 pub(crate) fn converged(meta: &Map) -> Map {
     meta.iter()
         .map(|(key, value)| {
@@ -151,9 +151,9 @@ impl<'a, S: BrainStore> Workspace<'a, S> {
     }
 
     /// Write a file read as `old` (`None` for a new file) with new metadata:
-    /// markdown in python-frontmatter's framing, a YAML neuron in v2's `#---`
+    /// markdown in python-frontmatter's framing, a YAML neuron in its `#---`
     /// block, each keeping the old file's line endings and BOM (new files are
-    /// LF, interview-01 #3).
+    /// LF).
     pub(crate) fn write(&mut self, rel: &str, old: Option<&Frontmatter>, meta: &Map, body: &str) {
         let line_ending = old.map_or(LineEnding::Lf, |fm| fm.line_ending);
         let mut text = if is_yaml(rel) {

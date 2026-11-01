@@ -1,4 +1,4 @@
-//! The one brain walker every Kluris 3 command uses.
+//! The one brain walker every Kluris command uses.
 //!
 //! It prunes `.git`, every directory whose name starts with `.`,
 //! `node_modules` and the rest of [`SKIP_DIRS`] (`__pycache__`), at any
@@ -23,7 +23,7 @@ use std::path::{Path, PathBuf};
 
 use super::sandbox;
 
-/// v2's `SKIP_DIRS`; every other dot-directory is pruned too.
+/// Directories never walked; every other dot-directory is pruned too.
 pub const SKIP_DIRS: [&str; 6] = [
     ".git",
     ".github",
@@ -50,7 +50,7 @@ pub fn is_pruned_dir(name: &str) -> bool {
 }
 
 /// Whether a symlinked file resolves outside the brain (or cannot be
-/// resolved), v2's `_escapes_brain`.
+/// resolved).
 fn escapes(path: &Path, resolved_root: Option<&Path>) -> bool {
     match (sandbox::resolve(path), resolved_root) {
         (Ok(target), Some(root)) => !sandbox::is_within(&target, root),

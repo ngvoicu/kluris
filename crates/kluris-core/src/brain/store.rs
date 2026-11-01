@@ -18,7 +18,7 @@ pub enum ReadError {
     /// The path is empty, outside the brain, or missing.
     Sandbox(SandboxError),
     /// The file is there but its frontmatter cannot be read (markdown only:
-    /// v2 reads a YAML neuron it cannot parse as no metadata).
+    /// a YAML neuron that does not parse reads as no metadata).
     File(FrontmatterError),
 }
 
@@ -50,13 +50,13 @@ pub trait BrainStore {
     fn files(&self) -> &[WalkedFile];
     /// The neurons ([`neuron_files`]).
     fn neurons(&self) -> &[Neuron];
-    /// A file's frontmatter and body by its brain-relative path, as v2's
-    /// `read_frontmatter` reads it, inside the path sandbox
+    /// A file's frontmatter and body by its brain-relative path, read as
+    /// [`frontmatter::read_frontmatter`] reads it, inside the path sandbox
     /// ([`sandbox::resolve_in_brain`]). A malformed neuron is an error value
     /// for this file alone.
     fn read(&self, rel: &str) -> Result<Frontmatter, ReadError>;
-    /// One of [`BrainStore::neurons`] read by its own path, as v2's
-    /// `read_frontmatter(path)` reads the walked file: its name is never
+    /// One of [`BrainStore::neurons`] read by its own path, the walked file
+    /// itself: its name is never
     /// re-parsed from the `/`-separated `rel` (on POSIX a `\` is part of a
     /// file name).
     fn read_neuron(&self, neuron: &Neuron) -> Result<Frontmatter, ReadError> {
@@ -102,12 +102,12 @@ pub trait BrainStore {
     /// `sorted(Path)` sorts them: by code point, and on Windows by
     /// `str.lower()`.
     fn lobe_names(&self) -> Vec<String>;
-    /// The neurons of one lobe walked with the lobe as the root, as v2's
-    /// `neuron_files(lobe_dir)` does (a symlink is checked against the lobe,
+    /// The neurons of one lobe walked with the lobe as the root (a symlink
+    /// is checked against the lobe,
     /// a symlinked lobe is walked).
     fn lobe_neurons(&self, lobe: &str) -> Vec<Neuron>;
     /// One of the brain's own structure files (`brain.md`, `glossary.md`,
-    /// `<lobe>/map.md`) read as markdown, as v2 reads them: `None` when it
+    /// `<lobe>/map.md`) read as markdown: `None` when it
     /// does not exist (`Path.exists()`, links followed), no path sandbox.
     fn structure_file(&self, rel: &str) -> Option<Result<Frontmatter, FrontmatterError>>;
     /// A structure file's text; `None` when it cannot be read or is not
@@ -116,8 +116,8 @@ pub trait BrainStore {
     /// The directories the walker descends into, the root excluded,
     /// `/`-separated and sorted by bytes.
     fn dirs(&self) -> &[String];
-    /// The children of a directory (`""` is the root) in the order of v2's
-    /// `sorted(path.iterdir())`: by code point, and on Windows by
+    /// The children of a directory (`""` is the root) in the order of
+    /// Python's `sorted(path.iterdir())`: by code point, and on Windows by
     /// `str.lower()`. Nothing when it cannot be read.
     fn entries(&self, rel_dir: &str) -> Vec<DirEntry>;
     /// `Path.exists()` of a brain-relative path (links followed).
@@ -128,8 +128,8 @@ pub trait BrainStore {
     /// symlink the path its target resolves to; `None` when that is outside
     /// the brain or loops.
     fn real_rel(&self, rel: &str) -> Option<String>;
-    /// A markdown file a brain links to, wherever it is, read as v2's
-    /// `read_frontmatter` reads it (no path sandbox: the link checks read
+    /// A markdown file a brain links to, wherever it is, read as markdown
+    /// (no path sandbox: the link checks read
     /// what the links point at).
     fn read_markdown_at(&self, path: &Path) -> Result<Frontmatter, FrontmatterError> {
         frontmatter::read(path)
@@ -218,7 +218,7 @@ impl BrainStore for LocalGitStore {
         frontmatter::read_frontmatter(&neuron.path).map_err(ReadError::File)
     }
 
-    /// On disk, as v2's deprecation check resolves `related`: the target
+    /// On disk, as the deprecation check resolves `related`: the target
     /// joined to `from`'s directory and resolved like the walker
     /// ([`sandbox::resolve`]: symlinks followed, then `..`), kept when it is
     /// inside the resolved brain root; a symlink loop resolves to nothing.

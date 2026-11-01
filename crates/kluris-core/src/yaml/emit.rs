@@ -2,7 +2,7 @@
 //! `emitter.py`, and from libyaml 0.2.5 `emitter.c`; see LICENSE-PyYAML and
 //! LICENSE-libyaml.
 //!
-//! YAML writing that reproduces PyYAML 6.0.3 byte for byte, the way v2 writes
+//! YAML writing that reproduces PyYAML 6.0.3 byte for byte, for
 //! frontmatter, YAML neurons and configs (block style, width 80, indent 2).
 //!
 //! A port of PyYAML's `SafeRepresenter` and serializer (Python code in every
@@ -17,7 +17,7 @@ use crate::pyrepr::float_repr;
 const BEST_WIDTH: usize = 80;
 const BEST_INDENT: usize = 2;
 
-/// Which v2 writer to reproduce.
+/// Which PyYAML writer to reproduce.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Profile {
     /// Markdown frontmatter: python-frontmatter's `yaml.dump(meta,
@@ -44,7 +44,7 @@ impl Profile {
     }
 }
 
-/// Write a mapping as one YAML document, exactly as the profile's v2 writer.
+/// Write a mapping as one YAML document, exactly as the profile's PyYAML writer.
 pub fn emit(map: &Map, profile: Profile) -> String {
     let mut emitter = Emitter {
         profile,

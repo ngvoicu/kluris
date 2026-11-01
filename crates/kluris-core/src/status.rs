@@ -1,7 +1,7 @@
 //! `kluris status`: per brain, the lobe and neuron counts and, when the brain
-//! is in a git work tree, its recent commits and uncommitted changes
-//! (research-03 §1.4). The git calls are [`Git`]'s, scoped to the brain when
-//! it is nested in a larger repo.
+//! is in a git work tree, its recent commits and uncommitted changes. The
+//! git calls are [`Git`]'s, scoped to the brain when it is nested in a
+//! larger repo.
 
 use crate::brain::store::BrainStore;
 use crate::git::{Commit, Git, GitError};

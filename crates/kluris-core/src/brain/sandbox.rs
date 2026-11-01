@@ -1,10 +1,9 @@
-//! The path sandbox: Python's `Path.resolve()` (non-strict), v2's
-//! `is_within_brain` and `resolve_in_brain`.
+//! The path sandbox: Python's `Path.resolve()` (non-strict),
+//! [`is_within_brain`] and [`resolve_in_brain`].
 //!
-//! v2 decides with these whether a symlinked neuron escapes the brain
-//! (`neuron_index._escapes_brain`), whether a `replaced_by` target is in the
-//! brain, and which neuron a `related` entry points at. Kluris 3 resolves
-//! paths the way Python 3.11 does, so the same links mean the same thing:
+//! These decide whether a symlinked neuron escapes the brain, whether a
+//! `replaced_by` target is in the brain, and which neuron a `related` entry
+//! points at. Paths resolve the way Python 3.11 resolves them, so the same links mean the same thing:
 //! on POSIX, `..` is applied after the symlinks before it are followed (not
 //! lexically), a missing tail is kept as written, a broken link resolves to
 //! its target's path, and a symlink loop is an error.
@@ -269,16 +268,16 @@ pub fn is_within(resolved: &Path, resolved_root: &Path) -> bool {
     path.len() >= root.len() && path[..root.len()] == root[..]
 }
 
-/// v2's `is_within_brain`: `resolved` is inside `brain_root` (inclusive),
+/// Whether `resolved` is inside `brain_root` (inclusive),
 /// after resolving `brain_root`; false when the root cannot be resolved.
 pub fn is_within_brain(resolved: &Path, brain_root: &Path) -> bool {
     resolve(brain_root).is_ok_and(|root| is_within(resolved, &root))
 }
 
-/// v2's `resolve_in_brain`: `raw` (backslashes read as slashes, leading
+/// `raw` (backslashes read as slashes, leading
 /// slashes dropped) joined to the brain root and resolved, refused when it is
-/// empty, resolves outside the brain (a symlink loop counts as outside, as in
-/// v2's walk) or does not exist. Returns the resolved path.
+/// empty, resolves outside the brain (a symlink loop counts as outside, as
+/// in the walk) or does not exist. Returns the resolved path.
 pub fn resolve_in_brain(brain_root: &Path, raw: &str) -> Result<PathBuf, SandboxError> {
     if raw.is_empty() {
         return Err(SandboxError::Empty);

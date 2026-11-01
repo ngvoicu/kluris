@@ -30,7 +30,7 @@ use super::sandbox;
 use super::store::{BrainStore, ReadError};
 use crate::yaml::{Map, Value, date_iso, datetime_iso};
 
-/// One deprecation-frontmatter inconsistency, with v2's fields.
+/// One deprecation-frontmatter inconsistency.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DeprecationIssue {
     ActiveLinksToDeprecated { source: String, target: String },
@@ -40,7 +40,7 @@ pub enum DeprecationIssue {
 }
 
 impl DeprecationIssue {
-    /// v2's `kind` value.
+    /// The issue's `kind` in JSON.
     pub fn kind(&self) -> &'static str {
         match self {
             DeprecationIssue::ActiveLinksToDeprecated { .. } => "active_links_to_deprecated",
@@ -93,8 +93,8 @@ enum Replacement {
     Ignored,
 }
 
-/// v2 reads `replaced_by` after `_normalize_metadata`, which turns a
-/// top-level date or datetime into its `isoformat()` text.
+/// `replaced_by` as it is read: a top-level date or datetime is its
+/// `isoformat()` text.
 fn replacement(meta: &Map) -> Replacement {
     match meta.get("replaced_by") {
         None | Some(Value::Null) => Replacement::None,
@@ -118,8 +118,8 @@ fn parent(path: &Path) -> &Path {
     path.parent().unwrap_or(Path::new(""))
 }
 
-/// The deprecation issues of the store's neurons, in v2's order over the
-/// store's neuron order.
+/// The deprecation issues of the store's neurons: the deprecated neurons'
+/// issues in the store's neuron order, then the active neurons' links.
 pub fn detect_deprecation_issues(store: &impl BrainStore) -> DeprecationReport {
     let root = store.root();
     let resolved_root = sandbox::resolve(root).ok();

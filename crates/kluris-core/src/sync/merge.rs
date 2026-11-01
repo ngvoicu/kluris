@@ -1,4 +1,4 @@
-//! The in-memory merge of `kluris sync` (SPEC Phase 7 conflict rules).
+//! The in-memory merge of `kluris sync`, under its conflict rules.
 //!
 //! `git merge-tree --write-tree` gives the baseline: git's own merge of the
 //! two commits, renames included. Every path both sides changed, and every
@@ -237,7 +237,7 @@ pub fn merge_commits<G: SyncGit>(
     // a virtual base of them all, but no single base says who changed what:
     // with several, every path changed on both sides goes to a person
     // (`ambiguous_base`) and only one-sided changes merge, as merge-tree
-    // has them (decision of T-146, replacing the first-base rule).
+    // has them.
     let ambiguous = bases.len() > 1;
     let base = bases.first().cloned();
     let merged = git.merge_tree(repo, ours, theirs)?;
@@ -260,8 +260,8 @@ pub fn merge_commits<G: SyncGit>(
     };
     // A file that only followed a folder the other side renamed (git's
     // "directory rename suggested": one side's blob, no base) needs no
-    // person: it stays where git put it, under the new folder (decision of
-    // T-152). Renaming a folder never drops a teammate's file.
+    // person: it stays where git put it, under the new folder. Renaming a
+    // folder never drops a teammate's file.
     let follows: BTreeSet<&String> = merged
         .stages
         .iter()

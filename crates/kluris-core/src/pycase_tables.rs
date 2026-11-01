@@ -1,6 +1,5 @@
-// @generated from Python 3.11 (Unicode 14.0.0).
-// Generated from the Unicode Character Database (Unicode 14.0.0) via Python 3.11; see LICENSE-Unicode.
-// Frozen; do not edit.
+// Frozen; never regenerated. Python 3.11's case tables, from the Unicode
+// Character Database (Unicode 14.0.0); see LICENSE-Unicode. Do not edit.
 
 /// Full titlecase mappings that are not the character itself.
 pub(crate) static TITLE: &[(u32, &str)] = &[

@@ -1,8 +1,7 @@
-//! The brain resolver every `--brain` command uses: v2's `_resolve_brains`,
-//! `_check_brain_paths` and `_pick_brain_interactively` (research-03 §1.0,
-//! `cli.py:268-395`), with v2's exact texts.
+//! The brain resolver every `--brain` command uses: resolving the request,
+//! checking the brains' paths and the interactive picker.
 //!
-//! The cases, in v2's order:
+//! The cases, in this order:
 //! 1. `--brain all`: refused unless the command fans out (`allow_all`), an
 //!    error with no brains, else every brain in config order;
 //! 2. `--brain NAME` that is not registered: an error;
@@ -49,7 +48,7 @@ pub enum Resolution {
     Pick(Picker),
 }
 
-/// Why no brain was resolved; `Display` is v2's message.
+/// Why no brain was resolved; `Display` is the message.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ResolveError {
     AllNotSupported,
@@ -115,7 +114,7 @@ fn checked(brains: Vec<ResolvedBrain>) -> Result<Resolution, ResolveError> {
     Ok(Resolution::Brains(brains))
 }
 
-/// Resolve `request` against the registered brains (research-03 §1.0).
+/// Resolve `request` against the registered brains.
 pub fn resolve(config: &GlobalConfig, request: &Request) -> Result<Resolution, ResolveError> {
     let brain = request.brain.filter(|name| !name.is_empty());
     if brain == Some("all") {
@@ -150,7 +149,7 @@ pub fn resolve(config: &GlobalConfig, request: &Request) -> Result<Resolution, R
     }
 }
 
-/// v2's `_check_brain_paths`: every brain's path (read as Python's `Path()`
+/// Every brain's path (read as Python's `Path()`
 /// reads it) must be an existing directory; the error lists the others with
 /// their paths as stored.
 pub fn check_brain_paths(brains: &[ResolvedBrain]) -> Result<(), ResolveError> {
@@ -233,7 +232,7 @@ impl Picker {
         self.brains.len() + usize::from(self.allow_all)
     }
 
-    /// The menu v2 prints before the first prompt. A brain whose path does
+    /// The menu printed before the first prompt. A brain whose path does
     /// not exist (Python's `Path(path).exists()`) is marked `(missing)`.
     pub fn menu(&self) -> String {
         let mut out = String::from("Multiple brains registered. Pick one:\n");

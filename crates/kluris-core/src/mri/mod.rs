@@ -11,7 +11,7 @@
 //!   query cut, no self-link) for a pair that has no edge yet.
 //!
 //! The page's shell, CSS and JS are kept byte for byte
-//! (`assets/mri/`, taken from v2.28.11), with the brain name, the header
+//! (`assets/mri/`), with the brain name, the header
 //! counts and `json.dumps(graph, indent=2)` injected. The name is the
 //! registered brain name, not the directory name, and `</` and `<!--` in
 //! the graph JSON are escaped so neuron text cannot end the script.
@@ -44,7 +44,7 @@ const JS: &str = include_str!("../../assets/mri/mri.js");
 /// The MRI's `SKIP_FILES`: never nodes, at any depth.
 const SKIP_FILES: [&str; 3] = [".gitignore", "README.md", "kluris.yml"];
 
-/// v2's `LINK_PATTERN` (`core/linker.py`).
+/// A markdown link: `[text](target)`.
 static LINK: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"\[([^\]]*)\]\(([^)]+)\)").unwrap_or_else(|e| panic!("LINK is valid: {e}"))
 });
@@ -99,7 +99,7 @@ impl EdgeKind {
     }
 }
 
-/// One file of the graph, with v2's fields.
+/// One file of the graph, with the fields the page reads.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Node {
     pub id: usize,
@@ -195,7 +195,7 @@ fn py_strip(text: &str) -> &str {
     text.trim_matches(is_py_space)
 }
 
-/// The text v2's `read_frontmatter` hands over as the body: python-frontmatter's
+/// The body as a neuron is read: python-frontmatter's
 /// (line breaks read as `\n`, stripped) for markdown, the rest of the file as
 /// is for a YAML neuron.
 fn content(fm: &Frontmatter, kind: NeuronKind) -> String {
@@ -205,7 +205,7 @@ fn content(fm: &Frontmatter, kind: NeuronKind) -> String {
     }
 }
 
-/// `str(meta.get(key, ""))` after v2's date normalization.
+/// `str(meta.get(key, ""))`, a top-level date read as its ISO text.
 fn field(meta: &Map, key: &str) -> String {
     meta.get(key).map(py_str).unwrap_or_default()
 }
@@ -281,9 +281,9 @@ fn make_node(id: usize, file: &Neuron, read: Option<&Frontmatter>) -> Node {
     }
 }
 
-/// A link target as v2 resolves it (`(f.parent / target).resolve()`
-/// relative to the resolved brain), when it is a node. A target that is not
-/// a string makes v2's `pathlib` raise; it has no edge here.
+/// A link target as `(f.parent / target).resolve()` resolves it, relative
+/// to the resolved brain, when it is a node. A target that is not a string
+/// has no edge.
 fn target_node<S: BrainStore>(
     store: &S,
     ids: &HashMap<&str, usize>,
@@ -312,7 +312,7 @@ impl Edges {
     }
 }
 
-/// v2's `build_graph(brain_path)` over the store.
+/// The MRI graph of the brain in `store`.
 pub fn build_graph<S: BrainStore>(store: &S) -> Graph {
     let files = node_files(store);
     let reads: Vec<Option<Frontmatter>> = files
@@ -413,8 +413,8 @@ fn string(text: &str) -> Json {
     Json::Str(text.to_string())
 }
 
-/// `json.dumps` of a frontmatter value. A date or datetime, which v2 can only
-/// meet nested in `tags` or `related` (where its `json.dumps` raises), is
+/// `json.dumps` of a frontmatter value. A date or datetime, which can only
+/// be met nested in `tags` or `related` (top-level ones read as text), is
 /// written as its ISO text.
 fn value_json(value: &Value) -> Json {
     enum Task<'a> {
@@ -498,7 +498,7 @@ fn node_json(n: &Node) -> Json {
     ])
 }
 
-/// The graph as v2's dict: `{nodes, edges, meta: {edge_counts}}`.
+/// The graph as the page reads it: `{nodes, edges, meta: {edge_counts}}`.
 pub fn graph_json(graph: &Graph) -> Json {
     let edges = graph
         .edges
@@ -543,7 +543,7 @@ fn script_safe(json_text: &str) -> String {
         .replace("<!--", "\\u003c!--")
 }
 
-/// v2's `_render_mri_html` for the brain called `brain_name`.
+/// The MRI page for the brain called `brain_name`.
 pub fn render_html(brain_name: &str, graph: &Graph) -> String {
     let lobes: HashSet<&str> = graph
         .nodes

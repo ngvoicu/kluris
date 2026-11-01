@@ -105,7 +105,7 @@ pub fn line_ending(text: &str) -> LineEnding {
     }
 }
 
-/// The YAML text as v2's text-mode read hands it to PyYAML: only `\r\n`
+/// The YAML text as Python's text-mode read hands it to PyYAML: only `\r\n`
 /// and `\r` become `\n` here; `\u{85}`, `\u{2028}` and `\u{2029}` stay, and
 /// the YAML reader breaks lines at them as PyYAML's does.
 pub(crate) fn universal_newlines(text: &str) -> String {
@@ -113,7 +113,7 @@ pub(crate) fn universal_newlines(text: &str) -> String {
 }
 
 /// Load frontmatter YAML: a mapping is the metadata; an empty document or
-/// any other value is no metadata, as in v2.
+/// any other value is no metadata.
 fn load_meta(yaml: &str) -> Result<Map, YamlError> {
     Ok(yaml::load(&universal_newlines(yaml))?
         .into_map()
@@ -234,7 +234,7 @@ fn is_hash_fence(line: &str) -> bool {
         == "#---"
 }
 
-/// Find the `#---` block the way v2's `_read_yaml_neuron` does. Returns the
+/// Find a YAML neuron's `#---` block. Returns the
 /// block text (`# `/`#` prefixes removed) and the byte offset of the body.
 fn yaml_neuron_block(content: &str) -> Option<(String, usize)> {
     let lines = py_splitlines(content);
@@ -278,13 +278,13 @@ pub fn parse_yaml_neuron(text: &str) -> Result<Frontmatter, YamlError> {
 }
 
 /// Read a YAML neuron's `#---` block and the rest of the file. Invalid UTF-8
-/// is replaced with U+FFFD, as v2 decodes it.
+/// is replaced with U+FFFD, as Python's `errors="replace"` decodes it.
 pub fn read_yaml_neuron(path: &Path) -> Result<Frontmatter, FrontmatterError> {
     let bytes = fs::read(path).map_err(|e| error(path, Problem::Io(e.to_string())))?;
     parse_yaml_neuron(&String::from_utf8_lossy(&bytes)).map_err(|e| error(path, Problem::Yaml(e)))
 }
 
-/// A YAML neuron as v2's `_read_yaml_neuron` reads it, which never fails: a
+/// A YAML neuron read in the way that never fails: a
 /// block that does not parse gives no metadata and the whole text (BOM
 /// removed) as the body; a file that cannot be read gives no metadata and an
 /// empty body.
@@ -317,7 +317,7 @@ pub fn parse_yaml_neuron_lenient(text: &str) -> Frontmatter {
     }
 }
 
-/// Any neuron as v2's `read_frontmatter` reads it: a `.yml`/`.yaml` suffix
+/// Any neuron, read leniently: a `.yml`/`.yaml` suffix
 /// (any case) reads a YAML neuron leniently ([`read_yaml_neuron_lenient`]),
 /// everything else as markdown, which fails on unreadable files, invalid
 /// UTF-8 and frontmatter that does not parse.
@@ -335,7 +335,7 @@ pub(crate) fn has_yaml_suffix(path: &Path) -> bool {
         .is_some_and(|e| e.eq_ignore_ascii_case("yml") || e.eq_ignore_ascii_case("yaml"))
 }
 
-/// Read any neuron like v2's `read_frontmatter`: a `.yml`/`.yaml` suffix (any
+/// Read any neuron: a `.yml`/`.yaml` suffix (any
 /// case) reads a YAML neuron, everything else markdown.
 pub fn read_neuron(path: &Path) -> Result<Frontmatter, FrontmatterError> {
     if has_yaml_suffix(path) {
@@ -345,7 +345,7 @@ pub fn read_neuron(path: &Path) -> Result<Frontmatter, FrontmatterError> {
     }
 }
 
-/// The opt-in gate (v2 `has_yaml_opt_in_block`): the first 4096 bytes open,
+/// The opt-in gate: the first 4096 bytes open,
 /// after blank lines, with `#---`, continue with lines whose first non-blank
 /// character is `#`, and close with `#---`.
 pub fn has_yaml_opt_in_block(path: &Path) -> bool {
@@ -380,7 +380,7 @@ pub fn has_yaml_opt_in_head(bytes: &[u8]) -> bool {
     false
 }
 
-/// Whether `path` is a YAML neuron as v2's neuron walk decides: a name ending
+/// Whether `path` is a YAML neuron as the neuron walk decides: a name ending
 /// in `.yml`/`.yaml` (case-sensitive), not `kluris.yml`, and the opt-in gate.
 pub fn is_yaml_neuron(path: &Path) -> bool {
     let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
@@ -391,9 +391,9 @@ pub fn is_yaml_neuron(path: &Path) -> bool {
         && has_yaml_opt_in_block(path)
 }
 
-/// The body as v2 writes it after reading it back: universal newlines, the
-/// leading whitespace-only lines and all trailing whitespace removed. Kluris 3
-/// keeps the first text line's indentation (python-frontmatter strips it).
+/// The body as it is written after reading it back: universal newlines, the
+/// leading whitespace-only lines and all trailing whitespace removed. The
+/// first text line keeps its indentation (python-frontmatter strips it).
 fn markdown_body(body: &str) -> String {
     let body = universal_newlines(body);
     let Some(first_text) = body.find(|c: char| !is_py_space(c)) else {
@@ -403,12 +403,12 @@ fn markdown_body(body: &str) -> String {
     body[line_start..].trim_end_matches(is_py_space).to_string()
 }
 
-/// A markdown neuron as v2 writes it: python-frontmatter's
+/// A markdown neuron as it is written: python-frontmatter's
 /// `dumps(Post(body, **meta))` plus a final newline, i.e. `---`, the sorted
 /// libyaml YAML, `---`, a blank line, the body (see [`markdown_body`]) and
 /// `\n`; without a body the file ends at the closing `---`. Written LF;
-/// `LineEnding::Crlf` gives every line `\r\n`, as v2's text-mode write does on
-/// Windows.
+/// `LineEnding::Crlf` gives every line `\r\n`, as Python's text-mode write
+/// does on Windows.
 pub fn write_markdown(meta: &Map, body: &str, line_ending: LineEnding) -> String {
     let yaml = yaml::emit(meta, Profile::Md);
     let mut out = format!("---\n{}\n---\n", yaml.trim_matches(is_py_space));
@@ -424,7 +424,7 @@ pub fn write_markdown(meta: &Map, body: &str, line_ending: LineEnding) -> String
     }
 }
 
-/// A YAML neuron as v2's `_write_yaml_neuron` writes it: the `yaml.safe_dump`
+/// A YAML neuron as it is written: the `yaml.safe_dump`
 /// output with every line prefixed `# ` (`#` when empty) between `#---` lines,
 /// LF, then the body byte for byte.
 pub fn write_yaml_neuron(meta: &Map, body: &str) -> String {
@@ -432,8 +432,8 @@ pub fn write_yaml_neuron(meta: &Map, body: &str) -> String {
 }
 
 /// [`write_yaml_neuron`] with the `#---` block's lines ending in
-/// `line_ending` (Kluris 3 keeps a CRLF file's endings; v2 always writes the
-/// block LF). The body is still kept byte for byte.
+/// `line_ending` (a CRLF file keeps its endings). The body is still kept
+/// byte for byte.
 pub fn write_yaml_neuron_with(meta: &Map, body: &str, line_ending: LineEnding) -> String {
     let eol = match line_ending {
         LineEnding::Lf => "\n",

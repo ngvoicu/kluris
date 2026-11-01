@@ -27,8 +27,8 @@ pub enum ItemKind {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Item {
     pub kind: ItemKind,
-    /// The brain-relative path as v2 prints it: `/`-separated, a `\` in a
-    /// file name shown as `/` too (v2's `_rel`); `glossary.md` for every
+    /// The brain-relative path as search prints it: `/`-separated, a `\` in
+    /// a file name shown as `/` too; `glossary.md` for every
     /// entry.
     pub file: String,
     /// The walked path ([`crate::brain::neuron_index::Neuron::rel`]): the
@@ -39,7 +39,7 @@ pub struct Item {
     pub title: String,
     /// The frontmatter `tags` when it is a list, else none.
     pub tags: Vec<Value>,
-    /// v2's body (the definition for a glossary entry).
+    /// The searched body (the definition for a glossary entry).
     pub body: String,
     pub deprecated: bool,
     /// The frontmatter (empty for glossary entries).
@@ -71,7 +71,7 @@ pub(crate) fn stem_title(file: &str) -> String {
     py_title(&stem.replace('-', " "))
 }
 
-/// v2's `extract_neuron_title`: the first line starting with `# `, after it
+/// A markdown neuron's title: the first line starting with `# `, after it
 /// and stripped; else the file stem title-cased.
 pub fn markdown_title(file: &str, body: &str) -> String {
     for line in py_splitlines(body) {
@@ -97,7 +97,7 @@ pub fn markdown_title(file: &str, body: &str) -> String {
     stem_title(file)
 }
 
-/// A top-level frontmatter value as v2 sees it after `_normalize_metadata`:
+/// A top-level frontmatter value as search reads it:
 /// a date or datetime is its ISO text.
 pub(crate) fn normalized_str(value: &Value) -> Option<String> {
     match value {
@@ -127,7 +127,7 @@ fn count_line_breaks(text: &str) -> usize {
     universal_newlines(text).matches('\n').count()
 }
 
-/// v2's markdown body and the 0-based file line it starts on (the stripped
+/// The searched markdown body and the 0-based file line it starts on (the stripped
 /// leading whitespace moves it down).
 fn markdown_body(fm: &Frontmatter) -> (String, usize) {
     let lf = universal_newlines(&fm.body);
@@ -138,19 +138,19 @@ fn markdown_body(fm: &Frontmatter) -> (String, usize) {
     )
 }
 
-/// How v2 prints a walked path (`str(relative_to(...)).replace("\\", "/")`).
+/// How search prints a walked path (`str(relative_to(...)).replace("\\", "/")`).
 fn rendered(rel: &str) -> String {
     rel.replace('\\', "/")
 }
 
-/// The searchable items of a brain, in v2's order: neurons (store order),
+/// The searchable items of a brain, in this order: neurons (store order),
 /// glossary entries, brain.md.
 pub fn collect_items(store: &impl BrainStore) -> Vec<Item> {
     collect(store).0
 }
 
 /// The searchable items, and the files left out because they do not read:
-/// neurons (by v2's printed path) and `glossary.md`, in that order.
+/// neurons (by their printed path) and `glossary.md`, in that order.
 pub fn collect(store: &impl BrainStore) -> (Vec<Item>, Vec<SkippedNeuron>) {
     let mut items = Vec::new();
     let mut skipped = Vec::new();
@@ -288,7 +288,7 @@ pub fn substring_match(item: &Item, query_lower: &str) -> Option<SubstringMatch>
     })
 }
 
-/// v2's `_passes_filters`: `file` under `lobe.rstrip('/') + '/'`, and `tag`
+/// The search filters: `file` under `lobe.rstrip('/') + '/'`, and `tag`
 /// one of the item's tags (a string tag equal to it).
 pub fn passes_filters(item: &Item, lobe: Option<&str>, tag: Option<&str>) -> bool {
     if let Some(lobe) = lobe {
@@ -308,7 +308,7 @@ pub fn passes_filters(item: &Item, lobe: Option<&str>, tag: Option<&str>) -> boo
     true
 }
 
-/// The neurons an item links to through `related:`, as v2 prints paths:
+/// The neurons an item links to through `related:`, as search prints paths:
 /// each string entry resolved by the store ([`BrainStore::resolve_link`]:
 /// on disk, symlinks followed, inside the brain only), kept when it lands on
 /// a neuron of the store other than the item itself, at most `limit`, in

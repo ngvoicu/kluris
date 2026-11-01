@@ -1,6 +1,6 @@
 //! JSON text byte-identical to Python's `json.dumps(obj)` with its defaults
-//! (`ensure_ascii=True`), which is what Kluris v2 prints for every `--json`
-//! command, and to `json.dumps(obj, indent=N)`, which v2's MRI page embeds.
+//! (`ensure_ascii=True`), which is what every `--json` command prints, and
+//! to `json.dumps(obj, indent=N)`, which the MRI page embeds.
 //! The writer keeps its own stack, so a deeply nested value needs no deep
 //! call stack.
 
@@ -251,7 +251,7 @@ mod tests {
             (f64::INFINITY, "Infinity"),
             (f64::NEG_INFINITY, "-Infinity"),
             (f64::NAN, "NaN"),
-            // exact ties: Python rounds half to even (T-54 finding 4)
+            // exact ties: Python rounds half to even
             (70368744177664.12, "70368744177664.12"),
             (2.9802322387695312e-08, "2.9802322387695312e-08"),
             (0.0018625259399414062, "0.0018625259399414062"),

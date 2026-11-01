@@ -1,4 +1,4 @@
-//! Heading chunks (research-05 §3, the biggest lexical gain): a body is cut
+//! Heading chunks (the biggest lexical gain): a body is cut
 //! at its `##` and `###` headings (not inside a code fence), and a section
 //! longer than [`WINDOW_WORDS`] words is cut again into windows of about that
 //! many words, always at a line break, so every chunk starts on a real line

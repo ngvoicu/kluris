@@ -1,5 +1,4 @@
-//! The pre-flight of `kluris self-uninstall` (SPEC decision 2026-10-26,
-//! T-119): every change the uninstall plans is checked before the first one
+//! The pre-flight of `kluris self-uninstall`: every change the uninstall plans is checked before the first one
 //! is made, without changing anything.
 //!
 //! - Only NotFound means "not there": any other error looking at a path

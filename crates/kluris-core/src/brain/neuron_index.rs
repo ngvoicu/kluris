@@ -1,5 +1,4 @@
-//! What counts as a neuron: v2's `neuron_index.neuron_files` over the
-//! shared walk.
+//! What counts as a neuron, over the shared walk.
 //!
 //! - a markdown neuron is a file whose name ends in `.md` (case-sensitive, so
 //!   `X.MD` is not one, and a file named `.md` is);
@@ -10,15 +9,15 @@
 //!   (`projects/README.md` is not one; `map.yml` can be);
 //! - root-level files are neurons like any other.
 //!
-//! Markdown neurons come first, then YAML neurons, as in v2; each group is in
-//! the walk's order (v2: `os.walk` order).
+//! Markdown neurons come first, then YAML neurons; each group is in the
+//! walk's order (`os.walk` order).
 
 use std::path::PathBuf;
 
 use super::walk::WalkedFile;
 use crate::frontmatter;
 
-/// v2's `SKIP_FILES`: never neurons, at any depth.
+/// Never neurons, at any depth.
 pub const SKIP_FILES: [&str; 6] = [
     "brain.md",
     "index.md",

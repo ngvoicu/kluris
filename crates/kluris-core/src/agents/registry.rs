@@ -1,5 +1,4 @@
-//! Where each agent loads skills from (research-04, confirmed live on this
-//! Mac by research-07; SPEC decisions 2026-10-24 and 2026-10-25).
+//! Where each agent loads skills from, as each agent reads them.
 //!
 //! Every skill goes to `~/.agents/skills`, which most agents read. The
 //! registry lists only the agents that need a folder of their own; the other
@@ -11,8 +10,8 @@ use std::path::{Path, PathBuf};
 /// The folder every skill is written to, relative to HOME.
 pub const UNIVERSAL: &str = ".agents/skills";
 
-/// Agents that need their own folder, sorted by name (the order v2 installs
-/// in). `copilot` needs one only while `COPILOT_HOME` is set: Copilot CLI
+/// Agents that need their own folder, sorted by name (the order installs
+/// go in). `copilot` needs one only while `COPILOT_HOME` is set: Copilot CLI
 /// then stops reading `~/.agents/skills`.
 pub const REGISTRY: [&str; 4] = ["antigravity", "claude", "copilot", "hermes"];
 
@@ -45,8 +44,8 @@ pub fn skill_folders(agent: &str, home: &Path, copilot_home: Option<&Path>) -> V
     }
 }
 
-/// The directories directly inside `dir` (a symlink to one counts, as in
-/// v2's `Path.is_dir()`), sorted by name; none when `dir` cannot be read.
+/// The directories directly inside `dir` (a symlink to one counts, as
+/// Python's `Path.is_dir()` counts it), sorted by name; none when `dir` cannot be read.
 fn sorted_dirs(dir: &Path) -> Vec<PathBuf> {
     let Ok(entries) = fs::read_dir(dir) else {
         return Vec::new();

@@ -13,7 +13,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::agents::render::lf;
-use crate::scaffold::is_valid_v2_name;
+use crate::scaffold::is_valid_existing_name;
 
 /// The skill folders earlier releases wrote to, relative to HOME.
 /// `~/.copilot/skills` is one only while `COPILOT_HOME` is unset. The
@@ -158,7 +158,7 @@ fn matches_era(era: &Era, name: &str, text: &str, frontmatter: impl Fn(&str) -> 
                 .collect()
         }
     };
-    if slotted && !is_valid_v2_name(&brain) {
+    if slotted && !is_valid_existing_name(&brain) {
         return false;
     }
     let expected = frontmatter(&era.description.replace(BRAIN_SLOT, &brain));

@@ -1,6 +1,6 @@
 //! What Kluris's installers (dist 0.33.1's `kluris-installer.sh` / `.ps1`,
 //! `install-path = "~/.kluris/bin"`) leave on a machine, for `kluris
-//! self-update` and `kluris self-uninstall` (research-02 §1, §5).
+//! self-update` and `kluris self-uninstall`.
 //!
 //! - The binary goes to `~/.kluris/bin` (the flat layout: the receipt's
 //!   `install_prefix` is that folder).

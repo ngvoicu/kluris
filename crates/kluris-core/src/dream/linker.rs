@@ -1,10 +1,10 @@
-//! v2's `core/linker.py`: the two fixes dream applies (steps 2 and 3) and the
+//! The linker: the two fixes dream applies (steps 2 and 3) and the
 //! validators it runs on the written brain.
 //!
 //! Every path a report holds is brain-relative and `/`-joined
-//! (interview-01 #7). A file that cannot be read (strictly: a YAML neuron
-//! whose block does not parse too) is skipped and reported where v2 raises,
-//! and gets no other report. Links are found by [`super::links`].
+//! on every OS. A file that cannot be read (strictly: a YAML neuron whose
+//! block does not parse too) is skipped and reported as skipped, and gets no
+//! other report. Links are found by [`super::links`].
 
 use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -25,7 +25,7 @@ fn parent(path: &Path) -> &Path {
 }
 
 /// `Path.resolve()` of a link from `from`; a symlink loop resolves to
-/// nothing (v2 raises there).
+/// nothing.
 fn resolve_from(from: &Path, link: &str) -> Option<PathBuf> {
     sandbox::resolve(&parent(from).join(link)).ok()
 }
@@ -83,7 +83,7 @@ pub(crate) fn fix_reverse_links<S: BrainStore>(
     neurons: &[Neuron],
     from: impl Fn(&str) -> bool,
 ) -> Vec<String> {
-    // v2's `{neuron.resolve(): neuron}`: one entry per file, the last walked
+    // Keyed by the resolved file: one entry per file, the last walked
     // path of it, at the first one's position.
     let mut by_file: IndexMap<PathBuf, &Neuron> = IndexMap::new();
     for neuron in neurons {
@@ -183,7 +183,7 @@ fn name(rel: &str) -> &str {
     rel.rsplit('/').next().unwrap_or(rel)
 }
 
-/// v2's `_all_md_files`: every walked `.md` file (map.md, brain.md and the
+/// Every walked `.md` file (map.md, brain.md and the
 /// rest included), then the YAML neurons.
 fn all_md_files<S: BrainStore>(store: &S) -> Vec<(String, PathBuf)> {
     let md = store
@@ -269,9 +269,9 @@ fn py_suffix(name: &str) -> &str {
 
 /// `validate_bidirectional`: a neuron's `related` target that is a neuron
 /// not linking back, or another existing `.md` file whose list `related`
-/// does not link back. v2 raises on a non-string entry and on a target
-/// outside the brain; Kluris 3 ignores both here (they are a frontmatter
-/// issue and broken synapses).
+/// does not link back. A non-string entry and a target outside the brain
+/// are not one-way synapses (they are a frontmatter issue and broken
+/// synapses).
 fn one_way_synapses<S: BrainStore>(store: &S, read: &mut Reader<'_, S>) -> Vec<OneWaySynapse> {
     let root = sandbox::resolve(store.root()).ok();
     let mut related: IndexMap<PathBuf, Vec<PathBuf>> = IndexMap::new();
@@ -315,7 +315,7 @@ fn one_way_synapses<S: BrainStore>(store: &S, read: &mut Reader<'_, S>) -> Vec<O
                             .or_insert_with(|| "cannot read the file".into());
                         continue;
                     };
-                    // v2's `get("related", [])`: missing is an empty list.
+                    // A missing `related` is an empty list.
                     let links = match fm.meta.get("related") {
                         None => Vec::new(),
                         related => match strings(related) {
@@ -372,8 +372,8 @@ pub(crate) fn orphans<S: BrainStore>(
 
 /// `check_frontmatter`: the required fields (markdown: `parent`, `created`,
 /// `updated`; YAML neurons: `updated`), then `related` and `tags` that are not
-/// lists, a `related` list with an entry that is not a string (where v2
-/// raises) and a `replaced_by` that is not a string or null.
+/// lists, a `related` list with an entry that is not a string and a
+/// `replaced_by` that is not a string or null.
 fn frontmatter_issues<S: BrainStore>(store: &S, read: &mut Reader<'_, S>) -> Vec<FrontmatterIssue> {
     let mut issues = Vec::new();
     for neuron in store.neurons() {
@@ -410,7 +410,7 @@ fn frontmatter_issues<S: BrainStore>(store: &S, read: &mut Reader<'_, S>) -> Vec
                 issue(field, FieldProblem::Type);
             }
         }
-        // Top-level dates read as their ISO text in v2, so they are strings.
+        // Top-level dates read as their ISO text, so they are strings.
         let replaced_by_ok = |v: &Value| {
             matches!(
                 v,

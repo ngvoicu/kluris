@@ -246,8 +246,8 @@ mod tests {
             r.text_with_version("3.1.0"),
             DIST.replace("\"version\":\"3.0.0\"", "\"version\":\"3.1.0\"")
         );
-        // kluris-installer.ps1's receipt, as dist 0.33.1 wrote it on zeewin2
-        // (2026-10-26): `kluris.exe`, the prefix in backslashes, CRLF, no BOM.
+        // kluris-installer.ps1's receipt, as dist 0.33.1 writes it on
+        // Windows: `kluris.exe`, the prefix in backslashes, CRLF, no BOM.
         let windows = DIST
             .replace("[\"kluris\"]", "[\"kluris.exe\"]")
             .replace("/home/u/.kluris/bin", "C:\\\\Users\\\\u\\\\.kluris\\\\bin")
@@ -264,7 +264,7 @@ mod tests {
         );
     }
 
-    // T-111 finding 3: only a receipt that is dist's, for Kluris, says what
+    // Only a receipt that is dist's, for Kluris, says what
     // may be removed or replaced.
     #[test]
     fn dists_receipt_is_klurises_on_its_platform() {

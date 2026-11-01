@@ -21,7 +21,7 @@ use crate::pycase;
 use crate::pyrepr::{py_repr_str, py_str};
 use crate::yaml::{self, Date, Value, date_iso, is_py_space};
 
-/// The brain types and their lobes, in v2's order (`BRAIN_TYPES`).
+/// The brain types and their lobes, in the order the wizard offers them.
 pub const BRAIN_TYPES: [(&str, &[(&str, &str)]); 5] = [
     (
         "product-group",
@@ -106,8 +106,7 @@ pub fn not_a_brain_type(value: &str) -> String {
     )
 }
 
-/// The lobes of a brain type; an unknown type is `blank` (v2's
-/// `get_type_defaults`).
+/// The lobes of a brain type; an unknown type is `blank`.
 pub fn type_lobes(brain_type: &str) -> Vec<Lobe> {
     BRAIN_TYPES
         .iter()
@@ -120,30 +119,30 @@ pub fn type_lobes(brain_type: &str) -> Vec<Lobe> {
 
 // --- names ------------------------------------------------------------------------
 
-/// v2's `BRAIN_NAME_PATTERN.match`: `^[a-z][a-z0-9-]*$`, where Python's `$`
-/// also matches before a final `\n`.
-fn matches_v2_pattern(name: &str) -> bool {
+/// The pattern of names that already exist, `^[a-z][a-z0-9-]*$` as Python's
+/// `re.match` reads it: `$` also matches before a final `\n`.
+fn matches_existing_pattern(name: &str) -> bool {
     let name = name.strip_suffix('\n').unwrap_or(name);
     let mut chars = name.chars();
     chars.next().is_some_and(|c| c.is_ascii_lowercase())
         && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
 }
 
-/// v2's `validate_brain_name`: non-empty, not `all`, at most 48 characters,
-/// no `..`, no leading `.`, and v2's pattern. The rule for names that already
-/// exist: registered brains and `register`'s identity.
-pub fn is_valid_v2_name(name: &str) -> bool {
+/// The rule for names that already exist (registered brains and
+/// `register`'s identity): non-empty, not `all`, at most 48 characters, no
+/// `..`, no leading `.`, and [`matches_existing_pattern`].
+pub fn is_valid_existing_name(name: &str) -> bool {
     !name.is_empty()
         && name != RESERVED_NAME
         && name.chars().count() <= NAME_MAX_LENGTH
         && !name.contains("..")
         && !name.starts_with('.')
-        && matches_v2_pattern(name)
+        && matches_existing_pattern(name)
 }
 
 /// The rule for a brain `create` makes: `^[a-z][a-z0-9]*(-[a-z0-9]+)*$`, at
-/// most 48 characters, not `all`. v2 also took `--` and a final `-`, which
-/// VS Code and OpenCode drop as skill names (research-04).
+/// most 48 characters, not `all`. It refuses the `--` and the final `-` an
+/// existing name may hold, which VS Code and OpenCode drop as skill names.
 pub fn is_valid_new_name(name: &str) -> bool {
     name != RESERVED_NAME
         && name.chars().count() <= NAME_MAX_LENGTH
@@ -156,7 +155,7 @@ pub fn is_valid_new_name(name: &str) -> bool {
         })
 }
 
-/// Why `create` refuses `name`, in v2's order and words; `None` when it is
+/// Why `create` refuses `name`, the first rule it breaks; `None` when it is
 /// a valid new name.
 pub fn new_name_error(name: &str) -> Option<String> {
     if name == RESERVED_NAME {
@@ -170,7 +169,7 @@ pub fn new_name_error(name: &str) -> Option<String> {
             "Brain name '{name}' is too long ({length} chars). Maximum is {NAME_MAX_LENGTH}."
         ));
     }
-    if !is_valid_v2_name(name) {
+    if !is_valid_existing_name(name) {
         return Some(format!(
             "Brain name '{name}' is invalid. Use lowercase letters, numbers, and hyphens only."
         ));
@@ -211,10 +210,10 @@ fn is_plain_lobe_name(name: &str) -> bool {
 }
 
 /// The lobes a `--from-config` file gives (`file` names it in messages):
-/// `None` when it gives none, so the brain type's lobes are used. As v2: a
+/// `None` when it gives none, so the brain type's lobes are used. A
 /// document that is empty or false-like and a mapping without `structure`
 /// give none; each lobe's description is Python's `str()` of its value.
-/// Refused (v2 writes outside the brain, a Python repr, or raises): a lobe
+/// Refused: a lobe
 /// name that is not one plain directory name, a mapping or list value, a
 /// `structure` that is not a mapping, a document that is not a mapping.
 pub fn structure_from_config(text: &str, file: &str) -> Result<Option<Vec<Lobe>>, String> {
@@ -263,7 +262,7 @@ pub fn structure_from_config(text: &str, file: &str) -> Result<Option<Vec<Lobe>>
 
 const README: &str = include_str!("../templates/brain_readme.md");
 
-/// v2's `GITIGNORE_CONTENT`.
+/// A new brain's `.gitignore`.
 pub const GITIGNORE: &str = include_str!("../templates/brain_gitignore");
 
 /// A lobe's first `map.md` (dream rewrites it right after).
@@ -294,7 +293,7 @@ fn glossary_md(today: &str) -> String {
     )
 }
 
-/// v2's `_generate_readme`, filled in one pass.
+/// A new brain's `README.md`: the template, filled in one pass.
 pub fn readme(name: &str, description: &str) -> String {
     let mut out = String::with_capacity(README.len());
     let mut rest = README;
@@ -335,7 +334,7 @@ impl std::error::Error for ScaffoldError {}
 /// existing empty directory is used): the lobe directories, then as one
 /// change set of new files (a file already there is an error and is left
 /// alone) each lobe's `map.md`, `kluris.yml` (`config`), `brain.md`,
-/// `glossary.md`, `README.md` and `.gitignore`, in v2's order.
+/// `glossary.md`, `README.md` and `.gitignore`, in that order.
 pub fn scaffold_brain(
     root: &Path,
     config: &BrainConfig,
@@ -391,7 +390,7 @@ fn py_strip(text: &str) -> &str {
     text.trim_matches(is_py_space)
 }
 
-/// The text v2's `_read_brain_identity` scans: `brain.md`'s body, or its whole
+/// The text [`read_brain_identity`] scans: `brain.md`'s body, or its whole
 /// text when the frontmatter does not read; `None` when it cannot be read.
 fn identity_text(brain_md: &Path) -> Option<String> {
     match frontmatter::read(brain_md) {
@@ -400,8 +399,8 @@ fn identity_text(brain_md: &Path) -> Option<String> {
     }
 }
 
-/// v2's `_read_brain_identity`: the brain's name and description from
-/// `brain.md` (its first `# ` heading when that is a valid v2 name, else
+/// The brain's name and description from
+/// `brain.md` (its first `# ` heading when that is a valid existing name, else
 /// `fallback_name`; the first non-empty line after it that is not a `## `
 /// heading, else `<fallback_name> knowledge base`).
 pub fn read_brain_identity(brain_root: &Path, fallback_name: &str) -> (String, String) {
@@ -433,7 +432,7 @@ pub fn read_brain_identity(brain_root: &Path, fallback_name: &str) -> (String, S
             break;
         }
     }
-    let name = if is_valid_v2_name(&title) {
+    let name = if is_valid_existing_name(&title) {
         title
     } else {
         fallback_name.to_string()
@@ -444,10 +443,10 @@ pub fn read_brain_identity(brain_root: &Path, fallback_name: &str) -> (String, S
     (name, description)
 }
 
-/// v2's fallback name for a brain directory: its name, lowercased with
+/// The fallback name for a brain directory: its name, lowercased with
 /// spaces as `-` when it is not a valid name.
 pub fn fallback_name(dir_name: &str) -> String {
-    if is_valid_v2_name(dir_name) {
+    if is_valid_existing_name(dir_name) {
         dir_name.to_string()
     } else {
         pycase::lower(dir_name).replace(' ', "-")
@@ -459,7 +458,7 @@ mod tests {
     use super::*;
 
     /// The scaffold only creates files: one already in the target is an
-    /// error and keeps its bytes (review T-103 finding 1).
+    /// error and keeps its bytes.
     #[test]
     fn the_scaffold_never_overwrites_a_file() {
         let dir = tempfile::TempDir::new().unwrap();
@@ -477,9 +476,9 @@ mod tests {
     }
 
     #[test]
-    fn v2_rule() {
+    fn the_rule_for_existing_names() {
         for ok in ["a", "a-b", "a--b", "a-", "abc\n", &"a".repeat(48)] {
-            assert!(is_valid_v2_name(ok), "{ok:?}");
+            assert!(is_valid_existing_name(ok), "{ok:?}");
         }
         for bad in [
             "",
@@ -492,7 +491,7 @@ mod tests {
             "abc\n\n",
             &"a".repeat(49),
         ] {
-            assert!(!is_valid_v2_name(bad), "{bad:?}");
+            assert!(!is_valid_existing_name(bad), "{bad:?}");
         }
     }
 
@@ -541,7 +540,7 @@ mod tests {
                 && name.starts_with(|c: char| c.is_ascii_lowercase());
             assert_eq!(is_valid_new_name(name), strict, "{name:?}");
             assert!(
-                !is_valid_new_name(name) || is_valid_v2_name(name),
+                !is_valid_new_name(name) || is_valid_existing_name(name),
                 "{name:?}"
             );
             assert_eq!(new_name_error(name).is_none(), strict, "{name:?}");

@@ -1,5 +1,4 @@
-//! The companion pickers of `kluris companion add|remove` (v2
-//! `_prompt_for_companions`, `_prompt_companions_to_remove`), with Click's
+//! The companion pickers of `kluris companion add|remove`, with Click's
 //! prompts and messages. They read `input` and write `out`; the caller
 //! decides whether a terminal may be asked at all.
 
@@ -146,7 +145,7 @@ mod tests {
     }
 
     #[test]
-    fn add_choices_map_like_v2() {
+    fn add_choices_map_to_companions() {
         assert_eq!(add_choice("").unwrap(), Vec::<String>::new());
         assert_eq!(add_choice("3").unwrap(), ["specmint-core", "specmint-tdd"]);
         assert_eq!(add_choice("7").unwrap(), KNOWN);

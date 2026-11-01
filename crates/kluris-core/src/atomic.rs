@@ -466,7 +466,7 @@ mod tests {
     }
 
     /// A private file's new bytes are never readable by others, not even in
-    /// the temp file a crash leaves behind (review T-106).
+    /// the temp file a crash leaves behind.
     #[cfg(unix)]
     #[test]
     fn the_temp_file_is_private_until_it_has_the_targets_permissions() {

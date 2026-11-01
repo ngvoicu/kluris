@@ -1,4 +1,4 @@
-//! BM25F over search units (research-05 §3): one length-normalised,
+//! BM25F over search units: one length-normalised,
 //! weighted term frequency per unit summed over its fields, then the BM25
 //! saturation with `k1` [`K1`] and the inverse document frequency
 //! `ln(1 + (N - df + 0.5) / (df + 0.5))`, where `N` is the number of units and
@@ -40,8 +40,8 @@ impl Field {
     }
 }
 
-/// Field weights: title 3, tags 2, path 1.5, headings 1.5, body 1 (research-05
-/// §3; v2's 10/5/3/1 measured the same).
+/// Field weights: title 3, tags 2, path 1.5, headings 1.5, body 1 (measured
+/// against the search evaluation's queries).
 pub const FIELD_WEIGHTS: [f64; FIELDS] = [3.0, 2.0, 1.5, 1.5, 1.0];
 
 /// Term-frequency saturation.

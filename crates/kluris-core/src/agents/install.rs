@@ -1,6 +1,6 @@
-//! Installing every registered brain's skill into the agents' skill folders
-//! (v2 `_do_install`, with the `~/.agents/skills`-first matrix and the
-//! narrowed sweep).
+//! Installing every registered brain's skill into the agents' skill folders:
+//! `~/.agents/skills` first, then the agents that need their own folder,
+//! and a sweep that removes only what Kluris wrote.
 //!
 //! 1. `~/.agents/skills` always gets one `kluris-<brain>/SKILL.md` per brain.
 //! 2. Each selected registry agent's own folders get the same bytes
@@ -9,7 +9,7 @@
 //!    selects the whole registry. Only selected folders are ever created.
 //! 3. Each written folder is staged then renamed, skill by skill: a failure
 //!    leaves that folder's old skills in place and is reported for it.
-//!    Kluris-written skills of brains no longer registered are removed.
+//!    Kluris-written skills of brains that are not registered are removed.
 //! 4. The folders of deselected registry agents lose every Kluris-written
 //!    skill (the folders stay). Every folder written or cleared also loses
 //!    the staging folders an earlier run left (`.kluris-<brain>.<pid>-<16
@@ -18,11 +18,11 @@
 //!    Kluris-written skills and workflows earlier releases left in folders
 //!    Kluris writes no skill to ([`crate::upgrade::skills::folders`]).
 //!
-//! What may be removed (SPEC decision 2026-10-26, T-103):
+//! What may be removed:
 //!
 //! - Only an entry proven Kluris's: a folder holding nothing but a
 //!   `SKILL.md` file that [`render::is_generated_skill`] recognises under
-//!   the entry's own name (v3's marker, or a v1/v2 release's full
+//!   the entry's own name (the marker, or an earlier release's full
 //!   template), a link to such a folder (the link goes, never what it
 //!   points at), or a workflow [`render::is_generated_workflow`]
 //!   recognises. Finder's and Explorer's `.DS_Store`, `Thumbs.db` and
@@ -174,7 +174,7 @@ pub fn install_skills(req: &InstallRequest) -> InstallReport {
 pub fn install_skills_with(req: &InstallRequest, ops: &dyn FileOps) -> InstallReport {
     let mut report = InstallReport::default();
 
-    // The selection: the union of commands_for (v2), empty means all.
+    // The selection: the union of commands_for, empty means all.
     let mut selected: BTreeSet<&str> = BTreeSet::new();
     for (name, brain) in req.brains {
         match brain {
@@ -261,7 +261,8 @@ pub fn install_skills_with(req: &InstallRequest, ops: &dyn FileOps) -> InstallRe
 
 /// Remove every Kluris-written skill (and Windsurf workflow) from every
 /// folder Kluris has written to: `~/.agents/skills`, each registry agent's
-/// folders, and the folders only v2 used (`kluris self-uninstall --purge`).
+/// folders, and the folders only earlier releases wrote to (`kluris
+/// self-uninstall --purge`).
 /// A user's own `kluris-*` folder is never touched. One report per folder
 /// that exists, in that order.
 pub fn remove_generated_skills(home: &Path, copilot_home: Option<&Path>) -> Vec<DestinationReport> {
@@ -730,7 +731,8 @@ fn staged_base(name: &str, kind: Kind) -> Option<&str> {
 }
 
 /// A name like a staging folder's, of any run or version:
-/// `.kluris*.tmp`, `.kluris*.old` or v2's workflow `.kluris*.tmp.md`.
+/// `.kluris*.tmp`, `.kluris*.old` or an earlier release's workflow
+/// `.kluris*.tmp.md`.
 fn is_staging_like(name: &str) -> bool {
     name.starts_with(".kluris")
         && [".tmp", ".old", ".tmp.md"]

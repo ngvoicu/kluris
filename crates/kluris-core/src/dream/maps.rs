@@ -15,7 +15,7 @@ use crate::frontmatter::{
 use crate::pycase;
 use crate::yaml::{Date, Map, Value, date_iso, is_py_space};
 
-/// The files a map never lists (v2 maps' `SKIP_FILES`).
+/// The files a map never lists.
 const SKIP_FILES: [&str; 7] = [
     "map.md",
     "brain.md",
@@ -158,9 +158,9 @@ fn write_if_changed<S: BrainStore>(
     let old = if ws.exists(rel) {
         match ws.read(rel, Read::Lenient) {
             Ok(fm) => Some(fm),
-            // `create`'s own scaffold map can itself not parse (v2 writes a
-            // lobe description with `: ` unquoted); v2 regenerates it, and so
-            // does Kluris 3, keeping its line endings.
+            // `create`'s own scaffold map can itself not parse (a lobe
+            // description with `: ` is written unquoted); it is regenerated,
+            // keeping its line endings.
             Err(_) if ws.own_structure => ws.text(rel).map(|text| Frontmatter {
                 meta: Map::new(),
                 body: String::new(),
@@ -267,8 +267,8 @@ fn generate_map<S: BrainStore>(ws: &mut Workspace<'_, S>, dir: &str, today: Date
     write_if_changed(ws, &join(dir, "map.md"), meta, &content, today);
 }
 
-/// The directories in v2's map order: deepest first, then by path text
-/// (native separators, as v2 compares `str(path)`).
+/// The directories in map order: deepest first, then by path text
+/// (native separators, as Python compares `str(path)`).
 pub(crate) fn map_order(dirs: &[String]) -> Vec<String> {
     let mut dirs = dirs.to_vec();
     let native = |rel: &str| rel.replace('/', std::path::MAIN_SEPARATOR_STR);

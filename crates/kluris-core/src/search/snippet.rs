@@ -2,7 +2,7 @@
 //! window that holds the most matched words, `...` where the chunk goes on.
 //! Every cut falls on a character boundary.
 
-/// The snippet width in characters (v2's).
+/// The snippet width in characters.
 pub const WIDTH: usize = 200;
 
 /// The snippet of `text` around the matched words at byte ranges `spans`

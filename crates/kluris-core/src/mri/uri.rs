@@ -1,6 +1,5 @@
 //! The `file://` link `kluris mri` prints: Python 3.11's `Path.as_uri()` of
-//! the resolved page, or under WSL the Windows path `wslpath -w` gives
-//! (v2's `_is_wsl` and `_windows_path_if_wsl`, `cli.py:1525-1553`).
+//! the resolved page, or under WSL the Windows path `wslpath -w` gives.
 
 use std::ffi::OsStr;
 use std::path::Path;
@@ -41,14 +40,14 @@ pub fn file_uri(path: &Path) -> String {
     }
 }
 
-/// v2's `_is_wsl`: `WSL_DISTRO_NAME` is set (and not empty), or
+/// Whether this is WSL: `WSL_DISTRO_NAME` is set (and not empty), or
 /// `/proc/version` mentions `microsoft` in any case.
 pub fn is_wsl(distro: Option<&OsStr>, proc_version: Option<&str>) -> bool {
     distro.is_some_and(|d| !d.is_empty())
         || proc_version.is_some_and(|v| v.to_lowercase().contains("microsoft"))
 }
 
-/// The link v2 builds from `wslpath -w`: `file://` + the UNC path without its
+/// The link built from `wslpath -w`: `file://` + the UNC path without its
 /// leading backslashes, backslashes turned into slashes.
 pub fn wsl_file_uri(windows_path: &str) -> String {
     format!(
@@ -57,7 +56,7 @@ pub fn wsl_file_uri(windows_path: &str) -> String {
     )
 }
 
-/// v2's `_windows_path_if_wsl`: under WSL, `wslpath -w <path>`'s trimmed
+/// Under WSL, `wslpath -w <path>`'s trimmed
 /// output when it succeeds and says something; `None` otherwise.
 pub fn windows_path_if_wsl(path: &Path) -> Option<String> {
     let proc_version = std::fs::read_to_string("/proc/version").ok();
