@@ -140,6 +140,9 @@ pub trait Git {
     /// `branch.<branch>.remote` and `branch.<branch>.merge`.
     fn set_upstream(&self, dir: &Path, branch: &str, remote: &str) -> Result<(), GitError>;
 
+    /// `git branch --unset-upstream <branch>`.
+    fn unset_upstream(&self, dir: &Path, branch: &str) -> Result<(), GitError>;
+
     /// `git add <pathspec>`.
     fn add(&self, dir: &Path, pathspec: &str) -> Result<(), GitError>;
 
@@ -515,6 +518,11 @@ impl Git for SystemGit {
         let merge = format!("refs/heads/{branch}");
         self.run(dir, &["config", &format!("branch.{branch}.remote"), remote])?;
         self.run(dir, &["config", &format!("branch.{branch}.merge"), &merge])
+            .map(drop)
+    }
+
+    fn unset_upstream(&self, dir: &Path, branch: &str) -> Result<(), GitError> {
+        self.run(dir, &["branch", "--unset-upstream", branch])
             .map(drop)
     }
 

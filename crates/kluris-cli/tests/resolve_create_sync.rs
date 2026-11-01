@@ -712,3 +712,139 @@ fn create_without_a_remote_opens_no_session() {
         .unwrap();
     assert!(!out.status.success(), "an upstream was set");
 }
+
+// --- the first push to a remote --------------------------------------------------------
+
+/// A bare remote at `<home>/<name>.git` whose only branch, `notes`, holds
+/// someone else's commit; its `file://` URL.
+fn occupied_remote(h: &Home, name: &str) -> String {
+    let url = empty_remote(h, name);
+    seed_other_branch(h, &url);
+    url
+}
+
+/// Someone else pushes a `notes` branch to the remote at `url`.
+fn seed_other_branch(h: &Home, url: &str) {
+    let seed = h.dir.path().join("seed");
+    fs::create_dir_all(&seed).unwrap();
+    h.git(&seed, &["init", "-q", "-b", "notes"]);
+    h.configure(&seed, "Someone Else", "else@example.com");
+    h.commit(&seed, "notes.md", "# Someone else's\n");
+    h.git(&seed, &["push", "-q", url, "notes"]);
+}
+
+/// The branches of the bare remote at `<home>/<name>.git`.
+fn remote_heads(h: &Home, name: &str) -> String {
+    let bare = h.dir.path().join(format!("{name}.git"));
+    h.git(
+        &bare,
+        &["for-each-ref", "--format=%(refname)", "refs/heads"],
+    )
+    .trim()
+    .to_string()
+}
+
+/// Whether the brain at `root` has `branch.main.remote` set.
+fn has_upstream(h: &Home, root: &Path) -> bool {
+    let mut cmd = std::process::Command::new("git");
+    h.hermetic(&mut cmd);
+    cmd.args(["config", "--get", "branch.main.remote"])
+        .current_dir(root)
+        .output()
+        .unwrap()
+        .status
+        .success()
+}
+
+#[test]
+fn a_create_refused_for_an_occupied_remote_sets_no_upstream_and_a_read_pushes_nothing() {
+    let h = Home::new();
+    let url = occupied_remote(&h, "alpha");
+    let (code, doc) = create(&h, Some(&url));
+    assert_eq!(code, 0, "{doc}");
+    assert_eq!(
+        doc["sync"]["left_as_is"]["detail"], REMOTE_HAS_COMMITS,
+        "{doc}"
+    );
+    let root = h.dir.path().join("alpha");
+    assert!(!has_upstream(&h, &root), "an upstream was set");
+    assert_eq!(h.git(&root, &["remote"]).trim(), "origin");
+    let (code, doc) = h.json(&["status", "--brain", "alpha", "--json"]);
+    assert_eq!(code, 0, "{doc}");
+    assert_eq!(doc["brains"][0].get("sync"), None, "{doc}");
+    let sync_dir = root.join(".git").join("kluris-sync");
+    assert!(!sync_dir.join("background.log").exists(), "a push started");
+    assert_eq!(remote_heads(&h, "alpha"), "refs/heads/notes");
+}
+
+#[cfg(unix)]
+#[test]
+fn a_background_push_to_a_remote_another_branch_occupies_is_refused() {
+    let h = Home::new();
+    let url = empty_remote(&h, "alpha");
+    let (code, doc) = create(&h, Some(&offline_url()));
+    assert_eq!(code, 0, "{doc}");
+    let root = h.dir.path().join("alpha");
+    h.git(&root, &["remote", "set-url", "origin", &url]);
+    seed_other_branch(&h, &url);
+    let (code, doc) = h.json(&["status", "--brain", "alpha", "--json"]);
+    assert_eq!(code, 0, "{doc}");
+    wait_for_background(&root);
+    let record = LastPush::read(&root.join(".git").join(LAST_PUSH)).expect("a record");
+    assert_eq!(record.result, PushResult::Refused, "{record:?}");
+    assert_eq!(record.detail.as_deref(), Some(REMOTE_HAS_COMMITS));
+    assert_eq!(remote_heads(&h, "alpha"), "refs/heads/notes");
+}
+
+#[test]
+fn an_upstream_set_by_hand_to_an_occupied_remote_is_refused_and_nothing_is_pushed() {
+    let h = Home::new();
+    let url = occupied_remote(&h, "alpha");
+    let (code, doc) = create(&h, None);
+    assert_eq!(code, 0, "{doc}");
+    let root = h.dir.path().join("alpha");
+    h.git(&root, &["remote", "add", "origin", &url]);
+    h.git(&root, &["config", "branch.main.remote", "origin"]);
+    h.git(&root, &["config", "branch.main.merge", "refs/heads/main"]);
+    let (code, doc) = h.json(&["sync", "--brain", "alpha", "--json"]);
+    assert_eq!(code, 1, "{doc}");
+    let sync = &doc["brains"][0]["sync"];
+    assert_eq!(*reason(sync), "refused", "{doc}");
+    assert_eq!(sync["left_as_is"]["detail"], REMOTE_HAS_COMMITS, "{doc}");
+    assert_eq!(sync["pushed"], false, "{doc}");
+    assert_eq!(remote_heads(&h, "alpha"), "refs/heads/notes");
+}
+
+#[test]
+fn a_brain_created_on_an_empty_remote_keeps_pushing() {
+    let h = Home::new();
+    let url = empty_remote(&h, "alpha");
+    let (code, doc) = create(&h, Some(&url));
+    assert_eq!(code, 0, "{doc}");
+    assert_eq!(doc["sync"]["pushed"], true, "{doc}");
+    let root = h.dir.path().join("alpha");
+    h.configure(&root, "Ana Tester", "ana@example.com");
+    h.commit(&root, "notes/second.md", &neuron("Second", BODY));
+    let (code, doc) = h.json(&["sync", "--brain", "alpha", "--json"]);
+    assert_eq!(code, 0, "{doc}");
+    assert_eq!(doc["brains"][0]["sync"]["pushed"], true, "{doc}");
+    assert_eq!(bare_main(&h, "alpha"), head(&h, &root));
+    assert_eq!(remote_heads(&h, "alpha"), "refs/heads/main");
+}
+
+// --- the waiting merge's id in text ----------------------------------------------------
+
+#[test]
+fn every_commands_text_names_the_waiting_merge_with_its_conflicts() {
+    let mut h = Home::new();
+    let (_, merge) = h.conflicts("alpha", &["notes/first.md"]);
+    let said = format!("kluris: alpha: 1 conflict (notes/first.md) in merge {merge}");
+    for args in [
+        &["status", "--brain", "alpha"][..],
+        &["wake-up", "--brain", "alpha"],
+        &["sync", "--brain", "alpha"],
+    ] {
+        let (_, _, err) = h.run(args);
+        assert!(err.starts_with(&said), "{args:?}: {err}");
+    }
+}

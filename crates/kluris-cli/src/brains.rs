@@ -185,7 +185,7 @@ fn plural(n: usize, one: &str, many: &str) -> String {
 }
 
 /// What a brain's sync did, in a few words: `pulled 2 commits; 1 conflict
-/// (notes/c.md)`, and what the last background push did (`last push
+/// (notes/c.md) in merge 88e6700161ad`, and what the last background push did (`last push
 /// refused: <why>`, `last push needs_pull`, `pushed 2 commits in the
 /// background`); `None` when it has nothing to say.
 pub fn summary(report: &SyncReport) -> Option<String> {
@@ -199,12 +199,15 @@ pub fn summary(report: &SyncReport) -> Option<String> {
     if !report.auto_merged.is_empty() {
         parts.push(format!("auto-merged {}", report.auto_merged.join(", ")));
     }
-    if !report.conflicts.is_empty() {
+    if let Some(first) = report.conflicts.first() {
+        // Every conflict belongs to the one waiting merge, whose id
+        // `kluris resolve --merge` names.
         let paths: Vec<&str> = report.conflicts.iter().map(|c| c.path.as_str()).collect();
         parts.push(format!(
-            "{} ({})",
+            "{} ({}) in merge {}",
             plural(report.conflicts.len(), "conflict", "conflicts"),
-            paths.join(", ")
+            paths.join(", "),
+            first.merge
         ));
     }
     if report.behind_conflict > 0 {

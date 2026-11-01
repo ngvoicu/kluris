@@ -64,6 +64,9 @@ impl Git for FakeGit {
     fn set_upstream(&self, _: &Path, _: &str, _: &str) -> Result<(), GitError> {
         unreachable!()
     }
+    fn unset_upstream(&self, _: &Path, _: &str) -> Result<(), GitError> {
+        unreachable!()
+    }
     fn add(&self, _: &Path, _: &str) -> Result<(), GitError> {
         unreachable!()
     }

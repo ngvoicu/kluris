@@ -382,11 +382,14 @@ fn a_conflict_a_read_meets_carries_both_texts_and_its_merge() {
     // The text says it on stderr, with what the background push of the
     // commit waiting found, when one ran.
     let last = last_push_said(&root);
+    let merge = recorded_merge(&h);
     let (code, _, err) = h.run_args(&Read::WakeUp.args(&root, false));
     assert_eq!(code, 0);
     assert_eq!(
         err,
-        format!("kluris: alpha: 1 conflict (notes/first.md); 1 commit to push{last}\n")
+        format!(
+            "kluris: alpha: 1 conflict (notes/first.md) in merge {merge}; 1 commit to push{last}\n"
+        )
     );
     wait_for_background(&root);
 }
@@ -412,12 +415,15 @@ fn status_shows_a_waiting_conflict_and_only_then() {
     // waiting found, once it is done.
     wait_for_background(&root);
     let last = last_push_said(&root);
+    let merge = sync["conflicts"][0]["merge"].as_str().unwrap().to_string();
     let (code, out, err) = h.run(&["status", "--brain", "alpha"]);
     assert_eq!(code, 0);
     assert!(!out.contains("Sync:"), "{out}");
     assert_eq!(
         err,
-        format!("kluris: alpha: 1 conflict (notes/first.md); 1 commit to push{last}\n")
+        format!(
+            "kluris: alpha: 1 conflict (notes/first.md) in merge {merge}; 1 commit to push{last}\n"
+        )
     );
     // Once settled and pushed, no conflict and nothing to push is said: no
     // key, or (where the background push ran and found the remote ahead)
@@ -559,10 +565,14 @@ fn doctor_warns_for_a_brain_offline_or_in_conflict_and_never_fails() {
             "{c}"
         );
     }
+    let merge = sync_of(&a)["conflicts"][0]["merge"]
+        .as_str()
+        .unwrap()
+        .to_string();
     assert_eq!(
         a["detail"],
         format!(
-            "{}; 1 conflict (notes/first.md); 1 commit to push",
+            "{}; 1 conflict (notes/first.md) in merge {merge}; 1 commit to push",
             alpha.display()
         )
     );
@@ -586,7 +596,9 @@ fn doctor_warns_for_a_brain_offline_or_in_conflict_and_never_fails() {
     assert_eq!(lines.len(), 2, "{err}");
     assert_eq!(
         lines[0],
-        format!("kluris: alpha: 1 conflict (notes/first.md); 1 commit to push{last}")
+        format!(
+            "kluris: alpha: 1 conflict (notes/first.md) in merge {merge}; 1 commit to push{last}"
+        )
     );
     assert!(
         lines[1].starts_with("kluris: beta: left as is (refused): "),

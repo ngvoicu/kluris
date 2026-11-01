@@ -517,7 +517,9 @@ When kluris sync leaves a conflict (kluris status lists it), choose for \
 each conflicted path: --ours keeps this brain's version, --theirs the \
 remote's (a deletion included), --file the content you merged by hand \
 (checked first: its frontmatter must read). --merge names the waiting \
-merge the choice answers (kluris sync and kluris status show its id); one \
+merge the choice answers: every command that opens the brain names it in \
+its stderr line (1 conflict (PATH) in merge ID), and --json in \
+sync.conflicts[].merge; one \
 the brain has replaced since is refused, with its new id and sides, and \
 nothing is recorded. Each call first brings in what teammates pushed. With \
 the last path, the merge is committed under your git identity, the brain \

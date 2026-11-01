@@ -333,9 +333,12 @@ its branch gets its upstream (`branch.main.remote` and `branch.main.merge`,
 as `git push -u` writes them), and the first push sends it when the remote
 is empty. A remote that already has a branch is left alone, nothing merged
 or pushed (`refused`: clone it and run `kluris register` on the clone, or
-point `--remote` at an empty repository); offline or turned away, the brain
-is kept with its upstream set, and the next command that opens it pushes
-it. `kluris create --json` adds the `sync` object after its own keys; the
+point `--remote` at an empty repository), and the brain keeps `origin` but
+gets no upstream; offline or turned away, the brain is kept with its
+upstream set, and the next command that opens it pushes it. Every push
+guards that first publication: when the remote has no branch of the
+brain's name but has another, the push is refused the same way, with
+nothing pushed. `kluris create --json` adds the `sync` object after its own keys; the
 exit code is 0 whenever the brain was created.
 
 For each brain, `kluris sync` fetches its branch's upstream (it never asks
@@ -420,7 +423,8 @@ hook stopped the merge or the push), `failed` (git stopped partway) or `no_upstr
 with no remote at all says `add one with git remote add origin <url>, then
 git push -u origin main`); `detail` gives git's message and the fix. Without `--json`, every brain
 that has something to say also gets one line on stderr, such as `kluris:
-acme: pulled 2 commits; 1 conflict (notes/c.md)`. The exit code is 1 when a
+acme: pulled 2 commits; 1 conflict (notes/c.md) in merge 88e6700161ad`,
+which names the waiting merge's id for `kluris resolve --merge`. The exit code is 1 when a
 brain has a conflict or was left as it is for any reason but `offline` and
 `no_upstream`.
 
@@ -476,8 +480,11 @@ repository named `timed out.git` is still refused.
 
 ### Settle a conflict
 
-`kluris status` and `kluris sync` show an open conflict, its paths and the
-id of the waiting merge they belong to (`--merge`), with the command to run.
+Every command that opens the brain names an open conflict's paths and the
+id of the waiting merge they belong to (`--merge`) in its stderr line,
+`kluris: acme: 1 conflict (knowledge/auth.md) in merge 4ba0581dd58e`, and in
+`--json` as `sync.conflicts[].merge`; `kluris sync` also prints the command
+to run.
 Choose for each path:
 
 ```sh

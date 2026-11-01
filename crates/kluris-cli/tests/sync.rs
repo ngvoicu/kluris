@@ -115,7 +115,7 @@ fn brain_all_syncs_the_clean_brain_and_reports_the_conflicted_one() {
     );
     assert_eq!(
         err,
-        "kluris: alpha: 1 conflict (notes/first.md); 1 commit to push\n"
+        format!("kluris: alpha: 1 conflict (notes/first.md) in merge {merge}; 1 commit to push\n")
     );
 }
 

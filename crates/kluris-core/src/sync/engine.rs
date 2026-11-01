@@ -52,6 +52,12 @@
 //! stops the transfer to the URL it ran for; it undoes nothing the sync
 //! pulled or merged, nor a push another URL already took.
 //!
+//! A branch's first push to its remote, after a fetch that found no branch
+//! of its name there, asks the remote for its branches (`git ls-remote
+//! --heads`) first: one that has any is someone else's, and the push is
+//! refused ([`occupied`]) with nothing pushed. Every push takes this path:
+//! an explicit command's, the background push, and a retry.
+//!
 //! [`sync`] pulls again after a push the remote turned back because it
 //! moved, [`PUSH_ATTEMPTS`] times at most ([`share`]). Only the fetch and
 //! the push are bounded in time, unless the caller bounds every step before
@@ -63,6 +69,7 @@
 //! of [`pull`]: [`fetch_upstream`] under the remote claim, and
 //! [`pull_fetched`] under the tree claim it holds.
 
+use std::cell::Cell;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -118,6 +125,9 @@ pub struct Context<'a, G> {
     branch: Option<String>,
     upstream: Option<Upstream>,
     request: SyncRequest<'a>,
+    /// The last fetch found no branch of the upstream's name on the remote:
+    /// a push is then its first there, and is guarded ([`occupied`]).
+    lacks_branch: Cell<bool>,
 }
 
 impl<'a, G: SyncGit> Context<'a, G> {
@@ -238,6 +248,7 @@ pub fn open<'a, G: SyncGit>(
         branch,
         upstream,
         request: *request,
+        lacks_branch: Cell::new(false),
     })
 }
 
@@ -472,7 +483,7 @@ pub fn no_remote<G: SyncGit>(ctx: &Context<G>) -> LeftAsIs {
 /// Whether the upstream's remote has any branch at all (`git ls-remote
 /// --heads`), asked within the request's network time limit; or why it
 /// could not say (`offline`, `refused`).
-pub fn remote_has_branches<G: SyncGit>(ctx: &Context<G>) -> Result<bool, LeftAsIs> {
+fn remote_has_branches<G: SyncGit>(ctx: &Context<G>) -> Result<bool, LeftAsIs> {
     let upstream = upstream(ctx)?;
     let deadline = Instant::now() + ctx.request.network_time_limit;
     ctx.git
@@ -495,13 +506,33 @@ pub fn fetch_upstream<G: SyncGit>(
 ) -> Result<Option<String>, LeftAsIs> {
     let (git, repo) = (&ctx.git, &ctx.repo);
     let deadline = Instant::now() + ctx.request.network_time_limit;
-    match fetch::fetch(git, repo, upstream, &ctx.dirs.common, deadline)? {
-        Fetch::Moved { new, .. } => Ok(Some(new)),
-        Fetch::Same { at } => Ok(Some(at)),
-        Fetch::NoBranch => Ok(None),
-        Fetch::Offline => Err(offline()),
-        Fetch::Refused { detail } => Err(LeftAsIs::because(LeftReason::Refused, detail)),
-    }
+    let theirs = match fetch::fetch(git, repo, upstream, &ctx.dirs.common, deadline)? {
+        Fetch::Moved { new, .. } => Some(new),
+        Fetch::Same { at } => Some(at),
+        Fetch::NoBranch => None,
+        Fetch::Offline => return Err(offline()),
+        Fetch::Refused { detail } => {
+            return Err(LeftAsIs::because(LeftReason::Refused, detail));
+        }
+    };
+    ctx.lacks_branch.set(theirs.is_none());
+    Ok(theirs)
+}
+
+/// Why a push is refused: the remote has no branch of the brain's name
+/// but has another, so the brain would land beside someone else's
+/// history, and the teammates who clone the remote would get that branch.
+pub const REMOTE_OCCUPIED: &str = "the remote already has commits; clone it and run kluris register on the clone, or point --remote at an empty repository";
+
+/// The brain left as it is because the remote is someone else's
+/// ([`REMOTE_OCCUPIED`]): `refused`.
+pub fn occupied() -> LeftAsIs {
+    LeftAsIs::because(LeftReason::Refused, REMOTE_OCCUPIED)
+}
+
+/// Whether `left` is [`occupied`].
+pub fn is_occupied(left: &LeftAsIs) -> bool {
+    left.reason == LeftReason::Refused && left.detail.as_deref() == Some(REMOTE_OCCUPIED)
 }
 
 fn offline() -> LeftAsIs {
@@ -687,6 +718,10 @@ fn push_head<G: SyncGit>(ctx: &Context<G>) -> Result<Pushed, LeftAsIs> {
     }
     // git pushes the pinned branch by its ref: it must have a commit.
     ctx.branch_commit(&upstream.branch)?;
+    // The branch's first push to this remote: never beside another branch.
+    if ctx.lacks_branch.get() && remote_has_branches(ctx)? {
+        return Err(occupied());
+    }
     let deadline = Instant::now() + ctx.request.network_time_limit;
     match git.push(repo, upstream, deadline) {
         PushOutcome::Pushed => Ok(Pushed::Pushed),

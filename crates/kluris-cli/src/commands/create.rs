@@ -4,17 +4,20 @@
 //! With `--remote`, the new brain's branch gets its upstream, and an
 //! explicit session pushes it to the remote when the remote has no branch
 //! at all; a remote that has one is refused, before anything is merged or
-//! pushed, and the brain is kept. Offline or turned away, the brain is
-//! kept too, and the next command that opens it pushes it. The `sync`
+//! pushed, and the brain is kept without an upstream. Offline or turned
+//! away, the brain is kept with its upstream, and the next command that
+//! opens it pushes it, under the same refusal. The `sync`
 //! object says which; the brain was created, so the exit code is 0.
+
+use std::path::Path;
 
 use kluris_core::companions::prompt::pick_to_add;
 use kluris_core::create::{CreateError, CreateInput, CreateRequest, Created, create, wizard};
-use kluris_core::git::SystemGit;
+use kluris_core::git::{Git, SystemGit};
 use kluris_core::scaffold::DEFAULT_BRAIN_TYPE;
+use kluris_core::sync::SyncReport;
 use kluris_core::sync::engine;
 use kluris_core::sync::session::Intent;
-use kluris_core::sync::{LeftAsIs, LeftReason, SyncReport};
 use kluris_core::yaml::Date;
 
 use crate::brains::{self, Target};
@@ -37,33 +40,24 @@ pub struct Options {
     pub json: bool,
 }
 
-/// Why the new brain is not pushed to a remote that has a branch already.
-const REMOTE_HAS_COMMITS: &str = "the remote already has commits; clone it and run kluris register on the clone, or point --remote at an empty repository";
-
 /// The new brain's first push, through an explicit session: what its sync
-/// did. A remote with any branch (the brain's own, or another) is refused
-/// and nothing is pushed, so a brain never lands beside someone else's
-/// history.
-fn push_new_brain(created: &Created, today: Date) -> Option<SyncReport> {
+/// did. A remote with any branch is someone else's: its own branch of the
+/// brain's name the open's pull refuses before any merge, another the push
+/// refuses (`engine::occupied`); nothing is pushed, and the branch's
+/// upstream goes, so no later command pushes it there either.
+fn push_new_brain(created: &Created, branch: &str, today: Date) -> Option<SyncReport> {
     let targets = [Target::new(&created.path, &created.name, "")];
     let mut opened = brains::open(&targets, Intent::Explicit, today, false);
-    let session = opened.first()?;
-    let occupied = match (session.fetched(), session.context()) {
-        (Some(Some(_)), _) => Ok(true),
-        (Some(None), Some(ctx)) => engine::remote_has_branches(ctx),
-        // It did not fetch: the report says why, and the close pushes
-        // nothing.
-        _ => Ok(false),
-    };
-    let left = match occupied {
-        Ok(false) => return brains::close(opened).into_iter().next()?.report,
-        Ok(true) => LeftAsIs::because(LeftReason::Refused, REMOTE_HAS_COMMITS),
-        Err(left) => left,
-    };
-    let mut report = session.report().cloned().unwrap_or_default();
-    // Ended without the close: nothing is pushed.
-    drop(opened);
-    report.left_as_is = Some(left);
+    let own_branch = matches!(opened.first()?.fetched(), Some(Some(_)));
+    let mut report = brains::close(opened).into_iter().next()?.report?;
+    if own_branch {
+        report.left_as_is = Some(engine::occupied());
+    }
+    if report.left_as_is.as_ref().is_some_and(engine::is_occupied) {
+        // Reads leave a brain without an upstream alone. Should this fail,
+        // every push is still refused the same way.
+        let _ = SystemGit::new().unset_upstream(Path::new(&created.path), branch);
+    }
     Some(report)
 }
 
@@ -131,7 +125,7 @@ pub fn run(options: Options) -> Result<(), CliError> {
         eprintln!("{warning}");
     }
     let remote = request.remote.filter(|r| !r.is_empty() && !request.no_git);
-    let sync = remote.and_then(|_| push_new_brain(&created, today));
+    let sync = remote.and_then(|_| push_new_brain(&created, request.branch, today));
     let skills = refresh_skills(&home)?;
     print_failures(&skills, &home);
 
