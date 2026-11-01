@@ -30,7 +30,7 @@ use std::process::{Child, Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use common::{ISOLATED_VARS, SERIAL, World, detail, neuron, options, reason, wait_bounded};
+use common::{ISOLATED_VARS, Owned, SERIAL, World, detail, neuron, options, reason, wait_bounded};
 use kluris_core::config::{parse_brain_config, read_brain_config, write_brain_config};
 use kluris_core::git::SystemGit;
 use kluris_core::sync::claim::{COMMAND_BOUND, READ_BOUND, RemoteClaim, TreeClaim};
@@ -476,6 +476,84 @@ fn a_stalled_merge_hook_stops_at_the_reads_bound() {
     assert!(!late.exists(), "the hook went on past the bound");
 }
 
+/// A read has one local deadline, fixed when it starts: a pull that ran
+/// out of it leaves none to the lookup of the conflict that waits. With a
+/// conflict waiting and `cat-file --batch` stalled, the read is busy within
+/// its 10 s, and the stalled git ran once.
+#[cfg(unix)]
+#[test]
+fn a_stalled_conflict_lookup_keeps_a_read_within_its_one_bound() {
+    let w = World::new();
+    overlapping(&w);
+    let found = session_at(&w, &w.ours, Intent::Read, at(0)).expect("a report");
+    assert_eq!(found.conflicts.len(), 1, "no waiting merge: {found:?}");
+    let runs = w.dir.path().join("cat-file.log");
+    let stalled = format!("echo run >> '{}'\n{STALL}", sh_path(&runs));
+    let env = SessionEnv {
+        git: git_that(&w, " cat-file --batch ", &stalled),
+        no_verify: false,
+        now: at(61),
+        program: None,
+    };
+    let started = Instant::now();
+    let report =
+        session::close(session::open(brain(&w.ours), Intent::Read, &env)).expect("a report");
+    let took = started.elapsed();
+    assert!(took < READ_LOCAL_LIMIT + ROOM, "{took:?}");
+    assert_eq!(reason(&report), Some("busy"), "{report:?}");
+    let ran = fs::read_to_string(&runs).unwrap_or_default();
+    assert_eq!(ran.lines().count(), 1, "cat-file --batch ran: {ran:?}");
+}
+
+/// A fetch cut short by the read's local bound, not its own 3 s, is the
+/// read's: busy within its 10 s, with no back-off and no fetch stamp, so
+/// the next read fetches and lands. A slow discovery uses 8 of the 10 s and
+/// a slow (2.4 s) but working remote the rest.
+#[cfg(unix)]
+#[test]
+fn a_fetch_cut_by_the_reads_local_bound_holds_no_fetch_off() {
+    let w = World::new();
+    teammate_pushes(&w, "ideas/new.md");
+    let paused = w.dir.path().join("paused-once");
+    upload_pack(
+        &w,
+        &w.ours,
+        "slow-once-upload-pack.sh",
+        &format!(
+            "[ -e '{0}' ] || {{ : > '{0}'; sleep 2.4; }}\nexec git upload-pack \"$@\"\n",
+            sh_path(&paused)
+        ),
+    );
+    let before = w.head(&w.ours);
+    let env = SessionEnv {
+        git: git_that(
+            &w,
+            " rev-parse --is-inside-work-tree --show-prefix ",
+            "sleep 8",
+        ),
+        no_verify: false,
+        now: at(0),
+        program: None,
+    };
+    let started = Instant::now();
+    let report =
+        session::close(session::open(brain(&w.ours), Intent::Read, &env)).expect("a report");
+    let took = started.elapsed();
+    assert!(took < READ_LOCAL_LIMIT + ROOM, "{took:?}");
+    assert_eq!(reason(&report), Some("busy"), "{report:?}");
+    assert!(
+        detail(&report).contains("within the read's 10 s"),
+        "{report:?}"
+    );
+    let common = w.ours.join(".git");
+    assert!(!common.join(BACKOFF).exists(), "a back-off was written");
+    assert!(!common.join(STAMP).exists(), "a fetch stamp was written");
+    assert_eq!(w.head(&w.ours), before);
+    let report = session_at(&w, &w.ours, Intent::Read, at(61)).expect("a report");
+    assert_eq!(report.pulled, 1, "{report:?}");
+    assert_eq!(w.head(&w.ours), w.remote_head());
+}
+
 /// Whether the process `pid` (as the hooks' shell numbers it) runs.
 fn alive(w: &World, pid: &str) -> bool {
     let alias = format!("alias.alive=!kill -0 {pid} 2>/dev/null");
@@ -808,15 +886,17 @@ fn shaped(count: usize, pull: Pull) -> Brains {
     brains
 }
 
-/// A read of `root` traced into `trace`: how long it took, and what it
-/// said.
-fn traced_read(brains: &Brains, root: &Path, trace: &Path) -> (Duration, Option<SyncReport>) {
-    let mut env = brains.env();
+/// A read of `root` with `env` traced into `trace`: how long it took, and
+/// what it said.
+fn traced_read(mut env: SessionEnv, root: &Path, trace: &Path) -> (Duration, Option<SyncReport>) {
     env.git = env.git.env("GIT_TRACE2_EVENT", trace);
     let started = Instant::now();
     let report = session::close(session::open(brain(root), Intent::Read, &env));
     (started.elapsed(), report)
 }
+
+/// The longest a measured read may take.
+const A_MEASURED_READ: Duration = Duration::from_secs(120);
 
 /// How long a read's pull takes and which gits it runs, on each path,
 /// alone and eight at once, printed from git's trace2 events. A
@@ -832,7 +912,7 @@ fn the_time_of_a_reads_pull() {
     ] {
         let brains = shaped(1, pull);
         let trace = brains.dir.path().join("alone.trace");
-        let (took, report) = traced_read(&brains, &brains.roots[0], &trace);
+        let (took, report) = traced_read(brains.env(), &brains.roots[0], &trace);
         let gits = gits_in(&trace);
         let in_git: f64 = gits.iter().map(|g| g.end - g.start).sum();
         println!(
@@ -854,25 +934,29 @@ fn the_time_of_a_reads_pull() {
         drop(brains);
 
         let brains = shaped(8, pull);
-        let reads: Vec<(Duration, usize, f64, Option<LeftReason>)> = thread::scope(|scope| {
-            let reads: Vec<_> = brains
-                .roots
-                .iter()
-                .enumerate()
-                .map(|(index, root)| {
-                    let trace = brains.dir.path().join(format!("{index}.trace"));
-                    let brains = &brains;
-                    scope.spawn(move || {
-                        let (took, report) = traced_read(brains, root, &trace);
-                        let gits = gits_in(&trace);
-                        let in_git = gits.iter().map(|g| g.end - g.start).sum::<f64>();
-                        let left = report.and_then(|r| r.left_as_is).map(|l| l.reason);
-                        (took, gits.len(), in_git, left)
-                    })
-                })
-                .collect();
-            reads.into_iter().map(|read| read.join().unwrap()).collect()
-        });
+        // Each read on a thread of its own, its result waited for within
+        // a bound.
+        let (sent, results) = std::sync::mpsc::channel();
+        for (index, root) in brains.roots.iter().enumerate() {
+            let trace = brains.dir.path().join(format!("{index}.trace"));
+            let (env, root, sent) = (brains.env(), root.clone(), sent.clone());
+            thread::spawn(move || {
+                let (took, report) = traced_read(env, &root, &trace);
+                let gits = gits_in(&trace);
+                let in_git = gits.iter().map(|g| g.end - g.start).sum::<f64>();
+                let left = report.and_then(|r| r.left_as_is).map(|l| l.reason);
+                let _ = sent.send((took, gits.len(), in_git, left));
+            });
+        }
+        let reads: Vec<(Duration, usize, f64, Option<LeftReason>)> = brains
+            .roots
+            .iter()
+            .map(|_| {
+                results
+                    .recv_timeout(A_MEASURED_READ)
+                    .expect("a read within its bound")
+            })
+            .collect();
         for (took, gits, in_git, left) in reads {
             println!(
                 "pull {pull:?} 8 at once: {took:?}, {gits} gits, {:.0} ms in git, left as is: {left:?}",
@@ -1379,8 +1463,8 @@ fn opening(out: &Path) -> PathBuf {
 }
 
 /// The child doing `action` on "ours", writing to `out`.
-fn child(w: &World, action: &str, out: &Path) -> Child {
-    child_command(w, action, out).spawn().unwrap()
+fn child(w: &World, action: &str, out: &Path) -> Owned {
+    Owned::spawn(&mut child_command(w, action, out))
 }
 
 /// The command of [`child`].
@@ -1398,13 +1482,18 @@ fn child_command(w: &World, action: &str, out: &Path) -> Command {
     cmd
 }
 
-/// How long the remote claim stays held once the explicit session's child
-/// says it opens the session.
-const HELD_PAST_OPENING: Duration = Duration::from_secs(1);
+/// How long the remote claim stays held once the explicit session has run
+/// the last git before it takes the claim.
+const HELD_PAST_THE_CLAIM: Duration = Duration::from_millis(500);
+
+/// The git an explicit session runs last before it takes the remote claim.
+const LAST_BEFORE_THE_CLAIM: &str = "rev-parse --is-shallow-repository";
 
 /// An explicit session waits for a remote claim held from before it opens
-/// until it is let go, then fetches and pushes: one that tried the claim
-/// once would be busy.
+/// until it is let go, then fetches and pushes: the claim is let go only
+/// once the session has run its last git before the claim (its own trace2
+/// events say so), and a while after, so one that tried the claim once
+/// would be busy.
 #[test]
 fn an_explicit_session_waits_for_a_remote_claim_let_go_within_its_bound() {
     let w = World::new();
@@ -1412,12 +1501,16 @@ fn an_explicit_session_waits_for_a_remote_claim_let_go_within_its_bound() {
     w.ours_commit(&[("notes/second.md", &neuron("", "# Second\n"))], &[]);
     let held = RemoteClaim::try_take(&w.ours.join(".git")).unwrap();
     let out = w.dir.path().join("explicit.out");
-    let mut explicit = child(&w, "explicit", &out);
-    eventually("the session's opening", || {
+    let trace = w.dir.path().join("explicit.trace");
+    let mut explicit =
+        Owned::spawn(child_command(&w, "explicit", &out).env("GIT_TRACE2_EVENT", &trace));
+    eventually("the session at the remote claim", || {
         assert_running(&mut explicit);
-        opening(&out).exists()
+        gits_in(&trace)
+            .iter()
+            .any(|git| git.args.contains(LAST_BEFORE_THE_CLAIM))
     });
-    thread::sleep(HELD_PAST_OPENING);
+    thread::sleep(HELD_PAST_THE_CLAIM);
     let released = millis(SystemTime::now());
     drop(held);
     assert!(wait_bounded(&mut explicit, "the session", PATIENCE).success());
@@ -1487,7 +1580,7 @@ fn interrupted_read(what: &str) {
             Ok(())
         });
     }
-    let mut reader = cmd.spawn().unwrap();
+    let mut reader = Owned::spawn(&mut cmd);
     let pid = |file: &Path| fs::read_to_string(file).ok().filter(|p| p.ends_with('\n'));
     eventually("the hook", || {
         assert_running(&mut reader);

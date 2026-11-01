@@ -54,6 +54,45 @@ pub fn wait_bounded(child: &mut Child, what: &str, patience: Duration) -> ExitSt
     }
 }
 
+/// A child the test started, ended (killed, then reaped) whenever the
+/// guard goes, however the test ends; waited for only within a bound
+/// ([`Owned::wait`]).
+pub struct Owned(pub Child);
+
+impl Owned {
+    /// Start `cmd`, owned.
+    pub fn spawn(cmd: &mut Command) -> Owned {
+        Owned(cmd.spawn().unwrap())
+    }
+
+    /// How the child ended, within `patience` ([`wait_bounded`]).
+    pub fn wait(&mut self, what: &str, patience: Duration) -> ExitStatus {
+        wait_bounded(&mut self.0, what, patience)
+    }
+}
+
+impl std::ops::Deref for Owned {
+    type Target = Child;
+    fn deref(&self) -> &Child {
+        &self.0
+    }
+}
+
+impl std::ops::DerefMut for Owned {
+    fn deref_mut(&mut self) -> &mut Child {
+        &mut self.0
+    }
+}
+
+impl Drop for Owned {
+    fn drop(&mut self) {
+        if let Ok(None) = self.0.try_wait() {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+}
+
 pub fn today() -> Date {
     Date::new(2026, 1, 1).unwrap()
 }

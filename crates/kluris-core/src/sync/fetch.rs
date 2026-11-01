@@ -140,6 +140,8 @@ pub fn fetch<G: SyncGit>(
         let before = git.ref_value(repo, &upstream.refname)?;
         let brought = match bring(git, repo, upstream, deadline) {
             Ok(brought) => brought,
+            // Stopped by the caller's bound, not the remote's slowness.
+            Err(RemoteError::Failed(e)) if e.stopped => return Err(e),
             Err(e) => {
                 return Ok(match fetch_refused(git, repo, &upstream.remote, &e) {
                     Some(detail) => Fetch::Refused { detail },

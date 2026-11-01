@@ -15,10 +15,15 @@
 //! runner makes (its output drains, its input writer) never take those
 //! signals, so the handler runs on a thread whose progress the command
 //! waits for; and once a signal came, no run returns to the command: each
-//! waits for the handler, which ends the command within its own bounds (a
-//! second for a run starting its program, then the grace). A SIGKILL to
-//! the command cannot be handled: its groups are left running to their
-//! own end or the next machine restart.
+//! waits for the handler, which ends the command within its own bounds:
+//! up to [`COMMAND_BOUND`] for a run still starting its program to make its
+//! group known (a Ctrl-C otherwise ends the command at once), then the
+//! grace. A run whose start takes longer than that is not waited for, and
+//! its program can outlive the command: a known limit. A SIGKILL to the
+//! command cannot be handled: its groups are left running to their own end
+//! or the next machine restart.
+//!
+//! [`COMMAND_BOUND`]: crate::sync::claim::COMMAND_BOUND
 //!
 //! On Windows the program starts suspended, joins its job, and only then
 //! runs, so nothing it starts is outside the job. When the job cannot be
@@ -110,6 +115,10 @@ fn run_to_its_end(
     capture: bool,
     deadline: Instant,
 ) -> Result<Finished, RunError> {
+    // A program whose time is already up is never started.
+    if Instant::now() >= deadline {
+        return Err(RunError::TimedOut);
+    }
     cmd.stdin(if input.is_some() {
         Stdio::piped()
     } else {
@@ -308,8 +317,9 @@ mod interrupts {
     static INTERRUPTED: AtomicBool = AtomicBool::new(false);
 
     /// How long the handler waits for a run starting its program to
-    /// register its group.
-    const STARTING_BOUND: std::time::Duration = std::time::Duration::from_secs(1);
+    /// register its group: a command's bound, as a start held that long is
+    /// stuck, not slow.
+    const STARTING_BOUND: std::time::Duration = crate::sync::claim::COMMAND_BOUND;
 
     /// The handled signals blocked on this thread until dropped, when the
     /// mask it had comes back.
@@ -539,7 +549,7 @@ mod tree {
         pub fn start(cmd: &mut Command) -> io::Result<(Child, Tree)> {
             cmd.creation_flags(CREATE_SUSPENDED);
             let mut child = cmd.spawn()?;
-            let tree = Tree(job_for(&child));
+            let tree = Tree::containing(&child);
             if !resume(&child) {
                 let error = io::Error::last_os_error();
                 drop(tree);
@@ -565,7 +575,15 @@ mod tree {
     }
 
     /// A job that kills its processes when closed, with `child` in it.
-    pub fn job_for(child: &Child) -> Option<HANDLE> {
+    impl Tree {
+        /// A job holding `child`, owned: closed (and what is left in it
+        /// killed) when the tree goes.
+        pub fn containing(child: &Child) -> Tree {
+            Tree(job_for(child))
+        }
+    }
+
+    fn job_for(child: &Child) -> Option<HANDLE> {
         #[cfg(test)]
         if JOB_FAILS.with(std::cell::Cell::get) {
             return None;
@@ -759,6 +777,48 @@ mod tests {
         assert!(started.elapsed() < Duration::from_secs(3));
     }
 
+    /// A child a test started, killed and reaped however the test ends.
+    struct Owned(std::process::Child);
+
+    impl Drop for Owned {
+        fn drop(&mut self) {
+            if let Ok(None) = self.0.try_wait() {
+                let _ = self.0.kill();
+                let _ = self.0.wait();
+            }
+        }
+    }
+
+    impl Owned {
+        /// How the child ended, polled until `bound`; `None` past it.
+        #[cfg(unix)]
+        fn ended_by(&mut self, bound: Instant) -> Option<ExitStatus> {
+            loop {
+                if let Ok(Some(status)) = self.0.try_wait() {
+                    return Some(status);
+                }
+                if Instant::now() > bound {
+                    return None;
+                }
+                thread::sleep(Duration::from_millis(5));
+            }
+        }
+    }
+
+    /// `work` on a thread of its own, failing the test unless it ends
+    /// within `bound`.
+    fn within(bound: Duration, what: &str, work: fn()) {
+        let (done, ended) = std::sync::mpsc::channel();
+        thread::spawn(move || {
+            work();
+            let _ = done.send(());
+        });
+        assert!(
+            ended.recv_timeout(bound).is_ok(),
+            "{what}: not within {bound:?}"
+        );
+    }
+
     /// `cmd` starts with SIGINT, SIGTERM and SIGHUP at their default
     /// actions, however this test run was started (a background job of a
     /// shell starts with SIGINT ignored, and an ignored signal stays
@@ -809,36 +869,134 @@ mod tests {
             .stdout(Stdio::null())
             .stderr(Stdio::null());
             with_default_signals(&mut cmd);
-            let mut child = cmd.spawn().unwrap();
+            let mut child = Owned(cmd.spawn().unwrap());
             let bound = Instant::now() + Duration::from_secs(30);
-            let ended = |child: &mut std::process::Child, what: &str| {
-                let _ = child.kill();
-                let _ = child.wait();
-                panic!("command {command}: {what}");
-            };
             while !dir.path().join("running").exists() {
-                if Instant::now() > bound || child.try_wait().ok().flatten().is_some() {
-                    ended(&mut child, "its run never started");
-                }
+                assert!(
+                    Instant::now() < bound && child.0.try_wait().ok().flatten().is_none(),
+                    "command {command}: its run never started"
+                );
                 thread::sleep(Duration::from_millis(5));
             }
-            let pid = Pid::from_raw(i32::try_from(child.id()).unwrap()).unwrap();
+            let pid = Pid::from_raw(i32::try_from(child.0.id()).unwrap()).unwrap();
             kill_process(pid, Signal::INT).unwrap();
-            let status = loop {
-                if let Some(status) = child.try_wait().unwrap() {
-                    break status;
-                }
-                if Instant::now() > bound {
-                    ended(&mut child, "it never ended");
-                }
-                thread::sleep(Duration::from_millis(5));
-            };
+            let status = child
+                .ended_by(bound)
+                .unwrap_or_else(|| panic!("command {command}: it never ended"));
             assert_eq!(
                 status.signal(),
                 Some(Signal::INT.as_raw()),
                 "command {command}: {status:?}"
             );
         }
+    }
+
+    /// The folder the `slow_start_child` holds its claim and writes its
+    /// program's pid in.
+    #[cfg(unix)]
+    const SLOW_START_DIR: &str = "KLURIS_TEST_SLOW_START_DIR";
+
+    /// How long the `slow_start_child`'s start takes past its fork.
+    #[cfg(unix)]
+    const SLOW_START: Duration = Duration::from_secs(3);
+
+    /// A SIGINT while a run is still starting its program (its spawn held
+    /// past the fork, the program already running): the command ends the
+    /// program before it dies of SIGINT, so the program is gone before the
+    /// tree claim the command held can be taken.
+    #[cfg(unix)]
+    #[test]
+    fn a_sigint_during_a_slow_start_ends_the_program_before_the_command() {
+        use rustix::process::{Pid, Signal, kill_process};
+        use std::os::unix::process::ExitStatusExt;
+        let dir = tempfile::TempDir::new().unwrap();
+        let mut cmd = Command::new(std::env::current_exe().unwrap());
+        cmd.args([
+            "--ignored",
+            "--exact",
+            "process::tests::slow_start_child",
+            "--quiet",
+        ])
+        .env(SLOW_START_DIR, dir.path())
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+        with_default_signals(&mut cmd);
+        let mut child = Owned(cmd.spawn().unwrap());
+        let bound = Instant::now() + Duration::from_secs(60);
+        let pid_file = dir.path().join("program.pid");
+        let program = loop {
+            if let Some(pid) = std::fs::read_to_string(&pid_file)
+                .ok()
+                .filter(|pid| pid.ends_with('\n'))
+            {
+                break pid.trim().to_string();
+            }
+            assert!(
+                Instant::now() < bound && child.0.try_wait().ok().flatten().is_none(),
+                "the program never started"
+            );
+            thread::sleep(Duration::from_millis(5));
+        };
+        let command = Pid::from_raw(i32::try_from(child.0.id()).unwrap()).unwrap();
+        kill_process(command, Signal::INT).unwrap();
+        let claimed = dir.path().join("claimed");
+        while crate::sync::claim::TreeClaim::exclusive(&claimed, Duration::ZERO).is_err() {
+            assert!(Instant::now() < bound, "the claim was never let go");
+            thread::sleep(Duration::from_millis(5));
+        }
+        assert!(gone(&program), "the program {program} outlived the command");
+        let status = child.ended_by(bound).expect("the command ends");
+        assert_eq!(status.signal(), Some(Signal::INT.as_raw()), "{status:?}");
+    }
+
+    /// Whether the process `pid` is gone: none runs under it, or it is a
+    /// zombie, ended and waiting to be reaped.
+    #[cfg(unix)]
+    fn gone(pid: &str) -> bool {
+        let out = Command::new("ps")
+            .args(["-o", "stat=", "-p", pid])
+            .output()
+            .unwrap();
+        let stat = String::from_utf8_lossy(&out.stdout);
+        stat.trim().is_empty() || stat.trim_start().starts_with('Z')
+    }
+
+    /// The parent's side of every fork of the `slow_start_child`: held for
+    /// [`SLOW_START`], while the child process already runs.
+    #[cfg(unix)]
+    extern "C" fn slow_start() {
+        thread::sleep(SLOW_START);
+    }
+
+    /// This test binary run again as the command of
+    /// [`a_sigint_during_a_slow_start_ends_the_program_before_the_command`]:
+    /// it holds a tree claim, then starts, on a worker, a run whose program
+    /// writes its pid and waits, its spawn held for [`SLOW_START`] past the
+    /// fork. Without its variable it does nothing.
+    #[cfg(unix)]
+    #[test]
+    #[ignore = "run only as the child of a_sigint_during_a_slow_start_ends_the_program_before_the_command"]
+    fn slow_start_child() {
+        let Some(dir) = std::env::var_os(SLOW_START_DIR) else {
+            return;
+        };
+        let dir = std::path::PathBuf::from(dir);
+        let claimed = dir.join("claimed");
+        let _claim = crate::sync::claim::TreeClaim::exclusive(&claimed, Duration::ZERO).unwrap();
+        // SAFETY: registers a handler that only sleeps.
+        unsafe {
+            assert_eq!(libc::pthread_atfork(None, Some(slow_start), None), 0);
+        }
+        let script = format!(
+            "echo $$ > '{}'; exec sleep 30",
+            dir.join("program.pid").display()
+        );
+        let run = thread::spawn(move || {
+            let _ = run_until(sh(&script), Instant::now() + Duration::from_secs(20));
+        });
+        let _ = run.join();
+        std::process::exit(0);
     }
 
     /// This test binary run again as the command of
@@ -1048,6 +1206,15 @@ mod tests {
     #[test]
     #[ignore = "a measurement: run it with --ignored --nocapture"]
     fn the_cost_of_a_runs_start() {
+        within(
+            Duration::from_secs(300),
+            "the measurement",
+            measure_a_runs_start,
+        );
+    }
+
+    /// The measurement of [`the_cost_of_a_runs_start`].
+    fn measure_a_runs_start() {
         const RUNS: u32 = 50;
         let git = || {
             let mut cmd = Command::new("git");
@@ -1070,14 +1237,14 @@ mod tests {
             run_until(git(), far()).unwrap();
         });
         time("the runner's start, then wait", &mut || {
-            let (mut child, _tree) = tree::Tree::start(&mut git()).unwrap();
-            child.wait().unwrap();
+            let (child, _tree) = tree::Tree::start(&mut git()).unwrap();
+            Owned(child).0.wait().unwrap();
         });
         #[cfg(windows)]
         time("spawn, then the job, then wait", &mut || {
-            let mut child = git().spawn().unwrap();
-            let _job = tree::job_for(&child);
-            child.wait().unwrap();
+            let mut child = Owned(git().spawn().unwrap());
+            let _job = tree::Tree::containing(&child.0);
+            child.0.wait().unwrap();
         });
         #[cfg(windows)]
         time("a snapshot of every thread, walked", &mut || {
@@ -1088,13 +1255,13 @@ mod tests {
             "spawn, then a snapshot of its threads, then wait",
             &mut || {
                 use std::os::windows::io::AsRawHandle;
-                let mut child = git().spawn().unwrap();
-                let _ = tree::resume_by_process_snapshot(child.as_raw_handle() as _);
-                child.wait().unwrap();
+                let mut child = Owned(git().spawn().unwrap());
+                let _ = tree::resume_by_process_snapshot(child.0.as_raw_handle() as _);
+                child.0.wait().unwrap();
             },
         );
         time("spawn, then wait", &mut || {
-            git().spawn().unwrap().wait().unwrap();
+            Owned(git().spawn().unwrap()).0.wait().unwrap();
         });
         time("output()", &mut || {
             git().output().unwrap();

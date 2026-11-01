@@ -159,9 +159,11 @@ pub enum PushOutcome {
 /// A git step bounded by a deadline that did not finish.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RemoteError {
-    /// The deadline passed and git was stopped.
+    /// The step's own deadline passed and git was stopped.
     TimedOut,
-    /// git could not run or failed.
+    /// git could not run or failed; or this git's own deadline
+    /// ([`SyncGit::with_deadline`]) came first and stopped it
+    /// ([`GitError::stopped`]).
     Failed(GitError),
 }
 
@@ -807,8 +809,14 @@ impl SystemGit {
         args: &[&str],
         deadline: Instant,
     ) -> Result<Finished, RemoteError> {
+        // Which deadline ends the run decides what its stop is: the step's
+        // own (a slow remote), or this git's (the caller's bound).
+        let ours_first = self.deadline.is_some_and(|own| own < deadline);
         match run_until(self.command(Some(dir), args), self.bound(deadline)) {
             Ok(done) => Ok(done),
+            Err(RunError::TimedOut) if ours_first => {
+                Err(RemoteError::Failed(GitError::out_of_time(args)))
+            }
             Err(RunError::TimedOut) => Err(RemoteError::TimedOut),
             Err(RunError::Spawn(e)) => Err(RemoteError::Failed(GitError::new(
                 args,

@@ -96,6 +96,7 @@
 //! with an upstream does: no setting of the brain's and no environment
 //! variable is read here.
 
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread;
@@ -560,7 +561,12 @@ fn fetch<'a>(brain: Brain<'a>, intent: Intent, env: &SessionEnv) -> Fetched<'a> 
                     match engine::fetch_upstream(&ctx, upstream, &remote) {
                         Ok(theirs) => fetched.theirs = Some(theirs),
                         Err(left) => {
-                            if left.reason == LeftReason::Offline && Instant::now() >= bound {
+                            if left.stopped {
+                                // The read's own bound ended the fetch, not
+                                // the network: the next read fetches.
+                                let _ = fs::remove_file(&stamp);
+                            } else if left.reason == LeftReason::Offline && Instant::now() >= bound
+                            {
                                 back_off(&backoff, env.now);
                             }
                             fetched = fetched.left(left);
@@ -601,6 +607,13 @@ fn settle<'a>(fetched: Fetched<'a>, env: &SessionEnv) -> Session<'a> {
     };
     let own = ctx.dirs().own.clone();
     let fetched = (!intent.throttled()).then(|| theirs.clone()).flatten();
+    // The read's one local deadline, fixed the first time a git after the
+    // tree claim needs it: what the fetch left of READ_LOCAL_LIMIT. The
+    // wait for the claim, behind other commands' and brains' lands, is not
+    // counted.
+    let mut deadline = None;
+    let mut read_deadline =
+        || *deadline.get_or_insert_with(|| Instant::now() + READ_LOCAL_LIMIT.saturating_sub(spent));
     let claim = match theirs {
         // Nothing to land: read under the shared claim.
         None if intent.throttled() => match TreeClaim::shared(&own, intent.tree_bound()) {
@@ -614,9 +627,7 @@ fn settle<'a>(fetched: Fetched<'a>, env: &SessionEnv) -> Session<'a> {
             Ok(claim) => {
                 if let Some(theirs) = theirs {
                     if intent.throttled() {
-                        ctx.until(Some(
-                            Instant::now() + READ_LOCAL_LIMIT.saturating_sub(spent),
-                        ));
+                        ctx.until(Some(read_deadline()));
                     }
                     let mut pulled = engine::pull_fetched(&ctx, &claim, theirs);
                     pulled.left_as_is = pulled.left_as_is.map(in_time);
@@ -651,9 +662,7 @@ fn settle<'a>(fetched: Fetched<'a>, env: &SessionEnv) -> Session<'a> {
         .as_ref()
         .is_none_or(|r| r.pulled == 0 && r.conflicts.is_empty());
     if intent.throttled() && claim.is_some() && quiet {
-        ctx.until(Some(
-            Instant::now() + READ_LOCAL_LIMIT.saturating_sub(spent),
-        ));
+        ctx.until(Some(read_deadline()));
         match engine::waiting(&ctx) {
             Ok(conflicts) if conflicts.is_empty() => {}
             Ok(conflicts) => report.get_or_insert_with(SyncReport::default).conflicts = conflicts,
