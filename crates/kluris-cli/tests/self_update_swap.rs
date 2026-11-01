@@ -4,6 +4,10 @@
 //! rename over it): every failure leaves the installed `kluris` in place,
 //! byte-identical and running, and nothing staged behind. On Windows one
 //! more test fails a real swap: the staged file held open with no sharing.
+//!
+//! The tests run side by side, each writing binaries and starting them:
+//! every write of a file that is run takes `common::exec`'s lock alone, and
+//! every start shares it ([`Serialized`]).
 
 use std::fs;
 use std::io;
@@ -14,6 +18,8 @@ use kluris_core::dist::swap::{Probe, RealSteps, SwapRequest, SwapSteps, Swapped,
 use tempfile::TempDir;
 
 mod common;
+
+use common::exec::{output, starting, writing_exe};
 
 const CURRENT: &str = env!("CARGO_PKG_VERSION");
 
@@ -43,13 +49,13 @@ impl Setup {
         let prefix = base.join("bin");
         fs::create_dir_all(&prefix).unwrap();
         let installed = prefix.join(exe_name());
-        fs::copy(assert_cmd::cargo::cargo_bin!("kluris"), &installed).unwrap();
+        writing_exe(|| fs::copy(assert_cmd::cargo::cargo_bin!("kluris"), &installed)).unwrap();
         let old = fs::read(&installed).unwrap();
         let extracted = base.join("extracted");
         fs::create_dir_all(&extracted).unwrap();
         let new_binary = extracted.join(exe_name());
         let new = common::fake_for("9.0.0", 0, "", &base.join("args.txt"));
-        fs::write(&new_binary, &new).unwrap();
+        writing_exe(|| fs::write(&new_binary, &new)).unwrap();
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -89,10 +95,7 @@ impl Setup {
             fs::read(&self.installed).unwrap() == self.old,
             "{case}: bytes"
         );
-        let out = Command::new(&self.installed)
-            .arg("--version")
-            .output()
-            .unwrap();
+        let out = output(Command::new(&self.installed).arg("--version")).unwrap();
         assert_eq!(out.status.code(), Some(0), "{case}");
         assert_eq!(
             String::from_utf8_lossy(&out.stdout),
@@ -105,6 +108,34 @@ impl Setup {
             "{case}: leftovers"
         );
     }
+}
+
+/// `steps` with the staged copy written under the lock alone and the
+/// probe started under the shared lock, so no other test's process holds
+/// the staged copy open when it is run.
+struct Serialized<S>(S);
+
+impl<S: SwapSteps> SwapSteps for Serialized<S> {
+    fn stage(&mut self, new_binary: &Path, staged: &Path, like: &Path) -> io::Result<()> {
+        writing_exe(|| self.0.stage(new_binary, staged, like))
+    }
+
+    fn probe(&mut self, exe: &Path) -> io::Result<Probe> {
+        starting(|| self.0.probe(exe))
+    }
+
+    fn rename(&mut self, from: &Path, to: &Path) -> io::Result<()> {
+        self.0.rename(from, to)
+    }
+
+    fn remove(&mut self, path: &Path) -> io::Result<()> {
+        self.0.remove(path)
+    }
+}
+
+/// The real steps, serialized.
+fn real() -> Serialized<RealSteps> {
+    Serialized(RealSteps::default())
 }
 
 /// Where to fail.
@@ -167,12 +198,12 @@ impl SwapSteps for Faulty {
     }
 }
 
-fn faulty(s: &Setup, fail: Fail) -> Faulty {
-    Faulty {
+fn faulty(s: &Setup, fail: Fail) -> Serialized<Faulty> {
+    Serialized(Faulty {
         real: RealSteps::default(),
         fail,
         installed: s.installed.clone(),
-    }
+    })
 }
 
 #[test]
@@ -214,7 +245,7 @@ fn a_failed_rollback_deletes_nothing_and_says_where_kluris_is() {
 fn a_good_swap_puts_the_new_binary_in_place() {
     for windows in [false, true] {
         let s = Setup::new();
-        let Swapped { old } = swap(&s.request(windows), &mut RealSteps::default())
+        let Swapped { old } = swap(&s.request(windows), &mut real())
             .unwrap_or_else(|e| panic!("windows: {windows}: {e}"));
         assert!(
             fs::read(&s.installed).unwrap() == s.new,
@@ -249,7 +280,7 @@ fn the_staged_copy_keeps_the_installed_mode() {
     use std::os::unix::fs::PermissionsExt;
     let s = Setup::new();
     fs::set_permissions(&s.installed, fs::Permissions::from_mode(0o750)).unwrap();
-    swap(&s.request(false), &mut RealSteps::default()).unwrap();
+    swap(&s.request(false), &mut real()).unwrap();
     let mode = fs::metadata(&s.installed).unwrap().permissions().mode();
     assert_eq!(mode & 0o777, 0o750);
 }
@@ -280,9 +311,12 @@ fn a_real_failed_swap_on_windows_restores_kluris() {
         }
     }
     let s = Setup::new();
-    let err = swap(&s.request(true), &mut Locking(RealSteps::default()))
-        .expect_err("the held file cannot be renamed")
-        .to_string();
+    let err = swap(
+        &s.request(true),
+        &mut Serialized(Locking(RealSteps::default())),
+    )
+    .expect_err("the held file cannot be renamed")
+    .to_string();
     assert!(err.contains("unchanged"), "{err}");
     s.assert_old_kluris_works("held staged file");
 }

@@ -1,5 +1,5 @@
 //! Putting a release's new binary in place of the installed one so that a
-//! failure at any step leaves a working `kluris` (T-111):
+//! failure at any step leaves a working `kluris`:
 //!
 //! 1. Stage: copy the new binary to `.kluris(.exe).new-<pid>-<n>` beside
 //!    the installed one (same folder, so the renames below stay on one
@@ -84,7 +84,12 @@ impl SwapSteps for RealSteps {
     }
 
     fn probe(&mut self, exe: &Path) -> io::Result<Probe> {
-        let mut child = spawn_version(exe)?;
+        let mut child = Command::new(exe)
+            .arg("--version")
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()?;
         let stdout = child.stdout.take();
         let reader = std::thread::spawn(move || {
             let mut bytes = Vec::new();
@@ -127,27 +132,6 @@ impl SwapSteps for RealSteps {
 
     fn remove(&mut self, path: &Path) -> io::Result<()> {
         fs::remove_file(path)
-    }
-}
-
-/// Start `exe --version`. A file just written can be briefly "busy" on
-/// Unix while another thread's fork still holds it open: retried.
-fn spawn_version(exe: &Path) -> io::Result<std::process::Child> {
-    let mut tries = 0;
-    loop {
-        let started = Command::new(exe)
-            .arg("--version")
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .spawn();
-        match started {
-            Err(e) if e.kind() == io::ErrorKind::ExecutableFileBusy && tries < 50 => {
-                tries += 1;
-                std::thread::sleep(Duration::from_millis(20));
-            }
-            other => return other,
-        }
     }
 }
 

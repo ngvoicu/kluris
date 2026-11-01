@@ -1,7 +1,8 @@
 //! Helpers shared by the CLI tests: the golden-snapshot normalizations
 //! ([`golden`]), the sandboxed runs golden tests snapshot ([`sandbox`]), the
 //! brains a sandbox reads ([`brains`]), the fixture brains of the dream and
-//! MRI goldens ([`dream_brains`]), runs with stdin on a pseudo-terminal
+//! MRI goldens ([`dream_brains`]), writing a binary apart from starting
+//! processes ([`exec`]), runs with stdin on a pseudo-terminal
 //! ([`pty`], Unix), what a snapshot holds of a search ([`search`]), the
 //! files a snapshot shows by reference ([`shared`]), the frozen homes an earlier Kluris set up ([`upgrade`]) and a fake
 //! release binary for the self-update tests.
@@ -10,6 +11,7 @@
 
 pub mod brains;
 pub mod dream_brains;
+pub mod exec;
 pub mod golden;
 #[cfg(unix)]
 pub mod pty;
