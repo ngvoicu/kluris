@@ -5,8 +5,11 @@ human-curated knowledge stored in git-backed **brains**. It is a Rust CLI,
 `kluris`: it creates and registers brains, installs an agent skill per brain
 (with the Specmint companion playbooks a brain opts into), wakes up and
 searches a brain for an agent, keeps its maps and links healthy (`dream`,
-`mri`), commits approved files, and syncs every brain it opens with its
-remote through one session (fetch, merge, push; `sync`, `resolve`, `commit`).
+`mri`), commits approved files, and keeps every brain it opens in step with
+its remote through one session: each command brings teammates' commits in
+first, `commit` pushes, one background push shares what the others leave
+waiting, and `sync` and `resolve` are there to do it by hand. There is no
+off switch, watch mode or service.
 `main` holds the released Kluris; work goes on short-lived branches,
 fast-forwarded into `main` at release.
 

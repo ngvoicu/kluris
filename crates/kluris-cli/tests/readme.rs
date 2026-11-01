@@ -316,3 +316,86 @@ fn readmes_name_antigravity_cli_and_never_gemini_cli() {
         "README lists gemini as an agent"
     );
 }
+
+/// `text` with every run of whitespace one space, so a phrase reads the
+/// same wherever the text wraps its lines.
+fn flat(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// The README's sync section, from its heading to the next `## ` heading.
+fn sync_section(readme: &str) -> &str {
+    let start = readme
+        .find("\n### Keep it in sync with your team\n")
+        .expect("a sync section");
+    let rest = &readme[start + 1..];
+    &rest[..rest.find("\n## ").map_or(rest.len(), |at| at + 1)]
+}
+
+#[test]
+fn readme_says_reads_pull_commit_pushes_and_a_background_push_shares_the_rest() {
+    let readme = readme();
+    let sync = flat(sync_section(&readme));
+    for claim in [
+        // What each command does with the remote.
+        "`kluris wake-up`, `kluris search`, `kluris status`, `kluris register` and `kluris doctor` bring your teammates' commits in before they read",
+        "at most once a minute, within 3 seconds",
+        "within 10 seconds in all",
+        "A read's exit code is never its sync's",
+        "`kluris dream` and `kluris mri` pull, then commit the brain's own housekeeping",
+        "`kluris commit` commits the files you name",
+        "then pushes",
+        // The background push and its record.
+        "one background push",
+        "`last_push`",
+        "`needs_pull`",
+        // Busy.
+        "`busy`",
+        // Every command syncs; nothing else does.
+        "There is no switch that turns syncing off",
+        "no watch mode and no service",
+        // By hand.
+        "`kluris sync`",
+        "`kluris resolve`",
+        "`kluris create --remote",
+        "`kluris register`",
+    ] {
+        assert!(sync.contains(claim), "the sync section lacks {claim:?}");
+    }
+}
+
+#[test]
+fn readme_never_has_the_agent_sync_before_it_writes() {
+    let readme = flat(&readme());
+    for stale in [
+        "KLURIS_NO_AUTO_SYNC",
+        "auto_fetch",
+        "kluris watch",
+        "the agent runs it before every write",
+        "Before it writes, the agent syncs",
+        "commit, push and pull it with `git` like any",
+    ] {
+        assert!(!readme.contains(stale), "README says {stale:?}");
+    }
+}
+
+#[test]
+fn brain_readme_says_kluris_keeps_the_brain_in_step() {
+    let home = TempDir::new().unwrap();
+    let readme = flat(&brain_readme(home.path()));
+    for claim in [
+        "## Working with your team",
+        "keeps it in step",
+        "kluris commit --brain acme --paths",
+        "kluris commit --brain acme --merge",
+        "kluris resolve --brain acme",
+    ] {
+        assert!(readme.contains(claim), "brain README lacks {claim:?}");
+    }
+    for stale in [
+        "Sync and branch with git directly",
+        "Use git directly to commit and sync",
+    ] {
+        assert!(!readme.contains(stale), "brain README says {stale:?}");
+    }
+}

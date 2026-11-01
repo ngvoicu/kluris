@@ -32,6 +32,9 @@ git clone <this-repo-url> ~/path/to/brain  # if the brain lives at a git remote
 kluris register ~/path/to/brain            # register the on-disk brain
 ```
 
+From then on Kluris keeps your clone in step with the team (see
+[Working with your team](#working-with-your-team)).
+
 ### Start building your team knowledge
 
 One skill does everything: `kluris-{name} <natural language>`.
@@ -72,8 +75,9 @@ with `/skill kluris-{name}` inside a session or `hermes -s kluris-{name}` at
 startup. Use it inside your coding agent -- not in a regular terminal. The
 agent detects your intent and acts accordingly. Search and guided documentation
 happen through the skill; the `kluris` CLI is for mechanical operations like
-`dream`, `mri`, and `status` that you run in a terminal. Sync (commit, push,
-pull) goes through `git` directly -- kluris brains are plain git repos.
+`dream`, `mri`, and `status` that you run in a terminal. Kluris keeps the
+brain in step with the team on its own: every command that opens it brings
+teammates' commits in, and `kluris commit` shares yours.
 
 Every registered brain installs as `kluris-<name>` so you can address it
 unambiguously from day one, even before you add more brains.
@@ -86,7 +90,7 @@ snapshot of the brain: lobes with neuron counts, the 5 most recently updated
 neurons, total neuron count. You never run it manually. The agent refreshes
 the snapshot after mutating commands (`/kluris-{name} remember`,
 `/kluris-{name} learn`, `kluris dream --brain {name}`, or direct
-brain-file edits).
+brain-file edits) and when a command brings in teammates' commits.
 
 If you want to peek at what the agent sees, run
 `kluris wake-up --brain {name}` yourself.
@@ -173,6 +177,48 @@ before writing.
 The agent walks through the neuron section by section so you can review each
 part before anything is written.
 
+## Working with your team
+
+Every teammate clones this brain and registers the clone:
+
+```bash
+git clone <this-repo-url> ~/path/to/brain
+kluris register ~/path/to/brain
+```
+
+From then on Kluris keeps it in step with the team: every `kluris` command
+that opens the brain brings teammates' commits in first (reads like
+`wake-up`, `search` and `status` at most once a minute), and commits waiting
+to be shared go out in one background push. Nobody needs to run a sync.
+
+Commit what you wrote with `kluris commit`, which commits only the files you
+name and the maps and links they change, brings teammates' commits in and
+pushes:
+
+```bash
+kluris commit --brain {name} --paths notes/auth.md,notes/oauth.md
+```
+
+The agent does this after every write you approve. `kluris dream` commits
+the brain's own housekeeping (maps, dates, reverse links) by itself.
+
+When you and a teammate changed the same file, the next command reports a
+conflict and the merge waits for you. The agent shows you both versions and
+asks which to keep. By hand: write the version you want to the file (or
+delete it to keep a deletion), then finish the merge with the id the
+conflict shows:
+
+```bash
+kluris commit --brain {name} --merge <id> --paths notes/auth.md
+```
+
+A conflict between a file and a folder, or in a binary file, is settled with
+`kluris resolve`, keeping one side:
+
+```bash
+kluris resolve --brain {name} notes/auth.md --theirs --merge <id>
+```
+
 ## Use it from your projects
 
 The `{name}` brain stays the source of truth for shared knowledge. To make
@@ -220,14 +266,16 @@ kluris mri --brain {name}                # Generate visualization (prints link t
 kluris help                               # All commands
 ```
 
-Sync and branch with git directly:
+Commit and share, settle a conflict, or sync by hand:
 
 ```bash
-git -C <brain-path> status
-git -C <brain-path> add -A
-git -C <brain-path> commit -m "docs: update brain"
-git -C <brain-path> push
+kluris commit --brain {name} --paths <a.md,b.md>  # Commit those files and the maps they change, pull, push
+kluris resolve --brain {name} <path> --ours      # Settle a conflicted path (--theirs keeps the teammate's)
+kluris sync --brain {name}                       # Fetch, merge and push right now
 ```
+
+The brain is a plain git repository too: branches and history work with
+`git` as in any other.
 
 If `{name}` is your only registered brain, you can drop `--brain {name}` from
 every CLI invocation -- kluris auto-resolves the single brain.
@@ -318,4 +366,4 @@ description: my-brain knowledge base
 5. **Focus on decisions and rationale** -- "we chose X because Y"
 6. **Bidirectional synapses** -- if A links to B, add the reverse link in B
 7. **Run `kluris dream` after adding neurons** -- keeps maps and brain.md fresh
-8. **Use git directly to commit and sync** -- kluris brains are plain git repos
+8. **Commit with `kluris commit`** -- Kluris keeps the brain in step with the team

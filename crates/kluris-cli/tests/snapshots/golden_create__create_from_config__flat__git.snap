@@ -25,7 +25,7 @@ refs/heads/main
 == git cat-file blob <each blob of HEAD>
 == .gitignore (file, 204 bytes)
 <the work tree's bytes>
-== README.md (file, 11352 bytes)
+== README.md (file, 13276 bytes)
 <the work tree's bytes>
 == alpha-beta/map.md (file, 296 bytes)
 <the work tree's bytes>

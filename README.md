@@ -273,10 +273,10 @@ Then have it learn the project:
 for everything worth keeping, one at a time. Use it at the end of a working
 session.
 
-Before it writes, the agent syncs the brain with your team; after you approve,
-it commits exactly the files it wrote with `kluris commit`, which brings your
-teammates' commits in and pushes. If a teammate changed the same thing, it
-shows you both versions, asks which to keep (or proposes a merge), writes
+The commands the agent runs keep the brain in step with your team, so it
+never syncs by hand; after you approve, it commits exactly the files it wrote
+with `kluris commit`, which brings your teammates' commits in and pushes. If
+a teammate changed the same thing, it shows you both versions, asks which to keep (or proposes a merge), writes
 the file you chose and finishes the merge with `kluris commit --merge`.
 
 ### Use the brain while coding
@@ -308,10 +308,8 @@ kluris status    # lobes, neuron counts and recent commits
 kluris mri       # write the brain's visual map and print its link
 ```
 
-A brain is a git repository: commit, push and pull it with `git` like any
-other. Run `kluris dream` before you commit structural changes so the
-regenerated maps go into the same commit, or let `kluris commit --brain
-<name> --paths a.md,b.md` do it: it brings your teammates' commits in, commits
+Commit with `kluris commit --brain <name> --paths a.md,b.md`: it brings your
+teammates' commits in, commits
 just those files, the `map.md`/`brain.md` files they change and the reverse
 `related` links they call for in neurons with no change of their own, under
 your git identity, pulls what came in meanwhile and pushes, and leaves every
@@ -319,18 +317,75 @@ other change in the brain as it is. Its exit code is the commit's: offline,
 refused or in conflict, a commit that landed exits 0, and its `sync` object
 says what the sync did. While a merge waits for you, `kluris commit --merge
 <id> --paths <every conflicted file>` finishes it from the files as you
-settled them (a file you deleted is a deletion).
+settled them (a file you deleted is a deletion). A brain is a plain git
+repository too: branches, history and your own commits work with `git` as in
+any other, and Kluris pulls and pushes the branch you have checked out.
 
 ### Keep it in sync with your team
 
-```sh
-kluris sync --brain acme          # fetch, merge and push one brain
-kluris sync --brain all --json    # every brain, for scripts and agents
-```
+Every command that opens a brain keeps it in step with its remote, so nobody
+has to remember to sync:
 
-A brain made with `kluris create --remote <url>` is shared from the start:
-its branch gets its upstream (`branch.main.remote` and `branch.main.merge`,
-as `git push -u` writes them), and the first push sends it when the remote
+- `kluris wake-up`, `kluris search`, `kluris status`, `kluris register` and
+  `kluris doctor` bring your teammates' commits in before they read. They
+  fetch at most once a minute, within 3 seconds, and the git steps they run
+  before they read stop within 10 seconds in all, so a slow network or a
+  stalled hook never holds them: the brain is then read as it is. A fetch
+  cut off at 3 seconds pauses these fetches for that brain for an hour,
+  doubling up to a day, until a fetch succeeds. A read's exit code is never
+  its sync's.
+- `kluris dream` and `kluris mri` pull, then commit the brain's own
+  housekeeping, built from what is already committed: dates, a missing
+  `parent`, reverse `related` links, the maps and `brain.md` (see
+  [Neurons](#neurons)). Nothing is committed while a merge waits, and the
+  fixes your uncommitted files cause stay in the work tree.
+- `kluris commit` commits the files you name, the maps they change and the
+  reverse links they cause in neurons with no other change, brings your
+  teammates' commits in, then pushes (see
+  [Maintain it](#maintain-it-in-your-terminal)).
+- `kluris sync` and `kluris resolve` are for syncing and settling by hand
+  (below).
+
+The commits a read, `dream` or `mri` leaves waiting (a housekeeping commit,
+or one whose push failed) go out in one background push: a detached
+`kluris` process that outlives the command and never touches the work
+tree. It writes its output to `.git/kluris-sync/background.log` and its
+result to `.git/kluris-sync/last-push.json`, which the next command
+reports as `sync.last_push`: `at`, `result` (`pushed`, `offline`,
+`refused`, `failed`, or `needs_pull` when the remote has commits the brain
+lacks, which the next read brings in so the push can follow), `detail` and
+`commits`. A failure is reported by every command until a push succeeds; a
+success, by the one command that reads it. For ten minutes after a failure
+no background push starts; `kluris commit` and `kluris sync` push at once.
+
+One Kluris command at a time changes a brain. A read never waits for another
+command that is fetching or changing it: it reads the brain as it is, and
+its `sync` says `busy`. `kluris commit`, `kluris sync` and `kluris resolve`
+wait up to 30 seconds for it, then stop with `busy` too, as does any command
+that finds a git lock (such as `index.lock`) held.
+
+There is no switch that turns syncing off: every command that opens a git
+brain with an upstream syncs it. Kluris has no watch mode and no service:
+nothing runs between your commands but a background push. A brain that is
+not in git, sits inside a larger repository, is a shallow clone or has no
+upstream is left alone (`kluris commit`, `kluris sync` and `kluris resolve`
+say why).
+
+With `--json`, what a sync did is the same `sync` object (described below
+with `kluris sync`): at the top level for `kluris wake-up`, `kluris search`,
+`kluris register`, `kluris create` and `kluris commit`, in each brain's
+entry for `kluris status` and `kluris mri`, and one entry per brain (with
+`brain`) for `kluris dream`; `kluris doctor` says it only in its text. Reads, `dream` and `mri`
+add it only when there is something to say; the commands you run to sync
+carry it for every git brain with a remote: `kluris commit`, `kluris sync`,
+`kluris resolve`,
+and `kluris create` with `--remote`. Without `--json`, the same news is one
+line on stderr.
+
+A teammate clones the brain and runs `kluris register` on the clone; from
+then on every command keeps it in step. A brain made with `kluris create
+--remote <url>` is shared from the start: its branch gets its upstream
+(`branch.main.remote` and `branch.main.merge`, as `git push -u` writes them), and the first push sends it when the remote
 is empty. A remote that already has a branch is left alone, nothing merged
 or pushed (`refused`: clone it and run `kluris register` on the clone, or
 point `--remote` at an empty repository), and the brain keeps `origin` but
@@ -338,8 +393,16 @@ gets no upstream; offline or turned away, the brain is kept with its
 upstream set, and the next command that opens it pushes it. Every push
 guards that first publication: when the remote has no branch of the
 brain's name but has another, the push is refused the same way, with
-nothing pushed. `kluris create --json` adds the `sync` object after its own keys; the
-exit code is 0 whenever the brain was created.
+nothing pushed. `kluris create --json` adds the `sync` object after its own
+keys; the exit code is 0 whenever the brain was created.
+
+`kluris sync` does all of it at once, right now, for people who want to sync
+by hand:
+
+```sh
+kluris sync --brain acme          # fetch, merge and push one brain
+kluris sync --brain all --json    # every brain, for scripts
+```
 
 For each brain, `kluris sync` fetches its branch's upstream (it never asks
 for credentials), fast-forwards when the brain is behind, pushes when it is
@@ -369,9 +432,9 @@ new commits:
   a commit of yours.
 
 A file with uncommitted changes is never overwritten, nor is an untracked or
-ignored file where an incoming file lands: that brain is not synced until you
-commit, stash or move it. The repository's `pre-merge-commit`,
-`prepare-commit-msg`, `commit-msg`, `post-merge` and `pre-push` hooks run as
+ignored file where an incoming file lands: that brain is left as it is
+(`uncommitted`) until you commit, stash or move it. The repository's
+`pre-merge-commit`, `prepare-commit-msg`, `commit-msg`, `post-merge` and `pre-push` hooks run as
 git runs them, and git's `reference-transaction` and `post-index-change`
 hooks run on every ref and index update (`--no-verify` skips
 `pre-merge-commit` and `commit-msg`); a merge hook may change the message,
@@ -426,7 +489,9 @@ that has something to say also gets one line on stderr, such as `kluris:
 acme: pulled 2 commits; 1 conflict (notes/c.md) in merge 88e6700161ad`,
 which names the waiting merge's id for `kluris resolve --merge`. The exit code is 1 when a
 brain has a conflict or was left as it is for any reason but `offline` and
-`no_upstream`.
+`no_upstream`. The other commands keep their own exit codes: a read's is
+never its sync's, `kluris commit` exits 0 whenever its commit landed, and
+`kluris create` whenever the brain was created.
 
 The fetch has a one-minute limit. Sync learns the upstream's commit from
 its own `git ls-remote origin main`, then fetches that branch alone (no
@@ -480,12 +545,20 @@ repository named `timed out.git` is still refused.
 
 ### Settle a conflict
 
-Every command that opens the brain names an open conflict's paths and the
-id of the waiting merge they belong to (`--merge`) in its stderr line,
-`kluris: acme: 1 conflict (knowledge/auth.md) in merge 4ba0581dd58e`, and in
-`--json` as `sync.conflicts[].merge`; `kluris sync` also prints the command
-to run.
-Choose for each path:
+Every command that opens the brain reports a waiting merge: its conflicted
+paths with both texts, and the id of the merge (`--merge`). Its stderr line
+names them, `kluris: acme: 1 conflict (knowledge/auth.md) in merge
+4ba0581dd58e`, and `--json` gives the id as `sync.conflicts[].merge`;
+`kluris sync` also prints the command to run. For a text conflict, write the
+version you want to the file (delete the file to keep a deletion) and finish
+the merge with `kluris commit --brain acme --merge <id> --paths <every
+conflicted path of that merge>`; while the merge waits, `kluris commit`
+refuses any other path, and `kluris dream` in between is fine. A conflict
+between a file and a folder (`structure`), or in a binary file, is settled
+with `kluris resolve`, and so is every path of a merge that has a
+`structure` conflict among its paths (`kluris commit --merge` refuses that
+merge); for a text path there, write your merged text outside the brain and
+pass it with `--file`, leaving the conflicted file as it is:
 
 ```sh
 kluris resolve --brain acme knowledge/auth.md --ours --merge 4ba0581dd58e             # keep this brain's version
@@ -532,12 +605,12 @@ after the brain changes. To see what the agent sees:
 kluris wake-up --brain acme
 ```
 
-Before they read, `kluris wake-up` and `kluris search` fetch your team's
-pushes, at most once a minute, within 3 seconds. A fetch cut off at 3
-seconds (a slow link) pauses these fetches for that brain for an hour,
-doubling up to a day, until a fetch succeeds.
-`kluris sync` brings the changes in; the agent runs it before every write and when you ask for the
-team's latest. A brain inside another project's repository is never fetched.
+Before it reads, `kluris wake-up` brings your teammates' commits in, as
+every read does (see [Keep it in sync with your
+team](#keep-it-in-sync-with-your-team)).
+The agent never runs `kluris sync`: the commands it runs keep the brain in
+step, and it shares what you approved with `kluris commit`. A brain inside
+another project's repository is never fetched.
 
 ## Several brains
 
@@ -634,8 +707,8 @@ tree and says so in the brain's `sync`; dream's exit code stays its own.
 While a merge waits for you, nothing is committed, so the merge id dream
 reports is the one `kluris commit --merge` takes; the housekeeping waits in
 the work tree and the next dream after the merge commits it. A brain
-without git or without a remote is dreamed as before, its fixes left for
-you to commit.
+without git or without a remote gets no commit: its fixes are left for you
+to commit.
 
 ### YAML neurons
 
@@ -788,7 +861,7 @@ from disk or send it to a colleague.
 | `kluris dream` | Regenerate maps, fix what is safe to fix, validate links (`--brain`, `--broken-only` with `--json`) |
 | `kluris mri` | Write the brain's visual map and print its link (`--brain`, `--output`) |
 | `kluris commit` | Commit only the files you name and the maps and links they change, pull and push (`--brain`, `--paths`, `--message`, `--merge`, `--no-verify`) |
-| `kluris sync` | Fetch, merge and push a brain, or every brain (`--brain`, `--no-verify`) |
+| `kluris sync` | Fetch, merge and push a brain, or every brain, by hand (`--brain`, `--no-verify`) |
 | `kluris resolve <path>` | Settle an open sync conflict path by path, pull and push (`--ours`, `--theirs`, `--file`, `--merge`, `--no-verify`) |
 | `kluris companion list` | The companion playbooks, which are installed, and which brains use them (`--brain`) |
 | `kluris companion add <name>` | Turn a companion on for a brain (`--brain`) |
