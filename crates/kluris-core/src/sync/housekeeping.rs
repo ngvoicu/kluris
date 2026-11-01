@@ -15,8 +15,17 @@
 //! uncommitted file causes (the reverse link a new neuron adds, its line
 //! in a map) stay in the work tree, where dream wrote them.
 //!
-//! Afterwards each committed file's work-tree copy gets the committed bytes
-//! where it had no change of its own, as `kluris commit` does for its maps.
+//! A neuron is taken only when nothing of the person's is in it: its
+//! index entry is HEAD's blob or the commit's, and its work-tree copy is
+//! HEAD's or exactly the commit's (dream already wrote the same fix
+//! there). Any other neuron is left out, its fixes staying in the work
+//! tree, and a version the person staged stays staged. A generated file
+//! (`map.md`, `brain.md`) is always taken, so no map in history lags its
+//! neurons; a version of it the person staged keeps its index entry.
+//!
+//! Afterwards each committed file's index entry and work-tree copy get the
+//! committed bytes where they had nothing of the person's, as `kluris
+//! commit` does for its maps.
 //! A hook that stops the commit, or changes what it would commit, leaves
 //! everything as it was. Nothing to commit makes no commit.
 
@@ -24,9 +33,10 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use super::LeftAsIs;
 use super::LeftReason;
-use super::commit::{Seen, base_nodes, changed_paths, update_worktree_copy};
+use super::commit::{Seen, Untouched, base_nodes, changed_paths, untouched, update_worktree_copy};
 use super::hooks::{HookError, Source, gate, message_hooks};
 use super::land::{failed, join};
+use super::merge::is_generated;
 use crate::brain::tree_store::TreeStore;
 use crate::dream::{DreamOptions, housekeeping_changes};
 use crate::git::{Plumbing, Repo, StagedBlob};
@@ -72,14 +82,21 @@ pub fn commit<G: Plumbing>(
     if blobs.is_empty() {
         return Ok(Vec::new());
     }
-    let paths: Vec<String> = blobs.iter().map(|blob| blob.rel.clone()).collect();
     // Each file as it is before its cleanliness is checked, so one changed
     // after the check is never replaced.
-    let seen: BTreeMap<&str, Seen> = paths
+    let seen: BTreeMap<String, Seen> = blobs
         .iter()
-        .map(|rel| (rel.as_str(), Seen::of(&join(&repo.dir, rel))))
+        .map(|blob| (blob.rel.clone(), Seen::of(&join(&repo.dir, &blob.rel))))
         .collect();
     let dirty: BTreeSet<String> = git.dirty(repo)?.into_iter().collect();
+    let theirs = untouched(git, repo, &repo.dir, Some(&base), &blobs, &dirty)?;
+    let is_untouched = |rel: &str, part: fn(&Untouched) -> bool| theirs.get(rel).is_some_and(part);
+    // A neuron with anything of the person's in it is left out.
+    let blobs: Vec<StagedBlob> = blobs
+        .into_iter()
+        .filter(|blob| is_generated(&blob.rel) || is_untouched(&blob.rel, |u| u.both()))
+        .collect();
+    let paths: Vec<String> = blobs.iter().map(|blob| blob.rel.clone()).collect();
 
     let index = git.staging_index(repo, Some(&base))?;
     git.stage_blobs(repo, &index, &blobs)?;
@@ -111,7 +128,13 @@ pub fn commit<G: Plumbing>(
         })?;
     drop(index);
     let files: Vec<String> = files.into_iter().collect();
-    git.reset_paths(repo, &new, &files).map_err(|e| {
+    // A version of a generated file the person staged stays staged.
+    let index_files: Vec<String> = files
+        .iter()
+        .filter(|rel| is_untouched(rel, |u| u.index))
+        .cloned()
+        .collect();
+    git.reset_paths(repo, &new, &index_files).map_err(|e| {
         failed(format!(
             "committed the housekeeping as {new}, but the index was not updated for its files ({e})"
         ))
@@ -119,9 +142,9 @@ pub fn commit<G: Plumbing>(
     for blob in &blobs {
         if let Some(bytes) = &blob.bytes
             && files.contains(&blob.rel)
-            && let Some(seen) = seen.get(blob.rel.as_str())
+            && let Some(seen) = seen.get(&blob.rel)
         {
-            let clean = !dirty.contains(&blob.rel);
+            let clean = is_untouched(&blob.rel, |u| u.work_tree);
             update_worktree_copy(&repo.dir, &blob.rel, bytes, clean, seen);
         }
     }

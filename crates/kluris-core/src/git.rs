@@ -750,6 +750,14 @@ pub trait Plumbing: Git {
     /// <rev> -- <paths>`); every other entry stays as it is.
     fn reset_paths(&self, repo: &Repo, rev: &str, paths: &[String]) -> Result<(), GitError>;
 
+    /// The blob each of `paths` has in the user's index; a path the index
+    /// does not hold is left out.
+    fn index_blobs(
+        &self,
+        repo: &Repo,
+        paths: &[String],
+    ) -> Result<BTreeMap<String, String>, GitError>;
+
     /// Every path in the brain with a change git would commit or an
     /// untracked file it would add (`git status`, ignored files left out),
     /// sorted.
@@ -1205,6 +1213,26 @@ impl Plumbing for SystemGit {
     ) -> Result<(), GitError> {
         let args = ["update-ref", "-m", reason, "HEAD", new, old.unwrap_or("")];
         self.run(&repo.dir, &args).map(drop)
+    }
+
+    fn index_blobs(
+        &self,
+        repo: &Repo,
+        paths: &[String],
+    ) -> Result<BTreeMap<String, String>, GitError> {
+        if paths.is_empty() {
+            return Ok(BTreeMap::new());
+        }
+        // `<mode> <blob> <stage>\t<path>`, NUL-terminated.
+        let args = with_paths(&["ls-files", "-s", "-z"], paths);
+        let out = self.run(&repo.dir, &args)?;
+        Ok(nul_names(&out)
+            .filter_map(|line| {
+                let (meta, path) = line.split_once('\t')?;
+                let blob = meta.split(' ').nth(1)?;
+                Some((path.to_string(), blob.to_string()))
+            })
+            .collect())
     }
 
     fn reset_paths(&self, repo: &Repo, rev: &str, paths: &[String]) -> Result<(), GitError> {

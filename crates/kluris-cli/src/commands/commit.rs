@@ -7,7 +7,10 @@
 //!
 //! The exit code is the commit's: 0 whenever it landed (or there was
 //! nothing to commit), whatever the sync did, which the `sync` object says;
-//! 1 when nothing was committed. However it ends once the session opened,
+//! 1 when nothing was committed. Once HEAD moved the commit landed: what
+//! fails after it (updating the index, listing what is left) is a
+//! `warning`, with how to repair it, and the exit stays 0. However it ends
+//! once the session opened,
 //! the session closes as it does after a commit (it pushes what waits), and
 //! the `sync` object says what it did, in a failure too; a refusal while a
 //! merge waits carries that merge's conflicts, their texts and its id. A
@@ -187,10 +190,20 @@ pub fn run(options: &Options) -> Result<(), CliError> {
             ("linked".into(), strings(&report.linked)),
             ("left_dirty".into(), strings(&report.left_dirty)),
         ]);
+        let doc = match (doc, &report.warning) {
+            (Json::Object(mut fields), Some(warning)) => {
+                fields.push(("warning".into(), Json::Str(warning.clone())));
+                Json::Object(fields)
+            }
+            (doc, _) => doc,
+        };
         human::print(&json::to_line(&brains::with_sync(doc, sync)));
     } else {
         human::print(&text(&brain.name, &report));
         brains::print_lines([(brain.name.as_str(), sync)]);
+        if let Some(warning) = &report.warning {
+            eprintln!("Warning: {warning}");
+        }
     }
     Ok(())
 }

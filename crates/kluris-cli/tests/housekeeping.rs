@@ -817,3 +817,102 @@ fn the_stderr_line_says_what_the_last_background_push_did() {
     let (code, _, err) = h.run(&["status", "--brain", "alpha"]);
     assert_eq!((code, err.as_str()), (0, ""));
 }
+
+// --- nothing of the person's is taken -------------------------------------------
+
+/// A tracked neuron with fixes for housekeeping to make (no parent, no
+/// git dates): `notes/plain.md`, committed and pushed.
+const PLAIN: &str = "---\ncreated: '2026-01-01'\nupdated: '2026-01-01'\n---\n\n# Plain\n\nOne.\n";
+
+/// `rel` as the user's index holds it.
+fn staged(h: &Home, root: &Path, rel: &str) -> String {
+    h.git(root, &["show", &format!(":{rel}")])
+}
+
+/// `dream`'s or `mri`'s committed files.
+fn committed_by(command: &str, doc: &Value) -> Vec<String> {
+    match command {
+        "dream" => dream_committed(doc, "alpha"),
+        _ => doc["brains"][0]["committed"]
+            .as_array()
+            .map(|files| {
+                files
+                    .iter()
+                    .map(|f| f.as_str().unwrap().to_string())
+                    .collect()
+            })
+            .unwrap_or_default(),
+    }
+}
+
+/// `dream`'s or `mri`'s sync item.
+fn sync_by<'d>(command: &str, doc: &'d Value) -> &'d Value {
+    match command {
+        "dream" => dream_sync(doc, "alpha"),
+        _ => sync_of(&doc["brains"][0]["sync"]),
+    }
+}
+
+#[test]
+fn a_staged_version_of_a_neuron_is_kept_and_its_housekeeping_left_out() {
+    let staged_only = format!("{PLAIN}\nStaged only.\n");
+    for command in ["dream", "mri"] {
+        // A paragraph staged alone, and staged and work-tree versions that
+        // differ.
+        for work_tree in [PLAIN.to_string(), format!("{PLAIN}\nWork tree only.\n")] {
+            let (h, root) = team();
+            h.commit(&root, "notes/plain.md", PLAIN);
+            h.git(&root, &["push", "-q"]);
+            h.write(&root, "notes/plain.md", &staged_only);
+            h.git(&root, &["add", "notes/plain.md"]);
+            h.write(&root, "notes/plain.md", &work_tree);
+            let (code, doc, err) = h.json_run(&[command, "--brain", "alpha"]);
+            assert_eq!(code, 0, "{command}: {doc}{err}");
+            assert_eq!(
+                staged(&h, &root, "notes/plain.md"),
+                staged_only,
+                "{command}: the staged version was lost"
+            );
+            assert!(
+                !committed_by(command, &doc).contains(&"notes/plain.md".to_string()),
+                "{command}: {doc}"
+            );
+            assert_eq!(h.committed(&root, "notes/plain.md"), PLAIN, "{command}");
+            // The work tree keeps the person's text, with dream's fixes.
+            let now = h.read(&root, "notes/plain.md");
+            assert!(now.contains("parent: ./map.md"), "{command}: {now}");
+            assert_eq!(
+                now.contains("Work tree only."),
+                work_tree != PLAIN,
+                "{command}: {now}"
+            );
+            settle(sync_by(command, &doc), &root);
+        }
+    }
+}
+
+#[test]
+fn a_staged_version_of_a_map_is_kept_and_the_map_committed() {
+    for command in ["dream", "mri"] {
+        let (h, root) = team();
+        // A neuron committed without its map: the housekeeping rebuilds it.
+        h.commit(&root, "notes/third.md", &neuron("Third", BODY));
+        h.git(&root, &["push", "-q"]);
+        let head_map = h.committed(&root, "notes/map.md");
+        let staged_map = format!("{head_map}\nStaged note.\n");
+        h.write(&root, "notes/map.md", &staged_map);
+        h.git(&root, &["add", "notes/map.md"]);
+        h.write(&root, "notes/map.md", &head_map);
+        let (code, doc, err) = h.json_run(&[command, "--brain", "alpha"]);
+        assert_eq!(code, 0, "{command}: {doc}{err}");
+        assert!(
+            committed_by(command, &doc).contains(&"notes/map.md".to_string()),
+            "{command}: {doc}"
+        );
+        let map = h.committed(&root, "notes/map.md");
+        assert!(map.contains("third.md"), "{command}: {map}");
+        assert_eq!(staged(&h, &root, "notes/map.md"), staged_map, "{command}");
+        assert_eq!(h.read(&root, "notes/map.md"), map, "{command}");
+        settle(sync_by(command, &doc), &root);
+    }
+}

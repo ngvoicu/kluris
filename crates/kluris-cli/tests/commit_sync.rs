@@ -390,6 +390,163 @@ fn a_neuron_with_edits_of_its_own_never_gets_a_reverse_link() {
     assert_eq!(h.read(&root, "notes/first.md"), edited);
 }
 
+/// `kluris dream --brain alpha`, then the background push it started when
+/// it left commits waiting.
+fn dream(h: &Home, root: &Path) {
+    let (_, out, err) = h.run(&["dream", "--brain", "alpha", "--json"]);
+    let doc: Value = serde_json::from_str(&out).unwrap_or_else(|e| panic!("{e}: {out}{err}"));
+    let waits = doc["sync"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .any(|item| item["to_push"].as_u64().is_some_and(|n| n > 0));
+    if waits {
+        wait_for_background(root);
+    }
+}
+
+/// `alpha` with `notes/second.md`, `notes/third.md` and `notes/fourth.md`
+/// committed, tidied by a dream (so HEAD needs no housekeeping) and pushed.
+fn tidy_team() -> (Home, PathBuf) {
+    let (h, root) = team();
+    for (rel, title) in [
+        ("notes/second.md", "Second"),
+        ("notes/third.md", "Third"),
+        ("notes/fourth.md", "Fourth"),
+    ] {
+        h.write(&root, rel, &neuron(title, BODY));
+    }
+    h.git(&root, &["add", "-A"]);
+    h.git(&root, &["commit", "-q", "-m", "more"]);
+    h.git(&root, &["push", "-q"]);
+    dream(&h, &root);
+    assert_eq!(status(&h, &root), "");
+    (h, root)
+}
+
+#[test]
+fn a_reverse_link_dream_already_wrote_is_taken() {
+    let (h, root) = tidy_team();
+    // The write, then dream, then the commit of the write.
+    let first = h.read(&root, "notes/first.md").replace(
+        "parent: ./map.md\n",
+        "parent: ./map.md\nrelated:\n- ./second.md\n",
+    );
+    h.write(&root, "notes/first.md", &first);
+    dream(&h, &root);
+    assert!(h.read(&root, "notes/second.md").contains("- first.md\n"));
+
+    let (code, doc) = commit(&h, "notes/first.md", &[]);
+    assert_eq!(code, 0, "{doc}");
+    assert_eq!(doc["linked"], json!(["notes/second.md"]), "{doc}");
+    assert_eq!(doc["left_dirty"], json!([]), "{doc}");
+    assert_eq!(sync_of(&doc)["pushed"], true, "{doc}");
+    assert_eq!(status(&h, &root), "");
+    // The teammate reads both links.
+    let mate = h.teammate("alpha");
+    h.git(&mate, &["pull", "-q"]);
+    assert!(h.read(&mate, "notes/first.md").contains("- ./second.md\n"));
+    assert!(h.read(&mate, "notes/second.md").contains("- first.md\n"));
+}
+
+#[test]
+fn a_neuron_with_an_edit_or_a_fix_that_is_not_the_commits_stays_out() {
+    let (h, root) = tidy_team();
+    // `third.md` has an edit of its own; `fourth.md` gets, beside this
+    // commit's reverse link, one an untracked draft calls for.
+    let third = h
+        .read(&root, "notes/third.md")
+        .replace("Two.", "Two, edited.");
+    h.write(&root, "notes/third.md", &third);
+    h.write(&root, "notes/draft.md", &linking("Draft", &["./fourth.md"]));
+    let first = h.read(&root, "notes/first.md").replace(
+        "parent: ./map.md\n",
+        "parent: ./map.md\nrelated:\n- ./third.md\n- ./fourth.md\n",
+    );
+    h.write(&root, "notes/first.md", &first);
+    dream(&h, &root);
+    let fourth = h.read(&root, "notes/fourth.md");
+    assert!(
+        fourth.contains("- first.md\n") && fourth.contains("- draft.md\n"),
+        "{fourth}"
+    );
+    let third = h.read(&root, "notes/third.md");
+
+    let (code, doc) = commit(&h, "notes/first.md", &[]);
+    assert_eq!(code, 0, "{doc}");
+    assert_eq!(doc["linked"], json!([]), "{doc}");
+    let head = head(&h, &root);
+    assert!(
+        !changed(&h, &root, &head)
+            .iter()
+            .any(|rel| rel == "notes/third.md" || rel == "notes/fourth.md")
+    );
+    assert_eq!(h.read(&root, "notes/third.md"), third);
+    assert_eq!(h.read(&root, "notes/fourth.md"), fourth);
+}
+
+#[test]
+fn a_staged_version_of_a_map_the_commit_changes_is_kept() {
+    let (h, root) = team();
+    let head_map = h.read(&root, "notes/map.md");
+    let staged_map = format!("{head_map}\nStaged note.\n");
+    h.write(&root, "notes/map.md", &staged_map);
+    h.git(&root, &["add", "notes/map.md"]);
+    h.write(&root, "notes/map.md", &head_map);
+    h.write(&root, "notes/second.md", &neuron("Second", BODY));
+    let (code, doc) = commit(&h, "notes/second.md", &[]);
+    assert_eq!(code, 0, "{doc}");
+    assert_eq!(doc["regenerated"], json!(["notes/map.md"]), "{doc}");
+    let head = head(&h, &root);
+    let map = show(&h, &root, &head, "notes/map.md");
+    assert!(map.contains("second.md"), "{map}");
+    assert_eq!(h.git(&root, &["show", ":notes/map.md"]), staged_map);
+    assert_eq!(h.read(&root, "notes/map.md"), map);
+}
+
+#[test]
+fn a_commit_that_landed_exits_0_and_warns_of_what_failed_after() {
+    let (h, root) = team();
+    // A pre-commit hook that leaves the index locked: the commit lands, the
+    // index cannot be updated after it.
+    let lock = root.join(".git").join("index.lock");
+    let hooks = root.join(".git").join("hooks");
+    fs::create_dir_all(&hooks).unwrap();
+    let hook = hooks.join("pre-commit");
+    fs::write(&hook, format!("#!/bin/sh\ntouch '{}'\n", sh_path(&lock))).unwrap();
+    make_executable(&hook);
+    h.write(&root, "notes/second.md", &neuron("Second", BODY));
+    let before = head(&h, &root);
+
+    let (code, doc) = commit(&h, "notes/second.md", &[]);
+    assert_eq!(code, 0, "{doc}");
+    assert_eq!(doc["ok"], true);
+    assert_eq!(doc["committed"], true);
+    let head = head(&h, &root);
+    assert_ne!(head, before);
+    assert_eq!(doc["commit"], head.as_str());
+    let warning = doc["warning"]
+        .as_str()
+        .unwrap_or_else(|| panic!("no warning: {doc}"));
+    assert!(
+        warning.contains("git reset -q -- notes/second.md notes/map.md"),
+        "{warning}"
+    );
+    assert_eq!(sync_of(&doc)["pushed"], true, "{doc}");
+    assert_eq!(remote_main(&h), head);
+    let mut expected: Vec<&str> = COMMIT_KEYS[..8].to_vec();
+    expected.extend(["warning", "sync"]);
+    assert_eq!(keys(&doc), expected, "{doc}");
+
+    // Text: the warning on stderr.
+    fs::remove_file(&lock).unwrap();
+    h.write(&root, "notes/third.md", &neuron("Third", BODY));
+    let (code, _, err) = h.run(&["commit", "--brain", "alpha", "--paths", "notes/third.md"]);
+    assert_eq!(code, 0, "{err}");
+    assert!(err.contains("Warning: "), "{err}");
+    fs::remove_file(&lock).unwrap();
+}
+
 // --- the exit code is the commit's -----------------------------------------------------
 
 #[test]

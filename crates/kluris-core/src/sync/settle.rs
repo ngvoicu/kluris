@@ -175,23 +175,40 @@ fn finish<G: SyncGit>(
         },
     )
     .map_err(CommitError::Left)?;
-    pending::remove(&ctx.pending()).map_err(|e| {
-        CommitError::Left(super::land::failed(format!(
-            "the merge landed, but its record could not be removed: {e}"
-        )))
-    })?;
-    let regenerated: Vec<String> = git
-        .diff_names(repo, &waiting.ours, &finished)?
-        .into_iter()
-        .filter(|rel| is_generated(rel))
-        .collect();
+    // The merge landed: what fails from here is a warning.
+    let mut warnings = Vec::new();
+    let record = ctx.pending();
+    if let Err(e) = pending::remove(&record) {
+        warnings.push(format!(
+            "the waiting merge's record could not be removed ({e}); remove {}",
+            record.display()
+        ));
+    }
+    let regenerated: Vec<String> = match git.diff_names(repo, &waiting.ours, &finished) {
+        Ok(files) => files.into_iter().filter(|rel| is_generated(rel)).collect(),
+        Err(e) => {
+            warnings.push(format!(
+                "the maps the merge rebuilt could not be listed ({e})"
+            ));
+            Vec::new()
+        }
+    };
+    let message = commit_message(git, repo, &finished).unwrap_or_else(|e| {
+        warnings.push(format!("the merge's message could not be read ({e})"));
+        message
+    });
+    let left_dirty = git.dirty(repo).unwrap_or_else(|e| {
+        warnings.push(format!("the files left changed could not be listed ({e})"));
+        Vec::new()
+    });
     Ok(CommitReport {
-        message: Some(commit_message(git, repo, &finished)?),
+        message: Some(message),
         commit: Some(finished),
         paths,
         regenerated,
         linked: Vec::new(),
-        left_dirty: git.dirty(repo)?,
+        left_dirty,
+        warning: (!warnings.is_empty()).then(|| warnings.join("; ")),
         set: None,
     })
 }

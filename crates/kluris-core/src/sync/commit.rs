@@ -379,6 +379,8 @@ pub struct CommitReport {
     /// The brain's files still changed or untracked after the commit,
     /// sorted.
     pub left_dirty: Vec<String>,
+    /// What failed once the commit landed, and how to repair it.
+    pub warning: Option<String>,
     /// The commit as it was made.
     pub set: Option<CommitSet>,
     /// Its message as the hooks left it.
@@ -424,12 +426,6 @@ pub enum CommitError {
     MessageFile(String),
     /// `HEAD` moved while the commit was built; nothing was committed.
     HeadMoved(GitError),
-    /// The commit was made, but the user's index could not be updated for
-    /// its paths.
-    IndexNotUpdated {
-        commit: String,
-        error: GitError,
-    },
     /// A merge waits for a person (`merge`, its id): it is finished with
     /// `--merge`, its conflicted `paths` settled in the work tree.
     MergeWaits {
@@ -506,10 +502,6 @@ impl fmt::Display for CommitError {
                 f,
                 "HEAD moved while the commit was made; nothing was committed ({e})"
             ),
-            CommitError::IndexNotUpdated { commit, error } => write!(
-                f,
-                "committed {commit}, but the index was not updated for its paths ({error})"
-            ),
             CommitError::MergeWaits { merge, paths } => write!(
                 f,
                 "a merge waits to be finished (merge {merge}): settle {} in the work tree, then run kluris commit --merge {merge} --paths {}; nothing was committed",
@@ -570,6 +562,17 @@ impl fmt::Display for CommitError {
             CommitError::Git(e) => e.fmt(f),
         }
     }
+}
+
+/// The warning for an index the landed commit could not update for
+/// `paths`.
+pub(super) fn index_not_updated(paths: &[String], e: &GitError) -> String {
+    let words: Vec<String> = paths.iter().map(|rel| shell_word(rel)).collect();
+    format!(
+        "the index was not updated for the committed files ({}); once no other git is running, run `git reset -q -- {}`",
+        one_line(&e.to_string()),
+        words.join(" ")
+    )
 }
 
 /// `path` as a shell word: quoted when it holds anything but letters,
@@ -729,6 +732,88 @@ fn reverse_links(
             })
         })
         .collect()
+}
+
+/// What the person has in a file a Kluris commit gives new bytes (R)
+/// beside the person's own paths: nothing, where each of these holds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct Untouched {
+    /// The user's index entry is the base's blob or R's.
+    pub index: bool,
+    /// The work-tree copy is the base's bytes or exactly R (as `kluris
+    /// dream` writes the same fix there, its line endings aside).
+    pub work_tree: bool,
+}
+
+impl Untouched {
+    /// Nothing of the person's is in the file: the commit may take it.
+    pub fn both(self) -> bool {
+        self.index && self.work_tree
+    }
+}
+
+/// [`Untouched`] for each of `blobs` (R: its bytes, `None` for no file),
+/// against `base` (none: no commit yet), the user's index and the work
+/// tree under `root`; `dirty` is [`Plumbing::dirty`], read before.
+pub(super) fn untouched<G: Plumbing>(
+    git: &G,
+    repo: &Repo,
+    root: &Path,
+    base: Option<&str>,
+    blobs: &[StagedBlob],
+    dirty: &BTreeSet<String>,
+) -> Result<BTreeMap<String, Untouched>, GitError> {
+    let in_base = match base {
+        Some(rev) => entry_map(git, repo, rev)?,
+        None => BTreeMap::new(),
+    };
+    let rels: Vec<String> = blobs.iter().map(|blob| blob.rel.clone()).collect();
+    let index = git.index_blobs(repo, &rels)?;
+    let base_blob = |rel: &str| in_base.get(rel).map(|(_, oid)| oid.as_str());
+    // The bytes of each staged entry that is not the base's, and of the
+    // base's, to compare with R and the work tree.
+    let wanted: Vec<String> = rels
+        .iter()
+        .filter(|rel| dirty.contains(*rel))
+        .flat_map(|rel| [index.get(rel).map(String::as_str), base_blob(rel)])
+        .flatten()
+        .map(str::to_string)
+        .collect();
+    let bytes_of = git.read_blobs(repo, &wanted)?;
+    let mut out = BTreeMap::new();
+    for blob in blobs {
+        let rel = blob.rel.as_str();
+        let staged = index.get(rel).map(String::as_str);
+        let index_ok = staged == base_blob(rel)
+            || match (&blob.bytes, staged) {
+                (Some(r), Some(oid)) => bytes_of.get(oid) == Some(r),
+                (None, None) => true,
+                _ => false,
+            };
+        let work_tree_ok = !dirty.contains(rel) || {
+            let on_disk = fs::symlink_metadata(join(root, rel))
+                .ok()
+                .filter(|meta| meta.is_file())
+                .and_then(|_| fs::read(join(root, rel)).ok());
+            match (&blob.bytes, on_disk) {
+                (None, None) => true,
+                (Some(r), Some(disk)) => {
+                    disk == *r
+                        || disk == with_line_ending(r, line_ending(&String::from_utf8_lossy(&disk)))
+                        || base_blob(rel).and_then(|oid| bytes_of.get(oid)) == Some(&disk)
+                }
+                _ => false,
+            }
+        };
+        out.insert(
+            rel.to_string(),
+            Untouched {
+                index: index_ok,
+                work_tree: work_tree_ok,
+            },
+        );
+    }
+    Ok(out)
 }
 
 /// `view` with the `links` in its neurons.
@@ -1050,11 +1135,19 @@ pub fn commit<G: Plumbing>(
         .map(|rel| (rel.clone(), Seen::of(&join(root, rel))))
         .collect();
     let dirty_before: BTreeSet<String> = git.dirty(&repo)?.into_iter().collect();
-    // A neuron with changes of its own gets no link: they would be
-    // committed with it.
+    // A neuron with anything of the person's in it gets no link: it would
+    // be committed with it.
+    let untouched_links = untouched(
+        git,
+        &repo,
+        root,
+        base.as_deref(),
+        &candidates,
+        &dirty_before,
+    )?;
     let mut links: Vec<StagedBlob> = candidates
         .into_iter()
-        .filter(|blob| !dirty_before.contains(&blob.rel))
+        .filter(|blob| untouched_links.get(&blob.rel).is_some_and(|u| u.both()))
         .collect();
     let link_set: BTreeSet<String> = links.iter().map(|blob| blob.rel.clone()).collect();
     let view = with_links(root, view, &links);
@@ -1091,6 +1184,7 @@ pub fn commit<G: Plumbing>(
             regenerated: Vec::new(),
             linked: Vec::new(),
             left_dirty: git.dirty(&repo)?,
+            warning: None,
             set: None,
             message: None,
         });
@@ -1212,6 +1306,22 @@ pub fn commit<G: Plumbing>(
     )?;
     let final_message = message.text.clone();
 
+    // A generated file's index entry and work-tree copy get the commit's
+    // only where they hold nothing of the person's: a version of it the
+    // person staged stays staged.
+    let generated_untouched = untouched(
+        git,
+        &repo,
+        root,
+        set.base.as_deref(),
+        &generated,
+        &dirty_before,
+    )?;
+    let staged_generated: BTreeSet<&String> = generated_untouched
+        .iter()
+        .filter(|(_, u)| !u.index)
+        .map(|(rel, _)| rel)
+        .collect();
     let parents: Vec<&str> = set.base.iter().map(String::as_str).collect();
     let new = git.commit_tree(&repo, &tree, &parents, message.file())?;
     let subject = final_message.lines().next().unwrap_or_default();
@@ -1223,28 +1333,42 @@ pub fn commit<G: Plumbing>(
     )
     .map_err(CommitError::HeadMoved)?;
     drop(index);
-    git.reset_paths(&repo, &new, &set.paths)
-        .map_err(|error| CommitError::IndexNotUpdated {
-            commit: new.clone(),
-            error,
-        })?;
+    // HEAD has moved: the commit landed. What fails from here is a warning.
+    let mut warnings = Vec::new();
+    let index_paths: Vec<String> = set
+        .paths
+        .iter()
+        .filter(|rel| !staged_generated.contains(rel))
+        .cloned()
+        .collect();
+    if let Err(e) = git.reset_paths(&repo, &new, &index_paths) {
+        warnings.push(index_not_updated(&index_paths, &e));
+    }
     for blob in generated.iter().chain(&links) {
         if let Some(bytes) = &blob.bytes
             && (regenerated.contains(&blob.rel) || linked.contains(&blob.rel))
             && let Some(seen) = seen.get(&blob.rel)
         {
-            let clean = !dirty_before.contains(&blob.rel);
+            // A linked neuron holds nothing of the person's.
+            let clean = generated_untouched
+                .get(&blob.rel)
+                .is_none_or(|u| u.work_tree);
             update_worktree_copy(root, &blob.rel, bytes, clean, seen);
         }
     }
     // As with `git commit`, post-commit cannot undo or fail the commit.
     let _ = git.run_hook(&repo, None, "post-commit", &[]);
+    let left_dirty = git.dirty(&repo).unwrap_or_else(|e| {
+        warnings.push(format!("the files left changed could not be listed ({e})"));
+        Vec::new()
+    });
     Ok(CommitReport {
         commit: Some(new),
         paths,
         regenerated,
         linked,
-        left_dirty: git.dirty(&repo)?,
+        left_dirty,
+        warning: (!warnings.is_empty()).then(|| warnings.join("; ")),
         set: Some(set),
         message: Some(final_message),
     })
