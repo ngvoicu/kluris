@@ -351,6 +351,8 @@ fn readme_says_reads_pull_commit_pushes_and_a_background_push_shares_the_rest() 
         "`needs_pull`",
         // Busy.
         "`busy`",
+        // Where each command's JSON puts the `sync` object.
+        "a `sync` key on each `brain:<name>` check for `kluris doctor`",
         // Every command syncs; nothing else does.
         "There is no switch that turns syncing off",
         "no watch mode and no service",
@@ -374,6 +376,7 @@ fn readme_never_has_the_agent_sync_before_it_writes() {
         "the agent runs it before every write",
         "Before it writes, the agent syncs",
         "commit, push and pull it with `git` like any",
+        "`kluris doctor` says it only in its text",
     ] {
         assert!(!readme.contains(stale), "README says {stale:?}");
     }

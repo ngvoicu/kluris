@@ -140,6 +140,36 @@ fn help_names_the_hooks_a_command_runs() {
     }
 }
 
+/// `doctor --help` and `sync --help` say what the commands do with the
+/// remote: doctor's checks read every brain through its sync, so
+/// `--no-refresh` only skips the refresh, and a conflict `sync` leaves is
+/// settled either way there is.
+#[test]
+fn help_says_doctor_syncs_and_both_ways_to_settle_a_conflict() {
+    let home = TempDir::new().unwrap();
+    let flat = |args: &[&str]| {
+        let out = kluris(home.path()).args(args).output().unwrap();
+        String::from_utf8(out.stdout)
+            .unwrap()
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+    let doctor = flat(&["doctor", "--help"]);
+    assert!(!doctor.contains("read-only"), "{doctor}");
+    assert!(
+        doctor.contains("--no-refresh skips refreshing the companions and agent skills"),
+        "{doctor}"
+    );
+    let sync = flat(&["sync", "--help"]);
+    for text in ["`kluris commit --merge <id>`", "`kluris resolve`"] {
+        assert!(
+            sync.contains(text),
+            "kluris sync --help lacks {text:?}:\n{sync}"
+        );
+    }
+}
+
 #[test]
 fn help_prints_no_implementation_notes() {
     let home = TempDir::new().unwrap();

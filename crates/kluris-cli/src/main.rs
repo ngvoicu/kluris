@@ -489,7 +489,9 @@ copies an earlier release left in folders Kluris does not use, and removes \
 the background sync services an earlier release installed. This is the step \
 after an upgrade: run `kluris doctor` and everything is back in sync.
 
-Pass --no-refresh to run only the read-only checks.";
+Like every command that opens a brain, the checks bring teammates' commits \
+into each brain first. --no-refresh skips refreshing the companions and \
+agent skills.";
 
 /// `sync`.
 const SYNC_HELP: &str = "Fetch, merge and push brains with their remotes.
@@ -500,7 +502,8 @@ commits merge them: different files, the generated maps, dates, related and \
 tags lists, and edits to different parts of a neuron merge on their own; \
 overlapping edits, a delete against an edit, different parents and other \
 frontmatter changed on both sides are left for you, with nothing changed \
-until `kluris resolve`. A file with uncommitted changes is never \
+until you settle them: write the version you want to the file and run \
+`kluris commit --merge <id>`, or choose a side with `kluris resolve`. A file with uncommitted changes is never \
 overwritten: if incoming changes touch one, that brain is not synced. The \
 repository's pre-merge-commit, prepare-commit-msg, commit-msg, post-merge \
 and pre-push hooks run as git runs them, and git's reference-transaction \

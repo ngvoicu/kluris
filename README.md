@@ -374,9 +374,10 @@ say why).
 With `--json`, what a sync did is the same `sync` object (described below
 with `kluris sync`): at the top level for `kluris wake-up`, `kluris search`,
 `kluris register`, `kluris create` and `kluris commit`, in each brain's
-entry for `kluris status` and `kluris mri`, and one entry per brain (with
-`brain`) for `kluris dream`; `kluris doctor` says it only in its text. Reads, `dream` and `mri`
-add it only when there is something to say; the commands you run to sync
+entry for `kluris status` and `kluris mri`, one entry per brain (with
+`brain`) for `kluris dream`, and a `sync` key on each `brain:<name>` check
+for `kluris doctor`. Reads, `dream` and `mri` add it only when there is
+something to say; the commands you run to sync
 carry it for every git brain with a remote: `kluris commit`, `kluris sync`,
 `kluris resolve`,
 and `kluris create` with `--remote`. Without `--json`, the same news is one
@@ -867,7 +868,7 @@ from disk or send it to a colleague.
 | `kluris companion add <name>` | Turn a companion on for a brain (`--brain`) |
 | `kluris companion remove <name>` | Turn a companion off for a brain (`--brain`) |
 | `kluris remove <name>` | Unregister a brain; its files stay on disk |
-| `kluris doctor` | Check git, PATH, the config and every brain, then refresh companions and agent skills (`--no-refresh`: checks only) |
+| `kluris doctor` | Check git, PATH, the config and every brain, then refresh companions and agent skills (`--no-refresh`: no refresh) |
 | `kluris self-update` | Update to the newest release, or `--version X` (`--check`: only look) |
 | `kluris self-uninstall` | Uninstall Kluris (`--purge`, `--yes`) |
 | `kluris help [COMMAND]` | The command list, or one command's summary |
