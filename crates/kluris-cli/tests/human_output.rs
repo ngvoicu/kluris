@@ -96,8 +96,8 @@ fn json_is_never_styled() {
 
 #[test]
 fn usage_names_kluris_whatever_the_binary_file_is_called() {
-    // clap takes the name from argv[0] (`kluris.exe` on Windows); Click's
-    // usage, like v2's, says `kluris`.
+    // clap takes the name from argv[0] (`kluris.exe` on Windows); the usage
+    // line, as Click writes it, says `kluris`.
     let dir = TempDir::new().unwrap();
     let copy = dir.path().join("kluris-renamed.exe");
     std::fs::copy(assert_cmd::cargo::cargo_bin!("kluris"), &copy).unwrap();

@@ -1,5 +1,5 @@
-//! `kluris search`: v2's JSON keys and types, the added keys, errors and the
-//! text output's wording (research-03 §1.5; research-05 §6).
+//! `kluris search`: the JSON keys and their types, errors and the text
+//! output's wording.
 
 use std::path::Path;
 
@@ -79,7 +79,7 @@ fn keys(value: &Value) -> Vec<&str> {
 }
 
 #[test]
-fn json_keeps_v2s_keys_in_order_and_adds_the_new_ones() {
+fn json_has_the_result_keys_in_order() {
     let home = setup();
     let (text, doc) = json(&home, &["search", "jwt", "--json"]);
     assert_eq!(
@@ -161,7 +161,7 @@ fn hits_carry_heading_line_related_updated_and_replaced_by() {
 }
 
 #[test]
-fn glossary_entries_keep_v2s_shape() {
+fn glossary_entries_have_the_glossary_shape() {
     let home = setup();
     let (_, doc) = json(&home, &["search", "JWT", "--json", "--limit", "20"]);
     let glossary: Vec<&Value> = doc["results"]
@@ -236,7 +236,7 @@ fn brain_all_is_refused() {
 }
 
 #[test]
-fn text_output_uses_v2s_wording() {
+fn text_output_has_the_documented_wording() {
     let home = setup();
     let out = kluris(home.path())
         .args(["search", "zebra"])
@@ -298,7 +298,7 @@ fn a_two_line_snippet_indents_its_continuation() {
 
 #[test]
 fn skipped_files_are_reported_in_json_and_on_stderr() {
-    // T-79 finding 2: a malformed neuron is skipped and reported.
+    // A malformed neuron is skipped and reported.
     let home = setup();
     home.child("demo/k/bad.md")
         .write_str("---\nrelated: [\n---\n# Bad\n\njwt\n")

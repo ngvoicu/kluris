@@ -3,13 +3,13 @@
 //! `UserPath` for the Windows user PATH.
 //!
 //! The installer files are exact copies of what `kluris-installer.sh`
-//! (dist 0.33.1, `install-path = "~/.kluris/bin"`, the flat layout) wrote
-//! into a temp HOME on 2026-10-26: the env scripts go to the receipt's folder
+//! (dist 0.33.1, `install-path = "~/.kluris/bin"`, the flat layout) writes
+//! into a temp HOME: the env scripts go to the receipt's folder
 //! (`~/.config/kluris/env.sh`, `env.fish`), every rc file gets an empty line
 //! then `. "$HOME/.config/kluris/env.sh"`, and the fish conf.d file the same
 //! with `source`. Only what that installer writes is removed: env scripts
-//! beside the binary (`~/.kluris/bin/env`, where older dist versions put
-//! them) were never written for Kluris and are left alone.
+//! beside the binary (`~/.kluris/bin/env`, where other dist versions put
+//! them) are never written for Kluris and are left alone.
 //!
 //! The opt-in test `real_windows_user_path_round_trip` changes the real
 //! HKCU PATH of the machine it runs on and restores it; it runs only with
@@ -63,7 +63,7 @@ fn appended(original: &str, line: &str) -> String {
     format!("{original}\n{line}\n")
 }
 
-/// A Kluris-written skill (v3's marker after the frontmatter).
+/// A Kluris-written skill (the marker after the frontmatter).
 fn generated_skill(name: &str) -> String {
     format!("---\nname: {name}\ndescription: brain {name}\n---\n\n{MARKER}\n\n# Brain\n")
 }
@@ -498,7 +498,7 @@ fn the_user_path_entry_is_removed_through_user_path() {
 fn remove_path_entry_matches_case_and_separators_and_keeps_the_rest() {
     let prefix = Path::new(r"C:\Users\u\.kluris\bin");
     // dist 0.33.1 writes the entry as the receipt's prefix,
-    // `C:\Users\u\.kluris\bin` (checked on zeewin2, 2026-10-26); an entry a
+    // `C:\Users\u\.kluris\bin`; an entry a
     // user retyped may differ in case, separators or a trailing `\`, and
     // PowerShell's `-in` compares without case.
     assert_eq!(
@@ -585,12 +585,10 @@ fn the_binary_goes_through_the_callers_remover() {
     assert_eq!(asked, vec![h.prefix.join(exe_name())]);
 }
 
-// A failed step keeps what a retry needs (T-111 finding 5): the rc files
-// go first and a failure there stops everything; then the env scripts, the
-// fish file and the PATH entry, a failure stopping before the binary; the
-// receipt goes last, once the binary is gone. A rerun finishes the job.
-// (This replaces `a_failure_is_reported_and_the_rest_goes_on`, which required
-// the receipt to be removed after a failed binary removal: that was the bug.)
+// A failed step keeps what a retry needs: the rc files go first and a
+// failure there stops everything; then the env scripts, the fish file and
+// the PATH entry, a failure stopping before the binary; the receipt goes
+// last, once the binary is gone. A rerun finishes the job.
 
 #[test]
 fn a_failed_binary_removal_keeps_the_receipt_and_a_retry_finishes() {
@@ -626,8 +624,8 @@ fn read_only(dir: &Path, yes: bool) {
 #[cfg(unix)]
 #[test]
 fn an_rc_file_that_cannot_be_edited_stops_before_anything_is_removed() {
-    // The reviewer's case: ~/.profile is a link into a dotfiles folder the
-    // atomic rewrite cannot write in.
+    // ~/.profile is a link into a dotfiles folder the atomic rewrite cannot
+    // write in.
     let h = Home::installed();
     let dotfiles = h.root.join("dotfiles");
     fs::create_dir_all(&dotfiles).unwrap();
@@ -639,8 +637,7 @@ fn an_rc_file_that_cannot_be_edited_stops_before_anything_is_removed() {
     let report = uninstall(&request(&h, &receipt, false), None, &mut remove_file).unwrap();
     read_only(&dotfiles, false);
     assert!(!report.ok());
-    // The pre-flight (T-119) names the folder the rewrite needs, for
-    // ~/.profile; before it, the failed edit itself did.
+    // The pre-flight names the folder the rewrite needs, for ~/.profile.
     assert!(
         report
             .blocked
@@ -692,8 +689,7 @@ fn an_env_script_that_cannot_be_removed_stops_before_the_binary() {
         "the binary a retry runs is kept"
     );
     assert!(h.receipt.exists());
-    // The pre-flight (T-119) stops before the rc files are edited; before
-    // it, they were.
+    // The pre-flight stops before the rc files are edited.
     assert!(
         report.blocked.iter().any(|b| b.path == folder),
         "{:?}",
@@ -741,7 +737,7 @@ fn a_failed_path_update_keeps_the_binary_and_receipt_and_a_retry_finishes() {
     h.assert_installer_files_gone();
 }
 
-// `modify_path` and the env scripts (T-111 finding 4).
+// `modify_path` and the env scripts.
 
 /// The receipt with `modify_path` false, as the installer writes it under
 /// KLURIS_NO_MODIFY_PATH=1.
@@ -1210,7 +1206,7 @@ fn real_windows_user_path_round_trip() {
     assert_eq!(after.map(|(kind, _)| kind), Some(real_registry::EXPAND));
 }
 
-// Late failures (T-114): the binary and the receipt are the last two things
+// Late failures: the binary and the receipt are the last two things
 // removed, after every other step has succeeded, a purge included. Any
 // earlier failure stops with nothing a retry needs gone, and the rerun,
 // once the obstacle is cleared, finishes.
@@ -1254,8 +1250,8 @@ fn a_purge_that_cannot_clear_dot_kluris_keeps_the_binary_and_receipt() {
 #[cfg(unix)]
 #[test]
 fn a_receipt_folder_that_cannot_lose_the_receipt_keeps_the_binary() {
-    // The KLURIS_NO_MODIFY_PATH=1 install of the probe: no env scripts to
-    // go, and the receipt's folder read-only.
+    // A KLURIS_NO_MODIFY_PATH=1 install: no env scripts to go, and the
+    // receipt's folder read-only.
     let h = Home::installed();
     without_modify_path(&h);
     let folder = h.config_home.join("kluris");
@@ -1299,12 +1295,12 @@ fn a_fish_conf_d_that_cannot_be_cleaned_keeps_the_env_scripts() {
     h.assert_rc_files_restored();
 }
 
-// The pre-flight (T-118; SPEC decision of 2026-10-26): the whole removal
-// plan is checked before the first change. A file that cannot be read or
-// checked (anything but NotFound), a folder an entry must leave that is not
-// writable and searchable, an immutable flag (macOS) or a read-only
-// attribute (Windows) stops the uninstall with nothing changed and each
-// blocker named with its fix; the rerun, once it is cleared, finishes.
+// The pre-flight: the whole removal plan is checked before the first change.
+// A file that cannot be read or checked (anything but NotFound), a folder an
+// entry must leave that is not writable and searchable, an immutable flag
+// (macOS) or a read-only attribute (Windows) stops the uninstall with
+// nothing changed and each blocker named with its fix; the rerun, once it is
+// cleared, finishes.
 
 /// Every file under `root`, with its bytes or link target.
 fn tree(root: &Path) -> Vec<(PathBuf, Vec<u8>)> {
@@ -1626,11 +1622,11 @@ fn cli_a_blocked_uninstall_lists_the_blockers_and_changes_nothing() {
     assert!(!text.contains("uninstalled"), "{text}");
 }
 
-// Folders the user made links (T-129, SPEC decision 2026-10-26 on the
-// pre-flight): a purge checks the very tree it removes, through a linked
-// ~/.kluris as the removal goes through it; a folder the uninstall would
-// remove once empty is kept when it is a link, the link and its target
-// both, and listed in `kept`; the files Kluris installed in it still go.
+// Folders the user made links: a purge checks the very tree it removes,
+// through a linked ~/.kluris as the removal goes through it; a folder the
+// uninstall would remove once empty is kept when it is a link, the link and
+// its target both, and listed in `kept`; the files Kluris installed in it
+// still go.
 
 /// Move `home/<rel>` to `root/dotfiles/<rel's name>` and link it back;
 /// returns (link, target).
@@ -1648,7 +1644,7 @@ fn relink(h: &Home, rel: &str) -> (PathBuf, PathBuf) {
 fn assert_link_kept(link: &Path, target: &Path) {
     assert!(
         fs::symlink_metadata(link).unwrap().file_type().is_symlink(),
-        "{} is no longer the user's link",
+        "{} is not the user's link any more",
         link.display()
     );
     assert_eq!(fs::read_link(link).unwrap(), target);

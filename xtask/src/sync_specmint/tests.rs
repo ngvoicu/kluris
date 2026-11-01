@@ -1,8 +1,7 @@
-//! v2.28.11's `tests/test_sync_specmint.py`, ported, plus the Python texts
-//! the port must reproduce (generated with v2's script under Python 3.11),
-//! the frozen corpus of reports and path mentions that script
-//! gave (`fixtures/sync-specmint/corpus.jsonl`), and a real `--check`
-//! against the Specmint repos beside the workspace.
+//! `sync-specmint`'s rules and output: the exact texts it must write, the
+//! frozen corpus of reports and path mentions
+//! (`fixtures/sync-specmint/corpus.jsonl`), and a real `--check` against
+//! the Specmint repos beside the workspace.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -37,10 +36,10 @@ const HTML_STEP: &str = "4. Copy assets. AI tools
    `~/.claude/skills/specmint-core-html/assets/`). These
 ";
 
-/// v2 `_compat_section("specmint-core")`.
+/// `compat_section("specmint-core")`.
 const CORE_COMPAT: &str = "\n## Kluris Companion Compatibility\n\nKluris embeds this playbook as the `specmint-core` companion. Read and\nfollow it directly from `~/.kluris/companions/specmint-core/SKILL.md`.\nPaths in this file that start with `references/` resolve against\n`~/.kluris/companions/specmint-core/`. `.specs/...` paths are project\npaths. Do not ask the user to install specmint separately. Specs remain\nplain markdown/YAML files that humans can edit and Git can diff.\n";
 
-/// v2 `_compat_section("specmint-core-html")`.
+/// `compat_section("specmint-core-html")`.
 const CORE_HTML_COMPAT: &str = "\n## Kluris Companion Compatibility\n\nKluris embeds this playbook as the `specmint-core-html` companion. Read and\nfollow it directly from `~/.kluris/companions/specmint-core-html/SKILL.md`.\nPaths in this file that start with `references/` or `assets/` resolve\nagainst `~/.kluris/companions/specmint-core-html/`. `.specs/...` paths, and\nthe relative `../assets/` links inside a `SPEC.html`, are project paths. Do\nnot ask the user to install specmint separately. `SPEC.html` stays plain\nHTML with a JSON metadata blob: open it in any browser, edit it in any text\neditor, and keep it diff-friendly with the conventions in\n`references/spec-format.md`.\n";
 
 fn source(tmp: &Path, skill: &str, files: &[&str]) -> PathBuf {
@@ -72,7 +71,7 @@ fn workspace() -> PathBuf {
 // --- the sanitizer ------------------------------------------------------------
 
 #[test]
-fn compat_sections_are_v2s_text() {
+fn compat_sections_are_the_exact_text() {
     assert_eq!(compat_section("specmint-core"), CORE_COMPAT);
     assert_eq!(compat_section("specmint-core-html"), CORE_HTML_COMPAT);
     for name in NAMES {
@@ -159,8 +158,8 @@ fn non_html_companions_skip_the_asset_rule() {
 // --- path mentions --------------------------------------------------------------
 
 #[test]
-fn path_mentions_match_v2s_regex() {
-    // `_PATH_MENTION.findall(text)` under Python 3.11.
+fn path_mentions_match_the_lookbehind_regex() {
+    // What `re.findall` with the look-behind pattern gives under Python 3.11.
     let cases: [(&str, &[&str]); 13] = [
         ("see references/a.md.", &["references/a.md."]),
         ("x references/a.md", &["references/a.md"]),
@@ -321,7 +320,7 @@ fn report_shows_per_file_changes() {
 }
 
 #[test]
-fn report_with_full_diff_is_v2s_text() {
+fn report_with_full_diff_is_the_exact_text() {
     let mut out = Vec::new();
     report(
         "specmint-core",
@@ -564,7 +563,7 @@ fn corpus_report(row: &Value, full_diff: bool) -> Value {
 
 #[test]
 fn reports_and_mentions_match_the_frozen_corpus() {
-    let (header, rows) = corpus();
+    let (_, rows) = corpus();
     let mut failures = Vec::new();
     for (n, row) in rows.iter().enumerate() {
         let area = row["area"].as_str().unwrap_or("?");
@@ -592,10 +591,9 @@ fn reports_and_mentions_match_the_frozen_corpus() {
     }
     assert!(
         failures.is_empty(),
-        "{} of {} rows differ from {}:\n{}",
+        "{} of {} rows differ from fixtures/sync-specmint/corpus.jsonl:\n{}",
         failures.len(),
         rows.len(),
-        header["oracle"],
         failures.join("\n")
     );
 }

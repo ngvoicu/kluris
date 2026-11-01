@@ -1,11 +1,11 @@
-//! `kluris self-update [--check] [--version X] [--json]` (research-02 §5),
-//! with the `self_update` crate:
+//! `kluris self-update [--check] [--version X] [--json]`, with the
+//! `self_update` crate:
 //!
 //! 1. The install receipt says where the installer put kluris; any other
 //!    copy (a cargo build, a copy elsewhere) is refused before the network.
 //! 2. The GitHub release listing gives the newest candidate: a release that
 //!    is not a prerelease and carries this target's exact archive (so never
-//!    a v2 release). It is `latest` only when newer than this binary, else
+//!    a release without binaries). It is `latest` only when newer than this binary, else
 //!    `latest` is the current version (`--check` stops here); `--version`
 //!    names a release instead.
 //! 3. The archive is the asset named exactly `kluris-<target>.tar.gz` /
@@ -180,8 +180,8 @@ fn is_http_loopback(url: &str) -> bool {
 /// The newest candidate in the release listing, every page of it; `None`
 /// when there is none. A candidate is a release that is not a prerelease
 /// (`3.1.0-rc.1`: those install only when named with `--version`) and that
-/// carries this target's exact archive, which leaves out v2's releases and
-/// any release built without this platform. GitHub hides drafts from anyone
+/// carries this target's exact archive, which leaves out releases without
+/// binaries and any release built without this platform. GitHub hides drafts from anyone
 /// without push access, and `self_update`'s release carries no draft flag.
 fn newest_candidate(api: &Api) -> Result<Option<String>, CliError> {
     let mut builder = github::ReleaseList::configure();

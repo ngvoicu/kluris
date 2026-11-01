@@ -1,14 +1,14 @@
-# Kluris 3
-
-`main` is Kluris 3, the Rust rewrite. Kluris 2 (Python) is the tag v2.29.0,
-and its PyPI project `kluris` is archived; v2's v2.28.11 tag is the frozen
-reference for everything here. Work goes on short-lived branches,
-fast-forwarded into `main` at release.
+# Kluris
 
 Kluris turns AI agents into team subject matter experts by giving them shared,
-human-curated knowledge stored in git-backed **brains**. Kluris 3 keeps every v2
-command except `pack` and reads and writes existing brains, configs and agent
-skills exactly as v2 does.
+human-curated knowledge stored in git-backed **brains**. It is a Rust CLI,
+`kluris`: it creates and registers brains, installs an agent skill per brain
+(with the Specmint companion playbooks a brain opts into), wakes up and
+searches a brain for an agent, keeps its maps and links healthy (`dream`,
+`mri`), commits approved files, and syncs every brain it opens with its
+remote through one session (fetch, merge, push; `sync`, `resolve`, `commit`).
+`main` holds the released Kluris; work goes on short-lived branches,
+fast-forwarded into `main` at release.
 
 ## Knowledge base
 
@@ -27,7 +27,7 @@ rust-toolchain.toml   # pinned toolchain (rustfmt, clippy)
 crates/kluris-core/   # library: every operation, typed inputs and outputs, no printing
 crates/kluris-cli/    # package `kluris`, binary `kluris`: parses arguments, calls core, prints
 xtask/                # dev tasks (cargo xtask; windows and linux runners share ssh_ci/)
-vendored/             # the four Specmint companion folders (unchanged from v2)
+vendored/             # the four Specmint companion folders (cargo xtask sync-specmint)
 dist-workspace.toml   # dist 0.33.1: targets, installers, archives (see Release)
 about.toml, about.hbs # cargo-about config and template of THIRD_PARTY_LICENSES.md
 scripts/release/      # release tooling: pinned tools, licence report, local build, installer smoke, release notes
@@ -52,14 +52,14 @@ writes nothing (see "Golden tests").
 
 ## Windows machines (`cargo xtask windows`)
 
-Kluris 3's tests run on the household Windows machine zeewin2 over ssh, the way ConsensFlow's runner does (`xtask/src/windows.rs`
-has the whole design):
+Kluris's tests run on the household Windows machine zeewin2 over ssh, the
+way ConsensFlow's runner does (`xtask/src/windows.rs` has the whole design):
 
 ```bash
 cargo xtask windows                               # cargo test --workspace --no-fail-fast
 cargo xtask windows -- -p kluris-core             # extra cargo test args after --
 cargo xtask windows --wait 0 --clippy             # ask once: 75 at once if busy or a run is queued
-cargo xtask windows --installer-smoke --wrapper ../sites/kluris-site/install.ps1
+cargo xtask windows --installer-smoke --wrapper ../sites/kluris-site/install.ps1   # then the life cycle (see Release)
 cargo xtask windows --installer-smoke --published 3.0.0-rc.1   # a GitHub release, live wrapper
 cargo xtask windows --installer-smoke --published 3.0.0 --unpinned   # GitHub's latest, which must be 3.0.0
 cargo xtask windows --clippy                      # cargo clippy --workspace --all-targets -- -D warnings, no tests
@@ -72,7 +72,8 @@ cargo xtask windows --clippy                      # cargo clippy --workspace --a
   (`devices/agvlaptop.md`) and consensflow-sme (`operations/test-machines.md`).
 - **What goes.** `git archive` of HEAD, or of a `git stash create` commit when
   tracked files have uncommitted changes (untracked files do not go), without
-  `target/`.
+  `target/`, with the run script beside the files (and the site wrapper
+  under `--wrapper`), sent by scp to `%USERPROFILE%\<run id>.tgz`.
 - **The queue, shared with ConsensFlow.** A busy machine is waited for, first
   come first served, in the queue every runner on this Mac keeps: a folder
   per machine in `~/.cf-windows-queues/` (or `CF_WINDOWS_QUEUES`), a ticket
@@ -111,17 +112,20 @@ cargo xtask windows --clippy                      # cargo clippy --workspace --a
   but through the queue.
 - **Nothing on the machine changes.** No Windows settings, Defender, firewall,
   registry or PATH (user or machine) changes, no logins, no system-wide
-  installs. Everything Kluris adds lives in `%USERPROFILE%\.kluris-ci\`:
+  installs. Besides the run's tarball and the lock records in
+  `%USERPROFILE%\consensflow-build\`, everything Kluris adds lives in
+  `%USERPROFILE%\.kluris-ci\`:
   `tools\rustup` (`RUSTUP_HOME`: the tree's pinned toolchain, installed by the
   machine's own `~\.cargo\bin\rustup.exe` called by full path), `tools\cargo`
   (`CARGO_HOME`), `cache\target` (`CARGO_TARGET_DIR`: registry deps stay
   built; the workspace crates rebuild in each run's new folder), for
-  `--installer-smoke` `tools\uv-0.12.8\uv.exe` (fetched once, SHA-256
-  checked), `tools\python` (uv's managed CPython, which runs
-  `scripts\release\serve.py`) and `cache\uv`, and `runs\<run id>\` (the
-  unpacked tree, its `tmp\`). PATH is
-  prepended for the run's own process only. A machine without rustup (or the
-  VS Build Tools linker) is reported, not fixed. The one exception is
+  `--installer-smoke` without `--published` `tools\uv-0.12.8\uv.exe`
+  (fetched once, SHA-256 checked), `tools\python` (uv's managed CPython,
+  which runs `scripts\release\serve.py`) and `cache\uv`, and `runs\<run
+  id>\` (the unpacked tree, its `tmp\` as TEMP and TMP). PATH is prepended
+  for the run's own process only. A machine without rustup (the user's
+  `~\.cargo\bin\rustup.exe` and `cargo.exe`) is reported, not fixed; a
+  missing VS Build Tools linker shows as a cargo failure. The one exception is
   `--installer-smoke`, whose test is the installer's user PATH edit: the
   smoke saves `HKCU\Environment\Path` (bytes and registry type,
   `scripts\release\user-path.ps1`, into `runs\<id>\user-path.saved`),
@@ -129,18 +133,26 @@ cargo xtask windows --clippy                      # cargo clippy --workspace --a
   its bound, and so does the stop) and compares it byte for byte; the system
   PATH is only read. kluris.exe and the receipt go to a sandbox profile.
 - **Bounds and cleanup.** The run is in a job object: at most 64 processes,
-  all ended when the run ends. Each step has its own bound (toolchain 30 min,
-  cargo-test 90; a step past it is ended, status 124), the whole run one more (this side kills ssh and sends the stop), and
-  every probe a few seconds. The bootstrap's `finally` always removes the
-  run's tarball and its lock records and closes the lock (after a failed
-  upload, a 30-second ssh with no lock removes that run's own tarball and says
-  whether it could); run folders older than a day, stray `kluris-*.tgz` and
-  every folder in `cache\` that no run uses (all but `target` and `uv`) are
-  swept by the next run, under the lock, each said in a `== sweep:` line.
-  Ctrl-C ends the run there too (130).
+  all ended when the run ends. Each step has its own bound (toolchain 30
+  min, cargo-test 90, clippy 60, python 10, release-dist 60, installer-smoke
+  20, release-versions 60, lifecycle 20, published-smoke 20; a step past it
+  is ended, status 124), the whole run their sum plus 20 minutes (this side
+  kills ssh and sends the stop), and every probe and cleanup ssh its own
+  bound of seconds (the C: free-space probe 45 s, the zeelin lock probe 15
+  s). The bootstrap's `finally` always removes the run's tarball and its
+  lock records and closes the lock (after a failed upload, a 30-second ssh
+  with no lock removes that run's own tarball and says whether it could; the
+  command ends with 1); the next run, under the lock, sweeps run folders
+  older than a day and every folder in `cache\` that no run uses (all but
+  `target` and `uv`), each said in a `== sweep:` line, and removes stray
+  `kluris-*.tgz` older than a day without a line. Ctrl-C ends the run there
+  too (130).
 - **The answer.** The output streams back; the status is the machine's last
   line `== exit N` (ssh to PowerShell answers 1 for every failure), then a
-  summary line with each step's status and time. Each step's end line is
+  summary line on stderr, `windows: zeewin2 run <id> tree <commit, 12
+  characters>: <step> <status> (<time>), ...; exit N`. A run that ends
+  without an `== exit` line answers 1 (or ssh's own failure) and sends the
+  stop. Each step's end line is
   `== step NAME exit CODE SECONDSs <run id>`, and the summary counts only the
   lines that end with this run's id, so step lines inside a step's output (a
   failing test printing what it captured) never reach it.
@@ -158,7 +170,7 @@ the stop are shared with `windows` in `xtask/src/ssh_ci/`):
 ```bash
 cargo xtask linux                                 # cargo test --workspace --no-fail-fast
 cargo xtask linux -- -p kluris-core               # extra cargo test args after --
-cargo xtask linux --installer-smoke --wrapper ../sites/kluris-site/install.sh
+cargo xtask linux --installer-smoke --wrapper ../sites/kluris-site/install.sh   # then the life cycle (see Release)
 cargo xtask linux --installer-smoke --published 3.0.0-rc.1   # a GitHub release, live wrapper
 cargo xtask linux --installer-smoke --published 3.0.0 --unpinned   # GitHub's latest, which must be 3.0.0
 cargo xtask linux --clippy                        # clippy -D warnings on every target, no tests
@@ -183,7 +195,9 @@ cargo xtask linux --wait 0 --clippy               # ask once: 75 at once if busy
   bounded probe (5 s to connect, 30 s in all) and again by the bootstrap
   under its lock. zeelin not answering ends the command with **75** at once
   ("zeelin not running": it is never started from here, nor waited on; an
-  ssh that connected but could not say is an error, 1). Busy, waited for,
+  ssh that connected but could not say is an error, 1, on the first look,
+  and later is reported while the run waits on, ending with 1 if the wait
+  runs out that way). Busy, waited for,
   each refusal naming the holder: poker-lab's `~/.compile-lock/owner`
   present, a run holding zeewin2 (its record
   `/mnt/c/Users/AGV/consensflow-build/.windows-run.id`, written by ConsensFlow's
@@ -193,7 +207,9 @@ cargo xtask linux --wait 0 --clippy               # ask once: 75 at once if busy
   75 is the last word: the run goes back to its place and waits on. The
   other projects' locks are only looked at: never taken or broken, and never
   waited on but through the queue. They are checked when the run starts: a
-  poker-lab job that starts later runs beside it.
+  poker-lab job that starts later runs beside it. A Windows run killed hard
+  leaves its `.windows-run.id` behind, and Linux runs stay refused until a
+  Windows run or a person removes it.
 - **What goes.** The same tarball as for Windows (HEAD, or a `git stash
   create` commit with the uncommitted tracked changes; not `target/`), by
   scp to
@@ -203,12 +219,12 @@ cargo xtask linux --wait 0 --clippy               # ask once: 75 at once if busy
   the tree's pinned toolchain, installed by the user's own
   `~/.cargo/bin/rustup` called by full path; `~/.cargo/env` is never read),
   `tools/cargo` (`CARGO_HOME`), `cache/target` (`CARGO_TARGET_DIR`),
-  `cache/xdg` (`XDG_CACHE_HOME`), for the smokes `tools/uv-0.12.8/uv`
-  (fetched once, SHA-256 checked), `tools/python` (uv's managed CPython, which
-  runs `scripts/release/serve.py` and the smokes' JSON checks) and
-  `cache/uv`, and `runs/<run id>/` (the unpacked tree, its `tmp/` as
-  `TMPDIR`). PATH changes for the run's own
-  process only. A zeelin without rustup is reported, not fixed.
+  `cache/xdg` (`XDG_CACHE_HOME`), for the smokes (`--published` too)
+  `tools/uv-0.12.8/uv` (fetched once, SHA-256 checked), `tools/python` (uv's
+  managed CPython, which runs `scripts/release/serve.py` and the smokes'
+  JSON checks) and `cache/uv`, and `runs/<run id>/` (the unpacked tree, its
+  `tmp/` as `TMPDIR`). PATH changes for the run's own process only. A
+  zeelin without rustup is reported, not fixed.
 - **Bounds and cleanup.** The bootstrap runs in a session of its own
   (`setsid`) under `set -euo pipefail`; its `trap` ends every other process of
   the session and removes the tarball and the record however the run ends,
@@ -217,16 +233,17 @@ cargo xtask linux --wait 0 --clippy               # ask once: 75 at once if busy
   so it is a ceiling against runaway forks, not the Windows job's 64). Each
   step has the Windows bounds (toolchain 30 min, cargo-test 90) under
   `timeout` (TERM, then KILL 30 s later; status 124), and
-  the whole run one more. Ctrl-C (130), the bound (124) and a lost
-  connection send the stop, which ends the run's session only if the record
-  names that run. Run folders and tarballs older than a day and every folder
-  in `cache/` that no run uses (all but `target`, `uv` and `xdg`) are swept
-  by the next run, under the lock, each said in a `== sweep:` line.
+  the whole run their sum plus 20 minutes. Ctrl-C (130), the bound (124)
+  and a lost connection send the stop, which ends the run's session only if
+  the record names that run. The next run, under the lock, sweeps run
+  folders older than a day and every folder in `cache/` that no run uses
+  (all but `target`, `uv` and `xdg`), each said in a `== sweep:` line, and
+  removes tarballs older than a day without a line.
 - **The answer.** As on Windows: the output streams back, the status is the
-  run's last line `== exit N`, then a summary line `linux: zeelin run <id>
-  tree <commit>: <step> <status> (<time>), ...; exit N`, from the step lines
-  that end with the run's id.
-- **zeelin is WSL2, not native Linux.** v2's and v3's WSL code paths run
+  run's last line `== exit N`, then a summary line on stderr `linux: zeelin
+  run <id> tree <commit, 12 characters>: <step> <status> (<time>), ...; exit
+  N`, from the step lines that end with the run's id.
+- **zeelin is WSL2, not native Linux.** Kluris's WSL code paths run
   there (`mri` prints `file://wsl.localhost/<distro>/...` links, built with
   `wslpath -w`; `golden_dream_mri.rs` expects that form on a WSL host, its
   `@wsl` snapshot), so
@@ -235,7 +252,7 @@ cargo xtask linux --wait 0 --clippy               # ask once: 75 at once if busy
 
 ## Release (dist)
 
-Kluris 3 ships from GitHub Releases only (no PyPI, crates.io, Homebrew or
+Kluris ships from GitHub Releases only (no PyPI, crates.io, Homebrew or
 npm; both crates are `publish = false`), built by dist 0.33.1 from
 `dist-workspace.toml`: eight targets (macOS arm64/x86_64, Linux x86_64 and
 aarch64 as gnu and static musl, Windows x86_64/arm64), tar.gz/zip archives
@@ -251,8 +268,8 @@ package, hence the package `kluris`.
   release prints its own.
 - **What `self-update` picks:** a candidate is a release that is not a
   prerelease and carries this target's exact archive (`kluris-<target>.tar.gz`
-  / `.zip`), so v2 releases and a release built without this platform never
-  are; `latest` is the newest candidate when it is newer than the running
+  / `.zip`), so a release without binaries or built without this platform
+  never is; `latest` is the newest candidate when it is newer than the running
   version, else the current version (`update_available` false). A prerelease
   installs only when named with `--version`.
 - **Archives** hold `kluris`, `LICENSE`, `README.md`,
@@ -290,27 +307,20 @@ package, hence the package `kluris`.
   `fixtures/plan-3.0.0-rc.1.json`), run in ci.yml.
 - **LF checkouts everywhere** (`.gitattributes` `* text=auto eol=lf`, ahead of
   the `-text` rules for byte-exact fixtures, templates and MRI assets).
-  GitHub's Windows runners check out with `core.autocrlf=true`; without the
-  rule the tree CI and release.yml read on Windows had CRLF: `Cargo.toml`'s
-  version line went unseen by `build-versions.ps1`, and the Windows release
-  would embed CRLF Specmint companions (`vendored/`, `include_dir!`) where
-  every other target and v2 ship LF. The rule gives every checkout the
-  committed bytes, the same tree the zeewin2/zeelin runs' `git archive` sends.
+  GitHub's Windows runners check out with `core.autocrlf=true`; the rule
+  gives every checkout the committed bytes, so `build-versions.ps1` reads
+  `Cargo.toml`'s version line and the Windows release embeds the same LF
+  Specmint companions (`vendored/`, `include_dir!`) as every other target:
+  the same tree the zeewin2/zeelin runs' `git archive` sends.
 - **A release job that never got a runner is re-run, never re-tagged.**
   GitHub's capacity for some labels (macOS arm64 above all) can leave a
   build queued until it is cancelled ("The job was not acquired by Runner
   of type hosted even after multiple attempts"). `gh run rerun <id> -R
   ngvoicu/kluris --failed` runs it and the jobs after it again in the same
-  run, the way v2's failed publish jobs are re-run; v3.0.0-rc.1 shipped that
-  way (run 40366122460, attempt 2). Deleting and re-pushing a tag is for a
-  broken release only.
-- **Its tag trigger is dist's own** (`'**[0-9]+.[0-9]+.[0-9]+*'`, decided
-  2026-10-26), not `v3.*`: dist cannot generate `v3.*` (`tag-namespace =
-  "v3"` makes a glob that misses `v3.0.0`), and a hand edit would turn off
-  its drift check. v2 and v3 stay apart by tree instead, as GitHub runs the
-  workflows of the tagged commit: this tree has no publish.yml, so a v3 tag
-  can never reach PyPI; a v2 tag pushed onto a v3 commit makes `dist plan`
-  fail ("nothing to release"), never a release.
+  run. Deleting and re-pushing a tag is for a broken release only.
+- **Its tag trigger is dist's own** (`'**[0-9]+.[0-9]+.[0-9]+*'`): dist
+  cannot generate a narrower glob (`tag-namespace = "v3"` makes one that
+  misses `v3.0.0`), and a hand edit would turn off its drift check.
 - **Tools** (`scripts/release/tool.sh dist|cargo-about|actionlint`): the
   pinned prebuilt binary, its SHA-256 checked, in `target/tools/`; nothing is
   installed globally.
@@ -354,7 +364,7 @@ package, hence the package `kluris`.
   the sandbox HOME byte-identical, then a rerun that finishes. ci.yml's
   installer-smoke job runs it on the three OSes (`check_workflows.sh` fails
   if that goes).
-- **A receipt authorises nothing unless it is Kluris's** (T-111):
+- **A receipt authorises nothing unless it is Kluris's**:
   `Receipt::read` (so `self-update` and `self-uninstall` alike) accepts only
   dist 0.33.1's receipt for Kluris: `source` kluris/kluris/ngvoicu/github,
   `provider.source` cargo-dist, `binaries` exactly `["kluris"]`
@@ -363,8 +373,8 @@ package, hence the package `kluris`.
   else is "The receipt at <path> is not a Kluris install receipt; nothing
   was changed (<why>)", exit 1. The one file removed or replaced is
   `<install_prefix>/kluris(.exe)`.
-- **`self-uninstall` checks everything before the first change** (T-119,
-  `dist/preflight.rs`): the whole plan (rc edits, the fish file, env
+- **`self-uninstall` checks everything before the first change**
+  (`dist/preflight.rs`): the whole plan (rc edits, the fish file, env
   scripts, under `--purge` every generated skill and ~/.kluris, the
   binary, the receipt, their emptied folders) is built from reads alone,
   where only NotFound means "not there"; `preflight()` then checks it
@@ -376,7 +386,7 @@ package, hence the package `kluris`.
   a Windows file. Anything in the way: exit 1, nothing changed, each
   blocker in `blocked` (`{path, problem, fix}` in the JSON). Not checked:
   Windows ACLs and Linux `chattr` flags.
-- **The user's folder links stay** (T-131): a folder the uninstall would
+- **The user's folder links stay**: a folder the uninstall would
   remove (the bin folder, the receipt's folder, under `--purge` ~/.kluris)
   that is a link (or a Windows junction) is never removed, nor is the
   folder it points to; what Kluris put in it goes, and the link is in
@@ -428,6 +438,14 @@ package, hence the package `kluris`.
   `releases/download/v$KLURIS_VERSION/` (`install.ps1` checks the archive
   before the installer runs, see "Checksums"); a push there deploys the site.
 
+## Format contract
+
+What Kluris writes and prints for programs and agents is stable: `--json`
+output, exit codes, files written into brains, `~/.kluris/config.yml`, a
+brain's `kluris.yml` and SKILL.md files. The golden tests are their spec. A
+change to a golden is a decision, made on purpose and said in the release
+notes.
+
 ## Golden tests
 
 Kluris's own output is pinned by golden tests: `insta` snapshots
@@ -468,8 +486,9 @@ symlinks there, the OS words its own errors.
   to its snapshots, made on purpose: write them with `INSTA_UPDATE=always
   cargo test -p <crate> --test <file>` (cargo-insta is not used), read every
   changed `.snap` before committing, and say in the commit what changed and
-  why. The review reads the `.snap` diff as the behaviour change; a snapshot
-  that changed without a reason in the commit is a bug.
+  why; the release notes say it too. The review reads the `.snap` diff as
+  the behaviour change; a snapshot that changed without a reason in the
+  commit is a bug.
 - **On Windows and Linux.** `cargo xtask windows|linux` runs the goldens
   there with `INSTA_UPDATE` unset (insta writes only `.snap.new` files, which
   stay on the machine) and brings back only the log: a Windows variant is the
@@ -479,8 +498,5 @@ symlinks there, the OS words its own errors.
 ## Design decisions
 
 They live in the spec at
-`/Users/gabrielvoicu/Projects/ngvoicu/kluris/.specs/kluris-v3-rust/` (local to
-the `main` checkout, not in git): `SPEC.md` plus the research files
-(`research-03-v2-contract.md` is the v2 command contract with file:line
-references into v2.28.11). The v2 source at the tag v2.28.11 is the read-only
-reference.
+`/Users/gabrielvoicu/Projects/ngvoicu/kluris/.specs/kluris-3-2-sync/` (local
+to the `main` checkout, not in git): `SPEC.md`.

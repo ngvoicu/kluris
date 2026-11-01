@@ -160,7 +160,7 @@ fn write_four_brains(home: &TempDir) -> [std::path::PathBuf; 4] {
 }
 
 #[test]
-fn list_json_with_brains_matches_v2_shape() {
+fn list_json_with_brains_has_the_documented_shape() {
     let home = TempDir::new().unwrap();
     let [a, b, c, d] = write_four_brains(&home);
     let expected = format!(

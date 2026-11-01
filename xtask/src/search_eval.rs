@@ -1,5 +1,5 @@
-//! `search-eval`: the search-quality eval of research-05 §5 with the method
-//! of research-06 §5, run through the real `kluris search` process.
+//! `search-eval`: the search-quality eval (graded queries, hit@5 and MRR),
+//! run through the real `kluris search` process.
 //!
 //! - Default: the public fixture `xtask/fixtures/search-eval/` (its brains
 //!   registered in a temporary home, so the developer's config is never
@@ -35,7 +35,7 @@ use std::time::Instant;
 use crate::exec_files;
 use serde_json::{Value, json};
 
-/// The fixture gate (research-05 §5: v3.0 must not fall below these).
+/// The fixture gate: search must not fall below these.
 pub const MIN_HIT5: f64 = 0.90;
 pub const MIN_MRR: f64 = 0.74;
 

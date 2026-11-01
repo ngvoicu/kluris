@@ -1,4 +1,4 @@
-//! `kluris remove BRAIN_NAME [--json]` (research-03 §1.12): unregister a
+//! `kluris remove BRAIN_NAME [--json]`: unregister a
 //! brain and refresh the skills; its files stay.
 
 use kluris_core::register::remove;

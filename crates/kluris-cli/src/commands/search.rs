@@ -1,5 +1,5 @@
 //! `kluris search QUERY [--brain NAME] [--lobe L] [--tag T] [--limit N]
-//! [--json]` (research-03 §1.5; the engine is `kluris_core::search`).
+//! [--json]` (the engine is `kluris_core::search`).
 
 use std::path::Path;
 
@@ -106,8 +106,8 @@ fn strings(items: &[String]) -> Json {
     Json::Array(items.iter().map(|s| str(s)).collect())
 }
 
-/// v2's keys (`cli.py:1101-1107`, `rt/search.py:296-304`), then Kluris 3's.
-/// `skipped` is added only when files were left out.
+/// Each result's keys, the original ones (`file` to `deprecated`) first, then
+/// the ranking's; `skipped` is added only when files were left out.
 fn to_json(brain: &str, query: &str, hits: &[Hit], skipped: &[SkippedNeuron]) -> Json {
     let results = hits
         .iter()
@@ -159,7 +159,7 @@ fn to_json(brain: &str, query: &str, hits: &[Hit], skipped: &[SkippedNeuron]) ->
     Json::Object(doc)
 }
 
-/// v2's wording (`cli.py:1112-1127`).
+/// The text report.
 fn text(painter: Painter, brain: &str, query: &str, hits: &[Hit]) -> String {
     if hits.is_empty() {
         return format!(

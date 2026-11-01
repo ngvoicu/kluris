@@ -1,5 +1,5 @@
-//! `kluris commit --brain X --paths a.md,b.md [-m MSG] [--json]`
-//! (TEST-K3-43), with real git in temp dirs: only the given paths and the
+//! `kluris commit --brain X --paths a.md,b.md [-m MSG] [--json]`, with real
+//! git in temp dirs: only the given paths and the
 //! `map.md`/`brain.md` files the map step regenerates because of them are
 //! committed; every other dirty file stays as it was and is listed in
 //! `left_dirty`.

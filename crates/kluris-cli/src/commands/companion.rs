@@ -1,5 +1,4 @@
-//! `kluris companion list|add|remove [NAME] [--brain NAME|all] [--json]`
-//! (research-03 §1.7-1.9).
+//! `kluris companion list|add|remove [NAME] [--brain NAME|all] [--json]`.
 
 use kluris_core::companions::prompt::{pick_to_add, pick_to_remove};
 use kluris_core::companions::{self, BrainOptIns, KNOWN, OptInBrain};
@@ -198,8 +197,8 @@ pub fn remove(name: Option<&str>, brain: Option<&str>, as_json: bool) -> Result<
     let selected = match name {
         Some(name) => vec![name.to_string()],
         None if can_prompt(as_json) => {
-            // v2 `_enabled_union`: a brain whose kluris.yml does not read
-            // counts as none.
+            // The companions the brains already have: a brain whose
+            // kluris.yml does not read counts as none.
             let readable: Vec<OptInBrain> = resolved
                 .iter()
                 .filter_map(|b| companions::load_brains(std::slice::from_ref(b)).ok())

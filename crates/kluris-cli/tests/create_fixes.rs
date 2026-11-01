@@ -373,7 +373,7 @@ fn new_names_follow_the_stricter_rule() {
 }
 
 #[test]
-fn v2_names_keep_loading() {
+fn names_outside_the_new_name_rule_keep_loading() {
     let env = Env::new();
     let brain = env.work.join("old");
     fs::create_dir_all(brain.join("projects")).unwrap();
@@ -401,8 +401,8 @@ fn v2_names_keep_loading() {
     assert_eq!(doc["name"], "a--b");
     let (code, doc) = env.json(&["remove", "a--b", "--json"]);
     assert_eq!(code, 0, "{doc}");
-    // register keeps v2's rule: an existing brain whose brain.md names it
-    // `a--b` registers under that name.
+    // An existing brain whose brain.md names it `a--b` registers under that
+    // name: the new-name rule is only for new brains.
     let (code, doc) = env.json(&["register", "old", "--json"]);
     assert_eq!(code, 0, "{doc}");
     assert_eq!(doc["name"], "a--b");
@@ -475,11 +475,10 @@ fn a_target_that_is_a_file_is_an_error() {
     assert_eq!(env.listing(), before);
 }
 
-// --- a target that cannot be listed (review T-103 finding 1) ------------------------
+// --- a target that cannot be listed -------------------------------------------------
 
-/// v2 stops with a `PermissionError` traceback when it cannot list an
-/// existing target; v3 refuses cleanly and writes nothing (a listing error
-/// is never read as "empty").
+/// An existing target that cannot be listed is refused cleanly and nothing
+/// is written (a listing error is never read as "empty").
 #[cfg(unix)]
 #[test]
 fn a_target_that_cannot_be_listed_is_refused_and_left_alone() {

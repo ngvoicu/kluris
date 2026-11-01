@@ -1,8 +1,7 @@
-//! The agent skills every brain-registering command refreshes (v2's
-//! `_do_install`), what those commands say when a skill could not be
-//! written (T-106: stderr and a `--json` `skills` object; the clean case is
-//! v2's output), and the note `create` and `register` print about the new
-//! skill.
+//! The agent skills every brain-registering command refreshes, what those
+//! commands say when a skill could not be written (stderr and a `--json`
+//! `skills` object; a clean install adds neither), and the note `create`
+//! and `register` print about the new skill.
 
 use std::path::Path;
 
@@ -65,8 +64,7 @@ pub fn destination_json(d: &DestinationReport) -> Json {
 
 /// `doc` (a command's `--json` object) with `"skills": {"failed": [...],
 /// "kept": [...]}` appended, the folders that failed and the folders that
-/// kept a near miss, when there are any; otherwise `doc` as it is (v2's
-/// output).
+/// kept a near miss, when there are any; otherwise `doc` as it is.
 pub fn with_problems(doc: Json, report: &InstallReport) -> Json {
     let pick = |want: fn(&DestinationReport) -> bool| -> Vec<Json> {
         report
@@ -130,8 +128,8 @@ pub fn print_failures(report: &InstallReport, home: &Path) {
     }
 }
 
-/// v2's `_print_skill_usage` when `~/.agents/skills` got brain `name`'s
-/// skill; otherwise that the skill was not installed, and why.
+/// How to use brain `name`'s skill when `~/.agents/skills` got it;
+/// otherwise that the skill was not installed, and why.
 pub fn skill_note(painter: Painter, name: &str, report: &InstallReport) -> String {
     let skill = format!("kluris-{name}");
     let universal = report
@@ -161,7 +159,7 @@ pub fn skill_note(painter: Painter, name: &str, report: &InstallReport) -> Strin
     format!("{title}\n{why}")
 }
 
-/// v2's `_print_skill_usage`.
+/// How to use brain `name`'s new skill.
 pub fn skill_usage(painter: Painter, name: &str) -> String {
     let skill = format!("kluris-{name}");
     let title = painter.paint(

@@ -1,8 +1,7 @@
-//! `kluris doctor [--no-refresh] [--json]` (research-03 §1.13, SPEC
-//! acceptance criteria, interview-01 #8): v2's checks without the Python one,
-//! a real git check, the PATH-shadow warning, the config and per-brain
-//! checks, and the refresh (companions, then the skill install with its v2
-//! migration). Every run sets PATH itself.
+//! `kluris doctor [--no-refresh] [--json]`: a real git check, no Python
+//! check, the PATH-shadow warning, the config and per-brain checks, and the
+//! refresh (companions, then the skill install with its migration out of
+//! the folders Kluris does not use). Every run sets PATH itself.
 
 use std::collections::BTreeMap;
 use std::ffi::OsString;
@@ -89,7 +88,7 @@ impl Sandbox {
     }
 
     /// A brain whose kluris.yml selects `agents` and opts into `companions`
-    /// (as v2's `yaml.dump` writes it).
+    /// (as PyYAML's `yaml.dump` writes it).
     fn brain(&mut self, name: &str, agents: &[&str], companions: &[&str]) -> PathBuf {
         let list = |items: &[&str], indent: &str| -> String {
             if items.is_empty() {
@@ -211,8 +210,9 @@ fn slash(path: &Path) -> String {
     path.to_string_lossy().replace('\\', "/")
 }
 
-/// v2's own SKILL.md for brain `name` (kluris-core's fixture).
-fn v2_skill(name: &str) -> String {
+/// A SKILL.md for brain `name` without the `kluris:generated` marker, as an
+/// earlier release wrote it (kluris-core's fixture).
+fn unmarked_skill(name: &str) -> String {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../kluris-core/tests/fixtures/skills/v2/basic.md");
     fs::read_to_string(&path)
@@ -230,7 +230,7 @@ fn executable(path: &Path, text: &str) {
 // --- the checks and their shape ----------------------------------------------------
 
 #[test]
-fn healthy_setup_passes_with_v2s_shape_and_no_python_check() {
+fn healthy_setup_passes_with_the_documented_shape_and_no_python_check() {
     let mut s = Sandbox::new();
     let brain = s.brain("acme", &["claude"], &[]);
     let r = s.doctor(&["--json"]);
@@ -369,7 +369,7 @@ fn a_git_that_runs_but_fails_fails_the_check() {
 }
 
 #[test]
-fn no_git_on_path_fails_with_v2s_text() {
+fn no_git_on_path_fails_with_the_install_link() {
     let s = Sandbox::new();
     let r = run(s.kluris(&[&bin_dir(), &s.fake]).args(["doctor", "--json"]));
     assert_eq!(r.code, 1, "{} {}", r.stdout, r.stderr);
@@ -575,7 +575,7 @@ fn a_config_that_does_not_read_fails_and_nothing_is_refreshed() {
     put(&s.config(), "brains: [unclosed\n");
     put(
         &s.h(".agents/skills/kluris-acme/SKILL.md"),
-        &v2_skill("acme"),
+        &unmarked_skill("acme"),
     );
     let before = s.tree();
     let r = s.doctor(&["--json"]);
@@ -612,7 +612,7 @@ fn no_refresh_writes_nothing() {
     s.brain("acme", &["claude"], &["specmint-core"]);
     put(
         &s.h(".cursor/skills/kluris-acme/SKILL.md"),
-        &v2_skill("acme"),
+        &unmarked_skill("acme"),
     );
     put(&s.h(".claude/skills/kluris-acme/SKILL.md"), "OUTDATED");
     put(&s.h(".agents/skills/.kluris-gone.tmp/SKILL.md"), "half");
@@ -688,13 +688,13 @@ fn an_installed_companion_nobody_references_is_refreshed_too() {
 }
 
 #[test]
-fn a_v2_layout_is_migrated_and_reported() {
+fn skills_in_unused_folders_are_migrated_and_reported() {
     let mut s = Sandbox::new();
     s.brain("acme", &[], &[]);
     for rel in [".cursor/skills", ".codex/skills", ".claude/skills"] {
         put(
             &s.h(&format!("{rel}/kluris-acme/SKILL.md")),
-            &v2_skill("acme"),
+            &unmarked_skill("acme"),
         );
     }
     put(
@@ -731,7 +731,7 @@ fn removed_entries_are_listed_under_the_skills_line() {
     s.brain("acme", &[], &[]);
     put(
         &s.h(".cursor/skills/kluris-acme/SKILL.md"),
-        &v2_skill("acme"),
+        &unmarked_skill("acme"),
     );
     let r = s.doctor(&[]);
     assert_eq!(r.code, 0, "{} {}", r.stdout, r.stderr);
@@ -757,7 +757,7 @@ fn stale_staging_folders_are_removed() {
     );
     put(
         &s.h(".claude/skills").join(old).join("SKILL.md"),
-        &v2_skill("gone"),
+        &unmarked_skill("gone"),
     );
     let r = s.doctor(&["--json"]);
     assert_eq!(r.code, 0, "{} {}", r.stdout, r.stderr);
@@ -813,7 +813,7 @@ fn an_aliased_folder_is_reported_as_such() {
     );
 }
 
-/// A companion backup a failed refresh left (T-103 #8) is restored, then
+/// A companion backup a failed refresh left is restored, then
 /// refreshed, and the check says so.
 #[test]
 fn an_outstanding_companion_backup_is_restored_and_reported() {
@@ -884,8 +884,8 @@ fn doctor_is_listed_in_root_help() {
     assert!(line.eval(&r.stdout), "{}", r.stdout);
 }
 
-/// A same-named entry Kluris cannot prove it wrote (v2's copy with a file
-/// of the user's beside it) is not overwritten; the skills check fails and
+/// A same-named entry Kluris cannot prove it wrote (an unmarked copy with a
+/// file of the user's beside it) is not overwritten; the skills check fails and
 /// says how to fix it.
 #[test]
 fn a_same_named_entry_in_the_way_fails_the_skills_check() {
@@ -893,7 +893,7 @@ fn a_same_named_entry_in_the_way_fails_the_skills_check() {
     s.brain("acme", &["claude"], &[]);
     put(
         &s.h(".claude/skills/kluris-acme/SKILL.md"),
-        &v2_skill("acme"),
+        &unmarked_skill("acme"),
     );
     put(&s.h(".claude/skills/kluris-acme/mine.txt"), "mine");
     let r = s.doctor(&["--json"]);

@@ -1,4 +1,4 @@
-//! `kluris register [SOURCE] [--json]` (research-03 §1.2): the brain is
+//! `kluris register [SOURCE] [--json]`: the brain is
 //! found, its session brings teammates' commits in, and then it is read
 //! and registered. A brain whose branch has no upstream says so
 //! (`no_upstream`) and gets none.
@@ -22,8 +22,8 @@ use crate::prompt::{ask, can_prompt, on_terminal};
 use crate::resolve::{config_path, home};
 use crate::skills::{print_failures, refresh_skills, skill_note, with_problems};
 
-/// The message for a missing SOURCE without a terminal (v2 asked, even
-/// under `--json`).
+/// The message for a missing SOURCE when no prompt may run (`--json`,
+/// `KLURIS_NO_PROMPT=1`, stdin not a terminal).
 pub const PATH_REQUIRED: &str =
     "Brain path is required in non-interactive mode. Run 'kluris register <path>'.";
 

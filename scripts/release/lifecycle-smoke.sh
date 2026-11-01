@@ -26,33 +26,33 @@
 #    companions, skills, the brain), and the rc files the sandbox started with
 #    are byte-identical to before the install.
 # 6. KLURIS_NO_MODIFY_PATH=1 over the user's own ~/.config/kluris/env.sh and
-#    the profile line sourcing it (T-111 finding 4): the receipt says
+#    the profile line sourcing it: the receipt says
 #    modify_path false, and self-uninstall removes the binary and the
 #    receipt and leaves both of the user's files byte-identical.
 # 7. An rc file the uninstall cannot rewrite (~/.profile a link into a
-#    read-only dotfiles folder, T-111 finding 5): self-uninstall exits 1
+#    read-only dotfiles folder): self-uninstall exits 1
 #    and keeps the binary, the receipt and the env scripts; once the folder
 #    is writable again a rerun finishes, the profile byte-identical to
 #    before.
 # 8. `self-uninstall --purge` with a read-only folder in
-#    ~/.kluris/companions (T-114): it exits 1 and keeps the binary and the
+#    ~/.kluris/companions: it exits 1 and keeps the binary and the
 #    receipt; once the folder is writable a rerun purges and finishes.
-# 9. A read-only ~/.config/fish/conf.d (T-114): it exits 1, keeping
+# 9. A read-only ~/.config/fish/conf.d: it exits 1, keeping
 #    conf.d/kluris.env.fish and the env.fish it sources, the binary and the
 #    receipt; a rerun finishes.
-# 10. An unsearchable ~/.config/fish/conf.d (T-118): the same.
-# 11. macOS: the receipt with the immutable flag (`chflags uchg`, T-118):
-#    the same.
+# 10. An unsearchable ~/.config/fish/conf.d: the same.
+# 11. macOS: the receipt with the immutable flag (`chflags uchg`): the
+#    same.
 # 12. `--purge` with ~/.kluris moved to a dotfiles folder and linked back,
-#    and a protected (0555) folder in its companions (T-129): the same,
+#    and a protected (0555) folder in its companions: the same,
 #    and the rerun keeps the link and its folder, emptied.
 # 13. The same with a registered brain and its generated skills.
 # 14. macOS: the same with the immutable flag on the companion folder.
-# 7 to 14 are stopped by the pre-flight (T-119): every file under the
+# 7 to 14 are stopped by the pre-flight: every file under the
 # sandbox HOME is byte-identical after the blocked run, and its JSON lists
 # the blockers.
 # 15. ~/.config/kluris a link to a dotfiles folder before the install, and
-# 16. ~/.kluris/bin one (T-129): the uninstall finishes, removes what the
+# 16. ~/.kluris/bin one: the uninstall finishes, removes what the
 #    installer put there and keeps the link and its target.
 #
 # The local server and the JSON checks run on KLURIS_SMOKE_PYTHON (default

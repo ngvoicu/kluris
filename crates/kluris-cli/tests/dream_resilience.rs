@@ -425,7 +425,7 @@ fn link_checking_ignores_code_other_schemes_and_titles_and_decodes_paths() {
         .iter()
         .map(|b| b["target"].as_str().unwrap())
         .collect();
-    // A missing image stays broken, as in v2.
+    // A missing image stays broken.
     assert_eq!(targets, ["./nopic.png", "./missing.md"], "{doc}");
 }
 
@@ -462,15 +462,15 @@ fn an_unwritable_neuron_is_skipped_and_its_fix_not_counted() {
         !error.contains(home.dir.path().to_str().unwrap()),
         "{error}"
     );
-    // Only the fix that was written is counted, as v2's date pass counts.
+    // Only the fix that was written is counted, as the date pass counts.
     assert_eq!(doc["fixes"]["parents_inferred"], 1);
 }
 
-// --- write safety (review T-103) ---------------------------------------------------
+// --- write safety -------------------------------------------------------------------
 
 /// A failed write never truncates the original: under a 1,024-byte file-size
 /// limit dream cannot write the neuron's new version, reports it, and the
-/// file keeps all of its bytes (finding 2).
+/// file keeps all of its bytes.
 #[cfg(unix)]
 #[test]
 fn a_write_cut_short_leaves_the_original_whole() {
@@ -527,7 +527,7 @@ fn a_write_cut_short_leaves_the_original_whole() {
     assert!(names.iter().all(|n| !n.contains("kluris-tmp")), "{names:?}");
 }
 
-/// `mri` reports what its dream preflight skipped (finding 10): a
+/// `mri` reports what its dream preflight skipped: a
 /// `skipped` list per brain in the JSON, only when something was skipped,
 /// and dream's `Skipped` lines on stderr.
 #[test]
@@ -580,7 +580,7 @@ fn mri_reports_the_files_its_preflight_skipped() {
 }
 
 #[test]
-fn mri_keeps_v2s_shape_when_nothing_was_skipped() {
+fn mri_has_no_skipped_key_when_nothing_was_skipped() {
     let home = Home::new()
         .brain(
             "demo",
@@ -604,7 +604,7 @@ fn mri_keeps_v2s_shape_when_nothing_was_skipped() {
     );
 }
 
-// --- temp files an interrupted write left (review T-106) ---------------------------
+// --- temp files an interrupted write left -------------------------------------------
 
 fn age(path: &Path, secs: u64) {
     let when = std::time::SystemTime::now() - std::time::Duration::from_secs(secs);

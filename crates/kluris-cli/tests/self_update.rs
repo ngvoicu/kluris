@@ -910,16 +910,16 @@ fn a_prerelease_installs_when_named() {
 }
 
 #[test]
-fn a_v2_release_published_after_v3_never_wins() {
+fn a_newer_release_without_binaries_never_wins() {
     let f = Fixture::new();
-    // A v3 release newer than this build (3.1.1 itself would be no update).
-    let v3 = marked_binary(&f, "3.1.2", "v3");
+    // A release newer than this build (3.1.1 itself would be no update).
+    let binary = marked_binary(&f, "3.1.2", "v3");
     // Newest first, as GitHub lists them: v2.29.0 (no binaries) came later.
-    let v2 = Release {
+    let no_binaries = Release {
         tag: "v2.29.0".into(),
         assets: Vec::new(),
     };
-    f.serve(&[v2, f.release("v3.1.2", &v3)]);
+    f.serve(&[no_binaries, f.release("v3.1.2", &binary)]);
     let out = f.run(&["self-update", "--check", "--json"]);
     assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
     assert!(
@@ -927,11 +927,11 @@ fn a_v2_release_published_after_v3_never_wins() {
         "{}",
         stdout(&out)
     );
-    assert_installed(&f, &["self-update"], &v3, "3.1.2");
+    assert_installed(&f, &["self-update"], &binary, "3.1.2");
 }
 
-/// A v2 release as GitHub lists them: Python wheels, no Kluris 3 archive.
-fn v2_release(tag: &str) -> Release {
+/// A release as GitHub lists it with Python wheels and no binary archive.
+fn wheel_release(tag: &str) -> Release {
     let version = tag.trim_start_matches('v');
     Release {
         tag: tag.into(),
@@ -951,11 +951,11 @@ fn v2_release(tag: &str) -> Release {
 }
 
 #[test]
-fn only_v2_releases_listed_means_up_to_date_and_latest_is_current() {
-    // An rc user while only v2 releases are published: none carries this
+fn only_wheel_releases_listed_means_up_to_date_and_latest_is_current() {
+    // An rc user while only wheel releases are published: none carries this
     // target's archive, so none is a candidate.
     let f = Fixture::new();
-    f.serve(&[v2_release("v2.28.11"), v2_release("v2.28.10")]);
+    f.serve(&[wheel_release("v2.28.11"), wheel_release("v2.28.10")]);
     let out = f.run(&["self-update", "--check", "--json"]);
     assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
     assert_eq!(
@@ -1020,23 +1020,23 @@ fn a_newer_release_without_this_targets_archive_is_skipped() {
 
 #[test]
 fn every_page_of_the_listing_is_read() {
-    // GitHub pages the listing (100 a page here; the repo has many v2
-    // releases): the v3 release on page two must be found.
+    // GitHub pages the listing (100 a page here; the repo has many releases
+    // without binaries): the release on page two must be found.
     let f = Fixture::new();
     let new = marked_binary(&f, "3.99.0", "paged");
-    let v2: Vec<Release> = (0..3)
+    let no_binaries: Vec<Release> = (0..3)
         .map(|i| Release {
             tag: format!("v2.28.{i}"),
             assets: Vec::new(),
         })
         .collect();
-    let page1: Vec<serde_json::Value> = v2
+    let page1: Vec<serde_json::Value> = no_binaries
         .iter()
         .enumerate()
         .map(|(i, r)| f.release_json(i, r))
         .collect();
-    let v3 = f.release("v3.99.0", &new);
-    let page2 = vec![f.release_json(5, &v3)];
+    let wanted = f.release("v3.99.0", &new);
+    let page2 = vec![f.release_json(5, &wanted)];
     let next = format!(
         "<{}{RELEASES}?per_page=100&page=2>; rel=\"next\"",
         f.server.uri()

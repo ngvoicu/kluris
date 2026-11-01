@@ -1,14 +1,11 @@
-# The rich brain of parity/test_dream.py (rich_brain) as Kluris 2.28.11's
-# dream left it: committed at D1, projects/alpha.md changed at D2,
+# frozen; never regenerated. The rich brain as an earlier Kluris's dream
+# left it: committed at D1, projects/alpha.md changed at D2,
 # uncommitted-lobe/ written, then `kluris dream --json` (exit 1) twice, each
-# followed by a commit of everything at D3, the steps of
-# test_dream_on_a_brain_v2_normalized_changes_nothing.
-# made by: parity/test_dream.py and parity/harness.py at 280ab8a (sandbox HOME
-#   and KLURIS_CONFIG, TZ=UTC, git identity Kluris Parity
-#   <parity@kluris.invalid>), kluris 2.28.11 from parity/oracle.lock on
-#   Python 3.11.14, git version 2.55.0, macOS (APFS), on 2026-10-29 (the maps' `updated`)
+# followed by a commit of everything at D3 (sandbox HOME and KLURIS_CONFIG,
+# TZ=UTC, git identity Kluris Parity <parity@kluris.invalid>, git 2.55.0,
+# macOS (APFS); the maps' `updated` is 2026-10-29)
 # report.json: the stdout of a third `kluris dream --json` by the same
-#   Kluris 2.28.11 on the result: exit 1, empty stderr, no file changed,
+#   Kluris on the result: exit 1, empty stderr, no file changed,
 #   `git status --porcelain` empty
 # commit-<n>/: the files commit n adds or changes (no commit removes one)
 # windows/: the two maps that list a lower-case name after an upper-case

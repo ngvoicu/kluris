@@ -1,4 +1,4 @@
-//! The JSON error envelope and exit codes (research-03 §1.0).
+//! The JSON error envelope and exit codes.
 //!
 //! - `--json` reaching a subcommand: any error prints
 //!   `{"ok": false, "error": "<message>"}` on stdout and exits 1.
@@ -51,7 +51,7 @@ impl CliError {
     }
 
     /// Exit 1 after the command printed its own output (`dream` when the
-    /// brain is unhealthy; v2's `SystemExit(1)`).
+    /// brain is unhealthy).
     pub fn exit_only() -> Self {
         Self::exit_code(1)
     }
@@ -228,8 +228,8 @@ fn usage_message(err: &clap::Error) -> String {
 }
 
 /// Whether errors go out as the JSON envelope: a literal `--json` token, and
-/// the root options before the first command token parse (v2's Click group
-/// only reaches its envelope once a command name is being dispatched; a bare
+/// the root options before the first command token parse (the root, a Click
+/// group, reaches its envelope only once a command name is dispatched; a bare
 /// `kluris --json` is a root usage error, exit 2).
 pub fn json_requested(args: &[OsString]) -> bool {
     if !args.iter().any(|a| a == "--json") {

@@ -1,9 +1,8 @@
-//! Human-readable output: v2's wording, not Rich's layout.
+//! Human-readable output: plain text, styled by code.
 //!
 //! - Styles are applied by code, around text: user text (names, paths,
 //!   descriptions, commit subjects, snippets) is printed as it is, and a
-//!   `[bold]` or `[/x]` in it is never markup (v2 handed it to Rich, which
-//!   rendered it or raised `MarkupError`).
+//!   `[bold]` or `[/x]` in it is never markup.
 //! - Colour and bold appear only when stdout is a terminal that takes them:
 //!   never with `NO_COLOR` set (non-empty), when stdout is not a terminal, or
 //!   with `TERM=dumb`; on Windows only in a terminal known to read ANSI
@@ -13,7 +12,7 @@
 use std::ffi::OsString;
 use std::io::{self, IsTerminal, Write};
 
-/// A text style (v2's Rich styles).
+/// A text style.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[allow(dead_code, reason = "the commands still to port use the colours")]
 pub enum Style {
@@ -96,7 +95,7 @@ pub fn print(text: &str) {
     let _ = io::stdout().write_all(text.as_bytes());
 }
 
-/// A plain-text table (v2's Rich tables, without the boxes): `title`, the
+/// A plain-text table, without boxes: `title`, the
 /// header row in bold, a rule and the rows, columns padded to the widest cell
 /// (in characters) and two spaces apart.
 pub fn table(painter: Painter, title: &str, headers: &[&str], rows: &[Vec<String>]) -> String {

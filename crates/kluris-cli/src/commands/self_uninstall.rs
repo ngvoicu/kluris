@@ -1,5 +1,5 @@
-//! `kluris self-uninstall [--purge] [--yes] [--json]` (research-02 §5; the
-//! removals are `kluris_core::dist::uninstall`'s).
+//! `kluris self-uninstall [--purge] [--yes] [--json]` (the removals are
+//! `kluris_core::dist::uninstall`'s).
 
 use std::io::{self, BufRead, Write};
 use std::path::{Path, PathBuf};

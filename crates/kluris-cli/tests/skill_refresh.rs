@@ -123,7 +123,7 @@ fn assert_blocked_text(env: &Env, r: &Run, blocked: &Path) {
     assert!(env.universal().is_dir());
 }
 
-/// `--json`: v2's keys, then `skills`: `{"failed": [...], "kept": [...]}`,
+/// `--json`: the command's clean keys, then `skills`: `{"failed": [...], "kept": [...]}`,
 /// doctor's destination items, naming the universal folder.
 fn assert_blocked_json(env: &Env, r: &Run, keys: &[&str], name: &str) {
     assert_eq!(r.code, 0, "{} {}", r.stdout, r.stderr);
@@ -163,7 +163,7 @@ fn assert_blocked_json(env: &Env, r: &Run, keys: &[&str], name: &str) {
 // --- create -------------------------------------------------------------------
 
 #[test]
-fn create_clean_keeps_v2s_output() {
+fn create_clean_has_no_skills_key_and_no_stderr() {
     let env = Env::new();
     let r = env.run(&["create", "demo", "--no-git", "--type", "blank", "--json"]);
     assert_eq!(r.code, 0);
@@ -280,7 +280,7 @@ fn register_json_with_a_blocked_skill_reports_it() {
 }
 
 #[test]
-fn register_clean_keeps_v2s_output() {
+fn register_clean_has_no_skills_key_and_no_stderr() {
     let env = Env::new();
     let path = unregistered(&env);
     let r = env.run(&["register", &path, "--json"]);
@@ -316,7 +316,7 @@ fn remove_with_another_brains_skill_blocked_reports_it() {
 }
 
 #[test]
-fn remove_clean_keeps_v2s_output() {
+fn remove_clean_has_no_skills_key_and_no_stderr() {
     let env = Env::new();
     env.create("demo");
     let r = env.run(&["remove", "demo", "--json"]);
@@ -393,7 +393,7 @@ fn companion_remove_with_a_blocked_skill_reports_it() {
     assert_blocked_json(&env, &r, &keys, "demo");
 }
 
-/// The keys of a clean `companion add|remove --json` (v2's), from a run in a
+/// The keys of a clean `companion add|remove --json`, from a run in a
 /// fresh sandbox; that run must have no `skills` key and say nothing on
 /// stderr.
 fn clean_companion_keys(_blocked: &Env, action: &str) -> Vec<String> {

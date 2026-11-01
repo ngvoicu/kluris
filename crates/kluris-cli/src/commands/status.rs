@@ -90,7 +90,7 @@ fn to_json(name: &str, s: &BrainStatus) -> Json {
     ])
 }
 
-/// v2's wording (`cli.py:1400-1407`).
+/// The text report.
 fn text(painter: Painter, name: &str, s: &BrainStatus) -> String {
     let mut out = format!("\n{}\n", painter.bold(name));
     out.push_str(&format!("  Lobes: {}, Neurons: {}\n", s.lobes, s.neurons));

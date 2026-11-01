@@ -1,7 +1,6 @@
 //! A receipt Kluris's installer did not write, or one edited to name other
 //! files, never authorises a change: `kluris self-uninstall` and `kluris
-//! self-update` refuse before touching anything (T-111 finding 3; the first
-//! two cases are the reviewer's probe, /tmp/kluris-t111-ownership-probe.py).
+//! self-update` refuse before touching anything.
 //!
 //! The receipt they accept is dist 0.33.1's own, as its installers write it
 //! (see `dist_receipt`): `source` kluris/kluris/ngvoicu/github, `provider`
@@ -160,8 +159,7 @@ impl Case {
 
 #[test]
 fn a_foreign_receipt_authorises_nothing() {
-    // The reviewer's first probe: another app's receipt naming a file in
-    // ~/Documents.
+    // Another app's receipt naming a file in ~/Documents.
     let c = case("Documents", |r, _| {
         r["binaries"] = json!(["notes.txt"]);
         r["source"] = json!({"owner": "someone-else", "name": "other-app"});
@@ -171,7 +169,7 @@ fn a_foreign_receipt_authorises_nothing() {
 
 #[test]
 fn an_edited_kluris_receipt_authorises_nothing() {
-    // The reviewer's second probe: Kluris's receipt with `binaries` edited.
+    // Kluris's receipt with `binaries` edited.
     let c = case(".kluris/bin", |r, _| r["binaries"] = json!(["notes.txt"]));
     c.assert_every_command_refuses();
 }

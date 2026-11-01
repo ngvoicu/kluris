@@ -1,12 +1,11 @@
-"""Check `dist plan --output-format=json` against what a Kluris 3 release ships.
+"""Check `dist plan --output-format=json` against what a Kluris release ships.
 
     dist plan --output-format=json > plan.json
     python3 -I scripts/release/check_dist_plan.py plan.json
 
 Prints one line per problem and exits 1 when there is any; prints the release
-it checked and exits 0 otherwise. The rules are SPEC TEST-K3-37/IMPL-K3-38
-and research-02 section 1: the eight targets, tar.gz on Unix and zip on
-Windows, a sha256 per archive and one sha256.sum, the shell and PowerShell
+it checked and exits 0 otherwise. The rules: the eight targets, tar.gz on
+Unix and zip on Windows, a sha256 per archive and one sha256.sum, the shell and PowerShell
 installers named after `kluris` (so their variables are KLURIS_*), no
 updater, attestations, and LICENSE, THIRD_PARTY_NOTICES.md and
 THIRD_PARTY_LICENSES.md beside the binary in every archive.

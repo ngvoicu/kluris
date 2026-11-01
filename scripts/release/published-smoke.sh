@@ -18,7 +18,8 @@
 # login shell finds kluris there; `kluris --version` is `kluris <version>`;
 # `kluris doctor --json` is ok with this binary first on PATH; `kluris
 # self-update --check --json` against the real GitHub release listing says
-# no update is available (prereleases are skipped, v2 releases never win);
+# no update is available (prereleases are skipped, a release without this
+# target's archive never wins);
 # `kluris self-uninstall --yes --json` removes exactly the installer's files
 # and brings the sandbox's own rc files back byte for byte; the real HOME's
 # rc files and kluris files are the same before and after.

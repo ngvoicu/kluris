@@ -10,8 +10,8 @@ use crate::output::json::{self, Json};
 use crate::resolve::config_path;
 
 pub fn run(command: Option<&str>, as_json: bool) -> Result<(), CliError> {
-    // v2 reads the config before anything else, so a config that does not
-    // read fails `help` too (cleanly here; v2 ends in a traceback).
+    // The config is read before anything else, so a config that does not
+    // read fails `help` too, with a clean error.
     let path = config_path()?;
     let config = read_global_config(&path).map_err(|e| CliError::new(e.to_string()))?;
     let rows: Vec<&CommandHelp> = match command {

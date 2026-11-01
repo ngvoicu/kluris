@@ -22,8 +22,7 @@ pub fn config_path() -> Result<PathBuf, CliError> {
     .ok_or_else(|| CliError::new("Cannot find the home directory; set HOME or KLURIS_CONFIG."))
 }
 
-/// The HOME runtime files go under (v2 `_home_path`: `HOME` if set, else
-/// the OS home).
+/// The HOME runtime files go under: `HOME` if set, else the OS home.
 pub fn home() -> Result<PathBuf, CliError> {
     home_dir(std::env::var_os("HOME").as_deref(), std::env::home_dir())
         .ok_or_else(|| CliError::new("Cannot find the home directory; set HOME."))

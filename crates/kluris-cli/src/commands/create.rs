@@ -1,6 +1,5 @@
 //! `kluris create [NAME] [--description TEXT] [--path DIR] [--type TYPE]
-//! [--remote URL] [--branch NAME] [--no-git] [--from-config FILE] [--json]`
-//! (research-03 §1.1).
+//! [--remote URL] [--branch NAME] [--no-git] [--from-config FILE] [--json]`.
 //!
 //! With `--remote`, the new brain's branch gets its upstream, and an
 //! explicit session pushes it to the remote when the remote has no branch
@@ -27,8 +26,8 @@ use crate::prompt::{ask, can_prompt, on_terminal};
 use crate::resolve::{config_path, home};
 use crate::skills::{print_failures, refresh_skills, skill_note, with_problems};
 
-/// The message for a missing NAME without a terminal (v2 asked, or raised
-/// under `--json`).
+/// The message for a missing NAME when no prompt may run (`--json`,
+/// `KLURIS_NO_PROMPT=1`, stdin not a terminal).
 pub const NAME_REQUIRED: &str =
     "Brain name is required in non-interactive mode. Run 'kluris create <name>'.";
 
@@ -95,7 +94,7 @@ pub fn run(options: Options) -> Result<(), CliError> {
         if given.name.as_deref().is_none_or(str::is_empty) {
             return Err(CliError::new(NAME_REQUIRED));
         }
-        // v2 ends its (here empty) wizard with a blank line.
+        // The (here empty) wizard ends with a blank line.
         human::print("\n");
     }
 

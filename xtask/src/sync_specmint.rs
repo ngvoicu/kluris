@@ -1,5 +1,5 @@
 //! `sync-specmint`: re-vendor the four Specmint companion folders into
-//! `vendored/`, a port of v2.28.11's `scripts/sync-specmint.py`.
+//! `vendored/`.
 //!
 //! Each companion ships as a folder: `SKILL.md` plus `references/` and
 //! `assets/` when the source has them. Everything else in a source repo
@@ -27,7 +27,7 @@ use std::{fs, mem};
 
 use regex::Regex;
 
-/// The companions, in v2's order, with their source flags.
+/// The companions, in their fixed order, with their source flags.
 pub const NAMES: [&str; 4] = [
     "specmint-core",
     "specmint-tdd",
@@ -76,7 +76,7 @@ fn fill(text: &str, width: usize) -> String {
 }
 
 /// The `## Kluris Companion Compatibility` section that replaces Specmint's
-/// `## Cross-Tool Compatibility` (v2 `_compat_section`).
+/// `## Cross-Tool Compatibility`.
 pub fn compat_section(name: &str) -> String {
     let home = format!("~/.kluris/companions/{name}");
     let (scope, format_note) = if name.ends_with("-html") {
@@ -110,7 +110,7 @@ pub fn compat_section(name: &str) -> String {
     )
 }
 
-/// v3 `## Cross-Tool Compatibility` (the `npx skills add` install lines per
+/// Specmint's `## Cross-Tool Compatibility` (the `npx skills add` install lines per
 /// tool) up to `## Behavioral Notes`, replaced by [`compat_section`]:
 /// Python's `re.subn(r"\n## Cross-Tool Compatibility\n.*?(?=\n## Behavioral
 /// Notes\n)", ..., flags=re.S)`.
@@ -135,7 +135,7 @@ fn rule_compat_section(name: &str, content: &str) -> (String, usize) {
     (out, count)
 }
 
-/// v3 html Step 1: "... (e.g. `~/.claude/skills/<name>/assets/`)." becomes
+/// Specmint html's Step 1: "... (e.g. `~/.claude/skills/<name>/assets/`)." becomes
 /// the Kluris path. Python's `\s` (`str.isspace`) is Rust's `\s` plus
 /// `\x1c`-`\x1f`.
 fn rule_asset_location(name: &str, content: &str) -> (String, usize) {
@@ -157,7 +157,7 @@ fn rule_asset_location(name: &str, content: &str) -> (String, usize) {
     (out, count)
 }
 
-/// A sanitizer rule (v2 `Rule`): its label, whether it applies to a
+/// A sanitizer rule: its label, whether it applies to a
 /// companion, and the rewrite with its match count.
 struct Rule {
     label: &'static str,
@@ -207,7 +207,7 @@ pub fn forbidden_hits(content: &str) -> Vec<&'static str> {
         .collect()
 }
 
-/// v2's `_PATH_MENTION.findall(text)`:
+/// The path mentions, as Python's `re.findall` finds them with
 /// `(?<![\w./-])((?:references|assets)/[A-Za-z0-9_.*-]+)`. Rust's regex has
 /// no look-behind, so a match whose previous character is a word character,
 /// `.`, `/` or `-` is dropped and the search goes on one character later.
@@ -258,8 +258,8 @@ fn glob_match(name: &str, pattern: &str) -> bool {
 }
 
 /// The `references/`/`assets/` paths mentioned in the tree's markdown files
-/// that the tree lacks, as sorted `"<file>: <mention>"` (v2
-/// `_missing_mentions`); a markdown file that is not UTF-8 is an error.
+/// that the tree lacks, as sorted `"<file>: <mention>"`; a markdown file
+/// that is not UTF-8 is an error.
 pub fn missing_mentions(tree: &Tree) -> Result<Vec<String>, String> {
     let mut missing = std::collections::BTreeSet::new();
     for (rel, data) in tree {
@@ -321,7 +321,7 @@ fn read(path: &Path) -> Result<Vec<u8>, String> {
     fs::read(path).map_err(|e| format!("{}: {e}", path.display()))
 }
 
-/// The allowlisted source files of `name` (v2 `_read_source`); prints the
+/// The allowlisted source files of `name`; prints the
 /// top-level entries left behind.
 fn read_source(name: &str, source: &Path, out: &mut impl Write) -> Result<Tree, String> {
     let skill = source.join("SKILL.md");
@@ -394,8 +394,7 @@ fn resolve(path: &Path) -> PathBuf {
     }
 }
 
-/// Build companion `name` from `source` in memory and check it (v2
-/// `_build`).
+/// Build companion `name` from `source` in memory and check it.
 pub fn build(name: &str, source: &Path, out: &mut impl Write) -> Result<Tree, String> {
     let source = resolve(source);
     let mut tree = read_source(name, &source, out)?;
@@ -445,7 +444,7 @@ pub fn line_count(data: &[u8]) -> usize {
 }
 
 /// Print a per-file diff summary of `old` -> `new` (with `full_diff` the
-/// unified diffs too); `true` when anything differs (v2 `_report`).
+/// unified diffs too); `true` when anything differs.
 pub fn report(name: &str, old: &Tree, new: &Tree, full_diff: bool, out: &mut impl Write) -> bool {
     let mut changed = false;
     let paths: std::collections::BTreeSet<&String> = old.keys().chain(new.keys()).collect();
@@ -515,7 +514,7 @@ fn remove_tree(path: &Path) {
     let _ = fs::remove_dir_all(path);
 }
 
-/// Replace `dest_root/name` with `tree` via stage-then-rename (v2 `_write`).
+/// Replace `dest_root/name` with `tree` via stage-then-rename.
 fn write_companion(dest_root: &Path, name: &str, tree: &Tree) -> Result<(), String> {
     let dest = dest_root.join(name);
     let staging = dest_root.join(format!(".{name}.tmp"));

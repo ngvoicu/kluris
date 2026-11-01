@@ -1,6 +1,6 @@
 //! Every `kluris ...` command the agent skill tells an agent to run exists,
-//! with each `--flag` it names (SPEC items 49/50: the skill's write flow
-//! calls `sync`, `commit` and `resolve`).
+//! with each `--flag` it names (the skill's write flow calls `sync`,
+//! `commit` and `resolve`).
 
 use std::path::Path;
 

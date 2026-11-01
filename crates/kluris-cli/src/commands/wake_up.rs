@@ -60,7 +60,7 @@ fn path(p: &str) -> Json {
     Json::Str(p.to_string())
 }
 
-/// v2's deprecation entry (`kind` first), also in `dream --json`.
+/// A deprecation entry (`kind` first), also in `dream --json`.
 pub(crate) fn issue(issue: &DeprecationIssue) -> Json {
     let kind = ("kind".to_string(), str(issue.kind()));
     Json::Object(match issue {
@@ -81,7 +81,7 @@ pub(crate) fn issue(issue: &DeprecationIssue) -> Json {
     })
 }
 
-/// v2's payload, key for key.
+/// The `--json` payload.
 fn to_json(w: &WakeUp) -> Json {
     let lobes = w
         .lobes
@@ -136,7 +136,7 @@ fn to_json(w: &WakeUp) -> Json {
     ])
 }
 
-/// v2's wording (`cli.py:1183-1201`).
+/// The text report.
 fn human(w: &WakeUp) -> String {
     let mut out = format!("\nBrain: {}\n  Path: {}\n", w.name, w.path);
     if !w.description.is_empty() {

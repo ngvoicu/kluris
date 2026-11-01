@@ -31,16 +31,16 @@
 #    exactly that entry. Whether that is the text from before the install is
 #    reported: dist's Add-Path writes the value back without its empty
 #    entries (`-split ';' -ne ''`) and as REG_EXPAND_SZ, whatever it was.
-# 6. KLURIS_NO_MODIFY_PATH=1 (T-111 finding 4): the receipt says
+# 6. KLURIS_NO_MODIFY_PATH=1: the receipt says
 #    modify_path false, the installer leaves the user PATH alone, and
 #    self-uninstall removes kluris.exe and the receipt and leaves the user
 #    PATH exactly as it was (its text and its type).
-# 7. A read-only receipt (the read-only attribute, T-119): the pre-flight
+# 7. A read-only receipt (the read-only attribute): the pre-flight
 #    blocks the uninstall, exit 1, with every file under the sandbox and the
 #    user PATH as they were; once the attribute is cleared a rerun removes
 #    kluris.exe, the receipt and the user PATH entry.
 # 8. .kluris\bin, and 9. LOCALAPPDATA\kluris, a junction to a folder made
-#    before the install (T-129): the install writes through it, and the
+#    before the install: the install writes through it, and the
 #    uninstall exits 0, removes what the installer put there and the user
 #    PATH entry, and keeps the junction and its folder.
 #

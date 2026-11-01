@@ -1,5 +1,5 @@
-//! `kluris doctor [--no-refresh] [--json]` (research-03 §1.13; the checks
-//! are `kluris_core::doctor`'s). Every registered brain is read through its
+//! `kluris doctor [--no-refresh] [--json]` (the checks are
+//! `kluris_core::doctor`'s). Every registered brain is read through its
 //! session: a brain's check carries what its sync did (`sync`), and warns
 //! when the brain was left as it is or a conflict waits; the sync never
 //! fails it.
@@ -106,8 +106,8 @@ fn warn_for(checks: &mut [Check], name: &str, sync: &SyncReport) {
     }
 }
 
-/// `{"ok", "checks", "companions", "skills"}`: v2's first three, then the
-/// install report (`null` when it did not run).
+/// `{"ok", "checks", "companions", "skills"}`: the checks and the companion
+/// refresh, then the install report (`null` when it did not run).
 fn report_json(report: &DoctorReport, synced: &[(String, Option<SyncReport>)]) -> Json {
     let checks = report
         .checks
@@ -148,7 +148,7 @@ fn check_json(check: &Check, sync: Option<&SyncReport>) -> Json {
     Json::Object(fields)
 }
 
-/// v2: `{"name", "refreshed"[, "error"]}`.
+/// `{"name", "refreshed"[, "error"]}`.
 fn companion_json(refresh: &CompanionRefresh) -> Json {
     let mut fields = vec![
         ("name".into(), Json::Str(refresh.name.clone())),
@@ -181,7 +181,7 @@ fn skills_json(skills: &InstallReport) -> Json {
     ])
 }
 
-/// v2's `  PASS|FAIL <name>: <detail>` per check (`WARN` for a warning);
+/// `  PASS|FAIL <name>: <detail>` per check (`WARN` for a warning);
 /// under the skills line, one line per folder something happened in.
 fn report_text(report: &DoctorReport, home: &std::path::Path, painter: Painter) -> String {
     let mut out = String::new();

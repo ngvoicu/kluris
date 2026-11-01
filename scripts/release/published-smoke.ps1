@@ -27,9 +27,10 @@
 # fresh process (PATH built from the registry) finding it first; `kluris
 # --version` = `kluris <version>`; `kluris doctor --json` ok with this
 # binary first on PATH; `kluris self-update --check --json` against the real
-# GitHub release listing reporting no update (prereleases are skipped, v2
-# releases never win); `kluris self-uninstall --yes --json` removing
-# kluris.exe, the receipt and its user PATH entry.
+# GitHub release listing reporting no update (prereleases are skipped, a
+# release without this target's archive never wins); `kluris
+# self-uninstall --yes --json` removing kluris.exe, the receipt and its
+# user PATH entry.
 #
 # Exits 0 when every check passes and the PATH comparison holds, 1 otherwise.
 param(

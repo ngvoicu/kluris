@@ -1,5 +1,5 @@
-//! `kluris dream [--brain NAME|all] [--json] [--broken-only]` (v2
-//! `cli.py:1413-1522`): each brain's session brings teammates' commits in
+//! `kluris dream [--brain NAME|all] [--json] [--broken-only]`: each brain's
+//! session brings teammates' commits in
 //! first, dream then runs on the work tree, and the brain's own
 //! housekeeping, built from HEAD, is committed (`committed`, and one stdout
 //! line per brain in text). What each sync did is the `sync` array in JSON
@@ -209,7 +209,7 @@ pub fn run(brain: Option<&str>, as_json: bool, broken_only: bool) -> Result<(), 
                 ("fixes".into(), fixes_json(&fixes)),
             ]
         };
-        // After v2's keys, each only when it has an item: the temp files an
+        // After the report's keys, each only when it has an item: the temp files an
         // interrupted write left, then the skipped files.
         if !removed_temp_files.is_empty() {
             doc.push(("removed_temp_files".into(), Json::Array(removed_temp_files)));
@@ -283,7 +283,7 @@ fn native(rel: &str) -> String {
     rel.replace('/', std::path::MAIN_SEPARATOR_STR)
 }
 
-/// v2's per-brain health report (`cli.py:1470-1495`).
+/// The per-brain health report.
 fn text(p: Painter, name: &str, r: &DreamReport) -> String {
     let check = |n: usize, style: Style, what: &str| {
         if n == 0 {
@@ -322,7 +322,7 @@ fn text(p: Painter, name: &str, r: &DreamReport) -> String {
     ));
     use kluris_core::brain::deprecation::DeprecationIssue as D;
     for item in &r.deprecation {
-        // v2 never prints `replaced_by_not_active`.
+        // The text report never prints `replaced_by_not_active`.
         let line = match item {
             D::ActiveLinksToDeprecated { source, target } => {
                 format!("{} links to deprecated {}", native(source), native(target))

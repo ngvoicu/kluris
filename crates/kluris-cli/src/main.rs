@@ -18,7 +18,7 @@ use clap::{Arg, ArgAction, ArgMatches, CommandFactory, FromArgMatches, Parser, S
 use crate::error::CliError;
 use crate::output::human;
 
-// The root command. Its surface is Click's, as in v2 (`command`): `--help`
+// The root command. Its surface is Click's (`command`): `--help`
 // on every command and `--version` on the root, no `-h`, `-V` or automatic
 // `help` subcommand; `kluris help` is Kluris's own command.
 #[derive(Debug, Parser)]
@@ -440,7 +440,7 @@ enum CompanionCommand {
     },
 }
 
-/// v2's `create` docstring.
+/// `create`.
 const CREATE_HELP: &str = "Create a new brain.
 
 Prompts for anything not provided via flags. Use --json to skip all prompts.
@@ -450,7 +450,7 @@ Prompts for anything not provided via flags. Use --json to skip all prompts.
   kluris create my-brain --type personal --path ~/brains --no-git  # no prompts
   kluris create team-brain --remote git@github.com:team/brain.git";
 
-/// v2's `register` docstring.
+/// `register`.
 const REGISTER_HELP: &str = "Register an existing brain directory on disk.
 
 The brain stays where it is -- registration is in-place, no copy. For brains \
@@ -459,26 +459,26 @@ hosted on git, use ``git clone <url> <path>`` first, then ``kluris register \
 
   kluris register ~/brains/acme-sme";
 
-/// v2's `remove` docstring.
+/// `remove`.
 const REMOVE_HELP: &str = "Unregister a brain (does not delete files).
 
 Always preserves the files on disk. Git state is the user's responsibility \
 after unregistering.";
 
-/// v2's `companion add` docstring.
+/// `companion add`.
 const COMPANION_ADD_HELP: &str = "Opt one or more brains into an embedded companion playbook.
 
 Runs an interactive picker when no NAME is given. Pass NAME (or use --json) \
 to skip the wizard.";
 
-/// v2's `companion remove` docstring.
+/// `companion remove`.
 const COMPANION_REMOVE_HELP: &str = "Remove a companion opt-in from one or more brains.
 
 Runs an interactive picker listing currently-enabled companions when no \
 NAME is given. The global companion copy under ~/.kluris/companions is \
 kept for cheap reuse.";
 
-/// v2's `doctor` docstring, for what v3's doctor does.
+/// `doctor`.
 const DOCTOR_HELP: &str = "Check prerequisites and refresh installed agent skills.
 
 Checks that git runs, that the first kluris on PATH is this one, and that \
@@ -491,7 +491,7 @@ after an upgrade: run `kluris doctor` and everything is back in sync.
 
 Pass --no-refresh to run only the read-only checks.";
 
-/// `sync` (new in v3.1).
+/// `sync`.
 const SYNC_HELP: &str = "Fetch, merge and push brains with their remotes.
 
 For each brain: fetch its branch's upstream (never prompting), then \
@@ -510,7 +510,7 @@ skips pre-merge-commit and commit-msg). Needs git 2.38 or newer.
   kluris sync --brain acme
   kluris sync --brain all --json";
 
-/// `resolve` (new in v3.1).
+/// `resolve`.
 const RESOLVE_HELP: &str = "Settle an open sync conflict path by path.
 
 When kluris sync leaves a conflict (kluris status lists it), choose for \
@@ -532,7 +532,7 @@ commit-msg).
   kluris resolve --brain acme knowledge/auth.md --theirs --merge 4ba0581dd58e
   kluris resolve --brain acme knowledge/auth.md --file merged.md --merge 4ba0581dd58e";
 
-/// `self-update` (new in v3).
+/// `self-update`.
 const SELF_UPDATE_HELP: &str = "Update kluris to the newest release.
 
 Downloads this platform's archive from the newest GitHub release of \
@@ -547,7 +547,7 @@ KLURIS_GITHUB_API_URL to use a GitHub API mirror or GitHub Enterprise \
 instead of https://api.github.com (https only; the checksums are still \
 checked).";
 
-/// `self-uninstall` (new in v3).
+/// `self-uninstall`.
 const SELF_UNINSTALL_HELP: &str = "Remove the installed kluris.
 
 Removes what the Kluris installer wrote: the binary in ~/.kluris/bin, the \
@@ -589,7 +589,7 @@ or newer.
   kluris commit --brain acme --paths old.md -m \"Remove the old note\" --json
   kluris commit --brain acme --paths notes/a.md --merge 1a2b3c4d5e6f --json";
 
-/// v2's `wake-up` docstring.
+/// `wake-up`.
 const WAKE_UP_HELP: &str = "Compact brain snapshot for agent session bootstrap.
 
 Emits a tight view of the brain's live state: the brain.md body, lobes with \
@@ -602,7 +602,7 @@ glossary.md, and every map.md.
   kluris wake-up --brain foo     # target a specific brain when 2+ are registered
   kluris wake-up --json          # machine-readable (for agents)";
 
-/// v2's `search` docstring.
+/// `search`.
 const SEARCH_HELP: &str = "Search a brain's neurons, glossary, and brain.md for a query string.
 
 Searches:
@@ -616,7 +616,7 @@ Examples:
   kluris search \"raw sql\" --lobe knowledge --json
   kluris search \"auth\" --tag oauth --limit 5";
 
-/// v2's root usage line (clap's would be `kluris [COMMAND]`).
+/// The root usage line, Click's form (clap's would be `kluris [COMMAND]`).
 const ROOT_USAGE: &str = "kluris [OPTIONS] COMMAND [ARGS]...";
 
 /// The `--help` flag Click gives every command. It is a plain flag, not

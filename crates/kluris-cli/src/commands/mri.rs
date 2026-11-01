@@ -1,5 +1,5 @@
-//! `kluris mri [--brain NAME|all] [--output FILE] [--json]` (v2
-//! `cli.py:1556-1604`): each brain's session brings teammates' commits in
+//! `kluris mri [--brain NAME|all] [--output FILE] [--json]`: each brain's
+//! session brings teammates' commits in
 //! first, then the dream preflight, the brain's page, and the brain's own
 //! housekeeping commit, built from HEAD, as dream makes it. The files the
 //! preflight skipped are reported as dream reports them; each entry
@@ -26,7 +26,7 @@ use crate::output::human;
 use crate::output::json::{self, Json};
 use crate::resolve::resolve_brains;
 
-/// v2's `--output` refusal for more than one brain.
+/// The `--output` refusal for more than one brain.
 const OUTPUT_WITH_FAN_OUT: &str = "--output cannot be combined with multi-brain fan-out (each brain \
 would overwrite the others' output). Pass --output without --brain all, or pick brains one at a time.";
 

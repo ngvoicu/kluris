@@ -1,4 +1,4 @@
-//! Development tasks for the Kluris 3 workspace (`cargo xtask <task>`).
+//! Development tasks for the Kluris workspace (`cargo xtask <task>`).
 
 mod exec_files;
 mod linux;

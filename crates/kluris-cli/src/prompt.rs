@@ -1,6 +1,5 @@
-//! Asking on the terminal: whether a prompt may run at all (v2's
-//! `_wizard_can_prompt`), and running one with Ctrl-C and end of input
-//! aborting as Click does. The questions themselves are `kluris-core`'s.
+//! Asking on the terminal: whether a prompt may run at all, and running one
+//! with Ctrl-C and end of input aborting as Click does. The questions themselves are `kluris-core`'s.
 
 use std::io::{self, IsTerminal};
 
