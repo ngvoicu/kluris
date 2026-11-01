@@ -186,9 +186,19 @@ pub fn run(options: &Options) -> Result<(), CliError> {
             ),
             ("pushed".into(), Json::Bool(done.pushed)),
         ]);
+        let doc = match (doc, &report.warning) {
+            (Json::Object(mut fields), Some(warning)) => {
+                fields.push(("warning".into(), Json::Str(warning.clone())));
+                Json::Object(fields)
+            }
+            (doc, _) => doc,
+        };
         human::print(&json::to_line(&brains::with_sync(doc, sync.as_ref())));
     } else {
         human::print(&text(&report, &done));
+        if let Some(warning) = &report.warning {
+            eprintln!("Warning: {warning}");
+        }
     }
     if failed(&report, sync.as_ref()) {
         Err(CliError::exit_only())

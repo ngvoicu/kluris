@@ -916,3 +916,61 @@ fn a_staged_version_of_a_map_is_kept_and_the_map_committed() {
         settle(sync_by(command, &doc), &root);
     }
 }
+
+/// The index flags that hide a path's work-tree copy from `git status`,
+/// and the tag `git ls-files -v` gives such a path.
+const HIDING: [(&str, &str); 2] = [("--assume-unchanged", "h"), ("--skip-worktree", "S")];
+
+#[test]
+fn a_neuron_git_status_does_not_show_is_left_out_and_its_edit_kept() {
+    let edited = format!("{PLAIN}\nHidden paragraph.\n");
+    for command in ["dream", "mri"] {
+        for (flag, tag) in HIDING {
+            let (h, root) = team();
+            h.commit(&root, "notes/plain.md", PLAIN);
+            h.git(&root, &["push", "-q"]);
+            h.write(&root, "notes/plain.md", &edited);
+            h.git(&root, &["update-index", flag, "notes/plain.md"]);
+            let (code, doc, err) = h.json_run(&[command, "--brain", "alpha"]);
+            assert_eq!(code, 0, "{command} {flag}: {doc}{err}");
+            let now = h.read(&root, "notes/plain.md");
+            assert!(now.contains("Hidden paragraph."), "{command} {flag}: {now}");
+            assert!(
+                !committed_by(command, &doc).contains(&"notes/plain.md".to_string()),
+                "{command} {flag}: {doc}"
+            );
+            assert_eq!(
+                h.committed(&root, "notes/plain.md"),
+                PLAIN,
+                "{command} {flag}"
+            );
+            let listed = h.git(&root, &["ls-files", "-v", "notes/plain.md"]);
+            assert_eq!(
+                listed,
+                format!("{tag} notes/plain.md\n"),
+                "{command} {flag}"
+            );
+            settle(sync_by(command, &doc), &root);
+        }
+    }
+}
+
+#[test]
+fn a_staged_mode_is_kept_and_its_neuron_left_out() {
+    for command in ["dream", "mri"] {
+        let (h, root) = team();
+        h.commit(&root, "notes/plain.md", PLAIN);
+        h.git(&root, &["push", "-q"]);
+        h.git(&root, &["update-index", "--chmod=+x", "notes/plain.md"]);
+        let (code, doc, err) = h.json_run(&[command, "--brain", "alpha"]);
+        assert_eq!(code, 0, "{command}: {doc}{err}");
+        let entry = h.git(&root, &["ls-files", "-s", "notes/plain.md"]);
+        assert!(entry.starts_with("100755 "), "{command}: {entry}");
+        assert!(
+            !committed_by(command, &doc).contains(&"notes/plain.md".to_string()),
+            "{command}: {doc}"
+        );
+        assert_eq!(h.committed(&root, "notes/plain.md"), PLAIN, "{command}");
+        settle(sync_by(command, &doc), &root);
+    }
+}

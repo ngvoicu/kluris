@@ -164,6 +164,27 @@ fn the_last_choice_finishes_the_merge_then_the_close_pulls_what_is_newer_and_pus
     assert_eq!(bare_main(&h, "alpha"), head(&h, &root));
 }
 
+#[cfg(unix)]
+#[test]
+fn a_last_choice_whose_merge_landed_exits_0_when_the_check_after_it_fails() {
+    let mut h = Home::new();
+    let (root, merge) = h.conflicts("alpha", &["notes/first.md"]);
+    let failed = h.fail_the_check_after_a_land();
+    let (code, doc) = resolve(&h, "notes/first.md", &["--theirs"], &merge);
+    assert!(failed.exists(), "the check never failed: {doc}");
+    assert_eq!(code, 0, "{doc}");
+    assert_eq!(doc["committed"], true, "{doc}");
+    assert_eq!(doc["commit"], head(&h, &root).as_str(), "{doc}");
+    let warning = doc["warning"]
+        .as_str()
+        .unwrap_or_else(|| panic!("no warning: {doc}"));
+    assert!(warning.contains("could not be read"), "{warning}");
+    assert!(!pending_path(&root).exists());
+    let parents = h.git(&root, &["rev-list", "--parents", "-n", "1", "HEAD"]);
+    assert_eq!(parents.split_whitespace().count(), 3, "a merge: {parents}");
+    assert_eq!(doc["sync"]["pushed"], true, "{doc}");
+}
+
 #[test]
 fn a_different_id_is_refused_with_the_current_conflicts_and_id_in_sync() {
     let mut h = Home::new();

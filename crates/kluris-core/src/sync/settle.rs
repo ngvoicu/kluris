@@ -176,7 +176,11 @@ fn finish<G: SyncGit>(
     )
     .map_err(CommitError::Left)?;
     // The merge landed: what fails from here is a warning.
-    let mut warnings = Vec::new();
+    let engine::Finished {
+        commit: finished,
+        warning,
+    } = finished;
+    let mut warnings: Vec<String> = warning.into_iter().collect();
     let record = ctx.pending();
     if let Err(e) = pending::remove(&record) {
         warnings.push(format!(

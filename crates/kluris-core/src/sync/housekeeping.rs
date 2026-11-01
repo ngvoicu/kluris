@@ -29,7 +29,7 @@
 //! A hook that stops the commit, or changes what it would commit, leaves
 //! everything as it was. Nothing to commit makes no commit.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use super::LeftAsIs;
 use super::LeftReason;
@@ -88,13 +88,16 @@ pub fn commit<G: Plumbing>(
         .iter()
         .map(|blob| (blob.rel.clone(), Seen::of(&join(&repo.dir, &blob.rel))))
         .collect();
-    let dirty: BTreeSet<String> = git.dirty(repo)?.into_iter().collect();
-    let theirs = untouched(git, repo, &repo.dir, Some(&base), &blobs, &dirty)?;
+    let theirs = untouched(git, repo, &repo.dir, Some(&base), &blobs)?;
     let is_untouched = |rel: &str, part: fn(&Untouched) -> bool| theirs.get(rel).is_some_and(part);
-    // A neuron with anything of the person's in it is left out.
+    // A neuron with anything of the person's in it is left out, and any
+    // file whose index entry hides it from `git status`.
     let blobs: Vec<StagedBlob> = blobs
         .into_iter()
-        .filter(|blob| is_generated(&blob.rel) || is_untouched(&blob.rel, |u| u.both()))
+        .filter(|blob| {
+            !is_untouched(&blob.rel, |u| u.hidden)
+                && (is_generated(&blob.rel) || is_untouched(&blob.rel, |u| u.both()))
+        })
         .collect();
     let paths: Vec<String> = blobs.iter().map(|blob| blob.rel.clone()).collect();
 

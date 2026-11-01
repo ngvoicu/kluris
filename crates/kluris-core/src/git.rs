@@ -758,13 +758,13 @@ pub trait Plumbing: Git {
     /// <rev> -- <paths>`); every other entry stays as it is.
     fn reset_paths(&self, repo: &Repo, rev: &str, paths: &[String]) -> Result<(), GitError>;
 
-    /// The blob each of `paths` has in the user's index; a path the index
+    /// The entry each of `paths` has in the user's index; a path the index
     /// does not hold is left out.
-    fn index_blobs(
+    fn index_entries(
         &self,
         repo: &Repo,
         paths: &[String],
-    ) -> Result<BTreeMap<String, String>, GitError>;
+    ) -> Result<BTreeMap<String, IndexEntry>, GitError>;
 
     /// Every path in the brain with a change git would commit or an
     /// untracked file it would add (`git status`, ignored files left out),
@@ -801,6 +801,16 @@ impl TreeEntry {
     pub fn is_symlink(&self) -> bool {
         self.mode == "120000"
     }
+}
+
+/// A path's entry in the user's index.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IndexEntry {
+    pub mode: String,
+    pub oid: String,
+    /// Flagged `assume-unchanged` or `skip-worktree`: git hides the path's
+    /// work-tree copy, which is the person's setup.
+    pub hidden: bool,
 }
 
 /// Contents for [`Plumbing::stage_blobs`]: `None` removes the path.
@@ -1223,22 +1233,28 @@ impl Plumbing for SystemGit {
         self.run(&repo.dir, &args).map(drop)
     }
 
-    fn index_blobs(
+    fn index_entries(
         &self,
         repo: &Repo,
         paths: &[String],
-    ) -> Result<BTreeMap<String, String>, GitError> {
+    ) -> Result<BTreeMap<String, IndexEntry>, GitError> {
         if paths.is_empty() {
             return Ok(BTreeMap::new());
         }
-        // `<mode> <blob> <stage>\t<path>`, NUL-terminated.
-        let args = with_paths(&["ls-files", "-s", "-z"], paths);
+        // `<tag> <mode> <blob> <stage>\t<path>`, NUL-terminated; the tag is
+        // lowercase for an assume-unchanged entry, `S` for a skip-worktree
+        // one.
+        let args = with_paths(&["ls-files", "-s", "-v", "-z"], paths);
         let out = self.run(&repo.dir, &args)?;
         Ok(nul_names(&out)
             .filter_map(|line| {
                 let (meta, path) = line.split_once('\t')?;
-                let blob = meta.split(' ').nth(1)?;
-                Some((path.to_string(), blob.to_string()))
+                let mut fields = meta.split(' ');
+                let tag = fields.next()?;
+                let mode = fields.next()?.to_string();
+                let oid = fields.next()?.to_string();
+                let hidden = tag.chars().any(|c| c.is_ascii_lowercase()) || tag == "S";
+                Some((path.to_string(), IndexEntry { mode, oid, hidden }))
             })
             .collect())
     }

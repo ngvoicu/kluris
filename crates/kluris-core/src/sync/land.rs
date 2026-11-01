@@ -16,7 +16,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use super::git::SyncGit;
+use super::git::{SyncGit, one_line};
 use super::{LeftAsIs, LeftReason, SyncError};
 use crate::git::{GitError, Repo, TreeEntry};
 
@@ -67,6 +67,11 @@ fn still_settled(root: &Path, rel: &str, want: &Option<Vec<u8>>) -> bool {
         }
     }
 }
+
+/// What a land that went through has to say: a check after git's move
+/// that could not be made, and how to see to it; `None` when there is
+/// nothing to say.
+pub type Landed = Option<String>;
 
 /// What a land goes over in the work tree (nothing for a pull): the
 /// conflicted paths a person settled, and the generated files with changes
@@ -301,22 +306,44 @@ pub fn changed<G: SyncGit>(
 /// when git ran and git moved that one, which is reported (busy) with the
 /// branch that moved and to what; nothing is undone. HEAD naming another
 /// branch once `branch` holds `to` is a switch made after the land, and
-/// harmless.
+/// harmless. git's move went through, so a check that cannot be made is
+/// a warning ([`Landed`]), never a failure.
 fn moved_elsewhere<G: SyncGit>(
     git: &G,
     repo: &Repo,
     branch: &str,
     to: &str,
-) -> Result<(), LeftAsIs> {
-    let now = git.ref_value(repo, branch)?;
+) -> Result<Landed, LeftAsIs> {
+    let unchecked = |e: GitError| {
+        Ok(Some(format!(
+            "{branch} was moved to {}, but the check after it could not be made ({}); see that {branch} holds it with git log -1 {branch}",
+            short(to),
+            one_line(&e.to_string())
+        )))
+    };
+    let now = match git.ref_value(repo, branch) {
+        Ok(now) => now,
+        Err(e) => return unchecked(e),
+    };
     if now.as_deref() == Some(to) {
-        return Ok(());
+        return Ok(None);
     }
+    let head = match git.branch(repo) {
+        Ok(head) => head,
+        Err(e) => return unchecked(e),
+    };
+    let head_holds_to = match &head {
+        Some(head) => match git.ref_value(repo, head) {
+            Ok(value) => value.as_deref() == Some(to),
+            Err(e) => return unchecked(e),
+        },
+        None => false,
+    };
     let stays = now
         .as_deref()
         .map_or("no commit".to_string(), |c| short(c).to_string());
-    let moved = match git.branch(repo)? {
-        Some(head) if git.ref_value(repo, &head)?.as_deref() == Some(to) => {
+    let moved = match head {
+        Some(head) if head_holds_to => {
             format!(
                 "{head} moved to {} instead of {branch}: HEAD named it when git landed the pull",
                 short(to)
@@ -364,7 +391,8 @@ pub fn unchanged<G: SyncGit>(
 /// (git's fast-forward moves whichever branch HEAD names when it runs): an
 /// edit made then is found by git's refusal or the second check, and a
 /// switch made then by the check after the write ([`moved_elsewhere`]),
-/// which reports it; nothing is undone.
+/// which reports it; nothing is undone. Once git's move went through, a
+/// check after it that cannot be made is the [`Landed`] warning.
 #[allow(clippy::too_many_arguments)]
 pub fn land<G: SyncGit>(
     git: &G,
@@ -375,7 +403,7 @@ pub fn land<G: SyncGit>(
     ours: &str,
     to: &str,
     over: &Over,
-) -> Result<(), LeftAsIs> {
+) -> Result<Landed, LeftAsIs> {
     let in_the_way = |git: &G| -> Result<Vec<String>, LeftAsIs> {
         let dirty = git.dirty(repo)?;
         let blocked = blocked_paths(git, repo, root, &dirty, ours, to)?;

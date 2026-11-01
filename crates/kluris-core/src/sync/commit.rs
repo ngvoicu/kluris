@@ -738,78 +738,98 @@ fn reverse_links(
 /// beside the person's own paths: nothing, where each of these holds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct Untouched {
-    /// The user's index entry is the base's blob or R's.
+    /// The user's index entry, mode and blob, is the base's or R's.
     pub index: bool,
-    /// The work-tree copy is the base's bytes or exactly R (as `kluris
-    /// dream` writes the same fix there, its line endings aside).
+    /// The work-tree copy, as read, is the base's bytes or exactly R (as
+    /// `kluris dream` writes the same fix there), line endings aside.
     pub work_tree: bool,
+    /// The index entry is flagged `assume-unchanged` or `skip-worktree`:
+    /// the person's setup, which git hides. Such a file is never taken nor
+    /// written, whatever it is.
+    pub hidden: bool,
 }
 
 impl Untouched {
     /// Nothing of the person's is in the file: the commit may take it.
     pub fn both(self) -> bool {
-        self.index && self.work_tree
+        self.index && self.work_tree && !self.hidden
     }
 }
 
-/// [`Untouched`] for each of `blobs` (R: its bytes, `None` for no file),
-/// against `base` (none: no commit yet), the user's index and the work
-/// tree under `root`; `dirty` is [`Plumbing::dirty`], read before.
+/// [`Untouched`] for each of `blobs` (R: its bytes and mode, `None` for no
+/// file), against `base` (none: no commit yet), the user's index and the
+/// work-tree copy under `root`, read whatever `git status` says.
 pub(super) fn untouched<G: Plumbing>(
     git: &G,
     repo: &Repo,
     root: &Path,
     base: Option<&str>,
     blobs: &[StagedBlob],
-    dirty: &BTreeSet<String>,
 ) -> Result<BTreeMap<String, Untouched>, GitError> {
     let in_base = match base {
         Some(rev) => entry_map(git, repo, rev)?,
         None => BTreeMap::new(),
     };
     let rels: Vec<String> = blobs.iter().map(|blob| blob.rel.clone()).collect();
-    let index = git.index_blobs(repo, &rels)?;
-    let base_blob = |rel: &str| in_base.get(rel).map(|(_, oid)| oid.as_str());
-    // The bytes of each staged entry that is not the base's, and of the
+    let index = git.index_entries(repo, &rels)?;
+    // The base's bytes and those of each staged entry that is not the
     // base's, to compare with R and the work tree.
     let wanted: Vec<String> = rels
         .iter()
-        .filter(|rel| dirty.contains(*rel))
-        .flat_map(|rel| [index.get(rel).map(String::as_str), base_blob(rel)])
+        .flat_map(|rel| {
+            [
+                in_base.get(rel).map(|(_, oid)| oid.clone()),
+                index.get(rel).map(|entry| entry.oid.clone()),
+            ]
+        })
         .flatten()
-        .map(str::to_string)
+        .collect::<BTreeSet<String>>()
+        .into_iter()
         .collect();
     let bytes_of = git.read_blobs(repo, &wanted)?;
+    // `bytes` as a file holding `disk` would have them: its line endings.
+    let same = |bytes: &[u8], disk: &[u8]| {
+        disk == bytes
+            || disk == with_line_ending(bytes, line_ending(&String::from_utf8_lossy(disk)))
+    };
     let mut out = BTreeMap::new();
     for blob in blobs {
         let rel = blob.rel.as_str();
-        let staged = index.get(rel).map(String::as_str);
-        let index_ok = staged == base_blob(rel)
-            || match (&blob.bytes, staged) {
-                (Some(r), Some(oid)) => bytes_of.get(oid) == Some(r),
-                (None, None) => true,
-                _ => false,
-            };
-        let work_tree_ok = !dirty.contains(rel) || {
-            let on_disk = fs::symlink_metadata(join(root, rel))
-                .ok()
-                .filter(|meta| meta.is_file())
-                .and_then(|_| fs::read(join(root, rel)).ok());
-            match (&blob.bytes, on_disk) {
-                (None, None) => true,
-                (Some(r), Some(disk)) => {
-                    disk == *r
-                        || disk == with_line_ending(r, line_ending(&String::from_utf8_lossy(&disk)))
-                        || base_blob(rel).and_then(|oid| bytes_of.get(oid)) == Some(&disk)
-                }
-                _ => false,
+        let base_entry = in_base.get(rel);
+        let staged = index.get(rel);
+        let index_ok = match (staged, &blob.bytes) {
+            (None, _) => base_entry.is_none() || blob.bytes.is_none(),
+            (Some(entry), r) => {
+                base_entry.is_some_and(|(mode, oid)| *mode == entry.mode && *oid == entry.oid)
+                    || r.as_ref().is_some_and(|r| {
+                        entry.mode == blob.mode && bytes_of.get(&entry.oid) == Some(r)
+                    })
             }
+        };
+        let path = join(root, rel);
+        let on_disk = fs::symlink_metadata(&path)
+            .ok()
+            .filter(|meta| meta.is_file())
+            .and_then(|_| fs::read(&path).ok());
+        let work_tree_ok = match (&blob.bytes, on_disk) {
+            (None, None) => true,
+            (Some(r), Some(disk)) => {
+                same(r, &disk)
+                    || base_entry
+                        .and_then(|(_, oid)| bytes_of.get(oid))
+                        .is_some_and(|head| same(head, &disk))
+            }
+            (None, Some(disk)) => base_entry
+                .and_then(|(_, oid)| bytes_of.get(oid))
+                .is_some_and(|head| same(head, &disk)),
+            (Some(_), None) => base_entry.is_none() && fs::symlink_metadata(&path).is_err(),
         };
         out.insert(
             rel.to_string(),
             Untouched {
                 index: index_ok,
                 work_tree: work_tree_ok,
+                hidden: staged.is_some_and(|entry| entry.hidden),
             },
         );
     }
@@ -1123,10 +1143,14 @@ pub fn commit<G: Plumbing>(
     names.extend(removed_maps.iter().cloned());
     // The map step writes a linked map at its target: each map by the path
     // in the tree that holds its bytes.
-    let affected: BTreeSet<String> = names
+    let mut affected: BTreeSet<String> = names
         .iter()
         .map(|rel| view.real_rel(rel).unwrap_or_else(|| rel.clone()))
         .collect();
+    // A map whose index entry hides it from `git status` is the person's
+    // setup: it is neither committed nor written.
+    let in_index = git.index_entries(&repo, &affected.iter().cloned().collect::<Vec<_>>())?;
+    affected.retain(|rel| !in_index.get(rel).is_some_and(|entry| entry.hidden));
     // Each map and linked neuron as it is before its cleanliness is
     // checked, so one changed after the check is never replaced.
     let seen: BTreeMap<String, Seen> = affected
@@ -1134,17 +1158,9 @@ pub fn commit<G: Plumbing>(
         .chain(candidates.iter().map(|blob| &blob.rel))
         .map(|rel| (rel.clone(), Seen::of(&join(root, rel))))
         .collect();
-    let dirty_before: BTreeSet<String> = git.dirty(&repo)?.into_iter().collect();
     // A neuron with anything of the person's in it gets no link: it would
     // be committed with it.
-    let untouched_links = untouched(
-        git,
-        &repo,
-        root,
-        base.as_deref(),
-        &candidates,
-        &dirty_before,
-    )?;
+    let untouched_links = untouched(git, &repo, root, base.as_deref(), &candidates)?;
     let mut links: Vec<StagedBlob> = candidates
         .into_iter()
         .filter(|blob| untouched_links.get(&blob.rel).is_some_and(|u| u.both()))
@@ -1309,14 +1325,7 @@ pub fn commit<G: Plumbing>(
     // A generated file's index entry and work-tree copy get the commit's
     // only where they hold nothing of the person's: a version of it the
     // person staged stays staged.
-    let generated_untouched = untouched(
-        git,
-        &repo,
-        root,
-        set.base.as_deref(),
-        &generated,
-        &dirty_before,
-    )?;
+    let generated_untouched = untouched(git, &repo, root, set.base.as_deref(), &generated)?;
     let staged_generated: BTreeSet<&String> = generated_untouched
         .iter()
         .filter(|(_, u)| !u.index)

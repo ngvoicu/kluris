@@ -66,6 +66,8 @@ pub struct ResolveReport {
     pub remaining: Vec<String>,
     pub committed: bool,
     pub commit: Option<String>,
+    /// What failed once the merge landed, and how to repair it.
+    pub warning: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -329,6 +331,7 @@ pub fn resolve_in<G: SyncGit>(
         remaining,
         committed: false,
         commit: None,
+        warning: None,
     };
     if !report.remaining.is_empty() {
         pending.write(&path).map_err(record)?;
@@ -337,25 +340,33 @@ pub fn resolve_in<G: SyncGit>(
 
     // Every path has a choice: finish the merge. Until the merge commit is
     // in place the waiting merge (with the choices) stays.
-    let commit = match finish(ctx, claim, &pending) {
-        Ok(commit) => commit,
+    let finished = match finish(ctx, claim, &pending) {
+        Ok(finished) => finished,
         Err(e) => {
             pending.write(&path).map_err(record)?;
             return Err(e);
         }
     };
-    pending::remove(&path).map_err(record)?;
+    // The merge landed: what fails from here is a warning.
+    let mut warnings: Vec<String> = finished.warning.into_iter().collect();
+    if let Err(e) = pending::remove(&path) {
+        warnings.push(format!(
+            "the waiting merge's record could not be removed ({e}); remove {}",
+            path.display()
+        ));
+    }
     report.committed = true;
-    report.commit = Some(commit);
+    report.commit = Some(finished.commit);
+    report.warning = (!warnings.is_empty()).then(|| warnings.join("; "));
     Ok(report)
 }
 
-/// The merge with the choices, committed and landed; its commit.
+/// The merge with the choices, committed and landed.
 fn finish<G: SyncGit>(
     ctx: &Context<G>,
     claim: &TreeClaim,
     pending: &Pending,
-) -> Result<String, ResolveError> {
+) -> Result<engine::Finished, ResolveError> {
     let choices: BTreeMap<String, ResolvedChoice> = pending.resolved.iter().cloned().collect();
     let (git, repo) = (ctx.git(), ctx.repo());
     let author = git.author(repo)?;

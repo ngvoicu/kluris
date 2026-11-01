@@ -69,6 +69,7 @@ pub fn resolve(root: &Path, git: &SystemGit, call: &Resolve) -> Result<Resolved,
         remaining,
         committed,
         commit,
+        warning: _,
     } = resolve_in(&ctx, &claim, &request)?;
     let mut done = Resolved {
         path,

@@ -843,9 +843,18 @@ pub struct Finish<'f> {
     pub keep_generated: bool,
 }
 
+/// A waiting merge that landed ([`finish_merge`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Finished {
+    /// The merge commit, which the branch now holds.
+    pub commit: String,
+    /// A check after the land that could not be made, and how to see to it.
+    pub warning: Option<String>,
+}
+
 /// Finish the waiting merge with a person's choices: merge `ours` with the
 /// pinned `theirs`, check the files in the way, make the merge commit with
-/// its message through its hooks, and land it; its commit. The caller holds
+/// its message through its hooks, and land it ([`Finished`]). The caller holds
 /// the tree claim (`_claim`) from reading the waiting merge to removing it,
 /// so the merge and the record it answers stay one.
 pub fn finish_merge<G: SyncGit>(
@@ -853,7 +862,7 @@ pub fn finish_merge<G: SyncGit>(
     _claim: &TreeClaim,
     pending: &Pending,
     finish: &Finish,
-) -> Result<String, LeftAsIs> {
+) -> Result<Finished, LeftAsIs> {
     let (git, repo) = (&ctx.git, &ctx.repo);
     let branch = ctx.pinned()?;
     let (ours, theirs) = (&pending.ours, &pending.theirs);
@@ -899,12 +908,12 @@ pub fn finish_merge<G: SyncGit>(
     )
     .map_err(merge_stopped)?;
     let landing = &ctx.landing;
-    land(git, landing, repo, &ctx.root, branch, ours, &commit, &over)?;
+    let warning = land(git, landing, repo, &ctx.root, branch, ours, &commit, &over)?;
     if finish.hooks == MergeHooks::Commit {
         // As with `git commit`, post-commit cannot undo or fail the commit.
         let _ = landing.run_hook(repo, None, "post-commit", &[]);
     }
-    Ok(commit)
+    Ok(Finished { commit, warning })
 }
 
 fn count_json(n: usize) -> Json {

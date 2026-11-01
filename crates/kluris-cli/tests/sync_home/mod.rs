@@ -379,3 +379,48 @@ pub fn wait_for_background(root: &Path) {
         std::thread::sleep(Duration::from_millis(20));
     }
 }
+
+/// The git on this process's `PATH`, by its full path.
+#[cfg(unix)]
+pub fn real_git() -> PathBuf {
+    std::env::var_os("PATH")
+        .into_iter()
+        .flat_map(|path| std::env::split_paths(&path).collect::<Vec<_>>())
+        .map(|dir| dir.join("git"))
+        .find(|git| git.is_file())
+        .expect("git on PATH")
+}
+
+#[cfg(unix)]
+impl Home {
+    /// Put a `git` first on the `PATH` of every `kluris` run that runs the
+    /// real one, except that once a `git merge --ff-only` has succeeded,
+    /// the next `rev-parse` of `refs/heads/main` fails (exit 128): a check
+    /// after a land that cannot be made. Returns the file the failure
+    /// leaves, there once it happened.
+    pub fn fail_the_check_after_a_land(&mut self) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt as _;
+        let bin = self.dir.path().join("failing-git");
+        fs::create_dir_all(&bin).unwrap();
+        let landed = self.dir.path().join("landed");
+        let failed = self.dir.path().join("check-failed");
+        let quote =
+            |path: &Path| format!("'{}'", path.display().to_string().replace('\'', "'\\''"));
+        let script = format!(
+            "#!/bin/sh\ncase \" $* \" in\n*\" merge --ff-only \"*)\n  {git} \"$@\"; status=$?\n  [ $status = 0 ] && touch {landed}\n  exit $status ;;\n*\" rev-parse --verify --quiet refs/heads/main \"*)\n  if [ -e {landed} ] && [ ! -e {failed} ]; then\n    touch {failed}; echo 'the reference could not be read' >&2; exit 128\n  fi ;;\nesac\nexec {git} \"$@\"\n",
+            git = quote(&real_git()),
+            landed = quote(&landed),
+            failed = quote(&failed),
+        );
+        let wrapper = bin.join("git");
+        fs::write(&wrapper, script).unwrap();
+        fs::set_permissions(&wrapper, fs::Permissions::from_mode(0o755)).unwrap();
+        let path = std::env::var_os("PATH").unwrap_or_default();
+        let mut dirs = vec![bin];
+        dirs.extend(std::env::split_paths(&path));
+        let joined = std::env::join_paths(dirs).unwrap();
+        self.env
+            .push(("PATH".into(), joined.to_string_lossy().into_owned()));
+        failed
+    }
+}

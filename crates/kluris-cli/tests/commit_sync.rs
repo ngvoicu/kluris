@@ -547,6 +547,77 @@ fn a_commit_that_landed_exits_0_and_warns_of_what_failed_after() {
     fs::remove_file(&lock).unwrap();
 }
 
+/// The index flags that hide a path's work-tree copy from `git status`.
+const HIDING: [&str; 2] = ["--assume-unchanged", "--skip-worktree"];
+
+#[test]
+fn a_neuron_git_status_does_not_show_gets_no_reverse_link() {
+    for flag in HIDING {
+        let (h, root) = team();
+        let committed = h.read(&root, "notes/first.md");
+        let edited = format!("{committed}\nHidden paragraph.\n");
+        h.write(&root, "notes/first.md", &edited);
+        h.git(&root, &["update-index", flag, "notes/first.md"]);
+        h.write(
+            &root,
+            "notes/second.md",
+            &linking("Second", &["./first.md"]),
+        );
+        let (code, doc) = commit(&h, "notes/second.md", &[]);
+        assert_eq!(code, 0, "{flag}: {doc}");
+        assert_eq!(doc["linked"], json!([]), "{flag}: {doc}");
+        let head = head(&h, &root);
+        assert_eq!(
+            show(&h, &root, &head, "notes/first.md"),
+            committed,
+            "{flag}"
+        );
+        assert_eq!(h.read(&root, "notes/first.md"), edited, "{flag}");
+    }
+}
+
+#[test]
+fn a_map_git_status_does_not_show_is_left_out_and_never_written() {
+    for flag in HIDING {
+        let (h, root) = team();
+        let committed = h.read(&root, "notes/map.md");
+        let edited = format!("{committed}\nMy own line.\n");
+        h.write(&root, "notes/map.md", &edited);
+        h.git(&root, &["update-index", flag, "notes/map.md"]);
+        h.write(&root, "notes/second.md", &neuron("Second", BODY));
+        let (code, doc) = commit(&h, "notes/second.md", &[]);
+        assert_eq!(code, 0, "{flag}: {doc}");
+        assert_eq!(doc["regenerated"], json!([]), "{flag}: {doc}");
+        let head = head(&h, &root);
+        assert_eq!(changed(&h, &root, &head), ["notes/second.md"], "{flag}");
+        assert_eq!(show(&h, &root, &head, "notes/map.md"), committed, "{flag}");
+        assert_eq!(h.read(&root, "notes/map.md"), edited, "{flag}");
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn a_merge_that_landed_exits_0_when_the_check_after_it_fails() {
+    let (mut h, root) = team();
+    let (merge, ours, theirs) = waiting(&h, &root);
+    h.write(&root, "notes/first.md", &settled());
+    let failed = h.fail_the_check_after_a_land();
+    let (code, doc) = commit(&h, "notes/first.md", &["--merge", &merge]);
+    assert!(failed.exists(), "the check never failed: {doc}");
+    assert_eq!(code, 0, "{doc}");
+    assert_eq!(doc["committed"], true, "{doc}");
+    let head = head(&h, &root);
+    assert_eq!(doc["commit"], head.as_str(), "{doc}");
+    assert_eq!(parents(&h, &root, &head), [ours, theirs]);
+    let warning = doc["warning"]
+        .as_str()
+        .unwrap_or_else(|| panic!("no warning: {doc}"));
+    assert!(warning.contains("could not be read"), "{warning}");
+    assert!(!git_file(&root, "kluris-sync/pending.json").exists());
+    assert_eq!(sync_of(&doc)["conflicts"], json!([]), "{doc}");
+    assert_eq!(sync_of(&doc)["pushed"], true, "{doc}");
+}
+
 // --- the exit code is the commit's -----------------------------------------------------
 
 #[test]
