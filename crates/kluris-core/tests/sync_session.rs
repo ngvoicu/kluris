@@ -36,7 +36,7 @@ use kluris_core::sync::claim::{COMMAND_BOUND, READ_BOUND, RemoteClaim, TreeClaim
 use kluris_core::sync::engine;
 use kluris_core::sync::fetch::{BACKOFF, STAMP, back_off};
 use kluris_core::sync::session::{self, Alone, Brain, Intent, READ_TIME_LIMIT, SessionEnv};
-use kluris_core::sync::{NETWORK_TIME_LIMIT, SyncReport, SyncRequest};
+use kluris_core::sync::{LeftReason, NETWORK_TIME_LIMIT, SyncReport, SyncRequest};
 use tempfile::TempDir;
 
 /// The longest a test waits for another process to do something.
@@ -710,6 +710,171 @@ impl Brains {
 
 fn path(p: &Path) -> String {
     p.to_string_lossy().into_owned()
+}
+
+/// What a read's pull is shaped as in [`the_time_of_a_reads_pull`].
+#[derive(Debug, Clone, Copy)]
+enum Pull {
+    /// Read once already: the remote has nothing new.
+    NothingNew,
+    /// The remote is ahead.
+    FastForward,
+    /// Both moved, on different files.
+    Merge,
+    /// Both added the same file: the conflict's texts are read.
+    Conflict,
+}
+
+/// One git a read ran, as git's trace2 events say: when it started and
+/// ended (seconds of the day), and its arguments.
+struct Ran {
+    start: f64,
+    end: f64,
+    args: String,
+}
+
+/// The seconds of the day of a trace2 `time` (`…T12:34:56.789012Z`).
+fn seconds_of(time: &str) -> f64 {
+    let clock = time.split('T').nth(1).unwrap_or("").trim_end_matches('Z');
+    clock
+        .split(':')
+        .map(|part| part.parse::<f64>().unwrap_or(0.0))
+        .fold(0.0, |total, part| total * 60.0 + part)
+}
+
+/// The top-level gits of the trace2 event file `trace`, in start order.
+fn gits_in(trace: &Path) -> Vec<Ran> {
+    let text = fs::read_to_string(trace).unwrap_or_default();
+    let mut started = std::collections::BTreeMap::new();
+    let mut ran = Vec::new();
+    for line in text.lines() {
+        let Ok(event) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        let sid = event["sid"].as_str().unwrap_or("").to_string();
+        if sid.contains('/') {
+            continue;
+        }
+        let time = seconds_of(event["time"].as_str().unwrap_or(""));
+        match event["event"].as_str() {
+            Some("start") => {
+                let args: Vec<&str> = event["argv"]
+                    .as_array()
+                    .map(|argv| argv.iter().skip(1).filter_map(|a| a.as_str()).collect())
+                    .unwrap_or_default();
+                started.insert(sid, (time, args.join(" ")));
+            }
+            Some("exit") => {
+                if let Some((start, args)) = started.remove(&sid) {
+                    ran.push(Ran {
+                        start,
+                        end: time,
+                        args,
+                    });
+                }
+            }
+            _ => {}
+        }
+    }
+    ran.sort_by(|a, b| a.start.total_cmp(&b.start));
+    ran
+}
+
+/// `count` brains shaped for `pull`, with no upload-pack of their own.
+fn shaped(count: usize, pull: Pull) -> Brains {
+    let brains = Brains::new(count, "exec git upload-pack \"$@\"\n");
+    for root in &brains.roots {
+        brains.git(root, &["config", "--unset", "remote.origin.uploadpack"]);
+        match pull {
+            Pull::NothingNew => brains.git(root, &["pull", "-q", "--ff-only"]),
+            Pull::FastForward => {}
+            Pull::Merge => {
+                fs::write(root.join("local.md"), "# Local\n").unwrap();
+                brains.git(root, &["add", "-A"]);
+                brains.git(root, &["commit", "-q", "-m", "local"]);
+            }
+            Pull::Conflict => {
+                fs::write(root.join("note0.md"), "# Ours\n").unwrap();
+                brains.git(root, &["add", "-A"]);
+                brains.git(root, &["commit", "-q", "-m", "ours"]);
+            }
+        }
+    }
+    brains
+}
+
+/// A read of `root` traced into `trace`: how long it took, and what it
+/// said.
+fn traced_read(brains: &Brains, root: &Path, trace: &Path) -> (Duration, Option<SyncReport>) {
+    let mut env = brains.env();
+    env.git = env.git.env("GIT_TRACE2_EVENT", trace);
+    let started = Instant::now();
+    let report = session::close(session::open(brain(root), Intent::Read, &env));
+    (started.elapsed(), report)
+}
+
+/// How long a read's pull takes and which gits it runs, on each path,
+/// alone and eight at once, printed from git's trace2 events. A
+/// measurement, not a check.
+#[test]
+#[ignore = "a measurement: run it with --ignored --nocapture"]
+fn the_time_of_a_reads_pull() {
+    for pull in [
+        Pull::NothingNew,
+        Pull::FastForward,
+        Pull::Merge,
+        Pull::Conflict,
+    ] {
+        let brains = shaped(1, pull);
+        let trace = brains.dir.path().join("alone.trace");
+        let (took, report) = traced_read(&brains, &brains.roots[0], &trace);
+        let gits = gits_in(&trace);
+        let in_git: f64 = gits.iter().map(|g| g.end - g.start).sum();
+        println!(
+            "pull {pull:?} alone: {took:?}, {} gits, {:.0} ms in git, left as is: {:?}",
+            gits.len(),
+            in_git * 1000.0,
+            report.and_then(|r| r.left_as_is).map(|l| l.reason)
+        );
+        let mut before = gits.first().map_or(0.0, |g| g.start);
+        for git in &gits {
+            println!(
+                "  +{:>4.0} ms  {:>4.0} ms  git {}",
+                (git.start - before) * 1000.0,
+                (git.end - git.start) * 1000.0,
+                git.args.chars().take(90).collect::<String>()
+            );
+            before = git.end;
+        }
+        drop(brains);
+
+        let brains = shaped(8, pull);
+        let reads: Vec<(Duration, usize, f64, Option<LeftReason>)> = thread::scope(|scope| {
+            let reads: Vec<_> = brains
+                .roots
+                .iter()
+                .enumerate()
+                .map(|(index, root)| {
+                    let trace = brains.dir.path().join(format!("{index}.trace"));
+                    let brains = &brains;
+                    scope.spawn(move || {
+                        let (took, report) = traced_read(brains, root, &trace);
+                        let gits = gits_in(&trace);
+                        let in_git = gits.iter().map(|g| g.end - g.start).sum::<f64>();
+                        let left = report.and_then(|r| r.left_as_is).map(|l| l.reason);
+                        (took, gits.len(), in_git, left)
+                    })
+                })
+                .collect();
+            reads.into_iter().map(|read| read.join().unwrap()).collect()
+        });
+        for (took, gits, in_git, left) in reads {
+            println!(
+                "pull {pull:?} 8 at once: {took:?}, {gits} gits, {:.0} ms in git, left as is: {left:?}",
+                in_git * 1000.0
+            );
+        }
+    }
 }
 
 #[test]

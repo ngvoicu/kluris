@@ -122,11 +122,14 @@ pub fn bring<G: SyncGit>(
 }
 
 /// Fetch the upstream and move its tracking ref, by `deadline` (see the
-/// module docs). A local step that fails is the error.
+/// module docs); a fetch that reached the remote ends the back-off in
+/// `common`, the repository's common git directory. A local step that
+/// fails is the error.
 pub fn fetch<G: SyncGit>(
     git: &G,
     repo: &Repo,
     upstream: &Upstream,
+    common: &Path,
     deadline: Instant,
 ) -> Result<Fetch, GitError> {
     let (mut lost_once, mut gone_once) = (false, false);
@@ -144,9 +147,7 @@ pub fn fetch<G: SyncGit>(
                 });
             }
         };
-        if let Ok(dirs) = git.git_dirs(repo) {
-            end_backoff(&dirs.common.join(BACKOFF));
-        }
+        end_backoff(&common.join(BACKOFF));
         if let Some(detail) = unmovable(git, repo, upstream)? {
             return Ok(Fetch::Refused { detail });
         }

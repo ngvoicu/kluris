@@ -251,13 +251,11 @@ impl From<SyncError> for LeftAsIs {
 /// write the work tree and the index, then fail on the ref, leaving the
 /// incoming files staged under the old HEAD.
 fn held_lock<G: SyncGit>(git: &G, repo: &Repo, branch: &str) -> Result<Option<PathBuf>, GitError> {
-    for lock in [format!("{branch}.lock"), "index.lock".to_string()] {
-        let path = git.git_dir_path(repo, &lock)?;
-        if fs::symlink_metadata(&path).is_ok() {
-            return Ok(Some(path));
-        }
-    }
-    Ok(None)
+    let branch_lock = format!("{branch}.lock");
+    let locks = git.git_dir_paths(repo, &[&branch_lock, "index.lock"])?;
+    Ok(locks
+        .into_iter()
+        .find(|path| fs::symlink_metadata(path).is_ok()))
 }
 
 fn short(oid: &str) -> &str {

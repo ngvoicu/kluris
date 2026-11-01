@@ -410,13 +410,38 @@ impl SystemGit {
 
     /// A path `git rev-parse --git-path` names, made absolute.
     fn git_path(&self, dir: &Path, name: &str) -> Result<PathBuf, GitError> {
-        let out = self.run(dir, &["rev-parse", "--git-path", name])?;
-        let path = PathBuf::from(String::from_utf8_lossy(&out).trim_end_matches(['\n', '\r']));
-        Ok(if path.is_absolute() {
-            path
-        } else {
-            dir.join(path)
-        })
+        let mut paths = self.git_paths(dir, &[name])?;
+        Ok(paths.remove(0))
+    }
+
+    /// Each of `names` in the git directory of `dir` (one `git rev-parse
+    /// --git-path` for them all), absolute, in their order.
+    fn git_paths(&self, dir: &Path, names: &[&str]) -> Result<Vec<PathBuf>, GitError> {
+        let mut args = vec!["rev-parse"];
+        for name in names {
+            args.extend(["--git-path", name]);
+        }
+        let out = self.run(dir, &args)?;
+        let text = String::from_utf8_lossy(&out);
+        let paths: Vec<PathBuf> = text
+            .lines()
+            .map(|line| {
+                let path = PathBuf::from(line);
+                if path.is_absolute() {
+                    path
+                } else {
+                    dir.join(path)
+                }
+            })
+            .collect();
+        if paths.len() != names.len() {
+            return Err(GitError::new(
+                &args,
+                Some(0),
+                format!("unexpected output: {text}"),
+            ));
+        }
+        Ok(paths)
     }
 
     /// Whether the repo is a fresh one: `HEAD` names a branch (`git
@@ -616,6 +641,10 @@ pub trait Plumbing: Git {
 
     /// A path in the git directory (`git rev-parse --git-path`), absolute.
     fn git_dir_path(&self, repo: &Repo, name: &str) -> Result<PathBuf, GitError>;
+
+    /// [`Plumbing::git_dir_path`] of each of `names`, from one git, in
+    /// their order.
+    fn git_dir_paths(&self, repo: &Repo, names: &[&str]) -> Result<Vec<PathBuf>, GitError>;
 
     /// A temporary index holding the tree of `base` (none: empty). The
     /// user's index is never touched through it.
@@ -896,12 +925,13 @@ impl Plumbing for SystemGit {
     }
 
     fn in_progress(&self, repo: &Repo) -> Result<Option<InProgress>, GitError> {
-        for (marker, what) in IN_PROGRESS_MARKERS {
-            if self.git_path(&repo.dir, marker)?.exists() {
-                return Ok(Some(what));
-            }
-        }
-        Ok(None)
+        let markers = IN_PROGRESS_MARKERS.map(|(marker, _)| marker);
+        let paths = self.git_paths(&repo.dir, &markers)?;
+        Ok(paths
+            .iter()
+            .zip(IN_PROGRESS_MARKERS)
+            .find(|(path, _)| path.exists())
+            .map(|(_, (_, what))| what))
     }
 
     fn tracked(
@@ -939,6 +969,10 @@ impl Plumbing for SystemGit {
 
     fn git_dir_path(&self, repo: &Repo, name: &str) -> Result<PathBuf, GitError> {
         self.git_path(&repo.dir, name)
+    }
+
+    fn git_dir_paths(&self, repo: &Repo, names: &[&str]) -> Result<Vec<PathBuf>, GitError> {
+        self.git_paths(&repo.dir, names)
     }
 
     fn staging_index(&self, repo: &Repo, base: Option<&str>) -> Result<StagingIndex, GitError> {

@@ -496,6 +496,11 @@ mod tree {
     use std::time::Duration;
 
     use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, INVALID_HANDLE_VALUE};
+    use windows_sys::Win32::System::Diagnostics::ProcessSnapshotting::{
+        HPSS, HPSSWALK, PSS_CAPTURE_THREADS, PSS_THREAD_ENTRY, PSS_WALK_THREADS,
+        PssCaptureSnapshot, PssFreeSnapshot, PssWalkMarkerCreate, PssWalkMarkerFree,
+        PssWalkSnapshot,
+    };
     use windows_sys::Win32::System::Diagnostics::ToolHelp::{
         CreateToolhelp32Snapshot, TH32CS_SNAPTHREAD, THREADENTRY32, Thread32First, Thread32Next,
     };
@@ -505,7 +510,7 @@ mod tree {
         SetInformationJobObject, TerminateJobObject,
     };
     use windows_sys::Win32::System::Threading::{
-        CREATE_SUSPENDED, OpenThread, ResumeThread, THREAD_SUSPEND_RESUME,
+        CREATE_SUSPENDED, GetCurrentProcess, OpenThread, ResumeThread, THREAD_SUSPEND_RESUME,
     };
 
     /// No grace: a job has no signal to ask its processes to stop with.
@@ -535,7 +540,7 @@ mod tree {
             cmd.creation_flags(CREATE_SUSPENDED);
             let mut child = cmd.spawn()?;
             let tree = Tree(job_for(&child));
-            if !resume(child.id()) {
+            if !resume(&child) {
                 let error = io::Error::last_os_error();
                 drop(tree);
                 let _ = child.kill();
@@ -560,7 +565,7 @@ mod tree {
     }
 
     /// A job that kills its processes when closed, with `child` in it.
-    fn job_for(child: &Child) -> Option<HANDLE> {
+    pub fn job_for(child: &Child) -> Option<HANDLE> {
         #[cfg(test)]
         if JOB_FAILS.with(std::cell::Cell::get) {
             return None;
@@ -590,9 +595,64 @@ mod tree {
         }
     }
 
-    /// Let the suspended process `pid` run: its one thread, found in a
-    /// thread snapshot, resumed. Whether it was.
-    fn resume(pid: u32) -> bool {
+    /// Let the suspended `child` run: its one thread resumed, found in a
+    /// snapshot of the child alone, else in one of every thread of the
+    /// system, which costs tens of milliseconds where many threads run.
+    /// Whether it was.
+    fn resume(child: &Child) -> bool {
+        resume_by_process_snapshot(child.as_raw_handle() as HANDLE)
+            || resume_by_thread_snapshot(child.id())
+    }
+
+    /// Resume the thread with the id `thread`; whether it was.
+    fn resume_thread(thread: u32) -> bool {
+        // SAFETY: a handle opened and closed here.
+        unsafe {
+            let handle = OpenThread(THREAD_SUSPEND_RESUME, 0, thread);
+            if handle.is_null() {
+                return false;
+            }
+            let resumed = ResumeThread(handle) != u32::MAX;
+            CloseHandle(handle);
+            resumed
+        }
+    }
+
+    /// Resume the first thread of `process`, found in a snapshot of that
+    /// process alone (`PssCaptureSnapshot`); whether it was.
+    pub fn resume_by_process_snapshot(process: HANDLE) -> bool {
+        // SAFETY: plain Win32 calls on a snapshot and a walk marker made
+        // and freed here; `entry` is a live local whose size is given.
+        unsafe {
+            let mut snapshot: HPSS = std::ptr::null_mut();
+            if PssCaptureSnapshot(process, PSS_CAPTURE_THREADS, 0, &mut snapshot) != 0 {
+                return false;
+            }
+            let mut resumed = false;
+            let mut walk: HPSSWALK = std::ptr::null_mut();
+            if PssWalkMarkerCreate(std::ptr::null(), &mut walk) == 0 {
+                let mut entry: PSS_THREAD_ENTRY = std::mem::zeroed();
+                let size = u32::try_from(std::mem::size_of::<PSS_THREAD_ENTRY>()).unwrap_or(0);
+                if PssWalkSnapshot(
+                    snapshot,
+                    PSS_WALK_THREADS,
+                    walk,
+                    (&raw mut entry).cast(),
+                    size,
+                ) == 0
+                {
+                    resumed = resume_thread(entry.ThreadId);
+                }
+                PssWalkMarkerFree(walk);
+            }
+            PssFreeSnapshot(GetCurrentProcess(), snapshot);
+            resumed
+        }
+    }
+
+    /// Resume the thread of the process `pid`, found in a snapshot of every
+    /// thread of the system; whether it was.
+    pub fn resume_by_thread_snapshot(pid: u32) -> bool {
         // SAFETY: plain Win32 calls on handles opened and closed here;
         // `entry` is a live local whose size is given.
         unsafe {
@@ -614,11 +674,7 @@ mod tree {
             let mut more = Thread32First(snapshot, &mut entry) != 0;
             while more {
                 if entry.th32OwnerProcessID == pid {
-                    let thread = OpenThread(THREAD_SUSPEND_RESUME, 0, entry.th32ThreadID);
-                    if !thread.is_null() {
-                        resumed = ResumeThread(thread) != u32::MAX;
-                        CloseHandle(thread);
-                    }
+                    resumed = resume_thread(entry.th32ThreadID);
                     break;
                 }
                 more = Thread32Next(snapshot, &mut entry) != 0;
@@ -967,6 +1023,65 @@ mod tests {
         assert!(matches!(result, Err(RunError::TimedOut)), "{result:?}");
         assert!(started.elapsed() < Duration::from_secs(4));
         assert!(dir.path().join("ran").exists(), "it never ran");
+    }
+
+    /// What one bounded run's start costs, by each way to start it: 50
+    /// `git --version` each, printed. A measurement, not a check.
+    #[test]
+    #[ignore = "a measurement: run it with --ignored --nocapture"]
+    fn the_cost_of_a_runs_start() {
+        const RUNS: u32 = 50;
+        let git = || {
+            let mut cmd = Command::new("git");
+            cmd.arg("--version")
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null());
+            cmd
+        };
+        let far = || Instant::now() + Duration::from_secs(60);
+        let time = |what: &str, run: &mut dyn FnMut()| {
+            run();
+            let started = Instant::now();
+            for _ in 0..RUNS {
+                run();
+            }
+            println!("start cost: {what}: {:?} a run", started.elapsed() / RUNS);
+        };
+        time("run_until", &mut || {
+            run_until(git(), far()).unwrap();
+        });
+        time("the runner's start, then wait", &mut || {
+            let (mut child, _tree) = tree::Tree::start(&mut git()).unwrap();
+            child.wait().unwrap();
+        });
+        #[cfg(windows)]
+        time("spawn, then the job, then wait", &mut || {
+            let mut child = git().spawn().unwrap();
+            let _job = tree::job_for(&child);
+            child.wait().unwrap();
+        });
+        #[cfg(windows)]
+        time("a snapshot of every thread, walked", &mut || {
+            assert!(!tree::resume_by_thread_snapshot(u32::MAX));
+        });
+        #[cfg(windows)]
+        time(
+            "spawn, then a snapshot of its threads, then wait",
+            &mut || {
+                use std::os::windows::io::AsRawHandle;
+                let mut child = git().spawn().unwrap();
+                let _ = tree::resume_by_process_snapshot(child.as_raw_handle() as _);
+                child.wait().unwrap();
+            },
+        );
+        time("spawn, then wait", &mut || {
+            git().spawn().unwrap().wait().unwrap();
+        });
+        time("output()", &mut || {
+            git().output().unwrap();
+        });
+        time("the poll's sleep", &mut || thread::sleep(POLL));
     }
 
     #[test]

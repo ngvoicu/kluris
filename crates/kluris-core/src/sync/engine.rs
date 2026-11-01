@@ -339,6 +339,10 @@ fn land_into<G: SyncGit>(
         report.to_push = count(None, &ours)?;
         return drop_waiting(&pending_path, waiting);
     };
+    if theirs == ours {
+        // Nothing new either way: nothing to pull or push.
+        return drop_waiting(&pending_path, waiting);
+    }
     let behind = !git.is_ancestor(repo, &theirs, &ours)?;
     let ahead = !git.is_ancestor(repo, &ours, &theirs)?;
     if !behind {
@@ -460,7 +464,7 @@ pub fn fetch_upstream<G: SyncGit>(
 ) -> Result<Option<String>, LeftAsIs> {
     let (git, repo) = (&ctx.git, &ctx.repo);
     let deadline = Instant::now() + ctx.request.network_time_limit;
-    match fetch::fetch(git, repo, upstream, deadline)? {
+    match fetch::fetch(git, repo, upstream, &ctx.dirs.common, deadline)? {
         Fetch::Moved { new, .. } => Ok(Some(new)),
         Fetch::Same { at } => Ok(Some(at)),
         Fetch::NoBranch => Ok(None),

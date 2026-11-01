@@ -74,6 +74,7 @@ fn fetch_ours(w: &World) -> Fetch {
         &git,
         &repo,
         &upstream,
+        &w.ours.join(".git"),
         Instant::now() + Duration::from_secs(60),
     )
     .unwrap()
@@ -718,7 +719,8 @@ fn a_tracking_ref_outside_refs_remotes_or_symbolic_is_refused_before_anything_ch
         refname: "refs/heads/main".into(),
         ..upstream.clone()
     };
-    let Fetch::Refused { detail } = fetch(&git, &repo, &outside, deadline).unwrap() else {
+    let common = w.ours.join(".git");
+    let Fetch::Refused { detail } = fetch(&git, &repo, &outside, &common, deadline).unwrap() else {
         panic!("not refused");
     };
     assert!(detail.contains("outside refs/remotes/"), "{detail}");
@@ -726,7 +728,8 @@ fn a_tracking_ref_outside_refs_remotes_or_symbolic_is_refused_before_anything_ch
     // A symbolic ref to another branch.
     w.run(&w.ours, &["branch", "other"]);
     w.run(&w.ours, &["symbolic-ref", TRACKING, "refs/heads/other"]);
-    let Fetch::Refused { detail } = fetch(&git, &repo, &upstream, deadline).unwrap() else {
+    let Fetch::Refused { detail } = fetch(&git, &repo, &upstream, &common, deadline).unwrap()
+    else {
         panic!("not refused");
     };
     assert!(
