@@ -30,8 +30,10 @@
 //! **Housekeeping** (`dream`, `mri`): once the command's own work is done,
 //! [`housekeeping_commit`] commits the brain's own tidying, built from
 //! HEAD ([`housekeeping`]), whatever the pull did (offline, refused, busy,
-//! a conflict waiting, uncommitted files in the way); with a conflict
-//! waiting it lands on the branch's own commit. The commit moves HEAD, so
+//! uncommitted files in the way), except while a merge waits for a person
+//! (one recorded for the branch's commit now): HEAD then stays where it
+//! is, so the id the reports give still names that merge, and the fixes
+//! stay in the work tree for the commit after it. The commit moves HEAD, so
 //! the shared tree claim is turned exclusive for it, within
 //! [`READ_BOUND`], through the gate ([`TreeClaim::upgrade`]), so no land
 //! starts in between, and shared again after it. A claim not had in time,
@@ -303,9 +305,9 @@ pub fn open_all<'a>(brains: &[Brain<'a>], intent: Intent, env: &SessionEnv) -> V
 /// Commit the brain's own housekeeping, built from HEAD (see the module
 /// docs and [`housekeeping`]), in the work tree the session reads, its
 /// claim turned exclusive for the commit and back. The files committed,
-/// sorted; none for a brain the session leaves alone, with nothing to
-/// commit, or when the commit was left undone, which the session's report
-/// then says.
+/// sorted; none for a brain the session leaves alone, while a merge waits,
+/// with nothing to commit, or when the commit was left undone, which the
+/// session's report then says.
 pub fn housekeeping_commit(session: &mut Session, maps: &DreamOptions) -> Vec<String> {
     let Some(ctx) = &session.ctx else {
         return Vec::new();
@@ -325,7 +327,14 @@ pub fn housekeeping_commit(session: &mut Session, maps: &DreamOptions) -> Vec<St
             return Vec::new();
         }
     };
-    let done = housekeeping::commit(ctx.git(), ctx.repo(), maps);
+    // While a merge waits for a person, HEAD stays where it is, so the
+    // merge the reports name stays the one that waits: the fixes stay in
+    // the work tree, and the waiting conflict says why.
+    let done = match engine::waiting_merge(ctx) {
+        Ok(Some(_)) => Ok(Vec::new()),
+        Ok(None) => housekeeping::commit(ctx.git(), ctx.repo(), maps),
+        Err(left) => Err(left),
+    };
     session.claim = if session.intent.throttled() {
         claim.downgrade(READ_BOUND).ok()
     } else {

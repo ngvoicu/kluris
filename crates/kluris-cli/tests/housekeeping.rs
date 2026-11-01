@@ -596,24 +596,85 @@ fn two_clones_dreaming_on_one_history_commit_the_same_blobs_and_merge_cleanly() 
 }
 
 #[test]
-fn with_a_conflict_waiting_the_commit_lands_on_ours_and_the_conflict_is_said() {
+fn while_a_merge_waits_nothing_is_committed_and_the_id_dream_says_finishes_it() {
     let (h, root) = team();
     h.conflict("alpha", &root);
+    // Our side also has a neuron to tidy outside the conflict.
+    h.commit(
+        &root,
+        "notes/third.md",
+        "---\nupdated: '2026-01-01'\n---\n\n# Third\n\nThe third.\n",
+    );
     let ours = h.head(&root);
+    // A read says the conflict and the waiting merge's id.
+    let (code, read, err) = h.json_run(&["status", "--brain", "alpha"]);
+    assert_eq!(code, 0, "{read}{err}");
+    let said = &read["brains"][0]["sync"];
+    let merge = said["conflicts"][0]["merge"].as_str().unwrap().to_string();
+    settle(said, &root);
+
+    // The person settles the file, retitling the neuron, and dream runs:
+    // no commit, the fixes and the rebuilt map stay in the work tree, and
+    // the conflict is said with the same id.
+    h.write(
+        &root,
+        "notes/first.md",
+        &neuron("First, settled", &BODY.replace("Three.", "Three, settled.")),
+    );
     let (code, doc, err) = h.json_run(&["dream", "--brain", "alpha"]);
     assert_eq!(code, 0, "{doc}{err}");
+    assert_eq!(h.head(&root), ours);
+    assert!(doc.get("committed").is_none(), "{doc}");
     let sync = dream_sync(&doc, "alpha");
+    assert_eq!(sync["left_as_is"]["reason"], Value::Null, "{doc}");
     let conflicts = sync["conflicts"].as_array().unwrap();
     assert_eq!(conflicts.len(), 1, "{doc}");
     assert_eq!(conflicts[0]["path"], "notes/first.md");
-    assert_eq!(h.message(&root), MESSAGE);
-    assert_eq!(
-        h.git(&root, &["log", "-1", "--format=%P"]).trim(),
-        ours,
-        "not on ours alone"
-    );
-    assert_eq!(dream_committed(&doc, "alpha"), ["notes/first.md"]);
+    assert_eq!(conflicts[0]["merge"], merge.as_str(), "{doc}");
+    let dreamt = h.read(&root, "notes/map.md");
+    assert!(dreamt.contains("First, settled"), "{dreamt}");
+    assert!(h.read(&root, "notes/third.md").contains("parent: ./map.md"));
+    assert!(git_file(&root, "kluris-sync/pending.json").is_file());
     settle(sync, &root);
+
+    // That id finishes the merge, the map dream rewrote kept as it is.
+    let (code, done, err) = h.json_run(&[
+        "commit",
+        "--brain",
+        "alpha",
+        "--merge",
+        &merge,
+        "--paths",
+        "notes/first.md",
+    ]);
+    assert_eq!(code, 0, "{done}{err}");
+    let parents = h.git(&root, &["log", "-1", "--format=%P"]);
+    assert_eq!(parents.split_whitespace().count(), 2, "{parents}");
+    assert_eq!(parents.split_whitespace().next(), Some(ours.as_str()));
+    assert!(
+        h.committed(&root, "notes/map.md")
+            .contains("First, settled")
+    );
+    assert_eq!(h.read(&root, "notes/map.md"), dreamt);
+    // The map dream rebuilt is the merge's own; the neuron it tidied stays
+    // changed in the work tree.
+    assert_eq!(done["left_dirty"], json!(["notes/third.md"]), "{done}");
+    assert!(!git_file(&root, "kluris-sync/pending.json").exists());
+    assert!(!h.committed(&root, "notes/third.md").contains("parent:"));
+    let merged = h.head(&root);
+
+    // The next dream commits the housekeeping on the merge.
+    let (code, doc, err) = h.json_run(&["dream", "--brain", "alpha"]);
+    assert_eq!(code, 0, "{doc}{err}");
+    assert_eq!(h.message(&root), MESSAGE, "{doc}{err}");
+    assert_eq!(h.git(&root, &["rev-parse", "HEAD^"]).trim(), merged);
+    assert_eq!(dream_committed(&doc, "alpha"), ["notes/third.md"], "{doc}");
+    assert!(
+        h.committed(&root, "notes/third.md")
+            .contains("parent: ./map.md")
+    );
+    assert_eq!(h.status(&root), "");
+    settle(dream_sync(&doc, "alpha"), &root);
 }
 
 #[cfg(unix)]
