@@ -1,26 +1,27 @@
 //! `kluris sync [--brain NAME|all] [--no-verify] [--json]`: pull and push
-//! each brain through the sync engine.
+//! each brain through an explicit session (`brains::open`, several brains
+//! at once for `--brain all`), closed once every brain is open.
 //!
-//! git >= 2.38 is checked once, before any brain. A brain the engine does
-//! not open (nested in a larger repo, not a work tree, no kluris.yml) is a
-//! clean error with `--brain NAME`; under `--brain all` its `sync` object is
-//! left as it is, `refused`, and the other brains still sync. Each brain's
-//! entry is `{name, sync}`; in text, stdout says what sync did and stderr
-//! has one line per brain that has something to say. Exit 1 when any brain
-//! has a conflict or was left as it is for anything but having no network
-//! or no upstream.
+//! git >= 2.38 is checked once, before any brain. A brain the session
+//! cannot sync (nested in a larger repo, not a work tree, a shallow clone,
+//! no kluris.yml) is a clean error with `--brain NAME`; under `--brain all`
+//! its `sync` object is left as it is, `refused`, and the other brains
+//! still sync. A brain with no remote is left as it is, `no_upstream`, with
+//! the commands that add one. Each brain's entry is `{name, sync}`; in
+//! text, stdout says what sync did and stderr has one line per brain that
+//! has something to say. Exit 1 when any brain has a conflict or was left
+//! as it is for anything but having no network or no upstream.
 
 use std::path::{Path, PathBuf};
 
 use kluris_core::config::{ConfigErrorKind, read_brain_config};
-use kluris_core::dream::DreamOptions;
 use kluris_core::git::SystemGit;
 use kluris_core::pyrepr::py_path_str;
-use kluris_core::sync::claim::COMMAND_BOUND;
-use kluris_core::sync::engine::{self, check_git};
-use kluris_core::sync::{LeftAsIs, LeftReason, NETWORK_TIME_LIMIT, SyncReport, SyncRequest};
+use kluris_core::sync::engine::check_git;
+use kluris_core::sync::session::Intent;
+use kluris_core::sync::{LeftAsIs, LeftReason, SyncReport};
 
-use crate::brains;
+use crate::brains::{self, Target};
 use crate::commands::dream::today;
 use crate::commands::resolve::command;
 use crate::error::CliError;
@@ -105,37 +106,43 @@ pub fn background(roots: &[PathBuf]) -> Result<(), CliError> {
 
 pub fn run(brain: Option<&str>, no_verify: bool, as_json: bool) -> Result<(), CliError> {
     let brains = resolve_brains(brain, true, as_json)?;
-    let git = SystemGit::new();
-    check_git(&git).map_err(|e| CliError::new(e.to_string()))?;
-    let today = today()?;
+    check_git(&SystemGit::new()).map_err(|e| CliError::new(e.to_string()))?;
     // `--brain all`, or `all` picked from the interactive list.
     let all = brain == Some("all") || brains.len() > 1;
-    let mut reports = Vec::new();
+    // Each brain's report, or why it cannot be synced; the brains with a
+    // kluris.yml are opened together.
+    let mut outcomes: Vec<Result<Option<SyncReport>, String>> = Vec::new();
+    let mut targets = Vec::new();
     for brain in &brains {
         let root = py_path_str(&brain.entry.path);
-        let outcome = match read_brain_config(Path::new(&root)) {
+        match read_brain_config(Path::new(&root)) {
             Err(e) if e.kind == ConfigErrorKind::NotFound => {
-                Err(format!("it has no kluris.yml: {}", e.path.display()))
+                outcomes.push(Err(format!("it has no kluris.yml: {}", e.path.display())));
             }
-            Err(e) => Err(e.to_string()),
+            Err(e) => outcomes.push(Err(e.to_string())),
             Ok(config) => {
-                let request = SyncRequest {
-                    no_verify,
-                    maps: DreamOptions {
-                        name: &config.name,
-                        description: &config.description,
-                        today,
-                    },
-                    network_time_limit: NETWORK_TIME_LIMIT,
-                    tree_bound: COMMAND_BOUND,
-                };
-                engine::open(Path::new(&root), &git, &request)
-                    .map(|ctx| engine::sync(&ctx))
-                    .map_err(|e| e.to_string())
+                targets.push(Target::new(
+                    &brain.entry.path,
+                    &config.name,
+                    &config.description,
+                ));
+                outcomes.push(Ok(None));
             }
+        }
+    }
+    let opened = brains::open(&targets, Intent::Explicit, today()?, no_verify);
+    let mut closed = brains::close(opened).into_iter();
+    for outcome in outcomes.iter_mut().filter(|o| o.is_ok()) {
+        let Some(closed) = closed.next() else { break };
+        *outcome = match closed.alone.as_ref().and_then(|why| why.refusal()) {
+            Some(why) => Err(why),
+            None => Ok(closed.report),
         };
+    }
+    let mut reports = Vec::new();
+    for (brain, outcome) in brains.iter().zip(outcomes) {
         let report = match outcome {
-            Ok(report) => report,
+            Ok(report) => report.unwrap_or_default(),
             Err(why) if all => SyncReport {
                 left_as_is: Some(LeftAsIs::because(LeftReason::Refused, why)),
                 ..SyncReport::default()

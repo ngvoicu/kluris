@@ -1,44 +1,41 @@
-//! `kluris resolve`: settle an open sync conflict
-//! ([`PENDING`]) path by path, then finish the merge.
+//! `kluris resolve`: settle a waiting merge ([`PENDING`]) path by path, then
+//! finish it, in the explicit session the command opened.
 //!
-//! Each call is one transaction under the worktree's tree claim, from
-//! reading the waiting merge to writing or removing it, so two resolvers,
-//! an abort or a pull never change it in between. It records one choice in
-//! the waiting merge: our side,
-//! their side (a deletion included), or a file the person wrote, validated
-//! first (markdown frontmatter must parse; a YAML neuron needs its `#---`
-//! block; no conflict markers) and stored as a blob. Nothing else changes
-//! until every conflicted path has a choice. Then, in the same call, the
-//! engine finishes the merge ([`engine::finish_merge`]) with the message
-//! `kluris: sync (resolved)`, `Kluris-Sync: resolved` and
-//! `Kluris-Resolved-By`: anything that leaves the brain as it is keeps the
-//! choices. Once it landed, the waiting merge goes, and a sync pushes it
-//! (pulling again when the remote moved; a new conflict there is a new
-//! waiting merge).
+//! The session's open pulls first, so the waiting merge resolved is the one
+//! for the branch's commit now: one the branch moved on from was replaced
+//! by that pull (or, offline, is no open conflict at all). Each call holds
+//! the session's exclusive tree claim from reading the waiting merge to
+//! writing or removing it, so two resolvers or a pull never change it in
+//! between. It records one choice: our side, their side (a deletion
+//! included), or a file the person wrote, validated first (markdown
+//! frontmatter must parse; a YAML neuron needs its `#---` block; no
+//! conflict markers) and stored as a blob. Nothing else changes until every
+//! conflicted path has a choice. Then, in the same call, the engine
+//! finishes the merge ([`engine::finish_merge`]) with the message `kluris:
+//! sync (resolved)`, `Kluris-Sync: resolved` and `Kluris-Resolved-By`:
+//! anything that leaves the brain as it is keeps the choices. Once it
+//! landed, the waiting merge goes and the session is told the command
+//! committed ([`Session::committed`]), so its close pulls anything newer
+//! and pushes.
 //!
 //! Each call names the waiting merge it answers (its id, shown with every
 //! conflict): an id that is not the current record's is refused, with the
 //! current conflict, and nothing is recorded ([`pending::check_answer`]).
-//! A waiting merge whose `ours` is not the branch's commit now (the user
-//! committed meanwhile) is stale: refused, with [`abort`] as the way out.
 
 use std::collections::BTreeMap;
 use std::fmt;
-use std::fs;
-use std::path::{Path, PathBuf};
 
-use super::claim::{ClaimError, TreeClaim};
+use super::claim::TreeClaim;
 use super::commit::{PathProblem, normalize_path};
-use super::engine;
-use super::git::{GitDirs, SyncGit};
+use super::engine::{self, Context};
+use super::git::SyncGit;
 use super::hooks::MergeHooks;
 use super::land::Settled;
-use super::pending::{self, Found, Pending};
-use super::{
-    ConflictKind, ConflictText, LeftAsIs, LeftReason, ResolvedChoice, SyncError, SyncRequest,
-};
+use super::pending::{self, Pending};
+use super::session::Session;
+use super::{ConflictKind, ConflictText, LeftAsIs, LeftReason, ResolvedChoice, SyncError};
 use crate::frontmatter;
-use crate::git::{GitError, Repo};
+use crate::git::GitError;
 
 /// What to keep for a conflicted path.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -56,32 +53,24 @@ pub struct ResolveRequest<'a> {
     /// The id of the waiting merge the choice answers.
     pub merge: &'a str,
     pub choice: Choice,
-    /// For the merge commit (`no_verify`, the maps) and the push.
-    pub sync: SyncRequest<'a>,
 }
 
-/// What one call did.
+/// What one call did; the session's close says what the sync did after.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolveReport {
     /// The path, normalized.
     pub path: String,
     /// `ours`, `theirs` or `file`.
     pub choice: &'static str,
-    /// The conflicted paths still without a choice; after the commit, those
-    /// of a new conflict the push met.
+    /// The conflicted paths still without a choice.
     pub remaining: Vec<String>,
     pub committed: bool,
     pub commit: Option<String>,
-    pub pushed: bool,
-    /// Why the sync after the commit did not push, when it failed.
-    pub sync_error: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ResolveError {
     NoOpenConflict,
-    /// The pending state does not read.
-    Unreadable(PathBuf),
     InvalidPath {
         path: String,
         problem: PathProblem,
@@ -107,18 +96,15 @@ pub enum ResolveError {
     Unmappable {
         path: String,
     },
-    /// `HEAD` is not the commit the conflict was found on.
-    Stale {
-        head: Option<String>,
-        ours: String,
-    },
     /// Uncommitted files the merge would overwrite; the choices are kept.
     Blocked(Vec<String>),
-    /// The merge was left as it is (a hook, a lock, a git that failed);
-    /// the choices are kept.
+    /// The merge was left as it is (a hook, a lock, a git that failed, the
+    /// tree claim another command held); the choices are kept.
     Left(LeftAsIs),
     /// The waiting merge could not be written or removed.
     Record(String),
+    /// The brain cannot be synced: why, as the session refuses it.
+    Refused(String),
     Sync(SyncError),
 }
 
@@ -130,11 +116,6 @@ impl fmt::Display for ResolveError {
                 f,
                 "{path}: merge {} is not the open conflict: this brain waits on merge {} now, so nothing was recorded; decide again from its sides, then give --merge {}",
                 wrong.given, wrong.current, wrong.current
-            ),
-            ResolveError::Unreadable(path) => write!(
-                f,
-                "the open sync conflict cannot be read ({}); drop it with `kluris resolve --abort`",
-                path.display()
             ),
             ResolveError::InvalidPath { path, problem } => write!(f, "{path} {problem}"),
             ResolveError::NotConflicted(path) => write!(
@@ -151,13 +132,7 @@ impl fmt::Display for ResolveError {
             ),
             ResolveError::Unmappable { path } => write!(
                 f,
-                "{path}: git names no file on either side, so no choice can be mapped to files; nothing was recorded (drop the conflict with `kluris resolve --abort` and settle it with git)"
-            ),
-            ResolveError::Stale { head, ours } => write!(
-                f,
-                "the conflict was found on commit {}, but HEAD is now {}; drop it with `kluris resolve --abort`, then run `kluris sync` again",
-                short(ours),
-                head.as_deref().map_or("unborn".to_string(), short)
+                "{path}: git names no file on either side, so no choice can be mapped to files; nothing was recorded (merge the upstream with git and commit: the next sync replaces this waiting merge)"
             ),
             ResolveError::Blocked(paths) => write!(
                 f,
@@ -166,6 +141,7 @@ impl fmt::Display for ResolveError {
             ),
             ResolveError::Left(left) => left.fmt(f),
             ResolveError::Record(e) => write!(f, "cannot record the open conflict: {e}"),
+            ResolveError::Refused(why) => f.write_str(why),
             ResolveError::Sync(e) => e.fmt(f),
         }
     }
@@ -194,71 +170,23 @@ impl From<LeftAsIs> for ResolveError {
     }
 }
 
-/// Another command holds the work tree.
-fn busy() -> LeftAsIs {
-    LeftAsIs::because(
-        LeftReason::Busy,
-        "another kluris command is changing this brain; nothing was recorded: run again once it is done",
-    )
+/// Another command held the work tree past the session's bound: its own
+/// words when it said so.
+fn busy(session: &Session) -> LeftAsIs {
+    session
+        .report()
+        .and_then(|r| r.left_as_is.clone())
+        .filter(|left| left.reason == LeftReason::Busy)
+        .unwrap_or_else(|| {
+            LeftAsIs::because(
+                LeftReason::Busy,
+                "another kluris command is changing this brain; nothing was recorded: run again once it is done",
+            )
+        })
 }
 
 fn record(e: std::io::Error) -> ResolveError {
     ResolveError::Record(e.to_string())
-}
-
-fn short(oid: &str) -> String {
-    oid.chars().take(7).collect()
-}
-
-/// The brain's repo, refused as the engine refuses it, and its git
-/// directories.
-fn locate(root: &Path, git: &impl SyncGit) -> Result<(Repo, GitDirs), ResolveError> {
-    let repo = git.repo(root).ok_or(SyncError::NotARepo)?;
-    if repo.nested() {
-        return Err(SyncError::Nested {
-            prefix: repo.prefix.clone(),
-        }
-        .into());
-    }
-    let dirs = git.git_dirs(&repo)?;
-    Ok((repo, dirs))
-}
-
-fn read_pending(path: &Path) -> Result<Pending, ResolveError> {
-    match Pending::read(path) {
-        Found::Waiting(pending) => Ok(pending),
-        Found::None => Err(ResolveError::NoOpenConflict),
-        Found::Unreadable => Err(ResolveError::Unreadable(path.into())),
-    }
-}
-
-/// The waiting merge of the brain at `root`; `None` when none is open (or
-/// it cannot be read).
-pub fn waiting_merge(root: &Path, git: &impl SyncGit) -> Option<Pending> {
-    let (_, dirs) = locate(root, git).ok()?;
-    read_pending(&pending::path(&dirs)).ok()
-}
-
-/// Drop the open conflict, changing nothing else; how many paths it had.
-/// Under the tree claim, waited for up to `bound`.
-pub fn abort(
-    root: &Path,
-    git: &impl SyncGit,
-    bound: std::time::Duration,
-) -> Result<usize, ResolveError> {
-    let (_, dirs) = locate(root, git)?;
-    let _claim = TreeClaim::exclusive(&dirs.own, bound).map_err(|e| match e {
-        ClaimError::Busy => ResolveError::Left(busy()),
-        ClaimError::Io(e) => ResolveError::Record(format!("cannot claim the work tree: {e}")),
-    })?;
-    let path = pending::path(&dirs);
-    let count = match read_pending(&path) {
-        Ok(pending) => pending.conflicts.len(),
-        Err(ResolveError::Unreadable(_)) => 0,
-        Err(e) => return Err(e),
-    };
-    fs::remove_file(&path).map_err(record)?;
-    Ok(count)
 }
 
 /// Why a person's file cannot be kept for `rel`.
@@ -288,20 +216,46 @@ pub(crate) fn validate(rel: &str, bytes: &[u8]) -> Result<(), String> {
     Ok(())
 }
 
-/// Record a choice for one conflicted path; with the last one, finish the
-/// merge (see the module docs).
-pub fn resolve<G: SyncGit>(
-    root: &Path,
-    git: &G,
+/// Record a choice for one conflicted path in the brain `session` opened;
+/// with the last one, finish the merge (see the module docs).
+pub fn resolve(
+    session: &mut Session,
     request: &ResolveRequest,
 ) -> Result<ResolveReport, ResolveError> {
-    // Every git from here has the remote environment: none prompts.
-    let ctx = engine::open(root, git, &request.sync)?;
+    let report = match (session.context(), session.claim()) {
+        (Some(ctx), Some(claim)) => resolve_in(ctx, claim, request)?,
+        (Some(_), None) => return Err(ResolveError::Left(busy(session))),
+        (None, _) => {
+            // Why the session could not open the brain, when it says; a
+            // brain with no upstream has no merge waiting.
+            let failed = session
+                .report()
+                .and_then(|r| r.left_as_is.clone())
+                .filter(|left| left.reason != LeftReason::NoUpstream);
+            return Err(
+                match (session.alone().and_then(|why| why.refusal()), failed) {
+                    (Some(why), _) => ResolveError::Refused(why),
+                    (None, Some(left)) => ResolveError::Left(left),
+                    (None, None) => ResolveError::NoOpenConflict,
+                },
+            );
+        }
+    };
+    if report.committed {
+        session.committed();
+    }
+    Ok(report)
+}
+
+/// [`resolve`] in the brain `ctx` opened, under the exclusive tree claim
+/// the caller holds (`claim`): the session's, for the command.
+pub fn resolve_in<G: SyncGit>(
+    ctx: &Context<G>,
+    claim: &TreeClaim,
+    request: &ResolveRequest,
+) -> Result<ResolveReport, ResolveError> {
     let (git, repo, path) = (ctx.git(), ctx.repo(), ctx.pending());
-    // Read only once the claim is held: what another resolver recorded is
-    // in it.
-    let claim = ctx.claim_tree().map_err(|_| ResolveError::Left(busy()))?;
-    let mut pending = read_pending(&path)?;
+    let mut pending = engine::waiting_merge(ctx)?.ok_or(ResolveError::NoOpenConflict)?;
     let rel = normalize_path(request.path).map_err(|problem| ResolveError::InvalidPath {
         path: request.path.to_string(),
         problem,
@@ -343,17 +297,6 @@ pub fn resolve<G: SyncGit>(
             }
         }
     }
-    // The pinned branch's commit, never HEAD's.
-    let head = match ctx.branch() {
-        Some(branch) => git.ref_value(repo, branch)?,
-        None => None,
-    };
-    if head.as_deref() != Some(pending.ours.as_str()) {
-        return Err(ResolveError::Stale {
-            head,
-            ours: pending.ours.clone(),
-        });
-    }
     if let Some(op) = git.in_progress(repo)? {
         return Err(ResolveError::Left(LeftAsIs::because(
             LeftReason::InProgress,
@@ -386,8 +329,6 @@ pub fn resolve<G: SyncGit>(
         remaining,
         committed: false,
         commit: None,
-        pushed: false,
-        sync_error: None,
     };
     if !report.remaining.is_empty() {
         pending.write(&path).map_err(record)?;
@@ -396,8 +337,7 @@ pub fn resolve<G: SyncGit>(
 
     // Every path has a choice: finish the merge. Until the merge commit is
     // in place the waiting merge (with the choices) stays.
-    let commit = finish(&ctx, &claim, &pending);
-    let commit = match commit {
+    let commit = match finish(ctx, claim, &pending) {
         Ok(commit) => commit,
         Err(e) => {
             pending.write(&path).map_err(record)?;
@@ -405,23 +345,14 @@ pub fn resolve<G: SyncGit>(
         }
     };
     pending::remove(&path).map_err(record)?;
-    drop(claim);
     report.committed = true;
     report.commit = Some(commit);
-    let synced = engine::sync(&ctx);
-    report.pushed = synced.pushed;
-    report.remaining = synced.conflicts.into_iter().map(|c| c.path).collect();
-    // Why it was not pushed, unless the network was missing.
-    report.sync_error = synced
-        .left_as_is
-        .filter(|left| left.reason != LeftReason::Offline)
-        .map(|left| left.to_string());
     Ok(report)
 }
 
 /// The merge with the choices, committed and landed; its commit.
 fn finish<G: SyncGit>(
-    ctx: &engine::Context<G>,
+    ctx: &Context<G>,
     claim: &TreeClaim,
     pending: &Pending,
 ) -> Result<String, ResolveError> {

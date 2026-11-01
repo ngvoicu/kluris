@@ -49,7 +49,9 @@
 //! of that commit, the upstream's commit its open fetched (no second
 //! fetch), so what the open left as it is (the person's files in the way,
 //! a waiting merge the commit finished) is pulled in, and the report says
-//! where the brain ended rather than each step. The commits
+//! where the brain ended rather than each step. A remote the open found
+//! without the branch lacks every commit of it, counted from the root,
+//! whatever the remote-tracking ref still holds. The commits
 //! the reads closed together leave waiting go to one background push for
 //! all their brains ([`background`]), the program [`SessionEnv::program`]
 //! names, unless that brain's last push failed lately or a background run
@@ -89,8 +91,10 @@
 //!
 //! **Brains left alone**, with no report: one that is not in git, one
 //! nested in a larger repository, a shallow one, one whose branch has no
-//! upstream (an explicit session reports `no_upstream` there), and, for a
-//! read, one whose git is too old to sync. [`Session::alone`] says which.
+//! upstream (an explicit session reports `no_upstream` there, with the
+//! commands that add a remote when the brain has none), and, for a read,
+//! one whose git is too old to sync. [`Session::alone`] says which, and
+//! [`Alone::refusal`] how an explicit command refuses it.
 //!
 //! **No off switch.** Syncing is what every command that opens a git brain
 //! with an upstream does: no setting of the brain's and no environment
@@ -185,8 +189,8 @@ pub struct SessionEnv {
 pub enum Alone {
     /// Not in a git work tree.
     NotARepo,
-    /// Below the root of a larger repository.
-    Nested,
+    /// Below the root of a larger repository, at `prefix` in it.
+    Nested { prefix: String },
     /// A shallow clone.
     Shallow,
     /// git is too old to sync.
@@ -197,6 +201,28 @@ pub enum Alone {
     /// detached): why, with the command that sets one, as an explicit
     /// session reports it.
     NoUpstream(LeftAsIs),
+}
+
+impl Alone {
+    /// Why an explicit command cannot sync a brain left alone for this
+    /// reason, as it refuses it; `None` where the session's report says it
+    /// (no remote, no upstream) or the brain syncs as it is.
+    pub fn refusal(&self) -> Option<String> {
+        match self {
+            Alone::NotARepo => Some(SyncError::NotARepo.to_string()),
+            Alone::Nested { prefix } => Some(
+                SyncError::Nested {
+                    prefix: prefix.clone(),
+                }
+                .to_string(),
+            ),
+            Alone::Shallow => Some(
+                "it is a shallow clone, which kluris does not sync: fetch its whole history with git fetch --unshallow, then run again"
+                    .into(),
+            ),
+            Alone::GitTooOld | Alone::NoRemote | Alone::NoUpstream(_) => None,
+        }
+    }
 }
 
 /// One brain opened by a command, until [`close`].
@@ -258,6 +284,13 @@ impl<'a> Session<'a> {
     /// for a brain the session syncs.
     pub fn alone(&self) -> Option<&Alone> {
         self.alone.as_ref()
+    }
+
+    /// The upstream's commit an explicit session's fetch named:
+    /// `Some(None)` when the remote has no such branch; `None` when it did
+    /// not fetch (offline, refused, busy) or is a read.
+    pub fn fetched(&self) -> Option<Option<&str>> {
+        self.fetched.as_ref().map(Option::as_deref)
     }
 }
 
@@ -421,8 +454,14 @@ fn finish(session: Session) -> (Option<SyncReport>, Option<(PathBuf, PathBuf)>) 
         return (report, None);
     };
     let mut report = report.unwrap_or_default();
-    // What the command committed since the session opened counts.
-    if let Some(count) = engine::to_push(&ctx) {
+    // What the command committed since the session opened counts: against
+    // the tracking ref, unless the open's fetch found no branch on the
+    // remote, which then lacks every commit, whatever the ref still says.
+    let counted = match fetched {
+        Some(None) => engine::to_push_all(&ctx),
+        _ => engine::to_push(&ctx),
+    };
+    if let Some(count) = counted {
         report.to_push = count;
     }
     let common = &ctx.dirs().common;
@@ -509,7 +548,7 @@ fn fetch<'a>(brain: Brain<'a>, intent: Intent, env: &SessionEnv) -> Fetched<'a> 
     let mut ctx = match engine::open(brain.root, &git, &request) {
         Ok(ctx) => ctx,
         Err(SyncError::NotARepo) => return alone.alone_for(Alone::NotARepo),
-        Err(SyncError::Nested { .. }) => return alone.alone_for(Alone::Nested),
+        Err(SyncError::Nested { prefix }) => return alone.alone_for(Alone::Nested { prefix }),
         Err(SyncError::GitTooOld { .. }) if intent.throttled() => {
             return alone.alone_for(Alone::GitTooOld);
         }
@@ -528,9 +567,16 @@ fn fetch<'a>(brain: Brain<'a>, intent: Intent, env: &SessionEnv) -> Fetched<'a> 
             Ok(remotes) if remotes.is_empty() => Alone::NoRemote,
             _ => Alone::NoUpstream(none),
         };
+        let no_remote = why == Alone::NoRemote;
         let alone = alone.alone_for(why);
         return match engine::ready(&ctx) {
-            Err(left) if !intent.throttled() => alone.left(left),
+            Err(left) if !intent.throttled() => {
+                if no_remote && left.reason == LeftReason::NoUpstream {
+                    alone.left(engine::no_remote(&ctx))
+                } else {
+                    alone.left(left)
+                }
+            }
             _ => alone,
         };
     }

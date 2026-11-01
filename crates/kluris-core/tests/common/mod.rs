@@ -20,10 +20,86 @@ use kluris_core::git::SystemGit;
 use kluris_core::sync::claim::COMMAND_BOUND;
 use kluris_core::sync::commit::{CommitRequest, commit};
 use kluris_core::sync::engine::{self, Context};
-use kluris_core::sync::resolve::waiting_merge;
-use kluris_core::sync::{LeftReason, SyncReport, SyncRequest};
+use kluris_core::sync::pending::{Found, Pending};
+use kluris_core::sync::resolve::{Choice, ResolveError, ResolveReport, ResolveRequest, resolve_in};
+use kluris_core::sync::{LeftReason, PENDING, SyncReport, SyncRequest};
 use kluris_core::yaml::Date;
 use tempfile::TempDir;
+
+/// One `kluris resolve` call: the choice, and the request of the engine
+/// it is made with.
+#[derive(Debug, Clone)]
+pub struct Resolve<'a> {
+    pub path: &'a str,
+    pub merge: &'a str,
+    pub choice: Choice,
+    pub sync: SyncRequest<'a>,
+}
+
+/// What a [`resolve`] call did: the choice's report, then, once the merge
+/// landed, what the sync after it did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Resolved {
+    pub path: String,
+    pub choice: &'static str,
+    /// The paths still without a choice; after the merge, those of a new
+    /// conflict the sync met.
+    pub remaining: Vec<String>,
+    pub committed: bool,
+    pub commit: Option<String>,
+    pub pushed: bool,
+    /// Why the sync after the merge did not push, unless offline.
+    pub sync_error: Option<String>,
+}
+
+/// The choice recorded under the exclusive tree claim ([`resolve_in`]), as
+/// the command's explicit session holds it; once the merge landed, the
+/// claim let go and the brain synced, as the session's close does.
+pub fn resolve(root: &Path, git: &SystemGit, call: &Resolve) -> Result<Resolved, ResolveError> {
+    let ctx = engine::open(root, git, &call.sync)?;
+    let claim = ctx.claim_tree().map_err(ResolveError::Left)?;
+    let request = ResolveRequest {
+        path: call.path,
+        merge: call.merge,
+        choice: call.choice.clone(),
+    };
+    let ResolveReport {
+        path,
+        choice,
+        remaining,
+        committed,
+        commit,
+    } = resolve_in(&ctx, &claim, &request)?;
+    let mut done = Resolved {
+        path,
+        choice,
+        remaining,
+        committed,
+        commit,
+        pushed: false,
+        sync_error: None,
+    };
+    if committed {
+        drop(claim);
+        let synced = engine::sync(&ctx);
+        done.pushed = synced.pushed;
+        done.remaining = synced.conflicts.into_iter().map(|c| c.path).collect();
+        done.sync_error = synced
+            .left_as_is
+            .filter(|left| left.reason != LeftReason::Offline)
+            .map(|left| left.to_string());
+    }
+    Ok(done)
+}
+
+/// The waiting merge recorded in the brain at `root`, whatever commit it
+/// was found for; `None` when none is (or it does not read).
+pub fn waiting_merge(root: &Path, _git: &SystemGit) -> Option<Pending> {
+    match Pending::read(&root.join(".git").join(PENDING)) {
+        Found::Waiting(pending) => Some(pending),
+        _ => None,
+    }
+}
 
 pub const ISOLATED_VARS: [&str; 8] = [
     "GIT_AUTHOR_NAME",

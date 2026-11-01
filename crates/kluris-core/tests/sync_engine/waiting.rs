@@ -5,7 +5,7 @@
 use std::fs;
 
 use kluris_core::sync::PENDING;
-use kluris_core::sync::resolve::{Choice, ResolveError, ResolveRequest, resolve};
+use kluris_core::sync::resolve::{Choice, ResolveError};
 
 use crate::common::*;
 use crate::{chosen, overlapping, two_conflicts};
@@ -104,7 +104,7 @@ fn newer_commits_wait_behind_the_recorded_conflict() {
     let done = resolve(
         &w.ours,
         &w.git(),
-        &ResolveRequest {
+        &Resolve {
             path: "notes/first.md",
             merge: shown,
             choice: Choice::Ours,
@@ -143,7 +143,7 @@ fn a_choice_for_a_replaced_waiting_merge_records_nothing() {
         resolve(
             &w.ours,
             &w.git(),
-            &ResolveRequest {
+            &Resolve {
                 path: "notes/first.md",
                 merge,
                 choice: Choice::Ours,
@@ -183,7 +183,7 @@ fn a_replaced_waiting_merge_starts_with_no_choices() {
     resolve(
         &w.ours,
         &w.git(),
-        &ResolveRequest {
+        &Resolve {
             path: "notes/first.md",
             merge: &merge,
             choice: Choice::Ours,

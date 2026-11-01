@@ -328,6 +328,16 @@ kluris sync --brain acme          # fetch, merge and push one brain
 kluris sync --brain all --json    # every brain, for scripts and agents
 ```
 
+A brain made with `kluris create --remote <url>` is shared from the start:
+its branch gets its upstream (`branch.main.remote` and `branch.main.merge`,
+as `git push -u` writes them), and the first push sends it when the remote
+is empty. A remote that already has a branch is left alone, nothing merged
+or pushed (`refused`: clone it and run `kluris register` on the clone, or
+point `--remote` at an empty repository); offline or turned away, the brain
+is kept with its upstream set, and the next command that opens it pushes
+it. `kluris create --json` adds the `sync` object after its own keys; the
+exit code is 0 whenever the brain was created.
+
 For each brain, `kluris sync` fetches its branch's upstream (it never asks
 for credentials), fast-forwards when the brain is behind, pushes when it is
 ahead, and merges when both sides have new commits. It works on the branch
@@ -393,17 +403,22 @@ and `detail`, the `reason` `null` when nothing was), `conflicts` (each with
 `null` where a side has no file there or is binary, and `binary`),
 `behind_conflict` (the newer commits waiting behind an open conflict),
 `to_push` (the commits the remote does not have yet), `pushed` and
-`last_push` (`null`). The `reason` is one of `uncommitted` (the files in
+`last_push` (what the last background push did, as its record says: a
+failure until a push succeeds, which removes it; `null` when there is
+nothing to report). The `reason` is one of `uncommitted` (the files in
 the way are in `paths`), `offline` (the host does not resolve, the
 connection is refused or times out, or the fetch or push runs past its
 minute), `refused` (a locked ref, a remote-tracking ref Kluris will not
 move, a remote that turned the brain away or kept moving, histories with
-no commit in common, or under `--brain all` a brain that cannot be synced),
+no commit in common, or under `--brain all` a brain that cannot be synced:
+not a git repository, inside a larger one, or a shallow clone),
 `busy` (another Kluris command is changing the brain or fetching its
 remote, a git lock is held, or the branch changed while Kluris synced it:
 a switch, a commit, a rebase started), `in_progress` (a git merge, rebase, cherry-pick or revert), `hook` (a
-hook stopped the merge or the push), `failed` (git stopped partway) or `no_upstream`;
-`detail` gives git's message and the fix. Without `--json`, every brain
+hook stopped the merge or the push), `failed` (git stopped partway) or `no_upstream`
+(the branch has no upstream: `set one with git push -u origin main`; a brain
+with no remote at all says `add one with git remote add origin <url>, then
+git push -u origin main`); `detail` gives git's message and the fix. Without `--json`, every brain
 that has something to say also gets one line on stderr, such as `kluris:
 acme: pulled 2 commits; 1 conflict (notes/c.md)`. The exit code is 1 when a
 brain has a conflict or was left as it is for any reason but `offline` and
@@ -483,21 +498,20 @@ command to run.
 and everything in it), and `--file` is refused there when a side has a
 directory.
 `--file` content is checked first: its frontmatter must read, and a YAML
-neuron needs its `#---` block. Each call records one choice; with the last
-one the merge is committed under your git identity, the brain moves to it
-(uncommitted changes in the way stop it, and the choices are kept) and the
-result is pushed, merging again if the remote moved meanwhile. If you
-committed after the conflict was found, start over with
-`kluris resolve --brain acme --abort`, which drops the open conflict and
-changes nothing else, then `kluris sync`.
+neuron needs its `#---` block. Each call first brings in what teammates
+pushed, then records one choice; with the last one the merge is committed
+under your git identity, the brain moves to it (uncommitted changes in the
+way stop it, and the choices are kept), anything newer is pulled and the
+result is pushed. If you committed after the conflict was found, that pull
+finds the conflict afresh under a new id.
 
 With `--json`, a call prints `path`, `choice`, `remaining` (the paths still
-to settle), `committed`, `commit` and `pushed`; `--abort` prints `aborted`
-and `dropped`. A refused `--merge` prints the error with `merge` (the
-current id) and `conflict` (the current conflict at that path, as `kluris
-sync` reports it). While a conflict is open, `kluris status --json` adds
-`sync: {blocked: true, conflicts: [...]}` to that brain, each conflict with
-its `path`, `kind`, `merge` and the `base`, `ours` and `theirs` blob ids.
+to settle; once the merge landed, those of a new conflict), `committed`,
+`commit` and `pushed`, then the `sync` object. A refusal prints the error
+and the `sync` object; a refused `--merge` adds `merge` (the current id)
+and `conflict` (the current conflict at that path, as `kluris sync`
+reports it). The exit code is 1 for a refusal, and, as for `kluris sync`,
+when the sync was refused or blocked or met a new conflict; 0 offline.
 
 ### How the agent starts a session
 
@@ -768,7 +782,7 @@ from disk or send it to a colleague.
 | `kluris mri` | Write the brain's visual map and print its link (`--brain`, `--output`) |
 | `kluris commit` | Commit only the files you name and the maps and links they change, pull and push (`--brain`, `--paths`, `--message`, `--merge`, `--no-verify`) |
 | `kluris sync` | Fetch, merge and push a brain, or every brain (`--brain`, `--no-verify`) |
-| `kluris resolve <path>` | Settle an open sync conflict path by path (`--ours`, `--theirs`, `--file`, `--abort`, `--no-verify`) |
+| `kluris resolve <path>` | Settle an open sync conflict path by path, pull and push (`--ours`, `--theirs`, `--file`, `--merge`, `--no-verify`) |
 | `kluris companion list` | The companion playbooks, which are installed, and which brains use them (`--brain`) |
 | `kluris companion add <name>` | Turn a companion on for a brain (`--brain`) |
 | `kluris companion remove <name>` | Turn a companion off for a brain (`--brain`) |

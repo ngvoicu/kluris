@@ -24,8 +24,10 @@ mod common;
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::LazyLock;
 
+use common::golden::PINNED_ENV;
 use common::sandbox::GITCONFIG;
 use common::shared::{skill_brain, skill_reference, vendored_marker};
 use common::{
@@ -137,11 +139,41 @@ fn run_text(sb: &Sandbox, run: &Run, named: &[PathBuf]) -> String {
     .render(&sb.root)
 }
 
+/// The remote URLs the tests give `create --remote`; a run sees them on a
+/// free loopback port ([`offline_remotes`]).
+const OFFLINE_REMOTE: &str = "git://kluris.invalid/";
+
+/// `cmd` with [`OFFLINE_REMOTE`] rewritten (git's `url.<base>.insteadOf`,
+/// through the environment) to a loopback port nothing listens on, free
+/// when the run starts: the push is refused at once, so it is offline the
+/// same on every machine, and nothing reaches a network. The URL the brain
+/// keeps, and every dump shows, is the one given. (WSL leaves a connection
+/// to a port it has not seen bound, a fixed one say, hanging until the
+/// push's time limit.)
+fn offline_remotes(cmd: &mut Command) -> &mut Command {
+    let port = std::net::TcpListener::bind("127.0.0.1:0")
+        .and_then(|listener| listener.local_addr())
+        .map(|addr| addr.port())
+        .unwrap_or_else(|e| panic!("{e}"));
+    let next = PINNED_ENV
+        .iter()
+        .find(|(key, _)| *key == "GIT_CONFIG_COUNT")
+        .and_then(|(_, count)| count.parse::<usize>().ok())
+        .unwrap_or_else(|| panic!("PINNED_ENV sets GIT_CONFIG_COUNT"));
+    cmd.env("GIT_CONFIG_COUNT", (next + 1).to_string())
+        .env(
+            format!("GIT_CONFIG_KEY_{next}"),
+            format!("url.git://127.0.0.1:{port}/.insteadOf"),
+        )
+        .env(format!("GIT_CONFIG_VALUE_{next}"), OFFLINE_REMOTE)
+}
+
 /// `kluris args` with stdin a pseudo-terminal and `KLURIS_NO_PROMPT` unset:
 /// `lines` are typed one per line, then Ctrl-D.
 #[cfg(unix)]
 fn on_terminal(sb: &Sandbox, args: &[&str], lines: &[&str]) -> Run {
     let mut cmd = sb.command(args);
+    offline_remotes(&mut cmd);
     cmd.env_remove("KLURIS_NO_PROMPT");
     run_on_terminal(cmd, lines, End::Eof)
 }
@@ -542,14 +574,19 @@ fn create_text_output() {
     assert_golden("create_text_output", sb, &run, None);
 }
 
+/// The remotes are under [`OFFLINE_REMOTE`], which every run sees on a
+/// free loopback port ([`offline_remotes`]).
 const GIT_SETUPS: &[(&str, &[&str])] = &[
     ("branch", &["--branch", "dev"]),
-    ("remote", &["--remote", "git@example.com:team/brain.git"]),
+    (
+        "remote",
+        &["--remote", "git://kluris.invalid/team/brain.git"],
+    ),
     (
         "remote-branch",
         &[
             "--remote",
-            "https://example.com/brain.git",
+            "git://kluris.invalid/brain.git",
             "--branch",
             "trunk",
         ],
@@ -568,7 +605,9 @@ fn create_git_setup() {
         let mut args = vec!["create", "demo", "--type", "blank"];
         args.extend(*extra);
         args.push("--json");
-        let run = sb.kluris(&args);
+        let mut cmd = sb.command(&args);
+        offline_remotes(&mut cmd);
+        let run = Run::of(cmd);
         assert_golden(&format!("create_git_setup__{case}"), sb, &run, Some("demo"));
     }
 }
@@ -829,7 +868,8 @@ fn wizard_full() {
         "personal",
         "2",
         "",
-        "git@x:y.git",
+        // Under OFFLINE_REMOTE: the first push is offline.
+        "git://kluris.invalid/y.git",
         "dev",
         "9",
         "3",

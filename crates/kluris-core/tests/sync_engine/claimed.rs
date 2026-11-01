@@ -1,7 +1,7 @@
 //! A resolution is one transaction under the worktree's tree claim: it
 //! reads the waiting merge, records a choice, finishes the merge and
-//! removes the record without another resolver, an abort or a pull
-//! changing the record in between.
+//! removes the record without another resolver or a pull changing the
+//! record in between.
 
 use std::fs;
 use std::time::Duration;
@@ -9,7 +9,7 @@ use std::time::Duration;
 use kluris_core::sync::claim::TreeClaim;
 #[cfg(unix)]
 use kluris_core::sync::engine;
-use kluris_core::sync::resolve::{Choice, ResolveError, ResolveRequest, abort, resolve};
+use kluris_core::sync::resolve::{Choice, ResolveError};
 use kluris_core::sync::{LeftReason, PENDING, SyncRequest};
 
 #[cfg(unix)]
@@ -34,8 +34,8 @@ fn request<'a>(
     merge: &'a str,
     choice: Choice,
     sync: SyncRequest<'a>,
-) -> ResolveRequest<'a> {
-    ResolveRequest {
+) -> Resolve<'a> {
+    Resolve {
         path,
         merge,
         choice,
@@ -69,18 +69,6 @@ fn a_resolution_while_another_holds_the_tree_claim_records_nothing() {
         &request("notes/first.md", &merge, Choice::Ours, hurried(&w)),
     );
     assert!(r.is_ok(), "{r:?}");
-}
-
-#[test]
-fn an_abort_while_another_holds_the_tree_claim_drops_nothing() {
-    let w = World::new();
-    two_conflicts(&w);
-    let held = TreeClaim::exclusive(&w.ours.join(".git"), Duration::ZERO).unwrap();
-    let r = abort(&w.ours, &w.git(), Duration::from_millis(200));
-    assert!(busy(r.clone()), "{r:?}");
-    assert!(w.ours.join(".git").join(PENDING).exists());
-    drop(held);
-    assert_eq!(abort(&w.ours, &w.git(), Duration::ZERO).unwrap(), 2);
 }
 
 /// A git that pauses the first time it reads `refs/heads/main` (a

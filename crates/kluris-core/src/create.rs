@@ -315,7 +315,9 @@ fn lobes(req: &CreateRequest) -> Result<Vec<Lobe>, CreateError> {
 
 /// Create the brain: check it, scaffold it, ask for companions (`pick`, run
 /// only when the caller wants v2's picker), set up git, write the maps,
-/// commit, register. Installing the agent skills is the caller's last step.
+/// commit (with a remote, then set the branch's upstream), register.
+/// Pushing to the remote and installing the agent skills are the caller's
+/// last steps.
 pub fn create(
     req: &CreateRequest,
     git: &impl Git,
@@ -357,13 +359,14 @@ pub fn create(
         }
     }
 
+    let remote = req.remote.filter(|r| !r.is_empty() && !req.no_git);
     if !req.no_git {
         git.init(&brain_path).map_err(|e| left(e.to_string()))?;
         if req.branch != "main" {
             git.checkout_new_branch(&brain_path, req.branch)
                 .map_err(|e| left(e.to_string()))?;
         }
-        if let Some(remote) = req.remote.filter(|r| !r.is_empty()) {
+        if let Some(remote) = remote {
             git.remote_add(&brain_path, "origin", remote)
                 .map_err(|e| left(e.to_string()))?;
         }
@@ -376,6 +379,12 @@ pub fn create(
             .map_err(|e| left(e.to_string()))?;
         git.commit(&brain_path, &format!("brain: initialize {}", req.name))
             .map_err(|e| left(e.to_string()))?;
+        // As `git push -u` writes it, whether or not the caller's push
+        // gets through: a brain made offline syncs once it is online.
+        if remote.is_some() {
+            git.set_upstream(&brain_path, req.branch, "origin")
+                .map_err(|e| left(e.to_string()))?;
+        }
     }
 
     let entry = BrainEntry {

@@ -137,6 +137,10 @@ pub trait Git {
     /// `git remote add <name> <url>`.
     fn remote_add(&self, dir: &Path, name: &str, url: &str) -> Result<(), GitError>;
 
+    /// `branch`'s upstream, as `git push -u <remote> <branch>` writes it:
+    /// `branch.<branch>.remote` and `branch.<branch>.merge`.
+    fn set_upstream(&self, dir: &Path, branch: &str, remote: &str) -> Result<(), GitError>;
+
     /// `git add <pathspec>` (v2 always passes `-A`).
     fn add(&self, dir: &Path, pathspec: &str) -> Result<(), GitError>;
 
@@ -507,6 +511,13 @@ impl Git for SystemGit {
 
     fn remote_add(&self, dir: &Path, name: &str, url: &str) -> Result<(), GitError> {
         self.run(dir, &["remote", "add", name, url]).map(drop)
+    }
+
+    fn set_upstream(&self, dir: &Path, branch: &str, remote: &str) -> Result<(), GitError> {
+        let merge = format!("refs/heads/{branch}");
+        self.run(dir, &["config", &format!("branch.{branch}.remote"), remote])?;
+        self.run(dir, &["config", &format!("branch.{branch}.merge"), &merge])
+            .map(drop)
     }
 
     fn add(&self, dir: &Path, pathspec: &str) -> Result<(), GitError> {

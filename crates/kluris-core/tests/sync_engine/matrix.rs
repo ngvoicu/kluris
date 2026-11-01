@@ -10,7 +10,7 @@
 use std::collections::BTreeMap;
 use std::fs;
 
-use kluris_core::sync::resolve::{Choice, ResolveRequest, resolve, waiting_merge};
+use kluris_core::sync::resolve::Choice;
 
 use crate::common::*;
 
@@ -109,7 +109,7 @@ fn check(name: &str, setup: &dyn Fn(&World)) -> Outcome {
             let done = resolve(
                 &w.ours,
                 &w.git(),
-                &ResolveRequest {
+                &Resolve {
                     path: &c.path,
                     merge: &merge,
                     choice: choice.clone(),

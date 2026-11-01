@@ -3,10 +3,7 @@
 
 use std::fs;
 
-use kluris_core::sync::claim::COMMAND_BOUND;
-use kluris_core::sync::resolve::{
-    Choice, ResolveError, ResolveReport, ResolveRequest, abort, resolve, waiting_merge,
-};
+use kluris_core::sync::resolve::{Choice, ResolveError};
 use kluris_core::sync::{ConflictKind, LeftReason, PENDING, SyncRequest};
 
 use crate::common::*;
@@ -14,7 +11,7 @@ use crate::common::*;
 const RESOLVED_MESSAGE: &str =
     "kluris: sync (resolved)\n\nKluris-Sync: resolved\nKluris-Resolved-By: Ana Tester\n\n";
 
-fn resolve_with(w: &World, path: &str, choice: Choice) -> Result<ResolveReport, ResolveError> {
+fn resolve_with(w: &World, path: &str, choice: Choice) -> Result<Resolved, ResolveError> {
     resolve_req(w, path, choice, false)
 }
 
@@ -23,12 +20,12 @@ fn resolve_req(
     path: &str,
     choice: Choice,
     no_verify: bool,
-) -> Result<ResolveReport, ResolveError> {
+) -> Result<Resolved, ResolveError> {
     let merge = w.merge_id();
     resolve(
         &w.ours,
         &w.git(),
-        &ResolveRequest {
+        &Resolve {
             path,
             merge: &merge,
             choice,
@@ -45,7 +42,7 @@ fn pending(w: &World) -> std::path::PathBuf {
 }
 
 /// The merge was left for a hook: its detail names the hook and says why.
-fn hook_stopped(result: Result<ResolveReport, ResolveError>, hook: &str, why: &str) {
+fn hook_stopped(result: Result<Resolved, ResolveError>, hook: &str, why: &str) {
     match result {
         Err(ResolveError::Left(left)) => {
             assert_eq!(left.reason, LeftReason::Hook, "{left:?}");
@@ -76,7 +73,7 @@ fn content_conflict(w: &World) -> (String, String, String) {
 
 /// The commit landed: a two-parent merge with the resolved message, pushed,
 /// the conflict gone, and the next sync clean.
-fn assert_completed(w: &World, r: &ResolveReport) {
+fn assert_completed(w: &World, r: &Resolved) {
     assert!(r.committed && r.pushed && r.remaining.is_empty(), "{r:?}");
     let head = w.head(&w.ours);
     assert_eq!(r.commit.as_deref(), Some(head.as_str()));
@@ -359,49 +356,6 @@ fn no_open_conflict_is_an_error() {
         resolve_with(&w, "notes/first.md", Choice::Ours),
         Err(ResolveError::NoOpenConflict)
     ));
-    assert!(matches!(
-        abort(&w.ours, &w.git(), COMMAND_BOUND),
-        Err(ResolveError::NoOpenConflict)
-    ));
-    assert!(waiting_merge(&w.ours, &w.git()).is_none());
-}
-
-#[test]
-fn a_stale_conflict_is_refused_and_abort_drops_it() {
-    let w = World::new();
-    content_conflict(&w);
-    let conflicts = waiting_merge(&w.ours, &w.git()).unwrap().conflicts;
-    assert_eq!(conflicts[0].path, "notes/first.md");
-    // The user commits meanwhile: the branch is not at the conflict's ours.
-    w.ours_commit(&[("notes/second.md", &neuron("", "# Second\n"))], &[]);
-    let before = w.snapshot();
-    match resolve_with(&w, "notes/first.md", Choice::Ours) {
-        Err(e @ ResolveError::Stale { .. }) => {
-            let text = e.to_string();
-            assert!(text.contains("kluris resolve --abort"), "{text}");
-        }
-        other => panic!("{other:?}"),
-    }
-    assert_eq!(w.snapshot(), before);
-    assert_eq!(abort(&w.ours, &w.git(), COMMAND_BOUND).unwrap(), 1);
-    assert!(!pending(&w).exists());
-    assert_eq!(
-        w.snapshot(),
-        before,
-        "abort changed more than the pending state"
-    );
-    // The next sync meets the same conflict again.
-    open(&w, &["notes/first.md"]);
-}
-
-#[test]
-fn abort_changes_nothing_but_the_pending_state() {
-    let w = World::new();
-    content_conflict(&w);
-    let before = w.snapshot();
-    assert_eq!(abort(&w.ours, &w.git(), COMMAND_BOUND).unwrap(), 1);
-    assert_eq!(w.snapshot(), before);
-    assert!(!pending(&w).exists());
     assert!(waiting_merge(&w.ours, &w.git()).is_none());
 }
 

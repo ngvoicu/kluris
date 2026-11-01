@@ -61,6 +61,9 @@ impl Git for FakeGit {
     fn remote_add(&self, _: &Path, _: &str, _: &str) -> Result<(), GitError> {
         unreachable!()
     }
+    fn set_upstream(&self, _: &Path, _: &str, _: &str) -> Result<(), GitError> {
+        unreachable!()
+    }
     fn add(&self, _: &Path, _: &str) -> Result<(), GitError> {
         unreachable!()
     }

@@ -1,21 +1,25 @@
 //! `kluris resolve [--brain NAME] PATH --ours|--theirs|--file FILE --merge ID
-//! [--no-verify] [--json]` and `kluris resolve --abort`: settle an open sync
-//! conflict path by path. `--merge` names the waiting merge the choice
-//! answers; an id that is not the open conflict's is refused, with
-//! the current conflict's id, sides and the command to run.
+//! [--no-verify] [--json]`: settle a waiting merge path by path, through an
+//! explicit session (`kluris_core::sync::resolve`). Its open pulls first;
+//! with the last choice the merge is finished, and its close pulls anything
+//! newer and pushes. `--merge` names the waiting merge the choice answers;
+//! an id that is not the open conflict's is refused, with the current
+//! conflict's id, sides and the command to run.
+//!
+//! The JSON is the call's own keys, then the `sync` object. Every failure
+//! after the session opened closes it as usual and carries `sync` too.
+//! Exit 1 on a refusal, and, as `kluris sync`, when the sync was refused,
+//! blocked or met a new conflict once the merge landed; 0 offline.
 
 use std::path::Path;
 
 use kluris_core::config::{ConfigErrorKind, read_brain_config};
-use kluris_core::dream::DreamOptions;
-use kluris_core::git::SystemGit;
 use kluris_core::pyrepr::py_path_str;
-use kluris_core::sync::claim::COMMAND_BOUND;
-use kluris_core::sync::resolve::{
-    Choice, ResolveError, ResolveReport, ResolveRequest, abort, resolve,
-};
-use kluris_core::sync::{ConflictText, NETWORK_TIME_LIMIT, SyncRequest};
+use kluris_core::sync::resolve::{Choice, ResolveError, ResolveReport, ResolveRequest, resolve};
+use kluris_core::sync::session::Intent;
+use kluris_core::sync::{ConflictText, LeftReason, SyncReport};
 
+use crate::brains::{self, Target};
 use crate::commands::dream::today;
 use crate::error::CliError;
 use crate::output::human;
@@ -29,13 +33,8 @@ pub struct Options<'a> {
     pub theirs: bool,
     pub file: Option<&'a str>,
     pub merge: Option<&'a str>,
-    pub abort: bool,
     pub no_verify: bool,
     pub json: bool,
-}
-
-fn count(n: usize) -> Json {
-    Json::Int(i64::try_from(n).unwrap_or(i64::MAX))
 }
 
 fn conflicts(n: usize) -> &'static str {
@@ -70,7 +69,7 @@ fn wrong_merge(
     error: &ResolveError,
     current: &str,
     conflict: Option<&ConflictText>,
-) -> CliError {
+) -> (String, Vec<(String, Json)>) {
     let mut message = format!("Brain {brain}: {error}");
     if let Some(c) = conflict {
         let side = |text: &Option<String>| match text {
@@ -87,13 +86,14 @@ fn wrong_merge(
             command(brain, &c.path, current)
         ));
     }
-    CliError::new(message).with_fields(vec![
+    let fields = vec![
         ("merge".into(), Json::Str(current.into())),
         (
             "conflict".into(),
             conflict.map_or(Json::Null, ConflictText::to_json),
         ),
-    ])
+    ];
+    (message, fields)
 }
 
 pub fn run(options: &Options) -> Result<(), CliError> {
@@ -101,38 +101,11 @@ pub fn run(options: &Options) -> Result<(), CliError> {
         .iter()
         .filter(|on| **on)
         .count();
-    if options.abort && (options.path.is_some() || picked > 0 || options.merge.is_some()) {
-        return Err(CliError::new(
-            "--abort takes no PATH and no --ours, --theirs, --file or --merge",
-        ));
-    }
     let brains = resolve_brains(options.brain, false, options.json)?;
     let Some(brain) = brains.first() else {
         return Err(CliError::new("No brain to resolve in"));
     };
     let root = py_path_str(&brain.entry.path);
-    let git = SystemGit::new();
-    let failed = |e: &dyn std::fmt::Display| CliError::new(format!("Brain {}: {e}", brain.name));
-
-    if options.abort {
-        let dropped = abort(Path::new(&root), &git, COMMAND_BOUND).map_err(|e| failed(&e))?;
-        if options.json {
-            human::print(&json::to_line(&Json::Object(vec![
-                ("ok".into(), Json::Bool(true)),
-                ("brain".into(), Json::Str(brain.name.clone())),
-                ("aborted".into(), Json::Bool(true)),
-                ("dropped".into(), count(dropped)),
-            ])));
-        } else {
-            human::print(&format!(
-                "Dropped the open sync conflict in {} ({dropped} {}); nothing else changed.\n",
-                brain.name,
-                conflicts(dropped)
-            ));
-        }
-        return Ok(());
-    }
-
     match picked {
         0 => return Err(CliError::new("Give one of --ours, --theirs or --file")),
         1 => {}
@@ -161,80 +134,137 @@ pub fn run(options: &Options) -> Result<(), CliError> {
         )),
         _ => CliError::new(e.to_string()),
     })?;
-    let report = resolve(
-        Path::new(&root),
-        &git,
-        &ResolveRequest {
-            path,
-            merge,
-            choice,
-            sync: SyncRequest {
-                no_verify: options.no_verify,
-                maps: DreamOptions {
-                    name: &config.name,
-                    description: &config.description,
-                    today: today()?,
-                },
-                network_time_limit: NETWORK_TIME_LIMIT,
-                tree_bound: COMMAND_BOUND,
-            },
-        },
-    )
-    .map_err(|e| match &e {
-        ResolveError::WrongMerge {
-            wrong, conflict, ..
-        } => wrong_merge(&brain.name, &e, &wrong.current, conflict.as_deref()),
-        _ => failed(&e),
-    })?;
-
+    let request = ResolveRequest {
+        path,
+        merge,
+        choice,
+    };
+    let targets = [Target::new(
+        &brain.entry.path,
+        &config.name,
+        &config.description,
+    )];
+    let mut opened = brains::open(&targets, Intent::Explicit, today()?, options.no_verify);
+    let resolved = match opened.first() {
+        Some(session) => resolve(session, &request),
+        None => Err(ResolveError::NoOpenConflict),
+    };
+    let closed = brains::close(opened);
+    let sync = closed.into_iter().next().and_then(|c| c.report);
+    let name = brain.name.as_str();
+    if !options.json {
+        brains::print_lines([(name, sync.as_ref())]);
+    }
+    let report = match resolved {
+        Ok(report) => report,
+        Err(e) => {
+            let (message, mut fields) = match &e {
+                ResolveError::WrongMerge {
+                    wrong, conflict, ..
+                } => wrong_merge(name, &e, &wrong.current, conflict.as_deref()),
+                _ => (format!("Brain {name}: {e}"), Vec::new()),
+            };
+            fields.extend(brains::sync_field(sync.as_ref()));
+            return Err(CliError::new(message).with_fields(fields));
+        }
+    };
+    let done = Done::of(&report, sync.as_ref());
     if options.json {
-        human::print(&json::to_line(&Json::Object(vec![
+        let doc = Json::Object(vec![
             ("ok".into(), Json::Bool(true)),
-            ("brain".into(), Json::Str(brain.name.clone())),
+            ("brain".into(), Json::Str(name.to_string())),
             ("path".into(), Json::Str(report.path.clone())),
             ("choice".into(), Json::Str(report.choice.into())),
             (
                 "remaining".into(),
-                Json::Array(report.remaining.iter().cloned().map(Json::Str).collect()),
+                Json::Array(done.remaining.iter().cloned().map(Json::Str).collect()),
             ),
             ("committed".into(), Json::Bool(report.committed)),
             (
                 "commit".into(),
                 report.commit.clone().map_or(Json::Null, Json::Str),
             ),
-            ("pushed".into(), Json::Bool(report.pushed)),
-        ])));
+            ("pushed".into(), Json::Bool(done.pushed)),
+        ]);
+        human::print(&json::to_line(&brains::with_sync(doc, sync.as_ref())));
     } else {
-        human::print(&text(&report));
+        human::print(&text(&report, &done));
     }
-    Ok(())
+    if failed(&report, sync.as_ref()) {
+        Err(CliError::exit_only())
+    } else {
+        Ok(())
+    }
+}
+
+/// What the call left once the session closed.
+struct Done {
+    /// The paths still without a choice; once the merge landed, those of a
+    /// new conflict the close's pull met.
+    remaining: Vec<String>,
+    pushed: bool,
+    /// Why the close did not push, unless the network was missing.
+    not_pushed: Option<String>,
+}
+
+impl Done {
+    fn of(report: &ResolveReport, sync: Option<&SyncReport>) -> Done {
+        if !report.committed {
+            return Done {
+                remaining: report.remaining.clone(),
+                pushed: false,
+                not_pushed: None,
+            };
+        }
+        let sync = sync.cloned().unwrap_or_default();
+        Done {
+            remaining: sync.conflicts.into_iter().map(|c| c.path).collect(),
+            pushed: sync.pushed,
+            not_pushed: sync
+                .left_as_is
+                .filter(|left| left.reason != LeftReason::Offline)
+                .map(|left| left.to_string()),
+        }
+    }
+}
+
+/// Whether the call exits 1 though its choice was recorded: the sync was
+/// refused or blocked, or, once the merge landed, met a new conflict (the
+/// conflicts of the merge still being settled are its own).
+fn failed(report: &ResolveReport, sync: Option<&SyncReport>) -> bool {
+    sync.is_some_and(|sync| {
+        sync.left_as_is
+            .as_ref()
+            .is_some_and(|left| left.reason.fails())
+            || (report.committed && !sync.conflicts.is_empty())
+    })
 }
 
 /// One line per call.
-fn text(r: &ResolveReport) -> String {
+fn text(r: &ResolveReport, done: &Done) -> String {
     let mut line = format!("Resolved {} ({})", r.path, r.choice);
     match &r.commit {
         None => line.push_str(&format!(
             "; {} {} left: {}",
-            r.remaining.len(),
-            conflicts(r.remaining.len()),
-            r.remaining.join(", ")
+            done.remaining.len(),
+            conflicts(done.remaining.len()),
+            done.remaining.join(", ")
         )),
         Some(commit) => {
             let short: String = commit.chars().take(7).collect();
             line.push_str(&format!("; committed {short}"));
-            if r.pushed {
+            if done.pushed {
                 line.push_str(" and pushed");
-            } else if !r.remaining.is_empty() {
+            } else if !done.remaining.is_empty() {
                 line.push_str(&format!(
                     ", not pushed: the remote moved and a new {} is open: {}; run kluris resolve again",
-                    conflicts(r.remaining.len()),
-                    r.remaining.join(", ")
+                    conflicts(done.remaining.len()),
+                    done.remaining.join(", ")
                 ));
             } else {
                 line.push_str(&format!(
                     ", not pushed: {}",
-                    r.sync_error.as_deref().unwrap_or("offline")
+                    done.not_pushed.as_deref().unwrap_or("offline")
                 ));
             }
         }

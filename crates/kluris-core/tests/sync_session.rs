@@ -1089,7 +1089,7 @@ fn a_session_says_why_it_left_a_brain_alone() {
         why
     };
     assert_eq!(alone(&plain), Some(Alone::NotARepo));
-    assert_eq!(alone(&nested), Some(Alone::Nested));
+    assert!(matches!(alone(&nested), Some(Alone::Nested { .. })));
     assert_eq!(alone(&shallow), Some(Alone::Shallow));
     assert_eq!(alone(&local), Some(Alone::NoRemote));
     let Some(Alone::NoUpstream(left)) = alone(&unset) else {

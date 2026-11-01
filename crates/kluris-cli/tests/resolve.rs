@@ -1,7 +1,7 @@
 //! `kluris resolve [--brain NAME] PATH --ours|--theirs|--file FILE --merge
-//! ID` and `kluris resolve --abort`: the command surface over real git (the
-//! conflict a read reports is in `read_sync.rs`). The rules are in
-//! `kluris-core/tests/sync_engine/finish.rs`.
+//! ID`: the command surface over real git (the conflict a read reports is
+//! in `read_sync.rs`, the session's part in `resolve_create_sync.rs`). The
+//! rules are in `kluris-core/tests/sync_engine/finish.rs`.
 
 use std::fs;
 
@@ -11,7 +11,7 @@ mod sync_home;
 
 use sync_home::*;
 
-const RESOLVE_KEYS: [&str; 8] = [
+const RESOLVE_KEYS: [&str; 9] = [
     "ok",
     "brain",
     "path",
@@ -20,6 +20,7 @@ const RESOLVE_KEYS: [&str; 8] = [
     "committed",
     "commit",
     "pushed",
+    "sync",
 ];
 
 /// Two conflicts in `alpha`: `notes/first.md` and `notes/second.md`.
@@ -80,8 +81,10 @@ fn resolving_path_by_path_then_committing_and_pushing() {
     ]);
     assert_eq!(code, 0, "{doc}");
     assert_eq!(keys(&doc), RESOLVE_KEYS);
+    let mut own = doc.clone();
+    own.as_object_mut().unwrap().remove("sync");
     assert_eq!(
-        doc,
+        own,
         json!({
             "ok": true, "brain": "alpha", "path": "notes/first.md", "choice": "theirs",
             "remaining": ["notes/second.md"], "committed": false, "commit": null, "pushed": false,
@@ -205,26 +208,6 @@ fn text_output_one_line_per_call() {
 fn errors_are_clean() {
     let mut h = Home::new();
     let root = h.brain("alpha");
-    // No open conflict.
-    let (code, doc) = h.json(&[
-        "resolve",
-        "--brain",
-        "alpha",
-        "notes/first.md",
-        "--ours",
-        "--merge",
-        "000000000000",
-        "--json",
-    ]);
-    assert_eq!(code, 1);
-    assert_eq!(keys(&doc), ["ok", "error"]);
-    assert!(
-        doc["error"]
-            .as_str()
-            .unwrap()
-            .contains("no open sync conflict"),
-        "{doc}"
-    );
     h.conflict("alpha", &root);
     let (code, _) = h.json(&["sync", "--brain", "alpha", "--json"]);
     assert_eq!(code, 1);
@@ -233,7 +216,6 @@ fn errors_are_clean() {
         (&["notes/first.md"][..], "--ours, --theirs or --file"),
         (&["notes/first.md", "--ours", "--theirs"], "only one of"),
         (&["--ours"], "PATH"),
-        (&["notes/first.md", "--abort"], "--abort"),
         (&["notes/glossary.md", "--ours"], "not conflicted"),
     ] {
         let mut all = vec!["resolve", "--brain", "alpha", "--merge", &merge];
@@ -268,33 +250,6 @@ fn errors_are_clean() {
 }
 
 #[test]
-fn abort_drops_the_conflict() {
-    let mut h = Home::new();
-    let root = h.brain("alpha");
-    h.conflict("alpha", &root);
-    let (code, _) = h.json(&["sync", "--brain", "alpha", "--json"]);
-    assert_eq!(code, 1);
-    let head = h.git(&root, &["rev-parse", "HEAD"]);
-    let (code, doc) = h.json(&["resolve", "--brain", "alpha", "--abort", "--json"]);
-    assert_eq!(code, 0, "{doc}");
-    assert_eq!(
-        doc,
-        json!({"ok": true, "brain": "alpha", "aborted": true, "dropped": 1})
-    );
-    assert_eq!(h.git(&root, &["rev-parse", "HEAD"]), head);
-    assert!(
-        !root
-            .join(".git")
-            .join("kluris-sync")
-            .join("pending.json")
-            .exists()
-    );
-    let (code, out, _) = h.run(&["resolve", "--brain", "alpha", "--abort"]);
-    assert_eq!(code, 1, "nothing left to abort");
-    assert_eq!(out, "");
-}
-
-#[test]
 fn resolve_is_in_help() {
     let h = Home::new();
     let (_, doc) = h.json(&["help", "--json"]);
@@ -318,41 +273,12 @@ fn resolve_is_in_help() {
         "--ours",
         "--theirs",
         "--file",
-        "--abort",
         "--no-verify",
         "--brain",
         "--json",
     ] {
         assert!(out.contains(text), "{text}: {out}");
     }
-}
-
-/// The merge is committed, but the push is turned away: the text
-/// says why, not "offline".
-#[test]
-fn a_push_the_server_rejects_after_resolve_says_why() {
-    let mut h = Home::new();
-    let root = two_conflicts(&mut h);
-    let ssh = fake_ssh(h.dir.path());
-    h.env.push(("GIT_SSH_COMMAND".into(), ssh));
-    let url = "ssh://git@example.invalid/alpha.git";
-    h.git(&root, &["remote", "set-url", "--push", "origin", url]);
-    let merge = h.merge("alpha");
-    let resolve = |rel| {
-        h.run(&[
-            "resolve", "--brain", "alpha", rel, "--ours", "--merge", &merge,
-        ])
-    };
-    let (code, _, err) = resolve("notes/first.md");
-    assert_eq!(code, 0, "{err}");
-    let (code, out, err) = resolve("notes/second.md");
-    assert_eq!(code, 0, "{err}");
-    let not_pushed = format!(", not pushed: {DENIED}{}\n", the_fix("push"));
-    assert!(
-        out.starts_with("Resolved notes/second.md (ours); committed ")
-            && out.ends_with(&not_pushed),
-        "{out}"
-    );
 }
 
 /// The `merge` id of the brain's first reported conflict.

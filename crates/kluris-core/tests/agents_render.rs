@@ -184,8 +184,7 @@ Before you write, change, or delete any brain file, run
   or a rename) is settled with `--ours` or `--theirs`, which keep that side's
   whole structure.
   Brain files never contain conflict markers, so never edit a file to
-  resolve a conflict. If `kluris resolve` says the conflict is stale, run
-  `kluris resolve{flag} --abort` and sync again.
+  resolve a conflict.
 - `blocked[]` is not empty: those files have uncommitted changes that the
   incoming changes would overwrite. Ask the human to commit or stash them,
   then sync again.
@@ -236,7 +235,7 @@ const V3_CLI_TAIL: &str = "\
 - `kluris mri{flag}` -- generate interactive visualization
 - `kluris sync{flag} --json` -- fetch, merge, and push the brain; reports `conflicts[]`, `blocked[]`, `refused`, and `offline`
 - `kluris commit{flag} --paths <a.md,b.md> --json` -- commit exactly those files and the maps they change
-- `kluris resolve{flag} <path> --ours|--theirs|--file <merged file> --json` -- settle a sync conflict path by path (`--abort` drops it)
+- `kluris resolve{flag} <path> --ours|--theirs|--file <merged file> --json` -- settle a sync conflict path by path
 
 Branch operations and anything else go through `git` directly -- kluris
 brains are plain git repos. Use `git -C {path} status / log / checkout`
@@ -425,7 +424,6 @@ fn the_write_flow_syncs_commits_and_resolves() {
             format!("`kluris sync --brain {b} --json`"),
             format!("`kluris commit --brain {b} --paths "),
             format!("`kluris resolve --brain {b} <path> --ours`"),
-            format!("`kluris resolve --brain {b} --abort`"),
             "`KLURIS_AGENT=\"Claude Code\"`".to_string(),
             "never pass `--no-verify` unless the human asks for it".to_string(),
             "Brain files never contain conflict markers".to_string(),

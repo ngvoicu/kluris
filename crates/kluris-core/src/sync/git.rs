@@ -221,6 +221,10 @@ pub trait SyncGit: Plumbing + TextMerger + Clone + Sized {
         deadline: Instant,
     ) -> Result<Option<String>, RemoteError>;
 
+    /// Whether `remote` has any branch, from this git's own `git ls-remote
+    /// --heads <remote>`, by `deadline`.
+    fn has_heads(&self, repo: &Repo, remote: &str, deadline: Instant) -> Result<bool, RemoteError>;
+
     /// Fetch the objects of the upstream's branch by `deadline` and write
     /// nothing else: no ref, `FETCH_HEAD`, tag, `packed-refs`, commit-graph
     /// or bundle refs, so a fetch stopped at the deadline holds no ref lock
@@ -980,6 +984,12 @@ impl SyncGit for SystemGit {
         ];
         let out = self.remote(repo)?.checked(&repo.dir, &args, deadline)?;
         Ok(listed(&out, &upstream.remote_ref))
+    }
+
+    fn has_heads(&self, repo: &Repo, remote: &str, deadline: Instant) -> Result<bool, RemoteError> {
+        let args = ["ls-remote", "--quiet", "--heads", remote];
+        let out = self.remote(repo)?.checked(&repo.dir, &args, deadline)?;
+        Ok(out.iter().any(|b| !b.is_ascii_whitespace()))
     }
 
     fn fetch_branch(

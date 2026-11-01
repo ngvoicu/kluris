@@ -24,6 +24,7 @@ Agent skill installed: kluris-wiz
   Claude/Codex/Antigravity/etc: /kluris-wiz
   Hermes: /skill kluris-wiz  (or start with `hermes -s kluris-wiz`)
   Created a new Hermes profile later? Run `kluris doctor` to refresh Kluris skills.
-== stderr (0 bytes)
+== stderr (52 bytes)
+kluris: wiz: left as is (offline); 1 commit to push
 == exit 0
 <end of run>

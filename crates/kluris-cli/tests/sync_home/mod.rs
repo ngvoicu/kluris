@@ -283,6 +283,82 @@ impl Home {
     }
 }
 
+impl Home {
+    /// Brain `name` with a conflict waiting on each of `rels`: each is
+    /// committed and shared first, then both sides change its third
+    /// paragraph, the teammate pushes, and `kluris sync` records the
+    /// conflict. Returns the root and the waiting merge's id.
+    pub fn conflicts(&mut self, name: &str, rels: &[&str]) -> (PathBuf, String) {
+        let root = self.brain(name);
+        let mate = self.teammate(name);
+        for rel in rels {
+            if !root.join(rel).exists() {
+                self.commit(&root, rel, &neuron(rel, BODY));
+            }
+        }
+        self.git(&root, &["push", "-q"]);
+        self.git(&mate, &["pull", "-q"]);
+        for rel in rels {
+            let title = title_of(&self.read(&root, rel));
+            self.write(&mate, rel, &neuron(&title, &theirs_body()));
+            self.write(&root, rel, &neuron(&title, &ours_body()));
+        }
+        self.git(&mate, &["commit", "-q", "-am", "theirs"]);
+        self.git(&mate, &["push", "-q"]);
+        self.git(&root, &["commit", "-q", "-am", "ours"]);
+        let (code, doc) = self.json(&["sync", "--brain", name, "--json"]);
+        assert_eq!(code, 1, "{doc}");
+        let conflicts = &doc["brains"][0]["sync"]["conflicts"];
+        assert_eq!(
+            conflicts.as_array().map(Vec::len),
+            Some(rels.len()),
+            "{doc}"
+        );
+        let merge = conflicts[0]["merge"].as_str().unwrap().to_string();
+        (root, merge)
+    }
+
+    /// The `kluris` command with this home's environment, to start.
+    pub fn command(&self, args: &[&str]) -> StdCommand {
+        let mut cmd = StdCommand::new(assert_cmd::cargo::cargo_bin!("kluris"));
+        self.hermetic(&mut cmd);
+        for (key, value) in &self.env {
+            cmd.env(key, value);
+        }
+        cmd.args(args);
+        cmd
+    }
+}
+
+/// A neuron's `# Title`.
+pub fn title_of(text: &str) -> String {
+    text.lines()
+        .find_map(|line| line.strip_prefix("# "))
+        .unwrap_or("Untitled")
+        .to_string()
+}
+
+/// [`BODY`] as this brain changes it in a conflict.
+pub fn ours_body() -> String {
+    BODY.replace("Three.", "Three, ours.")
+}
+
+/// [`BODY`] as the teammate changes it in a conflict.
+pub fn theirs_body() -> String {
+    BODY.replace("Three.", "Three, theirs.")
+}
+
+/// A `git://` URL on a loopback port nothing listens on: the remote is
+/// offline.
+pub fn offline_url() -> String {
+    let port = std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port();
+    format!("git://127.0.0.1:{port}/alpha.git")
+}
+
 pub fn keys(doc: &Value) -> Vec<String> {
     doc.as_object().unwrap().keys().cloned().collect()
 }

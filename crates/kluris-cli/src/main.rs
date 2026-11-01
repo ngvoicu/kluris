@@ -335,12 +335,9 @@ enum Command {
             long = "merge",
             value_name = "ID",
             allow_hyphen_values = true,
-            required_unless_present = "abort"
+            required = true
         )]
         merge: Option<String>,
-        /// Drop the open conflict and change nothing else
-        #[arg(long)]
-        abort: bool,
         /// Skip the pre-merge-commit and commit-msg hooks
         #[arg(long = "no-verify")]
         no_verify: bool,
@@ -522,19 +519,18 @@ remote's (a deletion included), --file the content you merged by hand \
 (checked first: its frontmatter must read). --merge names the waiting \
 merge the choice answers (kluris sync and kluris status show its id); one \
 the brain has replaced since is refused, with its new id and sides, and \
-nothing is recorded. With the last path, the merge \
-is committed under your git identity, the brain moves to it and the result \
-is pushed. A file with uncommitted changes in the way stops it until you \
-commit or stash it; the choices are kept. --abort drops the open conflict \
-and changes nothing else. The repository's pre-merge-commit, \
+nothing is recorded. Each call first brings in what teammates pushed. With \
+the last path, the merge is committed under your git identity, the brain \
+moves to it, anything newer is pulled and the result is pushed. A file with \
+uncommitted changes in the way stops it until you commit or stash it; the \
+choices are kept. The repository's pre-merge-commit, \
 prepare-commit-msg, commit-msg, post-merge and pre-push hooks run as git \
 runs them, and git's reference-transaction and post-index-change hooks run \
 on every ref and index update (--no-verify skips pre-merge-commit and \
 commit-msg).
 
   kluris resolve --brain acme knowledge/auth.md --theirs --merge 4ba0581dd58e
-  kluris resolve --brain acme knowledge/auth.md --file merged.md --merge 4ba0581dd58e
-  kluris resolve --brain acme --abort";
+  kluris resolve --brain acme knowledge/auth.md --file merged.md --merge 4ba0581dd58e";
 
 /// `self-update` (new in v3).
 const SELF_UPDATE_HELP: &str = "Update kluris to the newest release.
@@ -1037,7 +1033,6 @@ fn run(cli: Cli) -> Result<(), CliError> {
             theirs,
             file,
             merge,
-            abort,
             no_verify,
             json,
         } => commands::resolve::run(&commands::resolve::Options {
@@ -1047,7 +1042,6 @@ fn run(cli: Cli) -> Result<(), CliError> {
             theirs,
             file: file.as_deref(),
             merge: merge.as_deref(),
-            abort,
             no_verify,
             json,
         }),

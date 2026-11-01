@@ -456,6 +456,35 @@ pub fn upstream<'c, G: SyncGit>(ctx: &'c Context<G>) -> Result<&'c Upstream, Lef
     ))
 }
 
+/// Why a branch of a brain with no remote has no upstream, with the
+/// commands that give it one (`no_upstream`).
+pub fn no_remote<G: SyncGit>(ctx: &Context<G>) -> LeftAsIs {
+    let branch = ctx
+        .branch()
+        .and_then(|b| b.strip_prefix("refs/heads/"))
+        .unwrap_or("<branch>");
+    LeftAsIs::because(
+        LeftReason::NoUpstream,
+        format!("add one with git remote add origin <url>, then git push -u origin {branch}"),
+    )
+}
+
+/// Whether the upstream's remote has any branch at all (`git ls-remote
+/// --heads`), asked within the request's network time limit; or why it
+/// could not say (`offline`, `refused`).
+pub fn remote_has_branches<G: SyncGit>(ctx: &Context<G>) -> Result<bool, LeftAsIs> {
+    let upstream = upstream(ctx)?;
+    let deadline = Instant::now() + ctx.request.network_time_limit;
+    ctx.git
+        .has_heads(&ctx.repo, &upstream.remote, deadline)
+        .map_err(
+            |e| match fetch::refusal(&ctx.git, &ctx.repo, &upstream.remote, &e) {
+                Some(detail) => LeftAsIs::because(LeftReason::Refused, detail),
+                None => offline(),
+            },
+        )
+}
+
 /// The upstream's commit to pull from: the one this fetch's own
 /// `ls-remote` named, under the remote claim the caller holds (`_remote`);
 /// `None` when the remote has no such branch.
@@ -745,6 +774,15 @@ pub fn to_push<G: SyncGit>(ctx: &Context<G>) -> Option<usize> {
     let tip = git.ref_value(repo, &upstream.branch).ok()??;
     let remote = git.ref_value(repo, &upstream.refname).ok()?;
     git.count(repo, remote.as_deref(), &tip).ok()
+}
+
+/// Every commit of the pinned branch, read now: what a remote without the
+/// branch lacks. `None` without an upstream, or when it cannot be read.
+pub fn to_push_all<G: SyncGit>(ctx: &Context<G>) -> Option<usize> {
+    let (git, repo) = (&ctx.landing, &ctx.repo);
+    let upstream = ctx.upstream.as_ref()?;
+    let tip = git.ref_value(repo, &upstream.branch).ok()??;
+    git.count(repo, None, &tip).ok()
 }
 
 /// How a waiting merge is finished ([`finish_merge`]).

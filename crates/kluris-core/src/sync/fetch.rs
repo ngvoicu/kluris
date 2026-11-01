@@ -143,7 +143,7 @@ pub fn fetch<G: SyncGit>(
             // Stopped by the caller's bound, not the remote's slowness.
             Err(RemoteError::Failed(e)) if e.stopped => return Err(e),
             Err(e) => {
-                return Ok(match fetch_refused(git, repo, &upstream.remote, &e) {
+                return Ok(match refusal(git, repo, &upstream.remote, &e) {
                     Some(detail) => Fetch::Refused { detail },
                     None => Fetch::Offline,
                 });
@@ -282,7 +282,7 @@ pub fn refused_access(command: &str, remote: &str, stderr: &str) -> String {
 /// the deadline, or network trouble ([`network_failure`]). A ref lock is
 /// named ([`ref_locked`]); anything else is a refusal ([`refused_access`]),
 /// shown, never taken for offline.
-fn fetch_refused<G: SyncGit>(
+pub(crate) fn refusal<G: SyncGit>(
     git: &G,
     repo: &Repo,
     remote: &str,

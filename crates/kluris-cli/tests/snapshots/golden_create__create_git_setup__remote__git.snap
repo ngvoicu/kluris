@@ -17,8 +17,8 @@ Kluris Parity <parity@kluris.invalid>|Kluris Parity <parity@kluris.invalid>|2026
 == git symbolic-ref HEAD
 refs/heads/main
 == git remote -v
-origin	git@example.com:team/brain.git (fetch)
-origin	git@example.com:team/brain.git (push)
+origin	git://kluris.invalid/team/brain.git (fetch)
+origin	git://kluris.invalid/team/brain.git (push)
 == git status --porcelain --ignored
 !! kluris.yml
 == git cat-file blob <each blob of HEAD>
