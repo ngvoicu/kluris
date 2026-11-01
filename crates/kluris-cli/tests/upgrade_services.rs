@@ -75,7 +75,8 @@ fn install_service(sb: &Sandbox, brain: &str) -> Vec<PathBuf> {
 
 /// A `launchctl` and a `systemctl` that append each call, as `<program>
 /// <args>` and whether `FAKE_DEFINITION` is there (`(there)` or `(gone)`),
-/// to `FAKE_CALLS`, and answer 0, or 1 to the arguments `FAKE_FAIL` holds.
+/// to `FAKE_CALLS`, and answer 0, or 1 to the call (`<program> <args>`)
+/// `FAKE_FAIL` holds.
 #[cfg(unix)]
 fn fake_tools(sb: &Sandbox) -> PathBuf {
     use std::os::unix::fs::PermissionsExt;
@@ -88,7 +89,7 @@ fn fake_tools(sb: &Sandbox) -> PathBuf {
             format!(
                 "#!/bin/sh\nif [ -e \"$FAKE_DEFINITION\" ]; then at=there; else at=gone; fi\n\
                  echo \"{name} $* ($at)\" >> \"$FAKE_CALLS\"\n\
-                 if [ -n \"$FAKE_FAIL\" ] && [ \"$*\" = \"$FAKE_FAIL\" ]; then\n\
+                 if [ -n \"$FAKE_FAIL\" ] && [ \"{name} $*\" = \"$FAKE_FAIL\" ]; then\n\
                  echo 'Operation not permitted' >&2; exit 1; fi\nexit 0\n"
             ),
         )
@@ -167,20 +168,32 @@ fn arm_calls(brain: &str) -> Vec<String> {
     ]
 }
 
+/// The call that stops one service's job: launchd's bootout, systemd's
+/// `disable --now`.
+#[cfg(target_os = "macos")]
+fn stop_call(brain: &str) -> String {
+    format!("launchctl bootout {}", launchd_target(brain))
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+fn stop_call(brain: &str) -> String {
+    format!("systemctl --user disable --now kluris-sync-{brain}.service")
+}
+
 /// The calls `doctor` and `self-uninstall` make for one service: the job is
 /// booted out before its plist goes; a running unit is stopped (`--now`).
 #[cfg(target_os = "macos")]
 fn sweep_calls(brain: &str) -> Vec<String> {
     vec![
         format!("launchctl print {} (there)", launchd_target(brain)),
-        format!("launchctl bootout {} (there)", launchd_target(brain)),
+        format!("{} (there)", stop_call(brain)),
     ]
 }
 
 #[cfg(all(unix, not(target_os = "macos")))]
 fn sweep_calls(brain: &str) -> Vec<String> {
     vec![
-        format!("systemctl --user disable --now kluris-sync-{brain}.service (there)"),
+        format!("{} (there)", stop_call(brain)),
         "systemctl --user daemon-reload (gone)".to_string(),
     ]
 }
@@ -461,12 +474,7 @@ fn self_uninstall_a_service_that_will_not_stop_keeps_the_install_and_a_rerun_fin
     sb.write_config(&[]);
     let (binary, receipt) = installed(&sb);
     let files = install_service(&sb, "acme");
-    let stop = sweep_calls("acme")[1]
-        .split_once(' ')
-        .unwrap()
-        .1
-        .trim_end_matches(" (there)")
-        .to_string();
+    let stop = stop_call("acme");
     let run = kluris_with(
         &sb,
         "acme",
