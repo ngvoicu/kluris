@@ -614,11 +614,15 @@ fn the_hidden_flags() {
 /// `PATH` is). Its git runs in the home's hermetic environment.
 const CHILD_ACTION: &str = "KLURIS_TEST_BACKGROUND_ACTION";
 const CHILD_ROOTS: &str = "KLURIS_TEST_BACKGROUND_ROOTS";
+/// The process whose console `console-of` looks at (Windows).
+#[cfg(windows)]
+const CHILD_PID: &str = "KLURIS_TEST_BACKGROUND_PID";
 
 /// This test binary run again as a command that ends: `read` opens the
 /// brains for a read, closes them, prints `done` and exits; `start-in-job`
 /// (Windows) joins a kill-on-close job that forbids breakaway, then
-/// prints what a start and a read's close did. Without those variables it
+/// prints what a start and a read's close did; `console-of` (Windows)
+/// prints whether the process [`CHILD_PID`] names has a console. Without those variables it
 /// does nothing.
 #[test]
 #[ignore = "run only as the child of the background tests"]
@@ -656,12 +660,22 @@ fn child_command() {
             let report = session::close(session::open(brain(&roots[0]), Intent::Read, &env));
             println!("to_push {}", report.map_or(0, |r| r.to_push));
         }
+        #[cfg(windows)]
+        "console-of" => {
+            let pid = std::env::var(CHILD_PID).unwrap().parse().unwrap();
+            println!("{}", windows_job::console_of(pid));
+        }
         other => panic!("no action {other}"),
     }
 }
 
 /// The child command doing `action` on `roots`, its stdout piped.
 fn command(home: &Home, action: &str, roots: &[&Path]) -> Child {
+    command_line(home, action, roots).spawn().unwrap()
+}
+
+/// [`command`], not started yet.
+fn command_line(home: &Home, action: &str, roots: &[&Path]) -> Command {
     let mut cmd = Command::new(std::env::current_exe().unwrap());
     home.hermetic(&mut cmd);
     cmd.args([
@@ -676,7 +690,7 @@ fn command(home: &Home, action: &str, roots: &[&Path]) -> Child {
     .stdin(Stdio::null())
     .stdout(Stdio::piped())
     .stderr(Stdio::null());
-    cmd.spawn().unwrap()
+    cmd
 }
 
 /// A read closed with commits waiting in two brains starts one child for
@@ -761,32 +775,62 @@ fn the_commands_stdout_closes_while_the_child_pushes_in_its_own_session() {
     eventually("the lock to go", || !git_file(&root, LOCK).exists());
 }
 
-/// Started from here, the child is detached and out of this process's job;
-/// where this process's job ends its processes with it and forbids
-/// breakaway (as a test runner's may), nothing is started.
+/// A start from this process, judged by this process's own job, read as
+/// the start reads it: a job that ends its processes when it closes and
+/// forbids breakaway (as `cargo xtask windows` runs tests in) starts
+/// nothing, and the commits stay counted; any other place starts a child
+/// with no console, outside this process's job unless the job keeps its
+/// children, that pushes.
 #[cfg(windows)]
 #[test]
-fn on_windows_the_child_is_out_of_the_job_or_not_started() {
+fn on_windows_the_job_this_process_is_in_decides_the_start() {
+    let job = windows_job::Job::ours();
     let mut home = Home::new();
     let root = waiting(&mut home, "alpha");
     let release = home.dir.path().join("release");
     stall_pushes(&home, &root, &release);
-    match background::start(&kluris(), &[root.clone()]) {
-        background::Start::Started(pid) => {
-            eventually("the child's lock", || git_file(&root, LOCK).exists());
-            assert_eq!(Lock::read(&git_file(&root, LOCK)).unwrap().pid, pid);
-            assert!(!windows_job::in_a_job(pid), "the child is in a job");
-            fs::write(&release, "").unwrap();
-            eventually("the push", || result_of(&root).is_some());
-            assert_eq!(result_of(&root).as_deref(), Some("pushed"));
-        }
-        background::Start::Refused(why) => {
-            assert!(windows_job::ours_kills_on_close(), "refused: {why}");
-            eprintln!("this process's job forbids breakaway: {why}");
-            assert!(!git_file(&root, LOCK).exists());
-        }
-        background::Start::Failed(e) => panic!("{e}"),
+    let started = background::start(&kluris(), std::slice::from_ref(&root));
+    if job.refuses_children() {
+        let background::Start::Refused(_) = started else {
+            panic!("{job}: expected nothing started, got {started:?}");
+        };
+        assert!(!git_file(&root, LOCK).exists(), "{job}: a child runs");
+        let env = env(&home, Some(kluris()));
+        let report = session::close(session::open(brain(&root), Intent::Read, &env));
+        assert_eq!(report.map(|r| r.to_push), Some(1), "{job}: not counted");
+        assert!(!git_file(&root, LOCK).exists(), "{job}: a read started one");
+        return;
     }
+    let background::Start::Started(pid) = started else {
+        panic!("{job}: expected a child started, got {started:?}");
+    };
+    eventually("the child's lock", || git_file(&root, LOCK).exists());
+    assert_eq!(
+        Lock::read(&git_file(&root, LOCK)).unwrap().pid,
+        pid,
+        "{job}"
+    );
+    assert_eq!(
+        windows_job::in_ours(pid),
+        job.keeps_children(),
+        "{job}: the child's place in this process's job"
+    );
+    let mut probe = command_line(&home, "console-of", &[&root])
+        .env(CHILD_PID, pid.to_string())
+        .spawn()
+        .unwrap();
+    let mut out = String::new();
+    probe
+        .stdout
+        .take()
+        .unwrap()
+        .read_to_string(&mut out)
+        .unwrap();
+    assert!(probe.wait().unwrap().success(), "{out}");
+    assert!(out.lines().any(|l| l == "no console"), "{job}: {out}");
+    fs::write(&release, "").unwrap();
+    eventually("the push", || result_of(&root).is_some());
+    assert_eq!(result_of(&root).as_deref(), Some("pushed"), "{job}");
 }
 
 /// In a kill-on-close job that forbids breakaway, nothing starts and the
@@ -816,11 +860,14 @@ fn in_a_kill_on_close_job_nothing_starts_and_the_commits_stay_counted() {
 
 #[cfg(windows)]
 mod windows_job {
-    use windows_sys::Win32::Foundation::{CloseHandle, FALSE};
+    use windows_sys::Win32::Foundation::{CloseHandle, ERROR_INVALID_HANDLE, FALSE, GetLastError};
+    use windows_sys::Win32::System::Console::{AttachConsole, FreeConsole};
     use windows_sys::Win32::System::JobObjects::{
-        AssignProcessToJobObject, CreateJobObjectW, IsProcessInJob,
-        JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
-        JobObjectExtendedLimitInformation, QueryInformationJobObject, SetInformationJobObject,
+        AssignProcessToJobObject, CreateJobObjectW, IsProcessInJob, JOB_OBJECT_LIMIT_BREAKAWAY_OK,
+        JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK,
+        JOBOBJECT_BASIC_PROCESS_ID_LIST, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+        JobObjectBasicProcessIdList, JobObjectExtendedLimitInformation, QueryInformationJobObject,
+        SetInformationJobObject,
     };
     use windows_sys::Win32::System::Threading::{
         GetCurrentProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
@@ -850,33 +897,128 @@ mod windows_job {
         }
     }
 
-    /// Whether this process's own job ends its processes when it closes.
-    pub fn ours_kills_on_close() -> bool {
-        // SAFETY: a query of this process's job into a local of its size.
-        unsafe {
-            let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
-            let size = u32::try_from(std::mem::size_of_val(&info)).unwrap();
-            QueryInformationJobObject(
-                std::ptr::null_mut(),
-                JobObjectExtendedLimitInformation,
-                (&raw mut info).cast(),
-                size,
-                std::ptr::null_mut(),
-            ) != 0
-                && info.BasicLimitInformation.LimitFlags & JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE != 0
+    /// This process's own job, as `QueryInformationJobObject` with no
+    /// handle reads it.
+    pub struct Job {
+        /// Its limit flags; `None`: this process is in no job.
+        flags: Option<u32>,
+    }
+
+    impl Job {
+        pub fn ours() -> Job {
+            // SAFETY: a query of this process's job into a local of its
+            // size.
+            unsafe {
+                let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
+                let size = u32::try_from(std::mem::size_of_val(&info)).unwrap();
+                let read = QueryInformationJobObject(
+                    std::ptr::null_mut(),
+                    JobObjectExtendedLimitInformation,
+                    (&raw mut info).cast(),
+                    size,
+                    std::ptr::null_mut(),
+                );
+                Job {
+                    flags: (read != 0).then_some(info.BasicLimitInformation.LimitFlags),
+                }
+            }
+        }
+
+        fn has(&self, flag: u32) -> bool {
+            self.flags.is_some_and(|flags| flags & flag != 0)
+        }
+
+        /// A child cannot leave it: in a job, with neither breakaway flag.
+        pub fn keeps_children(&self) -> bool {
+            self.flags.is_some()
+                && !self.has(JOB_OBJECT_LIMIT_BREAKAWAY_OK)
+                && !self.has(JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK)
+        }
+
+        /// A child would end with this process: the start refuses.
+        pub fn refuses_children(&self) -> bool {
+            self.keeps_children() && self.has(JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE)
         }
     }
 
-    /// Whether the process `pid` is in any job.
-    pub fn in_a_job(pid: u32) -> bool {
-        // SAFETY: a handle opened here and closed here.
+    impl std::fmt::Display for Job {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            let Some(flags) = self.flags else {
+                return write!(f, "this process is in no job (expected a child started)");
+            };
+            let named = [
+                (JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, "KILL_ON_JOB_CLOSE"),
+                (JOB_OBJECT_LIMIT_BREAKAWAY_OK, "BREAKAWAY_OK"),
+                (JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK, "SILENT_BREAKAWAY_OK"),
+            ]
+            .iter()
+            .map(|(flag, name)| format!("{}{name}", if flags & flag != 0 { "" } else { "no " }))
+            .collect::<Vec<_>>()
+            .join(", ");
+            let expected = if self.refuses_children() {
+                "nothing started"
+            } else {
+                "a child started"
+            };
+            write!(
+                f,
+                "this process's job has flags {flags:#x} ({named}); expected {expected}"
+            )
+        }
+    }
+
+    /// Whether the process `pid` is in this process's job (in any job
+    /// when this process is in none, which is then none of its).
+    pub fn in_ours(pid: u32) -> bool {
+        if Job::ours().flags.is_none() {
+            // SAFETY: a handle opened here and closed here.
+            return unsafe {
+                let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+                assert!(!process.is_null(), "no process {pid}");
+                let mut result = FALSE;
+                let asked = IsProcessInJob(process, std::ptr::null_mut(), &raw mut result);
+                CloseHandle(process);
+                asked != 0 && result != FALSE
+            };
+        }
+        let header = std::mem::offset_of!(JOBOBJECT_BASIC_PROCESS_ID_LIST, ProcessIdList);
+        let mut buffer = vec![0usize; 4096];
+        let size = u32::try_from(std::mem::size_of_val(buffer.as_slice())).unwrap();
+        // SAFETY: the list is written into a buffer of `size` bytes,
+        // aligned for it; its count says how many ids follow the header.
         unsafe {
-            let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
-            assert!(!process.is_null(), "no process {pid}");
-            let mut result = FALSE;
-            let asked = IsProcessInJob(process, std::ptr::null_mut(), &raw mut result);
-            CloseHandle(process);
-            asked != 0 && result != FALSE
+            let list = buffer
+                .as_mut_ptr()
+                .cast::<JOBOBJECT_BASIC_PROCESS_ID_LIST>();
+            let read = QueryInformationJobObject(
+                std::ptr::null_mut(),
+                JobObjectBasicProcessIdList,
+                list.cast(),
+                size,
+                std::ptr::null_mut(),
+            );
+            assert_ne!(read, 0, "the job's processes could not be read");
+            let count = usize::try_from((*list).NumberOfProcessIdsInList).unwrap();
+            let ids = buffer.as_ptr().cast::<u8>().add(header).cast::<usize>();
+            (0..count).any(|i| *ids.add(i) == pid as usize)
+        }
+    }
+
+    /// `no console` when the process `pid` has none (attaching to it is
+    /// refused as an invalid handle), else what attaching did.
+    pub fn console_of(pid: u32) -> String {
+        // SAFETY: this probe's own console is let go, then one is asked
+        // for; one that is had is let go again.
+        unsafe {
+            FreeConsole();
+            if AttachConsole(pid) != 0 {
+                FreeConsole();
+                return "attached".into();
+            }
+            match GetLastError() {
+                ERROR_INVALID_HANDLE => "no console".into(),
+                error => format!("not attached: error {error}"),
+            }
         }
     }
 }
