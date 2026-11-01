@@ -998,10 +998,10 @@ impl RealService {
     fn left(&self) -> Vec<String> {
         let mut left = self.files_left();
         let unit = self.unit();
-        if let Some(wants) = self.wants() {
-            if fs::symlink_metadata(&wants).is_ok() {
-                left.push(format!("the link {}", wants.display()));
-            }
+        if let Some(wants) = self.wants()
+            && fs::symlink_metadata(&wants).is_ok()
+        {
+            left.push(format!("the link {}", wants.display()));
         }
         let (_, out, _) = ran(
             "systemctl",
