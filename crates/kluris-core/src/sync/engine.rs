@@ -52,11 +52,16 @@
 //! stops the transfer to the URL it ran for; it undoes nothing the sync
 //! pulled or merged, nor a push another URL already took.
 //!
-//! A branch's first push to its remote, after a fetch that found no branch
-//! of its name there, asks the remote for its branches (`git ls-remote
-//! --heads`) first: one that has any is someone else's, and the push is
-//! refused ([`occupied`]) with nothing pushed. Every push takes this path:
-//! an explicit command's, the background push, and a retry.
+//! A branch's first push to a repository never puts it beside another
+//! branch: one that has any but this branch is someone else's, and the
+//! push is refused ([`occupied`]) with nothing pushed to any URL. When the
+//! push goes where the fetch looked (its URLs, `git remote get-url --push
+//! --all`, are the fetch URL), only a fetch that found no branch of its
+//! name asks the remote for its branches (`git ls-remote --heads`); when
+//! it goes elsewhere (`pushurl`, `pushInsteadOf`, several URLs), each push
+//! URL is asked. A URL that cannot be asked leaves the brain `offline` or
+//! `refused`, as a fetch does. Every push takes this path: an explicit
+//! command's, the background push, and a retry.
 //!
 //! [`sync`] pulls again after a push the remote turned back because it
 //! moved, [`PUSH_ATTEMPTS`] times at most ([`share`]). Only the fetch and
@@ -77,7 +82,7 @@ use std::time::{Duration, Instant};
 use super::background::LastPush;
 use super::claim::{ClaimError, RemoteClaim, TreeClaim};
 use super::fetch::{self, Fetch};
-use super::git::{GitDirs, PushOutcome, SyncGit, Upstream, one_line};
+use super::git::{GitDirs, PushOutcome, RemoteError, SyncGit, Upstream, one_line};
 use super::hooks::{HookError, MergeHookError, MergeHooks, merge_commit};
 use super::land::{Over, Settled, blocked_paths, failed, land, unchanged, uncommitted};
 use super::merge::is_generated;
@@ -126,7 +131,7 @@ pub struct Context<'a, G> {
     upstream: Option<Upstream>,
     request: SyncRequest<'a>,
     /// The last fetch found no branch of the upstream's name on the remote:
-    /// a push is then its first there, and is guarded ([`occupied`]).
+    /// a push there is then its first, and is guarded ([`occupied`]).
     lacks_branch: Cell<bool>,
 }
 
@@ -480,20 +485,45 @@ pub fn no_remote<G: SyncGit>(ctx: &Context<G>) -> LeftAsIs {
     )
 }
 
-/// Whether the upstream's remote has any branch at all (`git ls-remote
-/// --heads`), asked within the request's network time limit; or why it
-/// could not say (`offline`, `refused`).
-fn remote_has_branches<G: SyncGit>(ctx: &Context<G>) -> Result<bool, LeftAsIs> {
-    let upstream = upstream(ctx)?;
-    let deadline = Instant::now() + ctx.request.network_time_limit;
-    ctx.git
-        .has_heads(&ctx.repo, &upstream.remote, deadline)
-        .map_err(
-            |e| match fetch::refusal(&ctx.git, &ctx.repo, &upstream.remote, &e) {
-                Some(detail) => LeftAsIs::because(LeftReason::Refused, detail),
-                None => offline(),
-            },
-        )
+/// Whether pushing the pinned branch would put it beside another branch
+/// (see the module docs), asked by the push's `deadline`; or why it could
+/// not be (`offline`, `refused`).
+fn occupied_destination<G: SyncGit>(
+    ctx: &Context<G>,
+    upstream: &Upstream,
+    deadline: Instant,
+) -> Result<bool, LeftAsIs> {
+    let (git, repo, remote) = (&ctx.git, &ctx.repo, &upstream.remote);
+    let fetches = git.remote_urls(repo, remote)?;
+    let unasked = |urls: &[String], command: &str, e: RemoteError| match fetch::refusal_at(
+        git, repo, command, remote, urls, &e,
+    ) {
+        Some(detail) => LeftAsIs::because(LeftReason::Refused, detail),
+        None => offline(),
+    };
+    let pushes = git
+        .push_urls(repo, remote, deadline)
+        .map_err(|e| unasked(&fetches, "push", e))?;
+    if pushes == fetches {
+        // The push goes where the fetch looked: only a remote the fetch
+        // found without the branch is asked.
+        if !ctx.lacks_branch.get() {
+            return Ok(false);
+        }
+        let heads = git
+            .heads(repo, remote, deadline)
+            .map_err(|e| unasked(&fetches, "fetch", e))?;
+        return Ok(!heads.is_empty());
+    }
+    for url in &pushes {
+        let heads = git
+            .heads_at(repo, url, deadline)
+            .map_err(|e| unasked(std::slice::from_ref(url), "push", e))?;
+        if !heads.is_empty() && !heads.contains(&upstream.remote_ref) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 /// The upstream's commit to pull from: the one this fetch's own
@@ -718,11 +748,12 @@ fn push_head<G: SyncGit>(ctx: &Context<G>) -> Result<Pushed, LeftAsIs> {
     }
     // git pushes the pinned branch by its ref: it must have a commit.
     ctx.branch_commit(&upstream.branch)?;
-    // The branch's first push to this remote: never beside another branch.
-    if ctx.lacks_branch.get() && remote_has_branches(ctx)? {
+    // The branch's first push to each push URL: never beside another
+    // branch. Asked within the push's own time limit.
+    let deadline = Instant::now() + ctx.request.network_time_limit;
+    if occupied_destination(ctx, upstream, deadline)? {
         return Err(occupied());
     }
-    let deadline = Instant::now() + ctx.request.network_time_limit;
     match git.push(repo, upstream, deadline) {
         PushOutcome::Pushed => Ok(Pushed::Pushed),
         PushOutcome::RemoteMoved => Ok(Pushed::RemoteMoved),

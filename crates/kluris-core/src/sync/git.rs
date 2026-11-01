@@ -221,9 +221,34 @@ pub trait SyncGit: Plumbing + TextMerger + Clone + Sized {
         deadline: Instant,
     ) -> Result<Option<String>, RemoteError>;
 
-    /// Whether `remote` has any branch, from this git's own `git ls-remote
-    /// --heads <remote>`, by `deadline`.
-    fn has_heads(&self, repo: &Repo, remote: &str, deadline: Instant) -> Result<bool, RemoteError>;
+    /// The branches (`refs/heads/...`) of `remote`, from this git's own
+    /// `git ls-remote --heads <remote>`, by `deadline`.
+    fn heads(
+        &self,
+        repo: &Repo,
+        remote: &str,
+        deadline: Instant,
+    ) -> Result<Vec<String>, RemoteError>;
+
+    /// The branches of the repository at `url`, a URL git already
+    /// rewrote ([`SyncGit::push_urls`]), asked as it is: no `insteadOf`
+    /// applies to it again. By `deadline`.
+    fn heads_at(
+        &self,
+        repo: &Repo,
+        url: &str,
+        deadline: Instant,
+    ) -> Result<Vec<String>, RemoteError>;
+
+    /// The URLs a push to `remote` goes to, after `pushInsteadOf` and
+    /// `insteadOf` (`git remote get-url --push --all`), by `deadline`.
+    /// Read from config alone: no network.
+    fn push_urls(
+        &self,
+        repo: &Repo,
+        remote: &str,
+        deadline: Instant,
+    ) -> Result<Vec<String>, RemoteError>;
 
     /// Fetch the objects of the upstream's branch by `deadline` and write
     /// nothing else: no ref, `FETCH_HEAD`, tag, `packed-refs`, commit-graph
@@ -471,6 +496,18 @@ pub(crate) fn one_line(stderr: &str) -> String {
         .collect::<Vec<_>>()
         .join(" ");
     joined.trim_end_matches('.').to_string()
+}
+
+/// The variable [`SyncGit::heads_at`] passes its URL in.
+const URL_AS_IS: &str = "KLURIS_URL_AS_IS";
+
+/// The refs `git ls-remote` lists, one per `<oid>\t<ref>` line.
+fn refnames(out: &[u8]) -> Vec<String> {
+    String::from_utf8_lossy(out)
+        .lines()
+        .filter_map(|line| line.split_once('\t'))
+        .map(|(_, refname)| refname.trim().to_string())
+        .collect()
 }
 
 /// The commit `git ls-remote` lists for exactly `remote_ref` (its lines
@@ -986,10 +1023,45 @@ impl SyncGit for SystemGit {
         Ok(listed(&out, &upstream.remote_ref))
     }
 
-    fn has_heads(&self, repo: &Repo, remote: &str, deadline: Instant) -> Result<bool, RemoteError> {
+    fn heads(
+        &self,
+        repo: &Repo,
+        remote: &str,
+        deadline: Instant,
+    ) -> Result<Vec<String>, RemoteError> {
         let args = ["ls-remote", "--quiet", "--heads", remote];
         let out = self.remote(repo)?.checked(&repo.dir, &args, deadline)?;
-        Ok(out.iter().any(|b| !b.is_ascii_whitespace()))
+        Ok(refnames(&out))
+    }
+
+    fn heads_at(
+        &self,
+        repo: &Repo,
+        url: &str,
+        deadline: Instant,
+    ) -> Result<Vec<String>, RemoteError> {
+        // `insteadOf` takes the longest base that matches, and none is
+        // longer than the whole URL: mapped to itself, it is asked as it
+        // is. Through the environment, so a URL with `=` in it reads too.
+        let rewrite = format!("--config-env=url.{url}.insteadOf={URL_AS_IS}");
+        let args = [rewrite.as_str(), "ls-remote", "--quiet", "--heads", url];
+        let git = self.remote(repo)?.into_owned().env(URL_AS_IS, url);
+        let out = git.checked(&repo.dir, &args, deadline)?;
+        Ok(refnames(&out))
+    }
+
+    fn push_urls(
+        &self,
+        repo: &Repo,
+        remote: &str,
+        deadline: Instant,
+    ) -> Result<Vec<String>, RemoteError> {
+        let args = ["remote", "get-url", "--push", "--all", remote];
+        let out = self.remote(repo)?.checked(&repo.dir, &args, deadline)?;
+        Ok(String::from_utf8_lossy(&out)
+            .lines()
+            .map(str::to_string)
+            .collect())
     }
 
     fn fetch_branch(

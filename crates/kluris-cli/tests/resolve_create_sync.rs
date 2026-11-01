@@ -869,3 +869,144 @@ fn every_commands_text_names_the_waiting_merge_with_its_conflicts() {
         assert!(err.starts_with(&said), "{args:?}: {err}");
     }
 }
+
+// --- the first push to each push URL ---------------------------------------------------
+
+/// Brain `alpha`, shared on `alpha.git`, whose pushes go to `<home>/<push>.git`
+/// instead (`remote.origin.pushurl`), with one commit of its own to push.
+fn pushing_elsewhere(h: &mut Home, push: &str, occupied: bool) -> PathBuf {
+    let root = h.brain("alpha");
+    let url = if occupied {
+        occupied_remote(h, push)
+    } else {
+        empty_remote(h, push)
+    };
+    h.git(&root, &["remote", "set-url", "--push", "origin", &url]);
+    h.commit(&root, "notes/second.md", &neuron("Second", BODY));
+    root
+}
+
+/// Every branch of every bare remote in the home, `name: ref`.
+fn all_heads(h: &Home, names: &[&str]) -> Vec<String> {
+    names
+        .iter()
+        .map(|name| format!("{name}: {}", remote_heads(h, name)))
+        .collect()
+}
+
+#[test]
+fn sync_to_a_push_url_another_branch_occupies_is_refused() {
+    let mut h = Home::new();
+    pushing_elsewhere(&mut h, "second", true);
+    let before = all_heads(&h, &["alpha", "second"]);
+    let (code, doc) = h.json(&["sync", "--brain", "alpha", "--json"]);
+    assert_eq!(code, 1, "{doc}");
+    let sync = &doc["brains"][0]["sync"];
+    assert_eq!(*reason(sync), "refused", "{doc}");
+    assert_eq!(sync["left_as_is"]["detail"], REMOTE_HAS_COMMITS, "{doc}");
+    assert_eq!(sync["pushed"], false, "{doc}");
+    assert_eq!(all_heads(&h, &["alpha", "second"]), before);
+}
+
+/// The commit lands; its push is refused.
+#[test]
+fn a_commit_to_a_push_url_another_branch_occupies_is_not_pushed() {
+    let mut h = Home::new();
+    let root = pushing_elsewhere(&mut h, "second", true);
+    h.write(&root, "notes/third.md", &neuron("Third", BODY));
+    let before = all_heads(&h, &["alpha", "second"]);
+    let (code, doc) = h.json(&[
+        "commit",
+        "--brain",
+        "alpha",
+        "--paths",
+        "notes/third.md",
+        "--json",
+    ]);
+    assert_eq!(code, 0, "{doc}");
+    assert_eq!(doc["committed"], true, "{doc}");
+    assert_eq!(*reason(&doc["sync"]), "refused", "{doc}");
+    assert_eq!(doc["sync"]["left_as_is"]["detail"], REMOTE_HAS_COMMITS);
+    assert_eq!(all_heads(&h, &["alpha", "second"]), before);
+}
+
+/// The merge lands; its push is refused.
+#[test]
+fn a_resolve_to_a_push_url_another_branch_occupies_is_not_pushed() {
+    let mut h = Home::new();
+    let (root, merge) = h.conflicts("alpha", &["notes/first.md"]);
+    let url = occupied_remote(&h, "second");
+    h.git(&root, &["remote", "set-url", "--push", "origin", &url]);
+    let before = all_heads(&h, &["alpha", "second"]);
+    let (code, doc) = resolve(&h, "notes/first.md", &["--ours"], &merge);
+    assert_eq!(code, 1, "{doc}");
+    assert_eq!(doc["committed"], true, "{doc}");
+    assert_eq!(doc["pushed"], false, "{doc}");
+    assert_eq!(doc["sync"]["left_as_is"]["detail"], REMOTE_HAS_COMMITS);
+    assert_eq!(all_heads(&h, &["alpha", "second"]), before);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_background_push_to_a_push_url_another_branch_occupies_is_refused() {
+    let mut h = Home::new();
+    let root = pushing_elsewhere(&mut h, "second", true);
+    let before = all_heads(&h, &["alpha", "second"]);
+    let (code, doc) = h.json(&["status", "--brain", "alpha", "--json"]);
+    assert_eq!(code, 0, "{doc}");
+    wait_for_background(&root);
+    let record = LastPush::read(&root.join(".git").join(LAST_PUSH)).expect("a record");
+    assert_eq!(record.result, PushResult::Refused, "{record:?}");
+    assert_eq!(record.detail.as_deref(), Some(REMOTE_HAS_COMMITS));
+    assert_eq!(all_heads(&h, &["alpha", "second"]), before);
+}
+
+#[test]
+fn one_occupied_push_url_of_two_refuses_the_whole_push() {
+    let mut h = Home::new();
+    let root = pushing_elsewhere(&mut h, "empty", false);
+    let url = occupied_remote(&h, "second");
+    h.git(
+        &root,
+        &["remote", "set-url", "--add", "--push", "origin", &url],
+    );
+    let before = all_heads(&h, &["alpha", "empty", "second"]);
+    let (code, doc) = h.json(&["sync", "--brain", "alpha", "--json"]);
+    assert_eq!(code, 1, "{doc}");
+    let sync = &doc["brains"][0]["sync"];
+    assert_eq!(sync["left_as_is"]["detail"], REMOTE_HAS_COMMITS, "{doc}");
+    assert_eq!(all_heads(&h, &["alpha", "empty", "second"]), before);
+}
+
+#[test]
+fn a_push_instead_of_an_occupied_remote_is_refused() {
+    let mut h = Home::new();
+    let root = h.brain("alpha");
+    let fetch = h
+        .git(&root, &["remote", "get-url", "origin"])
+        .trim()
+        .to_string();
+    let url = occupied_remote(&h, "second");
+    h.git(
+        &root,
+        &["config", &format!("url.{url}.pushInsteadOf"), &fetch],
+    );
+    h.commit(&root, "notes/second.md", &neuron("Second", BODY));
+    let before = all_heads(&h, &["alpha", "second"]);
+    let (code, doc) = h.json(&["sync", "--brain", "alpha", "--json"]);
+    assert_eq!(code, 1, "{doc}");
+    let sync = &doc["brains"][0]["sync"];
+    assert_eq!(sync["left_as_is"]["detail"], REMOTE_HAS_COMMITS, "{doc}");
+    assert_eq!(all_heads(&h, &["alpha", "second"]), before);
+}
+
+#[test]
+fn a_push_url_to_an_empty_repository_is_pushed() {
+    let mut h = Home::new();
+    let root = pushing_elsewhere(&mut h, "empty", false);
+    let (code, doc) = h.json(&["sync", "--brain", "alpha", "--json"]);
+    assert_eq!(code, 0, "{doc}");
+    assert_eq!(doc["brains"][0]["sync"]["pushed"], true, "{doc}");
+    assert_eq!(bare_main(&h, "empty"), head(&h, &root));
+    assert_eq!(remote_heads(&h, "empty"), "refs/heads/main");
+}

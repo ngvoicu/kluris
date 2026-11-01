@@ -288,17 +288,30 @@ pub(crate) fn refusal<G: SyncGit>(
     remote: &str,
     error: &RemoteError,
 ) -> Option<String> {
+    let urls = git.remote_urls(repo, remote).unwrap_or_default();
+    refusal_at(git, repo, "fetch", remote, &urls, error)
+}
+
+/// [`refusal`] of a git that asked `urls` of `remote` for `command` (the
+/// `git fetch` or `git push` the fix names).
+pub(crate) fn refusal_at<G: SyncGit>(
+    git: &G,
+    repo: &Repo,
+    command: &str,
+    remote: &str,
+    urls: &[String],
+    error: &RemoteError,
+) -> Option<String> {
     let RemoteError::Failed(e) = error else {
         return None;
     };
     if let Some(lock) = locked_ref(git, repo, &e.detail) {
         return Some(ref_locked(&lock));
     }
-    let urls = git.remote_urls(repo, remote).unwrap_or_default();
-    if network_failure(&urls, &e.detail) {
+    if network_failure(urls, &e.detail) {
         return None;
     }
-    Some(refused_access("fetch", remote, &e.detail))
+    Some(refused_access(command, remote, &e.detail))
 }
 
 /// The lock file a failed ref update was stopped by, if that is why it

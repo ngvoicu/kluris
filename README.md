@@ -392,9 +392,10 @@ or pushed (`refused`: clone it and run `kluris register` on the clone, or
 point `--remote` at an empty repository), and the brain keeps `origin` but
 gets no upstream; offline or turned away, the brain is kept with its
 upstream set, and the next command that opens it pushes it. Every push
-guards that first publication: when the remote has no branch of the
-brain's name but has another, the push is refused the same way, with
-nothing pushed. `kluris create --json` adds the `sync` object after its own
+guards that first publication, at every URL it goes to (a `pushurl`, a
+`pushInsteadOf` rewrite, or the remote's own URL): when one has no branch
+of the brain's name but has another, the push is refused the same way,
+with nothing pushed to any of them. `kluris create --json` adds the `sync` object after its own
 keys; the exit code is 0 whenever the brain was created.
 
 `kluris sync` does all of it at once, right now, for people who want to sync
