@@ -437,6 +437,18 @@ package, hence the package `kluris`.
   `install.ps1`): thin pass-throughs to `releases/latest/download/` or
   `releases/download/v$KLURIS_VERSION/` (`install.ps1` checks the archive
   before the installer runs, see "Checksums"); a push there deploys the site.
+- **The site says what the binary does**: `scripts/release/check_site.sh
+  <site dir>` (the binary from `KLURIS_BIN`, else this tree's release build)
+  fails, naming each hit, on a retired word on a page (`*.html`,
+  `README.md`: the watch mode, the sync service, a major version after the
+  product's name or as a `v` word, Python packaging), on the site's
+  `AGENTS.md` differing from its `CLAUDE.md`, and on a `kluris <command>
+  --flag` in a page's code that `kluris help --json` or that command's
+  `--help` does not know; it prints what its parse misses. Tests:
+  `scripts/release/test_check_site.py`. ci.yml's Linux installer-smoke job
+  runs it on the `site` checkout, kluris-site's default branch, with the
+  dist build it made: a push of `main` checks the published site, so a
+  release pushes the site before `main`.
 
 ## Format contract
 
