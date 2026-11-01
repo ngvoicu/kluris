@@ -14,6 +14,11 @@
 //!   `scripts`, fixture folders included. File names are data: a fixture
 //!   named for the release that rendered it keeps its name.
 //!
+//! What is not read:
+//! - `__pycache__` folders and everything under them, wherever the walk
+//!   finds them;
+//! - a file that is not valid UTF-8 (bytecode, images).
+//!
 //! Names (test functions and folders) are matched with `_` read as a space,
 //! so a test named `reads_the_v2_config` is a hit.
 //!
@@ -34,6 +39,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use regex::Regex;
+use tempfile::TempDir;
 
 /// Paths read as data, never as prose; a folder ends with `/`.
 const EXEMPT: &[(&str, &str)] = &[
@@ -179,6 +185,9 @@ fn walk(dir: &Path, visit: &mut dyn FnMut(&Path, bool)) {
             continue;
         };
         if kind.is_dir() {
+            if entry.file_name() == "__pycache__" {
+                continue;
+            }
             visit(&path, true);
             walk(&path, visit);
         } else if kind.is_file() {
@@ -452,7 +461,9 @@ fn scan(root: &Path) -> Vec<String> {
             continue;
         }
         let bytes = fs::read(&path).unwrap_or_else(|e| panic!("{rel} reads: {e}"));
-        let src = String::from_utf8_lossy(&bytes);
+        let Ok(src) = String::from_utf8(bytes) else {
+            continue;
+        };
         for (prose, in_code_block) in text_prose(&rel, &src) {
             hits_in(&patterns, &rel, &prose, in_code_block, &mut hits);
         }
@@ -493,6 +504,23 @@ fn claude_md_and_agents_md_are_identical() {
     let claude = fs::read(root.join("CLAUDE.md")).expect("CLAUDE.md reads");
     let agents = fs::read(root.join("AGENTS.md")).expect("AGENTS.md reads");
     assert!(claude == agents, "CLAUDE.md and AGENTS.md differ");
+}
+
+#[test]
+fn pycache_folders_and_non_utf8_files_are_skipped() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+    fs::create_dir(root.join("crates")).unwrap();
+    for file in TEXT_FILES {
+        fs::write(root.join(file), "").unwrap();
+    }
+    let scripts = root.join("scripts");
+    let pycache = scripts.join("__pycache__");
+    fs::create_dir_all(&pycache).unwrap();
+    fs::write(pycache.join("x.pyc"), "it used to\n").unwrap();
+    fs::write(scripts.join("blob.bin"), b"\xff\xfeit used to\n").unwrap();
+    let hits = scan(root);
+    assert!(hits.is_empty(), "{}", hits.join("\n"));
 }
 
 #[test]
