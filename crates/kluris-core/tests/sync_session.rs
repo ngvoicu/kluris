@@ -1263,13 +1263,27 @@ fn an_explicit_session_waits_for_a_remote_claim_let_go_within_its_bound() {
     assert_eq!(w.parents(&w.ours, "HEAD"), 2, "a merge of the moved remote");
 }
 
+/// How many times the interrupted read runs: the thread the signal lands
+/// on is the kernel's choice, so one run proves little.
+#[cfg(unix)]
+const INTERRUPTED_READS: usize = 20;
+
 /// A read interrupted while a merge hook runs (SIGINT to its command's
 /// process group, as Ctrl-C sends it) ends the hook and everything the hook
 /// started, then dies of the signal: the tree claim is free only once they
-/// are gone, and nothing landed.
+/// are gone, and nothing landed. Every time, wherever the signal lands.
 #[cfg(unix)]
 #[test]
 fn an_interrupted_read_ends_its_hooks_before_it_lets_go_of_the_brain() {
+    for read in 1..=INTERRUPTED_READS {
+        interrupted_read(&format!("read {read} of {INTERRUPTED_READS}"));
+    }
+}
+
+/// One read of [`an_interrupted_read_ends_its_hooks_before_it_lets_go_of_the_brain`],
+/// in a world of its own.
+#[cfg(unix)]
+fn interrupted_read(what: &str) {
     use rustix::process::{Pid, Signal, kill_process_group};
     use std::os::unix::process::{CommandExt, ExitStatusExt};
     let w = World::new();
@@ -1305,12 +1319,16 @@ fn an_interrupted_read_ends_its_hooks_before_it_lets_go_of_the_brain() {
         TreeClaim::exclusive(&own, Duration::ZERO).is_ok()
     });
     for pid in &pids {
-        assert!(gone(pid.trim()), "{} outlived the read", pid.trim());
+        assert!(gone(pid.trim()), "{what}: {} outlived the read", pid.trim());
     }
     let status = wait_bounded(&mut reader, "the reader", PATIENCE);
-    assert_eq!(status.signal(), Some(Signal::INT.as_raw()), "{status:?}");
-    assert_eq!(w.head(&w.ours), before);
-    assert!(!late.exists(), "the hook went on");
+    assert_eq!(
+        status.signal(),
+        Some(Signal::INT.as_raw()),
+        "{what}: {status:?}"
+    );
+    assert_eq!(w.head(&w.ours), before, "{what}");
+    assert!(!late.exists(), "{what}: the hook went on");
 }
 
 /// Whether the process `pid` is gone: none runs under it, or it is a

@@ -11,9 +11,14 @@
 //!
 //! On Unix a SIGINT, SIGTERM or SIGHUP to the command ends every group
 //! still running before the command dies of it ([`interrupts`]), so nothing
-//! a run started outlives the claims the command holds. A SIGKILL to the
-//! command cannot be handled: its groups are left running to their own end
-//! or the next machine restart.
+//! a run started outlives the claims the command holds. The threads the
+//! runner makes (its output drains, its input writer) never take those
+//! signals, so the handler runs on a thread whose progress the command
+//! waits for; and once a signal came, no run returns to the command: each
+//! waits for the handler, which ends the command within its own bounds (a
+//! second for a run starting its program, then the grace). A SIGKILL to
+//! the command cannot be handled: its groups are left running to their
+//! own end or the next machine restart.
 //!
 //! On Windows the program starts suspended, joins its job, and only then
 //! runs, so nothing it starts is outside the job. When the job cannot be
@@ -72,6 +77,34 @@ pub fn run_until_shown(cmd: Command, deadline: Instant) -> Result<ExitStatus, Ru
 /// Run `cmd`, `input` on its stdin (closed without), its output captured
 /// when `capture` (else where `cmd` sends it, and none comes back).
 fn run(
+    cmd: Command,
+    input: Option<Vec<u8>>,
+    capture: bool,
+    deadline: Instant,
+) -> Result<Finished, RunError> {
+    let ran = run_to_its_end(cmd, input, capture, deadline);
+    hold_if_interrupted();
+    ran
+}
+
+/// Once the command is being interrupted, a run never returns to it: it
+/// waits for the interrupt handler to end the command ([`interrupts`]).
+fn hold_if_interrupted() {
+    #[cfg(unix)]
+    interrupts::hold_if_interrupted();
+}
+
+/// A thread of the runner's own for `work`, which never takes the signals
+/// the interrupt handler handles: it starts with them blocked, as a new
+/// thread takes the mask of the thread that makes it.
+fn helper(work: impl FnOnce() + Send + 'static) {
+    #[cfg(unix)]
+    let _blocked = interrupts::Blocked::now();
+    thread::spawn(work);
+}
+
+/// [`run`], up to the program's end or the deadline.
+fn run_to_its_end(
     mut cmd: Command,
     input: Option<Vec<u8>>,
     capture: bool,
@@ -89,7 +122,7 @@ fn run(
     // Written from a thread: the program may fill its output before it has
     // read all of its input. A program stopped first ends the write.
     if let (Some(mut stdin), Some(input)) = (child.stdin.take(), input) {
-        thread::spawn(move || {
+        helper(move || {
             let _ = stdin.write_all(&input);
         });
     }
@@ -99,6 +132,7 @@ fn run(
     let mut out = None;
     let mut err = None;
     loop {
+        hold_if_interrupted();
         if status.is_none() {
             status = child.try_wait().ok().flatten();
             if status.is_some() {
@@ -147,7 +181,7 @@ fn drain(pipe: Option<impl Read + Send + 'static>) -> Receiver<Vec<u8>> {
     let (tx, rx) = mpsc::channel();
     match pipe {
         Some(mut pipe) => {
-            thread::spawn(move || {
+            helper(move || {
                 let mut bytes = Vec::new();
                 let _ = pipe.read_to_end(&mut bytes);
                 let _ = tx.send(bytes);
@@ -185,10 +219,11 @@ mod tree {
     impl Tree {
         /// Start `cmd` leading a new process group, with the group known to
         /// the interrupt handler before any signal it handles can be taken.
-        /// No program starts once the command is being interrupted.
+        /// No program starts once the command is being interrupted: the
+        /// run waits for the handler to end the command.
         pub fn start(cmd: &mut Command) -> io::Result<(Child, Tree)> {
             cmd.process_group(0);
-            let starting = interrupts::Starting::begin()?;
+            let starting = interrupts::Starting::begin();
             let mask = starting.mask_before();
             // SAFETY: `sigprocmask` is async-signal-safe, and `mask` a copy.
             unsafe {
@@ -251,7 +286,6 @@ mod tree {
 /// prints `Aborted!` and exits 1 before the default action comes.
 #[cfg(unix)]
 mod interrupts {
-    use std::io;
     use std::sync::Once;
     use std::sync::atomic::{AtomicBool, AtomicI32, AtomicUsize, Ordering::SeqCst};
 
@@ -277,51 +311,79 @@ mod interrupts {
     /// register its group.
     const STARTING_BOUND: std::time::Duration = std::time::Duration::from_secs(1);
 
-    /// A run starting its program: until dropped, the handled signals are
-    /// blocked on this thread (the handler never waits for its own thread),
-    /// and the handler waits for the run to register its group.
-    pub struct Starting(libc::sigset_t);
+    /// The handled signals blocked on this thread until dropped, when the
+    /// mask it had comes back.
+    pub struct Blocked(libc::sigset_t);
 
-    impl Starting {
-        pub fn begin() -> io::Result<Starting> {
-            install();
+    impl Blocked {
+        pub fn now() -> Blocked {
             // SAFETY: plain libc calls on locals of the stated types.
-            let old = unsafe {
+            unsafe {
                 let mut block: libc::sigset_t = std::mem::zeroed();
                 libc::sigemptyset(&mut block);
                 for signal in SIGNALS {
                     libc::sigaddset(&mut block, signal);
                 }
-                let mut old: libc::sigset_t = std::mem::zeroed();
-                libc::pthread_sigmask(libc::SIG_BLOCK, &block, &mut old);
-                old
-            };
-            let starting = Starting(old);
-            STARTING.fetch_add(1, SeqCst);
-            if INTERRUPTED.load(SeqCst) {
-                return Err(io::Error::new(
-                    io::ErrorKind::Interrupted,
-                    "the command is being interrupted",
-                ));
+                let mut before: libc::sigset_t = std::mem::zeroed();
+                libc::pthread_sigmask(libc::SIG_BLOCK, &block, &mut before);
+                Blocked(before)
             }
-            Ok(starting)
         }
     }
 
+    impl Drop for Blocked {
+        fn drop(&mut self) {
+            // SAFETY: the mask this thread had before `now`.
+            unsafe {
+                libc::pthread_sigmask(libc::SIG_SETMASK, &self.0, std::ptr::null_mut());
+            }
+        }
+    }
+
+    /// A run starting its program: until dropped, the handled signals are
+    /// blocked on this thread (the handler never waits for its own thread),
+    /// and the handler waits for the run to register its group.
+    pub struct Starting(Blocked);
+
     impl Starting {
+        /// The start of a run; once the command is being interrupted, the
+        /// wait for the handler to end it instead.
+        pub fn begin() -> Starting {
+            install();
+            let blocked = Blocked::now();
+            STARTING.fetch_add(1, SeqCst);
+            if INTERRUPTED.load(SeqCst) {
+                STARTING.fetch_sub(1, SeqCst);
+                wait_for_the_end();
+            }
+            Starting(blocked)
+        }
+
         /// This thread's signal mask before [`Starting::begin`].
         pub fn mask_before(&self) -> libc::sigset_t {
-            self.0
+            self.0.0
         }
     }
 
     impl Drop for Starting {
         fn drop(&mut self) {
             STARTING.fetch_sub(1, SeqCst);
-            // SAFETY: the mask this thread had before `begin`.
-            unsafe {
-                libc::pthread_sigmask(libc::SIG_SETMASK, &self.0, std::ptr::null_mut());
-            }
+        }
+    }
+
+    /// Once a handled signal came, wait for the handler to end the
+    /// command.
+    pub fn hold_if_interrupted() {
+        if INTERRUPTED.load(SeqCst) {
+            wait_for_the_end();
+        }
+    }
+
+    /// The handler always ends the command within its bounds
+    /// ([`STARTING_BOUND`], then the grace): this thread waits for it.
+    fn wait_for_the_end() -> ! {
+        loop {
+            std::thread::sleep(POLL);
         }
     }
 
@@ -639,6 +701,95 @@ mod tests {
         let result = run_until_shown(cmd, started + Duration::from_millis(300));
         assert!(matches!(result, Err(RunError::TimedOut)), "{result:?}");
         assert!(started.elapsed() < Duration::from_secs(3));
+    }
+
+    /// The folder the `interrupted_child` writes its marker in.
+    #[cfg(unix)]
+    const INTERRUPTED_DIR: &str = "KLURIS_TEST_INTERRUPTED_DIR";
+
+    /// How many commands [`a_sigint_during_a_run_ends_the_command_by_sigint`]
+    /// interrupts.
+    #[cfg(unix)]
+    const INTERRUPTED_COMMANDS: usize = 20;
+
+    /// A SIGINT to the command while a run goes ends the command by
+    /// SIGINT, never with status 0, wherever the signal lands: the child
+    /// runs its program on a thread that blocks the signal, so it lands on
+    /// another one (one the runner made, or the test harness's).
+    #[cfg(unix)]
+    #[test]
+    fn a_sigint_during_a_run_ends_the_command_by_sigint() {
+        use rustix::process::{Pid, Signal, kill_process};
+        use std::os::unix::process::ExitStatusExt;
+        for command in 1..=INTERRUPTED_COMMANDS {
+            let dir = tempfile::TempDir::new().unwrap();
+            let mut child = Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--ignored",
+                    "--exact",
+                    "process::tests::interrupted_child",
+                    "--quiet",
+                ])
+                .env(INTERRUPTED_DIR, dir.path())
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .unwrap();
+            let bound = Instant::now() + Duration::from_secs(30);
+            let ended = |child: &mut std::process::Child, what: &str| {
+                let _ = child.kill();
+                let _ = child.wait();
+                panic!("command {command}: {what}");
+            };
+            while !dir.path().join("running").exists() {
+                if Instant::now() > bound || child.try_wait().ok().flatten().is_some() {
+                    ended(&mut child, "its run never started");
+                }
+                thread::sleep(Duration::from_millis(5));
+            }
+            let pid = Pid::from_raw(i32::try_from(child.id()).unwrap()).unwrap();
+            kill_process(pid, Signal::INT).unwrap();
+            let status = loop {
+                if let Some(status) = child.try_wait().unwrap() {
+                    break status;
+                }
+                if Instant::now() > bound {
+                    ended(&mut child, "it never ended");
+                }
+                thread::sleep(Duration::from_millis(5));
+            };
+            assert_eq!(
+                status.signal(),
+                Some(Signal::INT.as_raw()),
+                "command {command}: {status:?}"
+            );
+        }
+    }
+
+    /// This test binary run again as the command of
+    /// [`a_sigint_during_a_run_ends_the_command_by_sigint`]: on a thread
+    /// that blocks SIGINT, a run whose program marks that it runs and then
+    /// holds its output open; whatever the run gives back, the command then
+    /// ends with status 0. Without its variable it does nothing.
+    #[cfg(unix)]
+    #[test]
+    #[ignore = "run only as the child of a_sigint_during_a_run_ends_the_command_by_sigint"]
+    fn interrupted_child() {
+        let Some(dir) = std::env::var_os(INTERRUPTED_DIR) else {
+            return;
+        };
+        let running = std::path::Path::new(&dir).join("running");
+        // SAFETY: a libc call on locals of the stated type.
+        unsafe {
+            let mut block: libc::sigset_t = std::mem::zeroed();
+            libc::sigemptyset(&mut block);
+            libc::sigaddset(&mut block, libc::SIGINT);
+            libc::pthread_sigmask(libc::SIG_BLOCK, &block, std::ptr::null_mut());
+        }
+        let script = format!("echo x > '{}'; exec sleep 30", running.display());
+        let _ = run_until(sh(&script), Instant::now() + Duration::from_secs(10));
+        std::process::exit(0);
     }
 
     #[cfg(unix)]
