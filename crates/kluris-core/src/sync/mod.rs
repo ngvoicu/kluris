@@ -10,12 +10,14 @@
 //! - [`land`]: moving the work tree, never over an uncommitted file;
 //! - [`pending`]: the waiting merge a person settles;
 //! - [`session`]: the one step through which every command that opens a
-//!   brain syncs;
+//!   brain syncs; [`background`]: the detached push of the commits a read
+//!   leaves waiting;
 //! - [`commit`]: `kluris commit`; [`resolve`]: `kluris resolve`;
 //!   [`fresh`]: the fetch before a read.
 //!
 //! This module holds the types they share.
 
+pub mod background;
 pub mod claim;
 pub mod commit;
 pub mod engine;
@@ -251,6 +253,8 @@ pub struct SyncReport {
     /// The commits the remote does not have yet.
     pub to_push: usize,
     pub pushed: bool,
+    /// What the last background push did, as its record says.
+    pub last_push: Option<background::LastPush>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

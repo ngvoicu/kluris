@@ -5,9 +5,11 @@
 //! - [`RemoteClaim`] on [`REMOTE_CLAIM`] in the repository's common git
 //!   directory (`git rev-parse --git-common-dir`): one network sync of a
 //!   repository at a time. Its worktrees share its remote and its
-//!   remote-tracking refs, so they share this one claim. It is never
-//!   waited for: a command that finds it held leaves the network to the
-//!   holder.
+//!   remote-tracking refs, so they share this one claim. A read never
+//!   waits for it ([`RemoteClaim::try_take`]): one that finds it held
+//!   leaves the network to the holder. An explicit command and the
+//!   background push wait for it, tried every [`STEP`] up to
+//!   [`COMMAND_BOUND`] ([`RemoteClaim::take`]).
 //! - [`TreeClaim`] on [`TREE_CLAIM`] in the worktree's own git directory
 //!   (`git rev-parse --absolute-git-dir`, where `--git-path` puts the name):
 //!   each worktree has its own files, index and HEAD, so its own claim.
@@ -23,6 +25,15 @@
 //!   the gate meanwhile, and shared takers never take it.
 //!
 //! For the main worktree the two directories are one.
+//!
+//! No two holders wait for each other. No one waits for the tree claim
+//! while holding the remote claim: a pull fetches under the remote claim,
+//! lets it go, and only then takes the tree claim. The one holder of both
+//! is an explicit command's push when it closes, which takes the remote
+//! claim while it holds the tree claim; whoever holds the remote claim
+//! meanwhile (another command's fetch, the background push) never waits
+//! for a tree claim, so it lets the remote claim go, and the push gets it.
+//! The background push never takes the tree claim at all.
 //!
 //! A lock goes with its file handle, so a command that ends, crashes or is
 //! killed releases its claims and blocks no other. A claim dropped is
@@ -119,6 +130,14 @@ impl RemoteClaim {
         let file = open(&common_git_dir.join(REMOTE_CLAIM))?;
         file.try_lock()?;
         Ok(RemoteClaim { _held: Held(file) })
+    }
+
+    /// Takes the remote claim of the repository whose common git directory
+    /// is `common_git_dir`, trying every [`STEP`] until `bound` has passed.
+    pub fn take(common_git_dir: &Path, bound: Duration) -> Result<RemoteClaim, ClaimError> {
+        let path = common_git_dir.join(REMOTE_CLAIM);
+        let held = take(&path, Instant::now() + bound, fs::File::try_lock)?;
+        Ok(RemoteClaim { _held: held })
     }
 }
 

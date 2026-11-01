@@ -1,7 +1,7 @@
 //! The session: the one step through which every command that opens a
 //! brain syncs. [`open`] brings teammates' commits in before the command
 //! works; [`close`] ends it, pushing what an explicit command committed.
-//! [`open_all`] opens many brains at once.
+//! [`open_all`] opens many brains at once, and [`close_all`] closes them.
 //!
 //! What a session does depends on its [`Intent`]:
 //! - **A read** (`wake-up`, `search`, `status`, `register`, `doctor`) and
@@ -15,10 +15,20 @@
 //!   land, its merge commit and that commit's hooks included. The land
 //!   itself, and what follows it, is never stopped: a land stopped partway
 //!   would leave the work tree half moved. A local step stopped at the
-//!   limit leaves the brain as it is (`busy`).
+//!   limit leaves the brain as it is (`busy`). A read never waits for the
+//!   remote claim another command holds: it is `busy` at once.
 //! - **An explicit** command (`commit`, `sync`, `resolve`, `create
 //!   --remote`) always fetches, and its fetch and push each have
-//!   [`NETWORK_TIME_LIMIT`].
+//!   [`NETWORK_TIME_LIMIT`]. It waits for the remote claim another command
+//!   holds up to [`COMMAND_BOUND`], for its fetch, its push and every pull
+//!   the push runs again.
+//!
+//! **Closing.** An explicit session pushes what is committed. The commits
+//! the reads closed together leave waiting go to one background push for
+//! all their brains ([`background`]), the program [`SessionEnv::program`]
+//! names, unless that brain's last push failed lately or a background run
+//! holds it. Every session reports the last background push as its record
+//! says: a failure until a push succeeds, a success once.
 //!
 //! A pull that does not fetch lands nothing: only the commit this
 //! invocation's own `ls-remote` named may land, never what the shared
@@ -50,12 +60,13 @@
 //! with an upstream does: no setting of the brain's and no environment
 //! variable is read here.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Mutex, PoisonError};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime};
 
+use super::background;
 use super::claim::{COMMAND_BOUND, ClaimError, READ_BOUND, TreeClaim};
 use super::engine::{self, Context};
 use super::fetch::{BACKOFF, STAMP, THROTTLE, back_off, backed_off, fetched_recently, write_stamp};
@@ -122,6 +133,9 @@ pub struct SessionEnv {
     pub no_verify: bool,
     /// The time the throttle and the back-off compare with.
     pub now: SystemTime,
+    /// The program a read's [`close`] starts to push the commits it leaves
+    /// waiting (the CLI passes its own executable); `None`: none starts.
+    pub program: Option<PathBuf>,
 }
 
 /// One brain opened by a command, until [`close`].
@@ -135,6 +149,10 @@ pub struct Session<'a> {
     report: Option<SyncReport>,
     /// Shared for a read, exclusive for an explicit command.
     claim: Option<TreeClaim>,
+    /// [`SessionEnv::program`].
+    program: Option<PathBuf>,
+    /// [`SessionEnv::now`].
+    now: SystemTime,
 }
 
 impl Session<'_> {
@@ -153,7 +171,7 @@ fn silent(report: &SyncReport) -> bool {
 
 /// Open the brain for `intent`: fetch, then land (see the module docs).
 pub fn open<'a>(brain: Brain<'a>, intent: Intent, env: &SessionEnv) -> Session<'a> {
-    settle(fetch(brain, intent, env))
+    settle(fetch(brain, intent, env), env)
 }
 
 /// Open every brain for `intent`: [`PARALLEL_FETCHES`] fetch at a time at
@@ -180,23 +198,61 @@ pub fn open_all<'a>(brains: &[Brain<'a>], intent: Intent, env: &SessionEnv) -> V
         .zip(brains)
         .map(|(slot, brain)| {
             let fetched = slot.into_inner().unwrap_or_else(PoisonError::into_inner);
-            settle(fetched.unwrap_or_else(|| fetch(*brain, intent, env)))
+            settle(fetched.unwrap_or_else(|| fetch(*brain, intent, env)), env)
         })
         .collect()
 }
 
-/// End the session: release its claim and say what was done. An explicit
-/// session pushes what is committed first ([`engine::share`]); a read
-/// counts the commits waiting ([`push_later`]).
+/// End the session: release its claim and say what was done ([`close_all`]).
 pub fn close(session: Session) -> Option<SyncReport> {
+    close_all(vec![session]).pop().flatten()
+}
+
+/// End the sessions, each as [`close`] says, the reports in their order.
+/// An explicit session pushes what is committed first ([`engine::share`]).
+/// The commits the reads leave waiting go to one background push for all
+/// their brains ([`push_later`]).
+pub fn close_all(sessions: Vec<Session>) -> Vec<Option<SyncReport>> {
+    let mut waiting = Vec::new();
+    let mut program = None;
+    let reports = sessions
+        .into_iter()
+        .map(|session| {
+            let (report, handed) = finish(session);
+            if let Some((root, by)) = handed {
+                waiting.push(root);
+                program = Some(by);
+            }
+            report
+        })
+        .collect();
+    if let Some(program) = program {
+        push_later(&program, &waiting);
+    }
+    reports
+}
+
+/// Start one background push of the commits waiting in the brains at
+/// `roots`. A start that fails or is refused leaves them counted in
+/// `to_push`, and the next read tries again.
+fn push_later(program: &Path, roots: &[PathBuf]) {
+    let _ = background::start(program, roots);
+}
+
+/// One session closed: its report, and the brain to hand to the
+/// background push with the program that pushes it.
+fn finish(session: Session) -> (Option<SyncReport>, Option<(PathBuf, PathBuf)>) {
     let Session {
         intent,
         ctx,
         report,
         claim,
+        program,
+        now,
     } = session;
     let Some(ctx) = ctx else {
-        return report.filter(|r| intent == Intent::Explicit || !silent(r));
+        let report = report.filter(|r| intent == Intent::Explicit || !silent(r));
+        return (report, None);
     };
     let mut report = report.unwrap_or_default();
     // What the command committed since the session opened counts.
@@ -204,21 +260,41 @@ pub fn close(session: Session) -> Option<SyncReport> {
         report.to_push = count;
     }
     if intent == Intent::Explicit {
-        let report = engine::share(&ctx, claim.as_ref(), report);
+        report = engine::share(&ctx, claim.as_ref(), report);
         drop(claim);
-        return Some(report);
+        last_push(&ctx, &mut report, intent, now);
+        return (Some(report), None);
     }
     drop(claim);
-    if report.to_push > 0 {
-        push_later(&ctx, &report);
-    }
-    (!silent(&report)).then_some(report)
+    last_push(&ctx, &mut report, intent, now);
+    let common = &ctx.dirs().common;
+    let handed = program
+        .filter(|_| report.to_push > 0 && background::wanted(common, now))
+        .map(|program| (ctx.repo().dir.clone(), program));
+    ((!silent(&report)).then_some(report), handed)
 }
 
-/// Where the commits a read or housekeeping session leaves waiting go:
-/// they stay counted in its report's `to_push`, for the next explicit
-/// command to push.
-fn push_later(_ctx: &Context<SystemGit>, _report: &SyncReport) {}
+/// The last background push, as `report` says it: a failure until a push
+/// succeeds, a success once. A record a live background run may be
+/// replacing stays; one an explicit push that succeeded makes moot goes
+/// unreported.
+fn last_push(ctx: &Context<SystemGit>, report: &mut SyncReport, intent: Intent, now: SystemTime) {
+    let common = &ctx.dirs().common;
+    let path = common.join(background::LAST_PUSH);
+    let Some(record) = background::LastPush::read(&path) else {
+        return;
+    };
+    let running =
+        background::Lock::read(&common.join(background::LOCK)).is_some_and(|lock| lock.live(now));
+    let done = record.result == background::PushResult::Pushed;
+    let moot = !done && intent == Intent::Explicit && report.pushed;
+    if (done || moot) && !running {
+        let _ = std::fs::remove_file(&path);
+    }
+    if !moot {
+        report.last_push = Some(record);
+    }
+}
 
 /// A brain's fetch: what [`open`] does before the land.
 #[derive(Debug)]
@@ -267,12 +343,15 @@ fn fetch<'a>(brain: Brain<'a>, intent: Intent, env: &SessionEnv) -> Fetched<'a> 
         tree_bound: intent.tree_bound(),
     };
     let alone = Fetched::alone(intent);
-    let ctx = match engine::open(brain.root, &git, &request) {
+    let mut ctx = match engine::open(brain.root, &git, &request) {
         Ok(ctx) => ctx,
         Err(SyncError::NotARepo | SyncError::Nested { .. }) => return alone,
         Err(SyncError::GitTooOld { .. }) if intent.throttled() => return alone,
         Err(e) => return alone.left(failed(e)),
     };
+    if !intent.throttled() {
+        ctx.wait_for_remote(COMMAND_BOUND);
+    }
     match ctx.git().is_shallow(ctx.repo()) {
         Ok(false) => {}
         Ok(true) => return alone,
@@ -328,7 +407,7 @@ fn fetch<'a>(brain: Brain<'a>, intent: Intent, env: &SessionEnv) -> Fetched<'a> 
 
 /// Land what the fetch named under the tree claim, and hold the claim the
 /// session keeps until [`close`] (see the module docs).
-fn settle(fetched: Fetched) -> Session {
+fn settle<'a>(fetched: Fetched<'a>, env: &SessionEnv) -> Session<'a> {
     let Fetched {
         intent,
         ctx,
@@ -342,6 +421,8 @@ fn settle(fetched: Fetched) -> Session {
             ctx: None,
             report,
             claim: None,
+            program: env.program.clone(),
+            now: env.now,
         };
     };
     let own = ctx.dirs().own.clone();
@@ -395,6 +476,8 @@ fn settle(fetched: Fetched) -> Session {
         ctx: Some(ctx),
         report,
         claim,
+        program: env.program.clone(),
+        now: env.now,
     }
 }
 

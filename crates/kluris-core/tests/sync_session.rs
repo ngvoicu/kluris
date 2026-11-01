@@ -18,6 +18,7 @@
 mod common;
 
 use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::thread;
@@ -54,6 +55,7 @@ fn env(w: &World, now: SystemTime) -> SessionEnv {
         git: w.git(),
         no_verify: false,
         now,
+        program: None,
     }
 }
 
@@ -315,6 +317,7 @@ fn a_stalled_local_step_keeps_a_read_within_its_bound() {
             git: stalling_git(&w, step),
             no_verify: false,
             now: at(0),
+            program: None,
         };
         let started = Instant::now();
         let report =
@@ -327,6 +330,7 @@ fn a_stalled_local_step_keeps_a_read_within_its_bound() {
 }
 
 /// A teammate's commit and one of ours on different files.
+#[cfg(unix)]
 fn diverged(w: &World) {
     teammate_pushes(w, "ideas/new.md");
     w.ours_commit(&[("notes/second.md", &neuron("", "# Second\n"))], &[]);
@@ -532,6 +536,7 @@ impl Brains {
             git,
             no_verify: false,
             now: at(0),
+            program: None,
         }
     }
 }
@@ -757,8 +762,10 @@ const CHILD_OUT: &str = "KLURIS_TEST_SESSION_OUT";
 /// This test binary run again as a child, without the world's lock, that
 /// `read`s the brain through a session (with `KLURIS_NO_AUTO_SYNC=1` in
 /// its environment) or `land`s what a pull brings, waiting for the tree
-/// claim up to an explicit command's bound. It writes `<pulled>
-/// <milliseconds when done>`. Without those variables it does nothing.
+/// claim up to an explicit command's bound, and writes `<pulled>
+/// <milliseconds when done>`; or `hold`s the remote claim until its stdin
+/// closes, writing an empty file once it holds it. Without those variables
+/// it does nothing.
 #[test]
 #[ignore = "run only as the child of the cross-process tests"]
 fn child_session() {
@@ -785,6 +792,7 @@ fn child_session() {
                 git,
                 no_verify: false,
                 now: SystemTime::now(),
+                program: None,
             };
             session::close(session::open(brain(&root), Intent::Read, &env))
                 .map_or(0, |report| report.pulled)
@@ -797,6 +805,13 @@ fn child_session() {
                 tree_bound: COMMAND_BOUND,
             };
             engine::pull(&engine::open(&root, &git, &request).unwrap()).pulled
+        }
+        "hold" => {
+            let _claim = RemoteClaim::try_take(&root.join(".git")).unwrap();
+            fs::write(&out, "").unwrap();
+            let mut rest = Vec::new();
+            let _ = std::io::stdin().read_to_end(&mut rest);
+            return;
         }
         other => panic!("no action {other}"),
     };
@@ -819,6 +834,88 @@ fn child(w: &World, action: &str, out: &Path) -> Child {
         .stdout(Stdio::null())
         .stderr(Stdio::null());
     cmd.spawn().unwrap()
+}
+
+/// A child holding "ours"' remote claim, once it holds it; it lets go when
+/// its stdin closes.
+fn holder(w: &World) -> Child {
+    let held = w.dir.path().join("remote-held");
+    let mut cmd = Command::new(std::env::current_exe().unwrap());
+    cmd.args(["--ignored", "--exact", "child_session", "--quiet"])
+        .env(CHILD_ACTION, "hold")
+        .env(CHILD_WORLD, w.dir.path())
+        .env(CHILD_BRAIN, &w.ours)
+        .env(CHILD_OUT, &held)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    let mut child = cmd.spawn().unwrap();
+    eventually("the child holding the remote claim", || {
+        assert_running(&mut child);
+        held.exists()
+    });
+    child
+}
+
+#[test]
+fn an_explicit_session_waits_for_a_remote_claim_let_go_within_its_bound() {
+    let w = World::new();
+    teammate_pushes(&w, "ideas/first-new.md");
+    let mut held = holder(&w);
+    // Let go half a second after the session starts waiting.
+    let stdin = held.stdin.take();
+    let letting_go = thread::spawn(move || {
+        thread::sleep(Duration::from_millis(500));
+        drop(stdin);
+    });
+    let started = Instant::now();
+    let open = session::open(brain(&w.ours), Intent::Explicit, &env(&w, at(0)));
+    assert!(
+        started.elapsed() >= Duration::from_millis(400),
+        "did not wait"
+    );
+    assert_eq!(
+        open.report().map(|r| r.pulled),
+        Some(1),
+        "{:?}",
+        open.report()
+    );
+    w.ours_commit(&[("notes/second.md", &neuron("", "# Second\n"))], &[]);
+    let report = session::close(open).expect("a report");
+    assert!(report.pushed, "{report:?}");
+    assert_eq!(w.remote_head(), w.head(&w.ours));
+    letting_go.join().unwrap();
+    assert!(held.wait().unwrap().success());
+}
+
+#[test]
+fn an_explicit_session_is_busy_once_the_remote_claim_is_held_past_its_bound() {
+    let w = World::new();
+    teammate_pushes(&w, "ideas/new.md");
+    let before = w.head(&w.ours);
+    let held = RemoteClaim::try_take(&w.ours.join(".git")).unwrap();
+    let started = Instant::now();
+    let report = session_at(&w, &w.ours, Intent::Explicit, at(0)).expect("a report");
+    let took = started.elapsed();
+    assert!(took >= COMMAND_BOUND, "did not wait its bound: {took:?}");
+    assert_eq!(reason(&report), Some("busy"), "{report:?}");
+    assert_eq!(w.head(&w.ours), before);
+    drop(held);
+}
+
+#[test]
+fn a_read_never_waits_for_the_remote_claim() {
+    let w = World::new();
+    teammate_pushes(&w, "ideas/new.md");
+    let held = RemoteClaim::try_take(&w.ours.join(".git")).unwrap();
+    for intent in READS {
+        let started = Instant::now();
+        let report = session_at(&w, &w.ours, intent, at(0)).expect("a report");
+        let took = started.elapsed();
+        assert_eq!(reason(&report), Some("busy"), "{intent:?}: {report:?}");
+        assert!(took < Duration::from_secs(2), "{intent:?} waited {took:?}");
+    }
+    drop(held);
 }
 
 fn assert_running(child: &mut Child) {

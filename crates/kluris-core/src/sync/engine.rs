@@ -64,8 +64,9 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
+use super::background::LastPush;
 use super::claim::{ClaimError, RemoteClaim, TreeClaim};
 use super::fetch::{self, Fetch};
 use super::git::{GitDirs, PushOutcome, SyncGit, Upstream, one_line};
@@ -107,6 +108,9 @@ pub struct Context<'a, G> {
     landing: G,
     repo: Repo,
     dirs: GitDirs,
+    /// How long the remote claim another command holds is waited for
+    /// ([`Context::wait_for_remote`]); zero: not at all.
+    remote_bound: Duration,
     /// `refs/heads/<name>`; `None` on a detached HEAD.
     branch: Option<String>,
     upstream: Option<Upstream>,
@@ -122,6 +126,12 @@ impl<'a, G: SyncGit> Context<'a, G> {
     /// never); the land and what follows it are never stopped.
     pub fn until(&mut self, deadline: Option<Instant>) {
         self.git = self.git.clone().with_deadline(deadline);
+    }
+
+    /// Wait for the remote claim another command holds up to `bound`
+    /// before it is busy.
+    pub fn wait_for_remote(&mut self, bound: Duration) {
+        self.remote_bound = bound;
     }
 
     /// The repository's two git directories.
@@ -180,7 +190,12 @@ impl<'a, G: SyncGit> Context<'a, G> {
 
     /// The remote claim; `None` while another command holds it.
     pub fn take_remote(&self) -> Result<Option<RemoteClaim>, LeftAsIs> {
-        match RemoteClaim::try_take(&self.dirs.common) {
+        let taken = if self.remote_bound.is_zero() {
+            RemoteClaim::try_take(&self.dirs.common)
+        } else {
+            RemoteClaim::take(&self.dirs.common, self.remote_bound)
+        };
+        match taken {
             Ok(claim) => Ok(Some(claim)),
             Err(ClaimError::Busy) => Ok(None),
             Err(ClaimError::Io(e)) => Err(failed(format!("cannot claim the remote: {e}"))),
@@ -217,6 +232,7 @@ pub fn open<'a, G: SyncGit>(
         landing,
         repo,
         dirs,
+        remote_bound: Duration::ZERO,
         branch,
         upstream,
         request: *request,
@@ -527,6 +543,21 @@ pub enum Pushed {
 /// Push the pinned branch to its upstream under the remote claim (see the
 /// module docs).
 pub fn push<G: SyncGit>(ctx: &Context<G>) -> Pushed {
+    let remote = match ctx.take_remote() {
+        Ok(Some(remote)) => remote,
+        Ok(None) => {
+            return Pushed::Left(LeftAsIs::because(
+                LeftReason::Busy,
+                "another kluris command is talking to the remote; the commits wait for the next push",
+            ));
+        }
+        Err(left) => return Pushed::Left(left),
+    };
+    push_claimed(ctx, &remote)
+}
+
+/// [`push`] under the remote claim the caller holds (`_remote`).
+pub fn push_claimed<G: SyncGit>(ctx: &Context<G>, _remote: &RemoteClaim) -> Pushed {
     match push_head(ctx) {
         Ok(pushed) => pushed,
         Err(left) => Pushed::Left(left),
@@ -567,12 +598,6 @@ fn push_left(outcome: PushOutcome, remote: &str) -> LeftAsIs {
 fn push_head<G: SyncGit>(ctx: &Context<G>) -> Result<Pushed, LeftAsIs> {
     let (git, repo) = (&ctx.git, &ctx.repo);
     let upstream = upstream(ctx)?;
-    let Some(_remote) = ctx.take_remote()? else {
-        return Err(LeftAsIs::because(
-            LeftReason::Busy,
-            "another kluris command is talking to the remote; the commits wait for the next push",
-        ));
-    };
     // Checked right before: the ref git moves once the remote took the
     // push.
     if let Some(why) = fetch::unmovable(git, repo, upstream).map_err(failed)? {
@@ -735,7 +760,7 @@ impl ConflictText {
 impl SyncReport {
     /// The `sync` object every command prints: all eight keys, `left_as_is`
     /// with a `null` reason when nothing was left, and `last_push` `null`
-    /// (every push here is the command's own).
+    /// when there is no background push to report.
     pub fn to_json(&self) -> Json {
         let (reason, paths, detail) = match &self.left_as_is {
             Some(left) => (
@@ -763,7 +788,12 @@ impl SyncReport {
             ("behind_conflict".into(), count_json(self.behind_conflict)),
             ("to_push".into(), count_json(self.to_push)),
             ("pushed".into(), Json::Bool(self.pushed)),
-            ("last_push".into(), Json::Null),
+            (
+                "last_push".into(),
+                self.last_push
+                    .as_ref()
+                    .map_or(Json::Null, LastPush::to_json),
+            ),
         ])
     }
 }

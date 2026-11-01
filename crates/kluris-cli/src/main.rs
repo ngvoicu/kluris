@@ -290,6 +290,17 @@ enum Command {
         log_file: Option<String>,
         #[arg(long = "config", value_name = "PATH", hide = true, requires = "watch")]
         config: Option<String>,
+        // The background push a read starts for the brains at each `--path`
+        // (`kluris_core::sync::background::run`).
+        #[arg(long, hide = true, conflicts_with_all = ["brain", "json", "watch"])]
+        background: bool,
+        #[arg(
+            long = "path",
+            value_name = "ROOT",
+            hide = true,
+            requires = "background"
+        )]
+        path: Vec<std::path::PathBuf>,
         /// JSON output
         #[arg(long)]
         json: bool,
@@ -988,10 +999,14 @@ fn run(cli: Cli) -> Result<(), CliError> {
             brain,
             no_verify,
             watch,
+            background,
+            path,
             json,
             ..
         } => {
-            if watch {
+            if background {
+                commands::sync::background(&path)
+            } else if watch {
                 commands::upgrade::watch(brain.as_deref())
             } else {
                 commands::sync::run(brain.as_deref(), no_verify, json)

@@ -10,7 +10,7 @@
 //! has a conflict or was left as it is for anything but having no network
 //! or no upstream.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use kluris_core::config::{ConfigErrorKind, read_brain_config};
 use kluris_core::dream::DreamOptions;
@@ -139,6 +139,14 @@ fn failed(report: &SyncReport) -> bool {
             .left_as_is
             .as_ref()
             .is_some_and(|left| left.reason.fails())
+}
+
+/// `kluris sync --background --path <root>...`: push each brain's waiting
+/// commits, detached from the command that started it; what happened goes
+/// to each brain's log and record, never to this process's output.
+pub fn background(roots: &[PathBuf]) -> Result<(), CliError> {
+    kluris_core::sync::background::run(roots, &SystemGit::new());
+    Ok(())
 }
 
 pub fn run(brain: Option<&str>, no_verify: bool, as_json: bool) -> Result<(), CliError> {
