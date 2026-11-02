@@ -655,6 +655,11 @@ acme/
     └── use-auth0.md        # a deprecated decision
 ```
 
+`kluris create` writes the brain's `README.md` from Kluris's template; while
+nobody edits it, the housekeeping commit of `kluris dream` and `kluris mri`
+keeps it the text of the Kluris you run, and a README anyone changed is left
+as it is.
+
 | Term | Meaning |
 |------|---------|
 | **Brain** | A git repository of shared team knowledge |

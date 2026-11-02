@@ -295,8 +295,13 @@ fn glossary_md(today: &str) -> String {
 
 /// A new brain's `README.md`: the template, filled in one pass.
 pub fn readme(name: &str, description: &str) -> String {
-    let mut out = String::with_capacity(README.len());
-    let mut rest = README;
+    fill(README, name, description)
+}
+
+/// `template` with each `{name}` and `{description}` filled in, one pass.
+pub(crate) fn fill(template: &str, name: &str, description: &str) -> String {
+    let mut out = String::with_capacity(template.len());
+    let mut rest = template;
     while let Some(at) = rest.find('{') {
         out.push_str(&rest[..at]);
         let tail = &rest[at..];

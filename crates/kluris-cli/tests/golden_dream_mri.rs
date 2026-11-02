@@ -26,11 +26,12 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::LazyLock;
 
+use common::brains::Brains;
 use common::dream_brains::{
     D2, D3, Files, NO_PARENT, Neuron, healthy_brain, legacy_brain, mri_brain, register,
     resilience_brain, rich_brain,
 };
-use common::golden::python_json;
+use common::golden::{PINNED_GIT_DATE, python_json};
 use common::sandbox::{
     Run, Sandbox, changed_files, fixture, json_dump, run_end, section, write_tree,
 };
@@ -1724,4 +1725,95 @@ fn mri_reports_the_files_its_preflight_skipped() {
         },
     ]);
     assert_eq!(fs::read(calm.join("projects/bad.md")).unwrap(), bad);
+}
+
+// --- the README an earlier release wrote -----------------------------------------
+
+/// Waits, at most a minute, for the background push a run left for the
+/// brain at `root` to end: on Unix until its record is written; on
+/// Windows, where the runner's job may keep it from starting, until no run
+/// holds its lock.
+fn wait_for_background(root: &Path) {
+    let dir = root.join(".git").join("kluris-sync");
+    let done = || {
+        !dir.join("background.lock").exists()
+            && (!cfg!(unix) || dir.join("last-push.json").is_file())
+    };
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    while !done() {
+        assert!(
+            std::time::Instant::now() < until,
+            "the background push did not end"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+}
+
+/// The brain `team` (`The team brain`), with a remote, its own
+/// housekeeping done, then `readme` committed and pushed as its README.
+fn team_with_readme(sb: &Sandbox, readme: &str) -> PathBuf {
+    let brain = sb.team_brain(false);
+    let git = |args: &[&str]| sb.git(&brain, args, PINNED_GIT_DATE);
+    fs::write(
+        brain.join("kluris.yml"),
+        "name: team\ndescription: The team brain\n",
+    )
+    .unwrap();
+    fs::write(brain.join(".gitignore"), kluris_core::scaffold::GITIGNORE).unwrap();
+    sb.commit(&brain, "kluris", PINNED_GIT_DATE);
+    git(&["push", "-q"]);
+    let settled = sb.kluris(&["dream", "--json"]);
+    assert_eq!(settled.code, 0, "{}", settled.render(&sb.root));
+    wait_for_background(&brain);
+    // Its record says when it pushed: the run under test reports none.
+    let record = brain
+        .join(".git")
+        .join("kluris-sync")
+        .join("last-push.json");
+    match fs::remove_file(&record) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => panic!("{e}"),
+        _ => {}
+    }
+    fs::write(brain.join("README.md"), readme).unwrap();
+    sb.commit(&brain, "readme", PINNED_GIT_DATE);
+    git(&["push", "-q"]);
+    brain
+}
+
+#[test]
+fn dream_and_mri_bring_an_earlier_releases_readme_to_the_current_render() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../kluris-core/tests/fixtures/brain-readme/3.1.1.md");
+    let earlier = fs::read_to_string(&fixture)
+        .unwrap()
+        .replace("{name}", "team")
+        .replace("{description}", "The team brain");
+    let current = kluris_core::scaffold::readme("team", "The team brain");
+    for command in ["dream", "mri"] {
+        let sb = Sandbox::new();
+        let brain = team_with_readme(&sb, &earlier);
+        let args = [command, "--json"];
+        let scenario = Scenario::new(command, &sb, &[&brain]);
+        let out = scenario.run(&args);
+        wait_for_background(&brain);
+        let commit = sb.git(
+            &brain,
+            &["log", "-1", "--format=%B", "--name-only"],
+            PINNED_GIT_DATE,
+        );
+        let extra = format!(
+            "== git log -1 --format=%B --name-only\n{commit}== git status --porcelain\n{}",
+            sb.porcelain(&brain)
+        );
+        snapshot(
+            &format!("{command}_earlier_readme"),
+            &scenario.run_text(&args, &out, &extra),
+        );
+        assert_eq!(
+            fs::read_to_string(brain.join("README.md")).unwrap(),
+            current
+        );
+        let committed = sb.git(&brain, &["show", "HEAD:README.md"], PINNED_GIT_DATE);
+        assert_eq!(committed, current, "{command}");
+    }
 }

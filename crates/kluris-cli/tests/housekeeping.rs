@@ -974,3 +974,245 @@ fn a_staged_mode_is_kept_and_its_neuron_left_out() {
         settle(sync_by(command, &doc), &root);
     }
 }
+
+// --- the README an earlier release wrote ---------------------------------------
+
+/// A release's README template (kluris-core's
+/// `tests/fixtures/brain-readme/<release>.md`) filled in for the test
+/// brain `alpha` with its `kluris.yml` description `d`.
+fn earlier_readme(release: &str) -> String {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../kluris-core/tests/fixtures/brain-readme")
+        .join(format!("{release}.md"));
+    fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("{}: {e}", path.display()))
+        .replace("{name}", "alpha")
+        .replace("{description}", "d")
+}
+
+/// The README `kluris create` writes for `alpha` (`d`).
+fn current_readme() -> String {
+    kluris_core::scaffold::readme("alpha", "d")
+}
+
+/// `rel`'s bytes in the work tree.
+fn bytes(root: &Path, rel: &str) -> Vec<u8> {
+    fs::read(root.join(rel)).unwrap()
+}
+
+/// `git status --porcelain` without the page `mri` writes, which the test
+/// brain does not ignore.
+fn tracked_status(h: &Home, root: &Path) -> String {
+    h.status(root).replace("?? brain-mri.html\n", "")
+}
+
+/// A team whose brain, its own housekeeping done, has `readme` committed
+/// as its README and pushed, and pulled by the teammate.
+fn team_with_readme(readme: &str) -> (Home, PathBuf) {
+    let (h, root) = team();
+    let (code, doc, err) = h.json_run(&["dream", "--brain", "alpha"]);
+    assert_eq!(code, 0, "{doc}{err}");
+    settle(dream_sync(&doc, "alpha"), &root);
+    h.commit(&root, "README.md", readme);
+    h.git(&root, &["push", "-q"]);
+    h.git(&h.teammate("alpha"), &["pull", "-q"]);
+    (h, root)
+}
+
+#[test]
+fn a_readme_an_earlier_release_rendered_is_rewritten_and_committed() {
+    // The README 3.1.1 wrote, and the one 2.28.9 wrote.
+    for release in ["3.1.1", "2.28.9"] {
+        for command in ["dream", "mri"] {
+            let (h, root) = team_with_readme(&earlier_readme(release));
+            let (code, doc, err) = h.json_run(&[command, "--brain", "alpha"]);
+            assert_eq!(code, 0, "{release} {command}: {doc}{err}");
+            assert_eq!(
+                committed_by(command, &doc),
+                ["README.md"],
+                "{release} {command}"
+            );
+            assert_eq!(h.message(&root), MESSAGE, "{release} {command}");
+            assert_eq!(h.changed(&root), ["README.md"], "{release} {command}");
+            assert_eq!(h.committed(&root, "README.md"), current_readme());
+            assert_eq!(h.read(&root, "README.md"), current_readme());
+            assert_eq!(tracked_status(&h, &root), "", "{release} {command}");
+            settle(sync_by(command, &doc), &root);
+        }
+    }
+}
+
+#[test]
+fn a_readme_already_current_or_absent_makes_no_commit() {
+    for command in ["dream", "mri"] {
+        let (h, root) = team_with_readme(&current_readme());
+        let before = h.head(&root);
+        let (code, doc, err) = h.json_run(&[command, "--brain", "alpha"]);
+        assert_eq!(code, 0, "{command}: {doc}{err}");
+        assert_eq!(h.head(&root), before, "{command}: {doc}");
+        assert_eq!(h.read(&root, "README.md"), current_readme(), "{command}");
+        // One home at a time.
+        drop(h);
+
+        // A brain without a README gets none.
+        let (h, root) = team();
+        teammate_pushes_second(&h);
+        let (code, doc, err) = h.json_run(&[command, "--brain", "alpha"]);
+        assert_eq!(code, 0, "{command}: {doc}{err}");
+        assert_eq!(committed_by(command, &doc), SECOND_FILES, "{command}");
+        assert!(!root.join("README.md").exists(), "{command}");
+        settle(sync_by(command, &doc), &root);
+    }
+}
+
+#[test]
+fn a_readme_anyone_edited_is_never_touched() {
+    let earlier = earlier_readme("3.1.1");
+    // A byte changed, one added at the end, one taken away.
+    let edits = [
+        earlier.replacen("Quick start", "Quick Start", 1),
+        format!("{earlier}\n"),
+        earlier[..earlier.len() - 1].to_string(),
+    ];
+    for command in ["dream", "mri"] {
+        for edited in &edits {
+            let (h, root) = team_with_readme(edited);
+            let before = h.head(&root);
+            let (code, doc, err) = h.json_run(&[command, "--brain", "alpha"]);
+            assert_eq!(code, 0, "{command}: {doc}{err}");
+            assert_eq!(h.head(&root), before, "{command}: {doc}");
+            assert_eq!(&h.read(&root, "README.md"), edited, "{command}");
+        }
+    }
+}
+
+#[test]
+fn a_readme_with_changes_of_the_persons_is_left_out_and_kept() {
+    let earlier = earlier_readme("3.1.1");
+    let edited = format!("{earlier}\nOur own note.\n");
+    for command in ["dream", "mri"] {
+        // An edit in the work tree, one staged alone, and one each hiding
+        // flag keeps from `git status`.
+        let cases: [(&str, &[&str]); 4] = [
+            ("work tree", &[]),
+            ("staged", &["add"]),
+            ("assume-unchanged", &["update-index", "--assume-unchanged"]),
+            ("skip-worktree", &["update-index", "--skip-worktree"]),
+        ];
+        for (case, git) in cases {
+            let (h, root) = team_with_readme(&earlier);
+            // Something else for the housekeeping to commit, fetched by
+            // the run.
+            teammate_pushes_second(&h);
+            stamp_age(&root, 61);
+            h.write(&root, "README.md", &edited);
+            if !git.is_empty() {
+                let mut args = git.to_vec();
+                args.push("README.md");
+                h.git(&root, &args);
+            }
+            if case == "staged" {
+                h.write(&root, "README.md", &earlier);
+            }
+            let (code, doc, err) = h.json_run(&[command, "--brain", "alpha"]);
+            assert_eq!(code, 0, "{command} {case}: {doc}{err}");
+            assert_eq!(
+                committed_by(command, &doc),
+                SECOND_FILES,
+                "{command} {case}"
+            );
+            assert_eq!(h.committed(&root, "README.md"), earlier, "{command} {case}");
+            let (kept, there) = match case {
+                "staged" => (staged(&h, &root, "README.md"), edited.clone()),
+                _ => (h.read(&root, "README.md"), edited.clone()),
+            };
+            assert_eq!(kept, there, "{command} {case}");
+            settle(sync_by(command, &doc), &root);
+        }
+    }
+}
+
+#[test]
+fn a_crlf_readme_is_recognised_and_keeps_its_line_endings() {
+    let crlf = |text: &str| text.replace('\n', "\r\n");
+    for command in ["dream", "mri"] {
+        // Committed with CRLF: the commit and the work tree stay CRLF.
+        let (h, root) = team_with_readme(&crlf(&earlier_readme("2.28.9")));
+        let (code, doc, err) = h.json_run(&[command, "--brain", "alpha"]);
+        assert_eq!(code, 0, "{command}: {doc}{err}");
+        assert_eq!(committed_by(command, &doc), ["README.md"], "{command}");
+        assert_eq!(h.committed(&root, "README.md"), crlf(&current_readme()));
+        assert_eq!(
+            bytes(&root, "README.md"),
+            crlf(&current_readme()).into_bytes()
+        );
+        assert_eq!(tracked_status(&h, &root), "", "{command}");
+        settle(sync_by(command, &doc), &root);
+        // One home at a time.
+        drop(h);
+
+        // Committed with LF and checked out with CRLF: the commit is LF,
+        // the work tree CRLF.
+        let (h, root) = team_with_readme(&earlier_readme("3.1.1"));
+        h.git(&root, &["config", "core.autocrlf", "true"]);
+        fs::remove_file(root.join("README.md")).unwrap();
+        h.git(&root, &["checkout", "--", "README.md"]);
+        assert_eq!(
+            bytes(&root, "README.md"),
+            crlf(&earlier_readme("3.1.1")).into_bytes()
+        );
+        assert_eq!(tracked_status(&h, &root), "", "{command}");
+        let (code, doc, err) = h.json_run(&[command, "--brain", "alpha"]);
+        assert_eq!(code, 0, "{command}: {doc}{err}");
+        assert_eq!(committed_by(command, &doc), ["README.md"], "{command}");
+        assert_eq!(h.committed(&root, "README.md"), current_readme());
+        assert_eq!(
+            bytes(&root, "README.md"),
+            crlf(&current_readme()).into_bytes()
+        );
+        assert_eq!(tracked_status(&h, &root), "", "{command}");
+        settle(sync_by(command, &doc), &root);
+    }
+}
+
+/// The READMEs 2.28.10 wrote in the upgrade fixtures' brains (LF and
+/// CRLF, an ASCII and a non-ASCII description), each for the name and
+/// description of its brain's `kluris.yml`, are taken for the current
+/// render in their own line endings.
+#[test]
+fn the_readmes_of_the_upgrade_fixtures_are_recognised() {
+    use kluris_core::upgrade::readme::refreshed;
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/upgrade-home");
+    let mut seen = 0;
+    for home in fs::read_dir(&fixtures).unwrap() {
+        let Ok(brains) = fs::read_dir(home.unwrap().path().join("brains")) else {
+            continue;
+        };
+        for brain in brains {
+            let brain = brain.unwrap().path();
+            let Some(readme) = ["commit-1", "worktree"]
+                .iter()
+                .map(|dir| brain.join(dir).join("README.md"))
+                .find(|path| path.is_file())
+            else {
+                continue;
+            };
+            let config = kluris_core::config::read_brain_config(&brain.join("worktree")).unwrap();
+            let old = fs::read(&readme).unwrap();
+            let current = kluris_core::scaffold::readme(&config.name, &config.description);
+            let expected = if old.contains(&b'\r') {
+                current.replace('\n', "\r\n")
+            } else {
+                current
+            };
+            assert_eq!(
+                refreshed(&old, &config.name, &config.description),
+                Some(expected.into_bytes()),
+                "{}",
+                readme.display()
+            );
+            seen += 1;
+        }
+    }
+    assert_eq!(seen, 8);
+}

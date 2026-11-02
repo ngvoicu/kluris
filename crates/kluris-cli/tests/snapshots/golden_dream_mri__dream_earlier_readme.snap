@@ -1,0 +1,59 @@
+---
+source: crates/kluris-cli/tests/golden_dream_mri.rs
+expression: text
+---
+$ kluris dream --json
+== stdout (777 bytes)
+{
+  "ok": true,
+  "healthy": true,
+  "broken_synapses": 0,
+  "one_way_synapses": 0,
+  "orphans": 0,
+  "frontmatter_issues": 0,
+  "dates_updated": 0,
+  "deprecation_issues": 0,
+  "deprecation": [],
+  "broken_synapses_detail": [],
+  "fixes": {
+    "dates_updated": 0,
+    "parents_inferred": 0,
+    "reverse_synapses_added": 0,
+    "orphan_references_added": 0,
+    "total": 0
+  },
+  "committed": [
+    {
+      "brain": "team",
+      "file": "README.md"
+    }
+  ],
+  "sync": [
+    {
+      "brain": "team",
+      "pulled": 0,
+      "auto_merged": [],
+      "left_as_is": {
+        "reason": null,
+        "paths": [],
+        "detail": null
+      },
+      "conflicts": [],
+      "behind_conflict": 0,
+      "to_push": 1,
+      "pushed": false,
+      "last_push": null
+    }
+  ]
+}
+== stderr (0 bytes)
+== exit 0
+<end of run>
+== git log -1 --format=%B --name-only
+kluris: dream
+
+Kluris-Sync: dream
+
+
+README.md
+== git status --porcelain

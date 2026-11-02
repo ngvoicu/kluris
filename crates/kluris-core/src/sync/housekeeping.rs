@@ -1,9 +1,11 @@
 //! The housekeeping commit `dream` and `mri` make once their own work is
 //! done: dream's steps run again over a [`TreeStore`] of HEAD's files,
 //! never the work tree (dates from git, a missing `parent: ./map.md`,
-//! reverse `related` links, every `map.md`, `brain.md`), and whatever they
-//! change is committed on HEAD as `kluris: dream` with a `Kluris-Sync:
-//! dream` trailer, as the person, through the path `kluris commit` takes:
+//! reverse `related` links, every `map.md`, `brain.md`, and a `README.md`
+//! an earlier release rendered, brought to the current render
+//! ([`crate::upgrade::readme`])), and whatever they change is committed on
+//! HEAD as `kluris: dream` with a `Kluris-Sync: dream` trailer, as the
+//! person, through the path `kluris commit` takes:
 //! a temporary index, the `pre-commit`, `prepare-commit-msg` and
 //! `commit-msg` hooks, `git commit-tree`, the compare-and-swap of HEAD,
 //! and `post-commit`.
@@ -19,9 +21,10 @@
 //! index entry is HEAD's blob or the commit's, and its work-tree copy is
 //! HEAD's or exactly the commit's (dream already wrote the same fix
 //! there). Any other neuron is left out, its fixes staying in the work
-//! tree, and a version the person staged stays staged. A generated file
-//! (`map.md`, `brain.md`) is always taken, so no map in history lags its
-//! neurons; a version of it the person staged keeps its index entry.
+//! tree, and a version the person staged stays staged; the README is
+//! taken on the same terms. A generated file (`map.md`, `brain.md`) is
+//! always taken, so no map in history lags its neurons; a version of it the
+//! person staged keeps its index entry.
 //!
 //! Afterwards each committed file's index entry and work-tree copy get the
 //! committed bytes where they had nothing of the person's, as `kluris
@@ -37,9 +40,10 @@ use super::commit::{Seen, Untouched, base_nodes, changed_paths, untouched, updat
 use super::hooks::{HookError, Source, gate, message_hooks};
 use super::land::{failed, join};
 use super::merge::is_generated;
-use crate::brain::tree_store::TreeStore;
+use crate::brain::tree_store::{Node, TreeStore};
 use crate::dream::{DreamOptions, housekeeping_changes};
 use crate::git::{Plumbing, Repo, StagedBlob};
+use crate::upgrade::readme::{README, refreshed};
 
 /// The housekeeping commit's message.
 pub const MESSAGE: &str = "kluris: dream\n\nKluris-Sync: dream\n";
@@ -67,7 +71,7 @@ pub fn commit<G: Plumbing>(
     let (nodes, modes) = base_nodes(git, repo, &base)?;
     let view = TreeStore::new(&repo.dir, nodes);
     let (changes, _skipped) = housekeeping_changes(&view, &git.file_dates(repo), maps);
-    let blobs: Vec<StagedBlob> = changes
+    let mut blobs: Vec<StagedBlob> = changes
         .writes
         .into_iter()
         .map(|write| StagedBlob {
@@ -79,6 +83,7 @@ pub fn commit<G: Plumbing>(
             bytes: Some(write.contents),
         })
         .collect();
+    blobs.extend(readme(&view, &modes, maps));
     if blobs.is_empty() {
         return Ok(Vec::new());
     }
@@ -154,6 +159,24 @@ pub fn commit<G: Plumbing>(
     // As with `git commit`, post-commit cannot undo or fail the commit.
     let _ = git.run_hook(repo, None, "post-commit", &[]);
     Ok(files)
+}
+
+/// HEAD's `README.md` (a file, in `view`, with its mode in `modes`) as the
+/// current render, when it is a render an earlier release made for the
+/// brain `maps` names.
+fn readme(
+    view: &TreeStore,
+    modes: &BTreeMap<String, String>,
+    maps: &DreamOptions,
+) -> Option<StagedBlob> {
+    let Some(Node::File(Some(committed))) = view.nodes().get(README) else {
+        return None;
+    };
+    Some(StagedBlob {
+        rel: README.to_string(),
+        mode: modes.get(README)?.clone(),
+        bytes: Some(refreshed(committed, maps.name, maps.description)?),
+    })
 }
 
 /// Why the hooks stopped the housekeeping commit.
