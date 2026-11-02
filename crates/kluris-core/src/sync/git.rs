@@ -5,8 +5,9 @@
 //!   remote, remote-tracking ref and branch on the remote ([`Upstream`]).
 //! - **One remote environment:** [`SyncGit::for_remote`] gives a git whose
 //!   every run has [`remote_env`] (no terminal prompt, no askpass, no
-//!   interactive credential manager, ssh in batch mode unless the user chose
-//!   an ssh command) and [`NO_BACKGROUND`]. The engine takes it once per
+//!   interactive credential manager, and unless the user chose an ssh
+//!   command, ssh in batch mode that never starts a shared connection) and
+//!   [`NO_BACKGROUND`]. The engine takes it once per
 //!   brain, after the local queries that open it (git's version, the
 //!   repository, `core.sshCommand`), which talk to no remote; no git it
 //!   starts after them can prompt: not a fetch or a push, and not a merge
@@ -169,10 +170,14 @@ pub enum RemoteError {
 
 /// The git steps of the sync engine (see the module docs).
 pub trait SyncGit: Plumbing + TextMerger + Clone + Sized {
-    /// This git, forwarding to this process's stderr what each of its runs
-    /// that succeeds printed on stderr (a hook's output, which git sends
-    /// there): the engine's gits, so no hook output is lost. A run that
-    /// fails keeps its stderr for the error.
+    /// This git, forwarding to this process's stderr what each of its local
+    /// runs that succeeds printed on stderr (a hook's output, which git
+    /// sends there): the engine's gits, so no hook output is lost. A run
+    /// that fails keeps its stderr for the error. The steps that ask the
+    /// remote or only read (`ls-remote`, the fetch, `cat-file`, `remote
+    /// get-url`) run no hook, so what they print there (ssh's warnings, the
+    /// server's notices) is never forwarded; the push and the fast-forward
+    /// show their own output.
     fn showing_output(self) -> Self;
 
     /// This git with every run stopped, with every process it started, at
@@ -751,9 +756,12 @@ pub const NO_BACKGROUND: [&str; 3] = [
 /// `GIT_TERMINAL_PROMPT=0` and an empty `GIT_ASKPASS` (git asks no askpass
 /// helper, `core.askPass` and `SSH_ASKPASS` included, and fails instead)
 /// always; `GCM_INTERACTIVE=never` unless the user set it;
-/// `GIT_SSH_COMMAND="ssh -o BatchMode=yes"` unless the user chose an ssh
-/// command (`GIT_SSH_COMMAND`, `GIT_SSH` or `core.sshCommand`, which the
-/// variable would override).
+/// `GIT_SSH_COMMAND="ssh -o BatchMode=yes -o ControlMaster=no"` unless the
+/// user chose an ssh command (`GIT_SSH_COMMAND`, `GIT_SSH` or
+/// `core.sshCommand`, which the variable would override). `ControlMaster
+/// no` still uses a shared connection the user's own ssh keeps at its
+/// `ControlPath`, and never tries to start one: the fetches of several
+/// brains at once would race for it, and each loser would say so.
 pub fn remote_env(
     get: impl Fn(&str) -> Option<OsString>,
     ssh_command_configured: bool,
@@ -764,7 +772,10 @@ pub fn remote_env(
         env.push(("GCM_INTERACTIVE", "never"));
     }
     if !(ssh_command_configured || set("GIT_SSH_COMMAND") || set("GIT_SSH")) {
-        env.push(("GIT_SSH_COMMAND", "ssh -o BatchMode=yes"));
+        env.push((
+            "GIT_SSH_COMMAND",
+            "ssh -o BatchMode=yes -o ControlMaster=no",
+        ));
     }
     env
 }
@@ -867,7 +878,10 @@ impl SystemGit {
         }
     }
 
-    /// [`SystemGit::bounded`], failing unless git exits 0.
+    /// [`SystemGit::bounded`], failing unless git exits 0, with git's
+    /// stderr as the failure's detail. What git printed on stderr when it
+    /// succeeds is dropped: these runs start no hook (see
+    /// [`SyncGit::showing_output`]).
     pub(crate) fn checked(
         &self,
         dir: &Path,
@@ -876,7 +890,6 @@ impl SystemGit {
     ) -> Result<Vec<u8>, RemoteError> {
         let done = self.bounded(dir, args, deadline)?;
         if done.status.success() {
-            self.forward(&done.stderr);
             Ok(done.stdout)
         } else {
             Err(RemoteError::Failed(GitError::new(

@@ -539,7 +539,10 @@ without a prompt (`git push origin` when only the push is turned away). A
 refused fetch changes nothing. A refused push keeps what the sync brought
 in or merged locally (`pulled` counts it, `pushed` is `false`), and the
 next sync that can push sends it. Kluris never asks for credentials, so
-whatever needs a prompt there fails here too. Anything git says that is not
+whatever needs a prompt there fails here too. Unless you set
+`GIT_SSH_COMMAND`, `GIT_SSH` or `core.sshCommand`, git runs `ssh -o
+BatchMode=yes -o ControlMaster=no`: it uses a shared connection your own
+ssh keeps open (`ControlMaster`, `ControlPath`), and never starts one. Anything git says that is not
 known network trouble is shown this way, never taken for offline: Kluris
 reads network trouble only in the lines git, ssh and curl print for it,
 never in a quoted URL or path or in what the remote sent, so a missing

@@ -257,7 +257,10 @@ fn the_remote_environment_turns_prompts_off_without_overriding_the_users_ssh_com
             ("GIT_TERMINAL_PROMPT", "0"),
             ("GIT_ASKPASS", ""),
             ("GCM_INTERACTIVE", "never"),
-            ("GIT_SSH_COMMAND", "ssh -o BatchMode=yes"),
+            (
+                "GIT_SSH_COMMAND",
+                "ssh -o BatchMode=yes -o ControlMaster=no"
+            ),
         ]
     );
     // The user's own choices stay: GCM_INTERACTIVE, and an ssh command set
@@ -268,7 +271,10 @@ fn the_remote_environment_turns_prompts_off_without_overriding_the_users_ssh_com
         [
             ("GIT_TERMINAL_PROMPT", "0"),
             ("GIT_ASKPASS", ""),
-            ("GIT_SSH_COMMAND", "ssh -o BatchMode=yes"),
+            (
+                "GIT_SSH_COMMAND",
+                "ssh -o BatchMode=yes -o ControlMaster=no"
+            ),
         ]
     );
     for key in ["GIT_SSH_COMMAND", "GIT_SSH"] {
@@ -293,6 +299,34 @@ fn the_remote_environment_turns_prompts_off_without_overriding_the_users_ssh_com
     // An empty variable is not a setting.
     let empty = |k: &str| (k == "GIT_SSH_COMMAND").then(OsString::new);
     assert_eq!(remote_env(empty, false).len(), 4);
+}
+
+#[test]
+fn this_machines_ssh_takes_the_default_ssh_command() {
+    let none = |_: &str| -> Option<OsString> { None };
+    let env = remote_env(none, false);
+    let (_, command) = env
+        .iter()
+        .find(|(key, _)| *key == "GIT_SSH_COMMAND")
+        .unwrap();
+    let mut words = command.split(' ');
+    assert_eq!(words.next(), Some("ssh"));
+    // `-G` prints the configuration ssh would use, and connects nowhere.
+    let out = match Command::new("ssh")
+        .args(words)
+        .args(["-G", "example.invalid"])
+        .stdin(Stdio::null())
+        .output()
+    {
+        Ok(out) => out,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return,
+        Err(e) => panic!("ssh: {e}"),
+    };
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "{out:?}");
+    let lines: Vec<&str> = text.lines().collect();
+    assert!(lines.contains(&"batchmode yes"), "{text}");
+    assert!(lines.contains(&"controlmaster false"), "{text}");
 }
 
 /// Set by [`a_post_merge_hook_that_reads_stdin_does_not_hang`] for the

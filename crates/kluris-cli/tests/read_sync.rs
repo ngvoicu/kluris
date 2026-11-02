@@ -1740,6 +1740,8 @@ fn ssh_runs_in_batch_mode_unless_the_user_chose_an_ssh_command() {
     };
     let logged = run(&mut h, &[]);
     assert!(logged.contains("BatchMode=yes"), "{logged}");
+    // A connection the user's own ssh shares is used; none is started.
+    assert!(logged.contains("ControlMaster=no"), "{logged}");
     // The user's own GIT_SSH_COMMAND is used as it is.
     let logged = run(
         &mut h,
@@ -1747,10 +1749,68 @@ fn ssh_runs_in_batch_mode_unless_the_user_chose_an_ssh_command() {
     );
     assert!(logged.contains("User=me"), "{logged}");
     assert!(!logged.contains("BatchMode"), "{logged}");
+    assert!(!logged.contains("ControlMaster"), "{logged}");
     // So is core.sshCommand.
     let command = format!("'{}' -o User=cfg", ssh.display());
     h.git(&root, &["config", "core.sshCommand", &command]);
     let logged = run(&mut h, &[]);
     assert!(logged.contains("User=cfg"), "{logged}");
     assert!(!logged.contains("BatchMode"), "{logged}");
+    assert!(!logged.contains("ControlMaster"), "{logged}");
+}
+
+#[cfg(unix)]
+#[test]
+fn a_read_shows_no_ssh_chatter_and_a_refusal_keeps_what_ssh_said() {
+    // What ssh prints on its stderr while it connects.
+    const SSH_CHATTER: &str =
+        "ControlSocket /tmp/cm-git@fakehost:22 already exists, disabling multiplexing";
+    let (mut h, root) = team();
+    let bin = h.dir.path().join("bin");
+    fs::create_dir_all(&bin).unwrap();
+    // An ssh that talks on stderr, then runs git's command on this machine;
+    // or, once `refuse` exists, turns the key away.
+    let refuse = h.dir.path().join("refuse");
+    let ssh = bin.join("ssh");
+    fs::write(
+        &ssh,
+        format!(
+            "#!/bin/sh\necho '{SSH_CHATTER}' >&2\nif [ -e '{}' ]; then\n  echo 'git@fakehost: Permission denied (publickey).' >&2\n  exit 255\nfi\nfor last; do :; done\nexec sh -c \"$last\"\n",
+            refuse.display()
+        ),
+    )
+    .unwrap();
+    make_executable(&ssh);
+    let bare = h.dir.path().join("alpha.git");
+    let url = format!("ssh://fakehost{}", bare.display());
+    h.git(&root, &["remote", "set-url", "origin", &url]);
+    let path = std::env::join_paths(std::iter::once(bin.clone()).chain(std::env::split_paths(
+        &std::env::var_os("PATH").unwrap_or_default(),
+    )))
+    .unwrap();
+    h.env
+        .push(("PATH".into(), path.to_string_lossy().into_owned()));
+
+    // A read that pulls through ssh: its own line, and nothing of ssh's.
+    teammate_pushes_zebra(&h, "zebra");
+    stamp_age(&root, 61);
+    let (code, _, err) = h.run_args(&Read::WakeUp.args(&root, false));
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(err, "kluris: alpha: pulled 1 commit\n");
+    teammate_pushes_zebra(&h, "zebra-two");
+    stamp_age(&root, 61);
+    let (code, doc, err) = h.read_json(Read::Doctor, &root);
+    assert_eq!((code, err.as_str()), (0, ""), "{doc}");
+    assert_eq!(sync_of(Read::Doctor.entry(&doc))["pulled"], 1, "{doc}");
+
+    // A refused read keeps what ssh said for its detail.
+    fs::write(&refuse, "").unwrap();
+    stamp_age(&root, 61);
+    let (code, doc, err) = h.read_json(Read::WakeUp, &root);
+    assert_eq!((code, err.as_str()), (0, ""), "{doc}");
+    let sync = sync_of(&doc);
+    assert_eq!(reason(sync), "refused", "{doc}");
+    let detail = sync["left_as_is"]["detail"].as_str().unwrap();
+    assert!(detail.contains("Permission denied (publickey)"), "{detail}");
+    assert!(detail.contains(SSH_CHATTER), "{detail}");
 }
