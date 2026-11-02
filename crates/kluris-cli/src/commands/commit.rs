@@ -1,4 +1,4 @@
-//! `kluris commit --brain NAME --paths a.md,b.md [-m MSG] [--merge ID]
+//! `kluris commit --brain NAME [--paths a.md,b.md] [-m MSG] [--merge ID]
 //! [--no-verify] [--json]`: commit the approved files, the maps they change
 //! and the reverse links they call for, through an explicit session that
 //! pulls teammates' commits first and pushes once it is done; with a merge
@@ -38,7 +38,8 @@ use crate::resolve::resolve_brains;
 
 pub struct Options<'a> {
     pub brain: Option<&'a str>,
-    /// `--paths`: comma-separated, each trimmed, empty items dropped.
+    /// `--paths`: comma-separated, each trimmed, empty items dropped;
+    /// empty when left out (with `--merge`).
     pub paths: &'a str,
     pub message: Option<&'a str>,
     /// `--merge`: the id of the waiting merge the settled files finish.

@@ -551,7 +551,8 @@ Every command that opens the brain reports a waiting merge: its conflicted
 paths with both texts, and the id of the merge (`--merge`). Its stderr line
 names them, `kluris: acme: 1 conflict (knowledge/auth.md) in merge
 4ba0581dd58e`, and `--json` gives the id as `sync.conflicts[].merge`;
-`kluris sync` also prints the command to run. For a text conflict, write the
+`kluris sync` also prints the commands to run, each choice its own line,
+complete, to run as printed. For a text conflict, write the
 version you want to the file (delete the file to keep a deletion) and finish
 the merge with `kluris commit --brain acme --merge <id> --paths <every
 conflicted path of that merge>`; while the merge waits, `kluris commit`
@@ -560,12 +561,15 @@ between a file and a folder (`structure`), or in a binary file, is settled
 with `kluris resolve`. In a merge that has both, settle its `structure`
 paths with `kluris resolve` first, then write the text files: `kluris commit
 --merge` keeps every choice `kluris resolve` recorded for that merge, and
-its `--paths` names the conflicted paths still without one (none at all,
-`--paths ""`, when every path has one). A path you give replaces the choice
-recorded for it with its file; a `structure` path is never given, and
-`kluris commit --merge` refuses the merge while one has no choice. `kluris
-resolve` alone settles a merge too, path by path; for a text path, write
-your merged text outside the brain and pass it with `--file`:
+its `--paths` names the conflicted paths still without one; with a choice
+for every path, `kluris commit --brain acme --merge <id>` alone finishes
+it. A path you give replaces the choice recorded for it with its file; a
+`structure` path is never given, and `kluris commit --merge` refuses the
+merge while one has no choice. `--paths` splits at commas and trims each
+name, so a file with a comma in its name, or spaces at either end, is
+settled with `kluris resolve`. `kluris resolve` alone also settles a
+merge, path by path; for a text or binary path, write the version to keep
+outside the brain and pass it with `--file`:
 
 ```sh
 kluris resolve --brain acme knowledge/auth.md --ours --merge 4ba0581dd58e             # keep this brain's version
@@ -588,8 +592,9 @@ directory.
 neuron needs its `#---` block. Each call first brings in what teammates
 pushed, then records one choice; with the last one the merge is committed
 under your git identity, the brain moves to it (uncommitted changes in the
-way stop it, and the choices are kept), anything newer is pulled and the
-result is pushed. If you committed after the conflict was found, that pull
+way stop it, the choices are kept, and `kluris commit --brain acme --merge
+<id>` finishes it once they are out of the way), anything newer is pulled
+and the result is pushed. If you committed after the conflict was found, that pull
 finds the conflict afresh under a new id.
 
 With `--json`, a call prints `path`, `choice`, `remaining` (the paths still

@@ -19,6 +19,7 @@
 //!
 //! This module holds the types they share.
 
+pub mod advice;
 pub mod background;
 pub mod claim;
 pub mod commit;

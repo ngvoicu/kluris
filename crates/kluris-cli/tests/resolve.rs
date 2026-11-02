@@ -355,10 +355,16 @@ fn a_resolution_never_settles_the_conflict_that_replaced_it() {
     assert_eq!(doc["conflict"]["theirs"], neuron("First", &newer), "{doc}");
     let (code, _, err) = resolve(Some(&shown_id), false);
     assert_eq!(code, 1);
-    assert!(
-        err.contains(&format!(
-            "kluris resolve --brain alpha notes/first.md --ours|--theirs|--file FILE --merge {current}"
-        )) && err.contains("with a newer critical line"),
+    assert!(err.contains("with a newer critical line"), "{err}");
+    assert_eq!(
+        printed(&err),
+        [
+            format!("kluris resolve --brain alpha notes/first.md --ours --merge {current}"),
+            format!("kluris resolve --brain alpha notes/first.md --theirs --merge {current}"),
+            format!(
+                "kluris resolve --brain alpha notes/first.md --file merged.md --merge {current}"
+            ),
+        ],
         "{err}"
     );
     assert_eq!(

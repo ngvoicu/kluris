@@ -632,6 +632,7 @@ fn command_help_flag() {
     golden_table(
         "command_help_flag",
         &[
+            &["commit", "--help"],
             &["doctor", "--help"],
             &["help", "--help"],
             &["list", "--help"],

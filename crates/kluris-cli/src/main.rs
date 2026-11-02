@@ -234,14 +234,15 @@ enum Command {
         /// Specific brain
         #[arg(long = "brain", value_name = "BRAIN", allow_hyphen_values = true)]
         brain: Option<String>,
-        /// Brain-relative files written or deleted, comma-separated
+        /// Brain-relative files written or deleted, comma-separated (with
+        /// --merge, the conflicted files without a choice)
         #[arg(
             long = "paths",
             value_name = "PATHS",
             allow_hyphen_values = true,
-            required = true
+            required_unless_present = "merge"
         )]
-        paths: String,
+        paths: Option<String>,
         /// Commit message (default: kluris: update <paths>)
         #[arg(
             short = 'm',
@@ -582,8 +583,10 @@ While a merge waits for you (a command that met a conflict shows its id), \
 --merge ID finishes it: --paths names every conflicted file, as you settled \
 it in the work tree (a file you deleted is a deletion), and nothing else, \
 but for the paths kluris resolve already chose a side or a file for: those \
-choices stand. A conflict between a file and a folder is settled with \
-kluris resolve alone. \
+choices stand, and with a choice for every path --paths is left out. A \
+conflict between a file and a folder, and a file --paths cannot name (a \
+comma in its name, or spaces at either end), are settled with kluris \
+resolve. A refusal prints the commands that finish the merge. \
 The exit code is the commit's: 0 when it landed, whatever the sync did, \
 which the sync object says. The repository's pre-commit, \
 prepare-commit-msg, commit-msg and post-commit hooks run as git commit runs \
@@ -595,7 +598,8 @@ or newer.
 
   kluris commit --brain acme --paths knowledge/auth.md,knowledge/oauth.md
   kluris commit --brain acme --paths old.md -m \"Remove the old note\" --json
-  kluris commit --brain acme --paths notes/a.md --merge 1a2b3c4d5e6f --json";
+  kluris commit --brain acme --paths notes/a.md --merge 1a2b3c4d5e6f --json
+  kluris commit --brain acme --merge 1a2b3c4d5e6f";
 
 /// `wake-up`.
 const WAKE_UP_HELP: &str = "Compact brain snapshot for agent session bootstrap.
@@ -1011,7 +1015,7 @@ fn run(cli: Cli) -> Result<(), CliError> {
             json,
         } => commands::commit::run(&commands::commit::Options {
             brain: brain.as_deref(),
-            paths: &paths,
+            paths: paths.as_deref().unwrap_or_default(),
             message: message.as_deref(),
             merge: merge.as_deref(),
             no_verify,

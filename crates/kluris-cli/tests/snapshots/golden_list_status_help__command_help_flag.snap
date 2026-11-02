@@ -1,6 +1,45 @@
 ---
 source: crates/kluris-cli/tests/golden_list_status_help.rs
 ---
+$ kluris commit --help
+== stdout (2623 bytes)
+Commit approved brain files and the maps they change.
+
+Brings teammates' commits in first, then commits only the given files (written or deleted, relative to the brain), the map.md/brain.md files the map step regenerates because of them and the reverse related links they call for in neurons with no change of their own, then pulls what came in since and pushes. Every other changed file is left as it is, staged or not, and listed as left uncommitted. The author is your git identity; the message ends with a Kluris-Approved-By trailer (git user.name) and, when KLURIS_AGENT is set, a Co-Authored-By trailer naming the agent. The maps are built from what is committed, so an uncommitted file never shows up in them.
+
+While a merge waits for you (a command that met a conflict shows its id), --merge ID finishes it: --paths names every conflicted file, as you settled it in the work tree (a file you deleted is a deletion), and nothing else, but for the paths kluris resolve already chose a side or a file for: those choices stand, and with a choice for every path --paths is left out. A conflict between a file and a folder, and a file --paths cannot name (a comma in its name, or spaces at either end), are settled with kluris resolve. A refusal prints the commands that finish the merge. The exit code is the commit's: 0 when it landed, whatever the sync did, which the sync object says. The repository's pre-commit, prepare-commit-msg, commit-msg and post-commit hooks run as git commit runs them (prepare-commit-msg with merge when it finishes a merge), post-merge and pre-push as git's pull and push run them, and git's reference-transaction and post-index-change hooks run on every ref and index update (--no-verify skips pre-commit and commit-msg). Needs git 2.38 or newer.
+
+  kluris commit --brain acme --paths knowledge/auth.md,knowledge/oauth.md
+  kluris commit --brain acme --paths old.md -m "Remove the old note" --json
+  kluris commit --brain acme --paths notes/a.md --merge 1a2b3c4d5e6f --json
+  kluris commit --brain acme --merge 1a2b3c4d5e6f
+
+Usage: kluris commit [OPTIONS]
+
+Options:
+      --brain <BRAIN>
+          Specific brain
+
+      --paths <PATHS>
+          Brain-relative files written or deleted, comma-separated (with --merge, the conflicted files without a choice)
+
+  -m, --message <MSG>
+          Commit message (default: kluris: update <paths>)
+
+      --merge <ID>
+          Finish the waiting merge with this id from the settled files
+
+      --no-verify
+          Skip the pre-commit and commit-msg hooks
+
+      --json
+          JSON output
+
+      --help
+          Show this message and exit.
+== stderr (0 bytes)
+== exit 0
+<end of run>
 $ kluris doctor --help
 == stdout (924 bytes)
 Check prerequisites and refresh installed agent skills.

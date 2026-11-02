@@ -257,8 +257,8 @@ checkout` as you would with any other repo.
 
 const CLI_TAIL: &str = "\
 - `kluris mri{flag}` -- generate interactive visualization
-- `kluris commit{flag} --paths <a.md,b.md> --json` -- commit exactly those files and the maps and links they change, bring in teammates' commits, and push; with `--merge <id>`, finish a waiting merge from the settled files
-- `kluris resolve{flag} <path> --ours|--theirs|--file <merged file> --merge <id> --json` -- settle a conflicted path of a waiting merge, for `structure` and binary conflicts
+- `kluris commit{flag} --paths <a.md,b.md> --json` -- commit exactly those files and the maps and links they change, bring in teammates' commits, and push; with `--merge <id>`, finish a waiting merge from the settled files (without `--paths` once every path has a choice)
+- `kluris resolve{flag} <path> --ours|--theirs|--file <merged file> --merge <id> --json` -- settle a conflicted path of a waiting merge: a `structure` one with `--ours` or `--theirs`, a binary one or one `--paths` cannot name (a comma, or spaces at either end) with any of the three
 
 Branch operations and anything else go through `git` directly -- kluris
 brains are plain git repos. Use `git -C {path} status / log / checkout`

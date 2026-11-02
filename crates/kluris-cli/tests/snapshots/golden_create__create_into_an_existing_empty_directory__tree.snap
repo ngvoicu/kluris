@@ -499,13 +499,13 @@ sideways [infrastructure](../infrastructure/map.md) | [knowledge](../knowledge/m
 ## Contents
 
 (empty)
-== home/.agents/skills/kluris-demo/SKILL.md (file, 36822 bytes)
+== home/.agents/skills/kluris-demo/SKILL.md (file, 36980 bytes)
 <snapshot skill_demo_none_git>
-== home/.claude/skills/kluris-demo/SKILL.md (file, 36822 bytes)
+== home/.claude/skills/kluris-demo/SKILL.md (file, 36980 bytes)
 <snapshot skill_demo_none_git>
-== home/.gemini/config/skills/kluris-demo/SKILL.md (file, 36822 bytes)
+== home/.gemini/config/skills/kluris-demo/SKILL.md (file, 36980 bytes)
 <snapshot skill_demo_none_git>
-== home/.hermes/skills/kluris-demo/SKILL.md (file, 36822 bytes)
+== home/.hermes/skills/kluris-demo/SKILL.md (file, 36980 bytes)
 <snapshot skill_demo_none_git>
 == home/.kluris/config.yml (file, 87 bytes)
 brains:

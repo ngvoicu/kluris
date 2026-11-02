@@ -16,8 +16,10 @@
 //! - every other conflicted path without a recorded choice must be given,
 //!   and no path that is not conflicted: an unrelated path is committed
 //!   after the merge, on the merged files, so a teammate's clean change to
-//!   it is never reverted and no edit hides in a merge. With a choice
-//!   recorded for every conflicted path, the paths may name none.
+//!   it is never reverted and no edit hides in a merge. A name `--paths`
+//!   cannot carry ([`super::advice::fits_paths`]) is settled with `kluris
+//!   resolve` alone. With a choice recorded for every conflicted path, the
+//!   paths may name none, and `--paths` may be left out.
 //!
 //! Each given path's file is its choice, in place of one recorded for it
 //! as a later `kluris resolve` replaces an earlier one, checked as `kluris
@@ -30,19 +32,16 @@
 //! commit` runs to conclude a merge. It lands over the settled files
 //! ([`super::land`]); the record goes once it landed. Every refusal changes
 //! nothing, and each one while a merge waits says what finishing it still
-//! needs ([`MergeNeeds`]): a `kluris resolve` for each structure path
-//! without a side, then the `kluris commit --merge` whose `--paths` names
-//! the paths without a recorded choice, each command to be run as it is
-//! written.
+//! needs ([`MergeNeeds`], in the lines of [`super::advice`]).
 
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 
+use super::advice::{MergeNeeds, Settle};
 use super::claim::TreeClaim;
 use super::commit::{
-    CommitError, CommitReport, CommitRequest, MergeNeeds, check_on_disk, commit, normalize_path,
-    one_line,
+    CommitError, CommitReport, CommitRequest, check_on_disk, commit, normalize_path, one_line,
 };
 use super::engine::{self, Context, Finish};
 use super::git::SyncGit;
@@ -102,20 +101,18 @@ fn needs(
     waiting: &Pending,
     recorded: &BTreeMap<String, ResolvedChoice>,
 ) -> MergeNeeds {
-    let open = |structure: bool| -> Vec<String> {
-        waiting
-            .conflicts
-            .iter()
-            .filter(|c| (c.kind == ConflictKind::Structure) == structure)
-            .filter(|c| !recorded.contains_key(&c.path))
-            .map(|c| c.path.clone())
-            .collect()
-    };
     MergeNeeds {
         brain: brain.to_string(),
         merge: waiting.id(),
-        resolve: open(true),
-        paths: open(false),
+        open: waiting
+            .conflicts
+            .iter()
+            .filter(|c| !recorded.contains_key(&c.path))
+            .map(|c| {
+                let structure = c.kind == ConflictKind::Structure;
+                (c.path.clone(), Settle::of(&c.path, structure, false))
+            })
+            .collect(),
     }
 }
 
@@ -140,9 +137,6 @@ fn finish<G: SyncGit>(
         return Err(CommitError::InProgress(op));
     }
     let paths = normalized(request.paths)?;
-    if paths.is_empty() && waiting.resolved.is_empty() {
-        return Err(CommitError::NoPaths);
-    }
     // A structure path is settled by a recorded side alone.
     if let Some(c) = waiting.conflicts.iter().find(|c| {
         c.kind == ConflictKind::Structure
@@ -154,11 +148,12 @@ fn finish<G: SyncGit>(
             needs,
         });
     }
+    // A path `--paths` cannot name is settled with `kluris resolve` alone.
     let missing: Vec<String> = needs
-        .paths
+        .open
         .iter()
-        .filter(|rel| !paths.contains(rel))
-        .cloned()
+        .filter(|(rel, how)| *how != Settle::Side && !paths.contains(rel))
+        .map(|(rel, _)| rel.clone())
         .collect();
     if !missing.is_empty() {
         return Err(CommitError::Unsettled { missing, needs });

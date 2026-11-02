@@ -2,13 +2,13 @@
 source: crates/kluris-cli/tests/golden_upgrade.rs
 expression: lf
 ---
-== home/.agents/skills/kluris-prod/SKILL.md (file, 37786 bytes)
+== home/.agents/skills/kluris-prod/SKILL.md (file, 37944 bytes)
 <snapshot skill_prod_specmint-core>
-== home/.agents/skills/kluris-team/SKILL.md (file, 36817 bytes)
+== home/.agents/skills/kluris-team/SKILL.md (file, 36975 bytes)
 <snapshot skill_team_none>
-== home/.claude/skills/kluris-prod/SKILL.md (file, 37786 bytes)
+== home/.claude/skills/kluris-prod/SKILL.md (file, 37944 bytes)
 <snapshot skill_prod_specmint-core>
-== home/.claude/skills/kluris-team/SKILL.md (file, 36817 bytes)
+== home/.claude/skills/kluris-team/SKILL.md (file, 36975 bytes)
 <snapshot skill_team_none>
 == home/.codeium/windsurf/global_workflows/kluris-prod.md (removed)
 == home/.codeium/windsurf/global_workflows/kluris-team.md (removed)
@@ -20,23 +20,23 @@ expression: lf
 == home/.copilot/skills/kluris-team/SKILL.md (removed)
 == home/.cursor/skills/kluris-prod/SKILL.md (removed)
 == home/.cursor/skills/kluris-team/SKILL.md (removed)
-== home/.gemini/config/skills/kluris-prod/SKILL.md (file, 37786 bytes)
+== home/.gemini/config/skills/kluris-prod/SKILL.md (file, 37944 bytes)
 <snapshot skill_prod_specmint-core>
-== home/.gemini/config/skills/kluris-team/SKILL.md (file, 36817 bytes)
+== home/.gemini/config/skills/kluris-team/SKILL.md (file, 36975 bytes)
 <snapshot skill_team_none>
 == home/.gemini/skills/kluris-prod/SKILL.md (removed)
 == home/.gemini/skills/kluris-team/SKILL.md (removed)
-== home/.hermes/profiles/personal/skills/kluris-prod/SKILL.md (file, 37786 bytes)
+== home/.hermes/profiles/personal/skills/kluris-prod/SKILL.md (file, 37944 bytes)
 <snapshot skill_prod_specmint-core>
-== home/.hermes/profiles/personal/skills/kluris-team/SKILL.md (file, 36817 bytes)
+== home/.hermes/profiles/personal/skills/kluris-team/SKILL.md (file, 36975 bytes)
 <snapshot skill_team_none>
-== home/.hermes/profiles/work/skills/kluris-prod/SKILL.md (file, 37786 bytes)
+== home/.hermes/profiles/work/skills/kluris-prod/SKILL.md (file, 37944 bytes)
 <snapshot skill_prod_specmint-core>
-== home/.hermes/profiles/work/skills/kluris-team/SKILL.md (file, 36817 bytes)
+== home/.hermes/profiles/work/skills/kluris-team/SKILL.md (file, 36975 bytes)
 <snapshot skill_team_none>
-== home/.hermes/skills/kluris-prod/SKILL.md (file, 37786 bytes)
+== home/.hermes/skills/kluris-prod/SKILL.md (file, 37944 bytes)
 <snapshot skill_prod_specmint-core>
-== home/.hermes/skills/kluris-team/SKILL.md (file, 36817 bytes)
+== home/.hermes/skills/kluris-team/SKILL.md (file, 36975 bytes)
 <snapshot skill_team_none>
 == home/.junie/skills/kluris-prod/SKILL.md (removed)
 == home/.junie/skills/kluris-team/SKILL.md (removed)

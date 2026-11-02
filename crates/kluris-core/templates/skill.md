@@ -657,8 +657,8 @@ These are terminal commands, not skill actions:
 - `kluris dream{brain_flag_hint_inline}` -- regenerate maps, auto-fix safe issues, and validate links
 - `kluris status{brain_flag_hint_inline}` -- show brain tree, recent changes, and counts
 - `kluris mri{brain_flag_hint_inline}` -- generate interactive visualization
-- `kluris commit{brain_flag_hint_inline} --paths <a.md,b.md> --json` -- commit exactly those files and the maps and links they change, bring in teammates' commits, and push; with `--merge <id>`, finish a waiting merge from the settled files
-- `kluris resolve{brain_flag_hint_inline} <path> --ours|--theirs|--file <merged file> --merge <id> --json` -- settle a conflicted path of a waiting merge, for `structure` and binary conflicts
+- `kluris commit{brain_flag_hint_inline} --paths <a.md,b.md> --json` -- commit exactly those files and the maps and links they change, bring in teammates' commits, and push; with `--merge <id>`, finish a waiting merge from the settled files (without `--paths` once every path has a choice)
+- `kluris resolve{brain_flag_hint_inline} <path> --ours|--theirs|--file <merged file> --merge <id> --json` -- settle a conflicted path of a waiting merge: a `structure` one with `--ours` or `--theirs`, a binary one or one `--paths` cannot name (a comma, or spaces at either end) with any of the three
 
 Branch operations and anything else go through `git` directly -- kluris
 brains are plain git repos. Use `git -C {brain_path} status / log / checkout`

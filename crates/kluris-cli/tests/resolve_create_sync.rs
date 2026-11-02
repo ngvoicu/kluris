@@ -405,6 +405,20 @@ fn a_merge_blocked_by_uncommitted_files_exits_1_and_keeps_the_choices() {
             (rels[1].to_string(), "ours".to_string()),
         ]
     );
+    // Every path has its choice: the refusal prints the command that
+    // finishes the merge once the edit is out of the way.
+    let finish = printed(doc["error"].as_str().unwrap());
+    assert_eq!(
+        finish,
+        [format!("kluris commit --brain alpha --merge {merge}")],
+        "{doc}"
+    );
+    h.git(&root, &["checkout", "--", rels[0]]);
+    let (code, out, err) = h.shell(&finish[0], h.dir.path());
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(!pending_path(&root).exists());
+    assert_eq!(bare_main(&h, "alpha"), head(&h, &root));
+    assert!(h.read(&root, rels[0]).contains("Three, theirs."));
 }
 
 #[test]

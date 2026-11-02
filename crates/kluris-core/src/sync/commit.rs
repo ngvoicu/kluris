@@ -61,6 +61,7 @@ use std::fs;
 use std::path::Path;
 use std::time::SystemTime;
 
+use super::advice::{MergeNeeds, shell_word};
 use super::hooks::{HookError, Source, gate, message_hooks};
 use super::land::join;
 use super::merge::{is_generated, tree_nodes};
@@ -513,7 +514,7 @@ impl fmt::Display for CommitError {
             ),
             CommitError::MergeWaits(needs) => write!(
                 f,
-                "a merge waits to be finished (merge {}): {needs}; nothing was committed",
+                "a merge waits to be finished (merge {}); nothing was committed. To finish it:\n{needs}",
                 needs.merge
             ),
             CommitError::WrongMerge(wrong) => write!(
@@ -527,22 +528,25 @@ impl fmt::Display for CommitError {
             ),
             CommitError::Unsettled { missing, needs } => write!(
                 f,
-                "settle these too: {}; {needs}; nothing was committed",
+                "settle these too: {}; nothing was committed. To finish the merge:\n{needs}",
                 missing.join(", ")
             ),
-            CommitError::Unrelated { needs, rest } => write!(
-                f,
-                "a merge waits: commit the conflicted paths first ({needs}), then the rest with `kluris commit --brain {} --paths {}`; nothing was committed",
-                shell_word(&needs.brain),
-                path_list(rest)
-            ),
+            CommitError::Unrelated { needs, rest } => {
+                let rest: Vec<String> = rest.iter().map(|rel| shell_word(rel)).collect();
+                write!(
+                    f,
+                    "a merge waits: commit the conflicted paths first, then the rest; nothing was committed. To finish the merge:\n{needs}\n  then commit the rest:\n    kluris commit --brain {} --paths {}",
+                    shell_word(&needs.brain),
+                    rest.join(",")
+                )
+            }
             CommitError::Structure {
                 path,
                 recorded: false,
                 needs,
             } => write!(
                 f,
-                "{path} is a file on one side and a directory on the other, or a rename, which only kluris resolve settles: {needs}; nothing was committed"
+                "{path} is a file on one side and a directory on the other, or a rename, so only a side settles it; nothing was committed. To finish the merge:\n{needs}"
             ),
             CommitError::Structure {
                 path,
@@ -550,7 +554,7 @@ impl fmt::Display for CommitError {
                 needs,
             } => write!(
                 f,
-                "{path} is a file on one side and a directory on the other, or a rename, and keeps the side kluris resolve chose, so leave it out of --paths: {needs}; nothing was committed"
+                "{path} is a file on one side and a directory on the other, or a rename, and keeps the side chosen for it, so leave it out of --paths; nothing was committed. To finish the merge:\n{needs}"
             ),
             CommitError::InvalidFile { path, reason } => write!(
                 f,
@@ -593,82 +597,6 @@ pub(super) fn index_not_updated(paths: &[String], e: &GitError) -> String {
         one_line(&e.to_string()),
         words.join(" ")
     )
-}
-
-/// What finishing a waiting merge with `kluris commit --merge` still
-/// needs: a side from `kluris resolve` for each structure path without one,
-/// then a file for each other conflicted path without a recorded choice.
-/// Paths with a recorded choice need nothing.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct MergeNeeds {
-    /// The brain, as `--brain` takes it.
-    pub brain: String,
-    /// The waiting merge's id.
-    pub merge: String,
-    /// Structure paths without a recorded side.
-    pub resolve: Vec<String>,
-    /// The other conflicted paths without a recorded choice: `--paths`.
-    pub paths: Vec<String>,
-}
-
-impl MergeNeeds {
-    /// The command that finishes the merge once every structure path has
-    /// a side and the files are written.
-    pub fn commit(&self) -> String {
-        let paths = if self.paths.is_empty() {
-            "\"\"".to_string()
-        } else {
-            path_list(&self.paths)
-        };
-        format!(
-            "kluris commit --brain {} --merge {} --paths {paths}",
-            shell_word(&self.brain),
-            self.merge
-        )
-    }
-}
-
-/// Each step in order, every command in backticks to be run as it is.
-impl fmt::Display for MergeNeeds {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        for path in &self.resolve {
-            write!(
-                f,
-                "keep a side of {path} with `kluris resolve --brain {} {} --ours|--theirs --merge {}`, then ",
-                shell_word(&self.brain),
-                shell_word(path),
-                self.merge
-            )?;
-        }
-        if !self.paths.is_empty() {
-            write!(
-                f,
-                "write the version to keep to {} and ",
-                self.paths.join(", ")
-            )?;
-        }
-        write!(f, "run `{}`", self.commit())
-    }
-}
-
-/// `paths` as one `--paths` value: each a shell word, joined with `,`.
-fn path_list(paths: &[String]) -> String {
-    paths
-        .iter()
-        .map(|rel| shell_word(rel))
-        .collect::<Vec<_>>()
-        .join(",")
-}
-
-/// `path` as a shell word: quoted when it holds anything but letters,
-/// digits and `._/-`.
-fn shell_word(path: &str) -> String {
-    let plain = |c: char| c.is_ascii_alphanumeric() || "._/-".contains(c);
-    if !path.is_empty() && path.chars().all(plain) {
-        path.to_string()
-    } else {
-        format!("'{}'", path.replace('\'', "'\\''"))
-    }
 }
 
 impl std::error::Error for CommitError {}

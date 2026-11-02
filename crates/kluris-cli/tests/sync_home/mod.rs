@@ -424,3 +424,95 @@ impl Home {
         failed
     }
 }
+
+/// The command lines `text` prints for a person to run: on each line, from
+/// `kluris resolve ` or `kluris commit ` to its end (a label before it, such
+/// as `keep yours:`, is not part of the command).
+pub fn printed(text: &str) -> Vec<String> {
+    text.lines()
+        .filter_map(|line| {
+            ["kluris resolve ", "kluris commit "]
+                .iter()
+                .filter_map(|verb| line.find(verb))
+                .min()
+                .map(|at| line[at..].trim_end().to_string())
+        })
+        .collect()
+}
+
+/// `line` split into words as a POSIX shell splits it: whitespace apart,
+/// `'...'` and `"..."` quoted (an empty pair is an empty word), `\x` the
+/// character itself.
+pub fn words(line: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut word: Option<String> = None;
+    let mut chars = line.chars();
+    while let Some(c) = chars.next() {
+        match c {
+            ' ' | '\t' | '\n' => {
+                if let Some(done) = word.take() {
+                    out.push(done);
+                }
+            }
+            '\'' | '"' => {
+                let w = word.get_or_insert_with(String::new);
+                for q in chars.by_ref() {
+                    if q == c {
+                        break;
+                    }
+                    w.push(q);
+                }
+            }
+            '\\' => {
+                let w = word.get_or_insert_with(String::new);
+                if let Some(next) = chars.next() {
+                    w.push(next);
+                }
+            }
+            other => word.get_or_insert_with(String::new).push(other),
+        }
+    }
+    out.extend(word);
+    out
+}
+
+impl Home {
+    /// Run a printed command `line` as it is, from `cwd`, with this home's
+    /// environment and the built binary first on `PATH` as `kluris`: on
+    /// Unix through `sh -c`. Windows has no POSIX shell to take the line,
+    /// so there its words (split as `sh` would) are given to the binary.
+    pub fn shell(&self, line: &str, cwd: &Path) -> (i32, String, String) {
+        let bin = PathBuf::from(assert_cmd::cargo::cargo_bin!("kluris"));
+        let mut cmd = if cfg!(unix) {
+            let mut sh = StdCommand::new("sh");
+            sh.arg("-c").arg(line);
+            sh
+        } else {
+            let words = words(line);
+            assert_eq!(words.first().map(String::as_str), Some("kluris"), "{line}");
+            let mut direct = StdCommand::new(&bin);
+            direct.args(&words[1..]);
+            direct
+        };
+        self.hermetic(&mut cmd);
+        for (key, value) in &self.env {
+            cmd.env(key, value);
+        }
+        let inherited = self
+            .env
+            .iter()
+            .find(|(key, _)| key == "PATH")
+            .map(|(_, value)| value.clone().into())
+            .or_else(|| std::env::var_os("PATH"))
+            .unwrap_or_default();
+        let mut dirs: Vec<PathBuf> = bin.parent().map(Path::to_path_buf).into_iter().collect();
+        dirs.extend(std::env::split_paths(&inherited));
+        cmd.env("PATH", std::env::join_paths(dirs).unwrap());
+        let out = cmd.current_dir(cwd).output().unwrap();
+        (
+            out.status.code().unwrap_or(-1),
+            String::from_utf8(out.stdout).unwrap(),
+            String::from_utf8(out.stderr).unwrap(),
+        )
+    }
+}

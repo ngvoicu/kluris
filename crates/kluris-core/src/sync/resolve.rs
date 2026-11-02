@@ -138,7 +138,7 @@ impl fmt::Display for ResolveError {
             ),
             ResolveError::Blocked(paths) => write!(
                 f,
-                "uncommitted changes are in the way: {}; commit or stash them, then run `kluris resolve` again for any conflicted path (the choices are kept)",
+                "uncommitted changes are in the way: {}; commit or stash them, then finish the merge (the choices are kept)",
                 paths.join(", ")
             ),
             ResolveError::Left(left) => left.fmt(f),

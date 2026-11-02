@@ -15,9 +15,10 @@ use std::path::Path;
 
 use kluris_core::config::{ConfigErrorKind, read_brain_config};
 use kluris_core::pyrepr::py_path_str;
+use kluris_core::sync::advice::{commit_lines, resolve_lines, shell_word};
 use kluris_core::sync::resolve::{Choice, ResolveError, ResolveReport, ResolveRequest, resolve};
 use kluris_core::sync::session::Intent;
-use kluris_core::sync::{ConflictText, LeftReason, SyncReport};
+use kluris_core::sync::{ConflictKind, ConflictText, LeftReason, SyncReport};
 
 use crate::brains::{self, Target};
 use crate::commands::dream::today;
@@ -41,26 +42,6 @@ fn conflicts(n: usize) -> &'static str {
     if n == 1 { "conflict" } else { "conflicts" }
 }
 
-/// `path` as a shell word: quoted when it holds anything but letters,
-/// digits and `._/-`.
-pub fn shell_word(path: &str) -> String {
-    let plain = |c: char| c.is_ascii_alphanumeric() || "._/-".contains(c);
-    if !path.is_empty() && path.chars().all(plain) {
-        path.to_string()
-    } else {
-        format!("'{}'", path.replace('\'', "'\\''"))
-    }
-}
-
-/// The command that settles the conflict at `path` of waiting merge
-/// `merge` in `brain`.
-pub fn command(brain: &str, path: &str, merge: &str) -> String {
-    format!(
-        "kluris resolve --brain {brain} {} --ours|--theirs|--file FILE --merge {merge}",
-        shell_word(path)
-    )
-}
-
 /// The error for an id that is not the open conflict's: the reason,
 /// the current conflict's sides and the command; in JSON, the current id
 /// and conflict entry.
@@ -77,13 +58,18 @@ fn wrong_merge(
             None if c.binary => "(binary)\n".into(),
             None => "(no file)\n".into(),
         };
+        let structure = c.kind == ConflictKind::Structure;
+        let choices: Vec<String> = resolve_lines(brain, current, &c.path, !structure)
+            .into_iter()
+            .map(|line| format!("  {line}"))
+            .collect();
         message.push_str(&format!(
-            "\nIts sides now ({}):\n--- ours\n{}--- theirs\n{}--- base\n{}Then run: {}",
+            "\nIts sides now ({}):\n--- ours\n{}--- theirs\n{}--- base\n{}Then run one of:\n{}",
             c.kind.as_str(),
             side(&c.ours),
             side(&c.theirs),
             side(&c.base),
-            command(brain, &c.path, current)
+            choices.join("\n")
         ));
     }
     let fields = vec![
@@ -162,6 +148,14 @@ pub fn run(options: &Options) -> Result<(), CliError> {
                 ResolveError::WrongMerge {
                     wrong, conflict, ..
                 } => wrong_merge(name, &e, &wrong.current, conflict.as_deref()),
+                // Only the last choice is blocked, so every path has one.
+                ResolveError::Blocked(_) => {
+                    let mut message = format!("Brain {name}: {e}");
+                    for line in commit_lines(name, merge, &[], false) {
+                        message.push_str(&format!("\n  {line}"));
+                    }
+                    (message, Vec::new())
+                }
                 _ => (format!("Brain {name}: {e}"), Vec::new()),
             };
             fields.extend(brains::sync_field(sync.as_ref()));
@@ -195,7 +189,7 @@ pub fn run(options: &Options) -> Result<(), CliError> {
         };
         human::print(&json::to_line(&brains::with_sync(doc, sync.as_ref())));
     } else {
-        human::print(&text(&report, &done));
+        human::print(&text(name, &report, &done));
         if let Some(warning) = &report.warning {
             eprintln!("Warning: {warning}");
         }
@@ -251,7 +245,7 @@ fn failed(report: &ResolveReport, sync: Option<&SyncReport>) -> bool {
 }
 
 /// One line per call.
-fn text(r: &ResolveReport, done: &Done) -> String {
+fn text(brain: &str, r: &ResolveReport, done: &Done) -> String {
     let mut line = format!("Resolved {} ({})", r.path, r.choice);
     match &r.commit {
         None => line.push_str(&format!(
@@ -267,9 +261,10 @@ fn text(r: &ResolveReport, done: &Done) -> String {
                 line.push_str(" and pushed");
             } else if !done.remaining.is_empty() {
                 line.push_str(&format!(
-                    ", not pushed: the remote moved and a new {} is open: {}; run kluris resolve again",
+                    ", not pushed: the remote moved and a new {} is open: {}; kluris sync --brain {} prints the commands that settle it",
                     conflicts(done.remaining.len()),
-                    done.remaining.join(", ")
+                    done.remaining.join(", "),
+                    shell_word(brain)
                 ));
             } else {
                 line.push_str(&format!(

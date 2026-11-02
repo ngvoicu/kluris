@@ -17,13 +17,13 @@ use std::path::{Path, PathBuf};
 use kluris_core::config::{ConfigErrorKind, read_brain_config};
 use kluris_core::git::SystemGit;
 use kluris_core::pyrepr::py_path_str;
+use kluris_core::sync::advice::{Settle, commit_lines, resolve_lines};
 use kluris_core::sync::engine::check_git;
 use kluris_core::sync::session::Intent;
 use kluris_core::sync::{ConflictKind, LeftAsIs, LeftReason, SyncReport};
 
 use crate::brains::{self, Target};
 use crate::commands::dream::today;
-use crate::commands::resolve::{command, shell_word};
 use crate::error::CliError;
 use crate::output::human;
 use crate::output::json::{self, Json};
@@ -69,12 +69,12 @@ fn text(name: &str, report: &SyncReport) -> String {
             "{name}: {} in merge {merge}:\n",
             plural(report.conflicts.len(), "conflict", "conflicts")
         );
-        // `kluris commit --merge` settles a text path from its file and
-        // keeps the choices `kluris resolve` recorded; a `structure` or
-        // binary path without a choice takes a side with `kluris resolve`.
-        // A path that has its choice is said as settled, never advised
-        // again.
+        // Each open path is settled as `kluris_core::sync::advice` says: a
+        // side or a file with `kluris resolve`, or its file named in the one
+        // `kluris commit --merge` line. A path that has its choice is said
+        // as settled, never advised again.
         let mut text_paths = Vec::new();
+        let mut open = false;
         for c in &report.conflicts {
             if let Some(choice) = &c.resolved {
                 out.push_str(&format!(
@@ -86,24 +86,18 @@ fn text(name: &str, report: &SyncReport) -> String {
                 continue;
             }
             out.push_str(&format!("  {}: {}\n", c.kind.as_str(), c.path));
-            if c.binary || c.kind == ConflictKind::Structure {
-                out.push_str(&format!("    {}\n", command(name, &c.path, &c.merge)));
-            } else {
-                text_paths.push(c.path.as_str());
+            match Settle::of(&c.path, c.kind == ConflictKind::Structure, c.binary) {
+                Settle::Paths => text_paths.push(c.path.clone()),
+                how => {
+                    open = true;
+                    for line in resolve_lines(name, merge, &c.path, how == Settle::SideOrFile) {
+                        out.push_str(&format!("    {line}\n"));
+                    }
+                }
             }
         }
-        if !text_paths.is_empty() {
-            let paths = text_paths
-                .iter()
-                .map(|p| shell_word(p))
-                .collect::<Vec<_>>()
-                .join(",");
-            out.push_str(
-                "    write the version you want to each file (a deleted file is a deletion), then:\n",
-            );
-            out.push_str(&format!(
-                "    kluris commit --brain {name} --merge {merge} --paths {paths}\n"
-            ));
+        for line in commit_lines(name, merge, &text_paths, open) {
+            out.push_str(&format!("    {line}\n"));
         }
         return out;
     }

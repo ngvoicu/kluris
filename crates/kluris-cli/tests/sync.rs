@@ -110,7 +110,7 @@ fn brain_all_syncs_the_clean_brain_and_reports_the_conflicted_one() {
     assert_eq!(
         out,
         format!(
-            "alpha: 1 conflict in merge {merge}:\n  content: notes/first.md\n    write the version you want to each file (a deleted file is a deletion), then:\n    kluris commit --brain alpha --merge {merge} --paths notes/first.md\nbeta: up to date\n"
+            "alpha: 1 conflict in merge {merge}:\n  content: notes/first.md\n    write the version you want to notes/first.md (a deleted file is a deletion), then:\n    kluris commit --brain alpha --merge {merge} --paths notes/first.md\nbeta: up to date\n"
         )
     );
     assert_eq!(
@@ -143,7 +143,7 @@ fn a_mixed_merge_resolves_the_structure_path_and_commits_the_text_path() {
     assert_eq!(
         out,
         format!(
-            "alpha: 2 conflicts in merge {merge}:\n  content: notes/first.md\n  structure: notes/topic.md\n    kluris resolve --brain alpha notes/topic.md --ours|--theirs|--file FILE --merge {merge}\n    write the version you want to each file (a deleted file is a deletion), then:\n    kluris commit --brain alpha --merge {merge} --paths notes/first.md\n"
+            "alpha: 2 conflicts in merge {merge}:\n  content: notes/first.md\n  structure: notes/topic.md\n    keep yours:   kluris resolve --brain alpha notes/topic.md --ours --merge {merge}\n    keep theirs:  kluris resolve --brain alpha notes/topic.md --theirs --merge {merge}\n    write the version you want to notes/first.md (a deleted file is a deletion), then:\n    kluris commit --brain alpha --merge {merge} --paths notes/first.md\n"
         ),
         "{out}"
     );
@@ -167,7 +167,7 @@ fn a_mixed_merge_resolves_the_structure_path_and_commits_the_text_path() {
     assert_eq!(
         out,
         format!(
-            "alpha: 2 conflicts in merge {merge}:\n  content: notes/first.md\n  structure: notes/topic.md (theirs)\n    write the version you want to each file (a deleted file is a deletion), then:\n    kluris commit --brain alpha --merge {merge} --paths notes/first.md\n"
+            "alpha: 2 conflicts in merge {merge}:\n  content: notes/first.md\n  structure: notes/topic.md (theirs)\n    write the version you want to notes/first.md (a deleted file is a deletion), then:\n    kluris commit --brain alpha --merge {merge} --paths notes/first.md\n"
         ),
         "{out}"
     );
@@ -192,6 +192,49 @@ fn a_mixed_merge_resolves_the_structure_path_and_commits_the_text_path() {
     assert_eq!(out, "alpha: up to date\n");
     assert_eq!(h.read(&root, "notes/first.md"), keep);
     assert!(h.read(&root, "notes/topic.md/child.md").contains("# Child"));
+    let bare = h.dir.path().join("alpha.git");
+    assert_eq!(
+        h.git(&bare, &["rev-parse", "main"]),
+        h.git(&root, &["rev-parse", "HEAD"])
+    );
+}
+
+/// A binary path takes a side or a file, each its own command, and the
+/// file line, run in a shell as printed, lands the merge.
+#[test]
+fn a_binary_conflict_prints_each_choice_and_its_file_line_lands_the_merge() {
+    let mut h = Home::new();
+    let root = h.brain("alpha");
+    h.commit(&root, "notes/data.bin", "\0base");
+    h.git(&root, &["push", "-q"]);
+    let mate = h.teammate("alpha");
+    h.git(&mate, &["pull", "-q"]);
+    h.teammate_pushes("alpha", "notes/data.bin", "\0theirs");
+    h.commit(&root, "notes/data.bin", "\0ours");
+    let (code, out, _) = h.run(&["sync", "--brain", "alpha"]);
+    assert_eq!(code, 1, "{out}");
+    let (_, doc) = h.json(&["status", "--brain", "alpha", "--json"]);
+    let merge = doc["brains"][0]["sync"]["conflicts"][0]["merge"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let lines: Vec<String> = ["--ours", "--theirs", "--file merged.bin"]
+        .iter()
+        .map(|choice| {
+            format!("kluris resolve --brain alpha notes/data.bin {choice} --merge {merge}")
+        })
+        .collect();
+    assert_eq!(printed(&out), lines, "{out}");
+    assert!(out.contains("    keep yours:   kluris resolve"), "{out}");
+
+    let outside = h.dir.path();
+    fs::write(outside.join("merged.bin"), b"\0both").unwrap();
+    let (code, out, err) = h.shell(&lines[2], outside);
+    assert_eq!(code, 0, "{out}{err}");
+    assert_eq!(
+        fs::read(root.join("notes").join("data.bin")).unwrap(),
+        b"\0both"
+    );
     let bare = h.dir.path().join("alpha.git");
     assert_eq!(
         h.git(&bare, &["rev-parse", "main"]),

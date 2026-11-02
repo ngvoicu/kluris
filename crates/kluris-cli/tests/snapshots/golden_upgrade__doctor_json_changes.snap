@@ -2,13 +2,13 @@
 source: crates/kluris-cli/tests/golden_upgrade.rs
 expression: lf
 ---
-== home/.agents/skills/kluris-acme/SKILL.md (file, 37801 bytes)
+== home/.agents/skills/kluris-acme/SKILL.md (file, 37959 bytes)
 <snapshot skill_acme_specmint-core>
-== home/.agents/skills/kluris-beta/SKILL.md (file, 36825 bytes)
+== home/.agents/skills/kluris-beta/SKILL.md (file, 36983 bytes)
 <snapshot skill_beta_none>
-== home/.claude/skills/kluris-acme/SKILL.md (file, 37801 bytes)
+== home/.claude/skills/kluris-acme/SKILL.md (file, 37959 bytes)
 <snapshot skill_acme_specmint-core>
-== home/.claude/skills/kluris-beta/SKILL.md (file, 36825 bytes)
+== home/.claude/skills/kluris-beta/SKILL.md (file, 36983 bytes)
 <snapshot skill_beta_none>
 == home/.codeium/windsurf/global_workflows/kluris-acme.md (removed)
 == home/.codeium/windsurf/global_workflows/kluris-beta.md (removed)
@@ -20,19 +20,19 @@ expression: lf
 == home/.copilot/skills/kluris-beta/SKILL.md (removed)
 == home/.cursor/skills/kluris-acme/SKILL.md (removed)
 == home/.cursor/skills/kluris-beta/SKILL.md (removed)
-== home/.gemini/config/skills/kluris-acme/SKILL.md (file, 37801 bytes)
+== home/.gemini/config/skills/kluris-acme/SKILL.md (file, 37959 bytes)
 <snapshot skill_acme_specmint-core>
-== home/.gemini/config/skills/kluris-beta/SKILL.md (file, 36825 bytes)
+== home/.gemini/config/skills/kluris-beta/SKILL.md (file, 36983 bytes)
 <snapshot skill_beta_none>
 == home/.gemini/skills/kluris-acme/SKILL.md (removed)
 == home/.gemini/skills/kluris-beta/SKILL.md (removed)
-== home/.hermes/profiles/work/skills/kluris-acme/SKILL.md (file, 37801 bytes)
+== home/.hermes/profiles/work/skills/kluris-acme/SKILL.md (file, 37959 bytes)
 <snapshot skill_acme_specmint-core>
-== home/.hermes/profiles/work/skills/kluris-beta/SKILL.md (file, 36825 bytes)
+== home/.hermes/profiles/work/skills/kluris-beta/SKILL.md (file, 36983 bytes)
 <snapshot skill_beta_none>
-== home/.hermes/skills/kluris-acme/SKILL.md (file, 37801 bytes)
+== home/.hermes/skills/kluris-acme/SKILL.md (file, 37959 bytes)
 <snapshot skill_acme_specmint-core>
-== home/.hermes/skills/kluris-beta/SKILL.md (file, 36825 bytes)
+== home/.hermes/skills/kluris-beta/SKILL.md (file, 36983 bytes)
 <snapshot skill_beta_none>
 == home/.junie/skills/kluris-acme/SKILL.md (removed)
 == home/.junie/skills/kluris-beta/SKILL.md (removed)
