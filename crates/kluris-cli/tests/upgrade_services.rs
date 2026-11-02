@@ -12,7 +12,8 @@
 //! - `real_round_trip`, opt-in (`--ignored`): a real service of this
 //!   machine's manager, for a brain named for the test, runs the arm and
 //!   is gone, with its log; its guard removes whatever is left however the
-//!   test ends.
+//!   test ends. On Windows `real_doctor_removes_a_task` too: `doctor`, run
+//!   outside the task, removes a real task and its log.
 
 mod common;
 
@@ -21,6 +22,7 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Command as StdCommand;
+use std::sync::{Mutex, MutexGuard};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -347,6 +349,31 @@ fn doctor_removes_every_service_and_reports_them_in_one_check() {
     assert_eq!(calls(&sb), expected);
 }
 
+/// A service that will not go is a warning naming it, in the manager's
+/// words, never a pass.
+#[cfg(unix)]
+#[test]
+fn doctor_warns_of_a_service_it_could_not_remove() {
+    let sb = Sandbox::new();
+    sb.write_config(&[]);
+    install_service(&sb, "acme");
+    let stop = stop_call("acme");
+    let run = kluris_with(
+        &sb,
+        "acme",
+        &["doctor", "--json"],
+        &[("FAKE_FAIL", stop.as_str())],
+    );
+    let doc = json(&run);
+    let check = doctor_check(&doc).unwrap_or_else(|| panic!("no sync-services check: {doc}"));
+    assert_eq!(check["warning"], true, "{check}");
+    let detail = check["detail"].as_str().unwrap();
+    assert!(
+        detail.contains("acme") && detail.contains("Operation not permitted"),
+        "{detail}"
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn doctor_no_refresh_leaves_the_services() {
@@ -578,6 +605,18 @@ impl FakeRunner {
         ));
     }
 
+    /// Answer `line` with exit 0 and `stdout`.
+    fn answer_out(&self, line: &str, stdout: &str) {
+        self.answers.borrow_mut().push((
+            line.to_string(),
+            Ran {
+                code: Some(0),
+                stdout: stdout.into(),
+                stderr: String::new(),
+            },
+        ));
+    }
+
     fn calls(&self) -> Vec<String> {
         self.calls.borrow().clone()
     }
@@ -800,6 +839,63 @@ fn task_scheduler_a_delete_that_fails_is_reported() {
     assert!(problem.contains("Access is denied"), "{problem}");
 }
 
+/// A task that will not go keeps its log, which gains one line saying why:
+/// inside the task nobody reads stderr, and the next sweep removes both.
+#[test]
+fn task_scheduler_a_task_that_stays_keeps_its_log_with_the_failure() {
+    for stop in [false, true] {
+        let tmp = TempDir::new().unwrap();
+        let home = tmp.path();
+        let log = touch(&home.join("lad/kluris/logs/sync-acme.log"));
+        let runner = FakeRunner::watching(&log);
+        runner.answer(
+            &format!("schtasks /Delete /TN {TASK} /F"),
+            1,
+            "ERROR: Access is denied.\r\r\n",
+        );
+        let env = env(home, Manager::TaskScheduler, &runner);
+        let done = if stop {
+            let tasks = format!("\"{TASK}\",\"N/A\",\"Running\"\r\n");
+            runner.answer_out("schtasks /Query /FO CSV /NH", &tasks);
+            services::sweep(&env).remove(0)
+        } else {
+            services::remove_one("acme", &env)
+        };
+        assert!(done.removed.is_empty(), "stop {stop}: {done:?}");
+        let problem = done.problem.clone().unwrap_or_default();
+        assert_eq!(
+            problem,
+            format!("`schtasks /Delete /TN {TASK} /F`: ERROR: Access is denied."),
+            "stop {stop}"
+        );
+        assert_eq!(
+            fs::read_to_string(&log).unwrap(),
+            format!(
+                "an earlier release's\nkluris: could not remove the task {TASK}, \
+                 which keeps this log: {problem}\n"
+            ),
+            "stop {stop}"
+        );
+    }
+}
+
+/// Without its log, a task that stays leaves no file behind.
+#[test]
+fn task_scheduler_a_task_that_stays_without_a_log_writes_none() {
+    let tmp = TempDir::new().unwrap();
+    let home = tmp.path();
+    let log = home.join("lad/kluris/logs/sync-acme.log");
+    let runner = FakeRunner::watching(&log);
+    runner.answer(
+        &format!("schtasks /Delete /TN {TASK} /F"),
+        1,
+        "ERROR: Access is denied.",
+    );
+    let done = services::remove_one("acme", &env(home, Manager::TaskScheduler, &runner));
+    assert!(done.problem.is_some(), "{done:?}");
+    assert!(!home.join("lad/kluris").exists());
+}
+
 #[test]
 fn a_name_no_service_has_reaches_no_command() {
     let tmp = TempDir::new().unwrap();
@@ -933,6 +1029,12 @@ impl RealService {
         left
     }
 
+    /// What launchd says of the job.
+    fn report(&self) -> String {
+        let (_, out, err) = ran("launchctl", &["print", &self.target()]);
+        format!("launchctl print: {out}{err}")
+    }
+
     fn clean(&self) {
         let _ = ran("launchctl", &["bootout", &self.target()]);
         self.remove_files();
@@ -1037,6 +1139,15 @@ impl RealService {
         Some(dir.join("default.target.wants").join(self.unit()))
     }
 
+    /// What systemd says of the unit.
+    fn report(&self) -> String {
+        let (_, out, err) = ran(
+            "systemctl",
+            &["--user", "status", "--no-pager", &self.unit()],
+        );
+        format!("systemctl --user status: {out}{err}")
+    }
+
     fn clean(&self) {
         let unit = self.unit();
         let _ = ran("systemctl", &["--user", "disable", "--now", &unit]);
@@ -1049,45 +1160,46 @@ impl RealService {
     }
 }
 
+/// Whether this process runs elevated: its token carries the High (or
+/// System) mandatory label, as an administrator's ssh session does.
 #[cfg(windows)]
-impl RealService {
-    fn task(&self) -> String {
-        format!(r"\Kluris\sync-{}", self.brain)
-    }
+fn elevated() -> bool {
+    let (_, out, _) = ran("whoami", &["/groups", "/fo", "csv", "/nh"]);
+    out.contains("S-1-16-12288") || out.contains("S-1-16-16384")
+}
 
-    /// The task, created from XML for this account at logon and run at
-    /// once, with the log its watch wrote.
-    fn install(brain: &str) -> Option<RealService> {
-        let lad = PathBuf::from(std::env::var_os("LOCALAPPDATA").expect("LOCALAPPDATA"));
-        let log = lad
-            .join("kluris")
-            .join("logs")
-            .join(format!("sync-{brain}.log"));
-        let service = RealService {
-            brain: brain.to_string(),
-            definition: None,
-            log: Some(log.clone()),
-        };
-        fs::create_dir_all(log.parent().unwrap()).unwrap();
-        fs::write(&log, "an earlier release's watch wrote this\r\n").unwrap();
-        let (code, out, err) = ran("whoami", &["/user", "/fo", "csv", "/nh"]);
-        assert_eq!(code, 0, "whoami: {out}{err}");
-        let sid = out
-            .lines()
-            .next()
-            .and_then(|l| l.rsplit(',').next())
-            .map(|s| s.trim().trim_matches('"').to_string())
-            .expect("a SID");
-        let arguments = format!(
-            "--headless &quot;{}&quot; sync --watch --brain {brain} --log-file &quot;{}&quot;",
-            kluris_exe().display(),
-            log.display()
-        );
-        let xml = format!(
-            r#"<?xml version="1.0" encoding="UTF-16"?>
+/// `text` in an XML element's text.
+#[cfg(windows)]
+fn xml_text(text: &str) -> String {
+    text.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+}
+
+/// The account's SID, as `whoami /user` says it.
+#[cfg(windows)]
+fn sid() -> String {
+    let (code, out, err) = ran("whoami", &["/user", "/fo", "csv", "/nh"]);
+    assert_eq!(code, 0, "whoami: {out}{err}");
+    out.lines()
+        .next()
+        .and_then(|l| l.rsplit(',').next())
+        .map(|s| s.trim().trim_matches('"').to_string())
+        .expect("a SID")
+}
+
+/// The task XML an earlier release registered: at this account's logon,
+/// with its interactive token at its least privilege, `command
+/// arguments`, as UTF-16 with its BOM.
+#[cfg(windows)]
+fn task_xml(task: &str, description: &str, command: &str, arguments: &str) -> Vec<u8> {
+    let sid = sid();
+    let xml = format!(
+        r#"<?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
   <RegistrationInfo>
-    <Description>Kluris sync for the brain {brain}</Description>
+    <Description>{description}</Description>
     <URI>{task}</URI>
   </RegistrationInfo>
   <Triggers>
@@ -1122,29 +1234,199 @@ impl RealService {
   </Settings>
   <Actions Context="Author">
     <Exec>
-      <Command>%SystemRoot%\System32\conhost.exe</Command>
+      <Command>{command}</Command>
       <Arguments>{arguments}</Arguments>
     </Exec>
   </Actions>
 </Task>
 "#,
-            task = service.task(),
-        );
-        let file = std::env::temp_dir().join(format!("{brain}.xml"));
-        let mut bytes = vec![0xFF, 0xFE];
-        for unit in xml.encode_utf16() {
-            bytes.extend_from_slice(&unit.to_le_bytes());
+        description = xml_text(description),
+        task = xml_text(task),
+        command = xml_text(command),
+        arguments = xml_text(arguments),
+    );
+    let mut bytes = vec![0xFF, 0xFE];
+    for unit in xml.encode_utf16() {
+        bytes.extend_from_slice(&unit.to_le_bytes());
+    }
+    bytes
+}
+
+/// A folder under LOCALAPPDATA, which the person's own token can write.
+#[cfg(windows)]
+fn person_dir() -> TempDir {
+    let lad = PathBuf::from(std::env::var_os("LOCALAPPDATA").expect("LOCALAPPDATA"));
+    tempfile::Builder::new()
+        .prefix("kluris-rt-")
+        .tempdir_in(lad)
+        .unwrap()
+}
+
+/// The helper task that runs a script as the person, removed when dropped.
+#[cfg(windows)]
+struct Helper(String);
+
+#[cfg(windows)]
+impl Drop for Helper {
+    fn drop(&mut self) {
+        let _ = ran("schtasks", &["/Delete", "/TN", &self.0, "/F"]);
+        if ran("schtasks", &["/Query", "/TN", &self.0]).0 == 0 {
+            eprintln!("the guard could not remove the helper task {}", self.0);
+        } else {
+            eprintln!("the helper task {} is gone", self.0);
         }
-        fs::write(&file, bytes).unwrap();
-        let file_text = file.display().to_string();
-        let task = service.task();
+    }
+}
+
+/// `command` (a `cmd` line) with `vars` set, as the person's own terminal
+/// runs it: its exit code, stdout and stderr. An elevated process (an
+/// administrator's ssh session) has a token that terminal never has, so it
+/// runs the script in a helper task, `\kluris-rt-person-<brain>`, with the
+/// person's interactive token at its least privilege: the terminal's
+/// token (Medium, Administrators for deny only), in their logon session.
+/// `None`, said on stderr, when that helper never ran (nobody logged on).
+#[cfg(windows)]
+fn as_person(brain: &str, vars: &[(&str, String)], command: &str) -> Option<(i32, String, String)> {
+    let dir = person_dir();
+    let (out, err, code) = (
+        dir.path().join("out"),
+        dir.path().join("err"),
+        dir.path().join("code"),
+    );
+    let mut script = String::from("@echo off\r\n");
+    for (key, value) in vars {
+        script.push_str(&format!("set \"{key}={value}\"\r\n"));
+    }
+    script.push_str(&format!(
+        "{command} > \"{}\" 2> \"{}\"\r\n> \"{}\" echo %ERRORLEVEL%\r\n",
+        out.display(),
+        err.display(),
+        code.display()
+    ));
+    let script_file = dir.path().join("run.cmd");
+    fs::write(&script_file, script).unwrap();
+    let _helper = if elevated() {
+        let name = format!(r"\kluris-rt-person-{brain}");
+        let xml = dir.path().join("helper.xml");
+        fs::write(
+            &xml,
+            task_xml(
+                &name,
+                "Runs a Kluris test's script as the person",
+                r"%SystemRoot%\System32\cmd.exe",
+                &format!("/c \"{}\"", script_file.display()),
+            ),
+        )
+        .unwrap();
+        let xml_text = xml.display().to_string();
         let created = ran(
             "schtasks",
-            &["/Create", "/TN", &task, "/XML", &file_text, "/F"],
+            &["/Create", "/TN", &name, "/XML", &xml_text, "/F"],
         );
-        let _ = fs::remove_file(&file);
         assert_eq!(created.0, 0, "schtasks /Create: {}{}", created.1, created.2);
-        let (code, out, err) = ran("schtasks", &["/Run", "/TN", &task]);
+        let helper = Helper(name);
+        let started = ran("schtasks", &["/Run", "/TN", &helper.0]);
+        if started.0 != 0 {
+            eprintln!(
+                "skipped: the helper task that runs as the person did not start: {}{}",
+                started.1, started.2
+            );
+            return None;
+        }
+        Some(helper)
+    } else {
+        let (code, out, err) = ran("cmd", &["/c", &script_file.display().to_string()]);
+        assert_eq!(code, 0, "{}: {out}{err}", script_file.display());
+        None
+    };
+    let until = Instant::now() + Duration::from_secs(120);
+    loop {
+        if let Some(status) = fs::read_to_string(&code)
+            .ok()
+            .and_then(|c| c.trim().parse::<i32>().ok())
+        {
+            let read = |p: &Path| fs::read_to_string(p).unwrap_or_default();
+            return Some((status, read(&out), read(&err)));
+        }
+        if Instant::now() > until {
+            eprintln!(
+                "skipped: the helper task that runs as the person did not finish in 120 s \
+                 (is the person logged on?)"
+            );
+            return None;
+        }
+        thread::sleep(Duration::from_millis(250));
+    }
+}
+
+/// Every task named as a sync service's, `\Kluris\sync-*`, on this
+/// machine; `None` when `schtasks` cannot list them.
+#[cfg(windows)]
+fn sync_tasks() -> Option<Vec<String>> {
+    let (code, out, _) = ran("schtasks", &["/Query", "/FO", "CSV", "/NH"]);
+    (code == 0).then(|| {
+        let mut tasks: Vec<String> = out
+            .lines()
+            .filter_map(|row| row.split(',').next())
+            .map(|name| name.trim().trim_matches('"').to_string())
+            .filter(|name| name.starts_with(r"\Kluris\sync-"))
+            .collect();
+        tasks.sort();
+        tasks.dedup();
+        tasks
+    })
+}
+
+#[cfg(windows)]
+impl RealService {
+    fn task(&self) -> String {
+        format!(r"\Kluris\sync-{}", self.brain)
+    }
+
+    /// The task, created from XML as the person's own terminal created it
+    /// ([`as_person`]), with the log its watch wrote; none when it could
+    /// not be created as the person.
+    fn create(brain: &str) -> Option<RealService> {
+        let lad = PathBuf::from(std::env::var_os("LOCALAPPDATA").expect("LOCALAPPDATA"));
+        let log = lad
+            .join("kluris")
+            .join("logs")
+            .join(format!("sync-{brain}.log"));
+        let service = RealService {
+            brain: brain.to_string(),
+            definition: None,
+            log: Some(log.clone()),
+        };
+        fs::create_dir_all(log.parent().unwrap()).unwrap();
+        fs::write(&log, "an earlier release's watch wrote this\r\n").unwrap();
+        let arguments = format!(
+            "--headless \"{}\" sync --watch --brain {brain} --log-file \"{}\"",
+            kluris_exe().display(),
+            log.display()
+        );
+        let task = service.task();
+        let dir = person_dir();
+        let xml = dir.path().join("task.xml");
+        fs::write(
+            &xml,
+            task_xml(
+                &task,
+                &format!("Kluris sync for the brain {brain}"),
+                r"%SystemRoot%\System32\conhost.exe",
+                &arguments,
+            ),
+        )
+        .unwrap();
+        let command = format!("schtasks /Create /TN {task} /XML \"{}\" /F", xml.display());
+        let (code, out, err) = as_person(brain, &[], &command)?;
+        assert_eq!(code, 0, "{command}: {out}{err}");
+        Some(service)
+    }
+
+    /// [`RealService::create`], then run at once.
+    fn install(brain: &str) -> Option<RealService> {
+        let service = Self::create(brain)?;
+        let (code, out, err) = ran("schtasks", &["/Run", "/TN", &service.task()]);
         assert_eq!(code, 0, "schtasks /Run: {out}{err}");
         Some(service)
     }
@@ -1156,6 +1438,32 @@ impl RealService {
             left.push(format!("the task {}", self.task()));
         }
         left
+    }
+
+    /// What the task's manager and log say, and this process's token.
+    fn report(&self) -> String {
+        let (_, task, task_err) = ran(
+            "schtasks",
+            &["/Query", "/TN", &self.task(), "/V", "/FO", "LIST"],
+        );
+        let task: Vec<&str> = task
+            .lines()
+            .filter(|l| {
+                ["Status:", "Last Result:", "Run As User:", "Logon Mode:"]
+                    .iter()
+                    .any(|k| l.starts_with(k))
+            })
+            .collect();
+        let log = self
+            .log
+            .as_ref()
+            .and_then(|l| fs::read_to_string(l).ok())
+            .unwrap_or_else(|| "(no log)".to_string());
+        format!(
+            "the task: {task:?}{}\nits log: {log}\nthis test elevated: {}",
+            task_err.trim(),
+            elevated()
+        )
     }
 
     fn clean(&self) {
@@ -1190,6 +1498,7 @@ impl RealService {
 impl Drop for RealService {
     fn drop(&mut self) {
         if self.left().is_empty() {
+            eprintln!("the guard found nothing of {}'s service left", self.brain);
             return;
         }
         self.clean();
@@ -1208,15 +1517,27 @@ impl Drop for RealService {
     }
 }
 
+/// The real tests one at a time: `doctor` removes every sync service it
+/// finds, so it must not meet another test's.
+static REAL: Mutex<()> = Mutex::new(());
+
+fn one_real_test() -> MutexGuard<'static, ()> {
+    REAL.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 /// A real service in an earlier release's shape, for a brain named for
 /// this run, starts this kluris with `sync --watch`; within 90 s its
 /// definition, its job (unit, task) and its log are gone, removed by the
-/// arm from inside the service. On a Linux without a systemd user instance
-/// it is skipped, and says so.
+/// arm from inside the service. On Windows the task is created as the
+/// person's own terminal creates it ([`as_person`]): a task an elevated
+/// session created is one its own least-privilege token may not delete.
+/// On a Linux without a systemd user instance, or a Windows nobody is
+/// logged on to, it is skipped, and says so.
 /// `cargo test -p kluris --test upgrade_services -- --ignored`.
 #[test]
 #[ignore = "installs a real per-user service on this machine"]
 fn real_round_trip() {
+    let _one = one_real_test();
     let brain = round_trip_brain();
     let Some(service) = RealService::install(&brain) else {
         return;
@@ -1227,6 +1548,79 @@ fn real_round_trip() {
         thread::sleep(Duration::from_millis(250));
         left = service.left();
     }
-    assert!(left.is_empty(), "after 90 s, still there: {left:?}");
+    assert!(
+        left.is_empty(),
+        "after 90 s, still there: {left:?}\n{}",
+        service.report()
+    );
     eprintln!("the service of {brain} removed itself: its definition, job and log are gone");
+}
+
+/// The path a Windows user takes: `kluris doctor`, run outside the task
+/// as the person runs it ([`as_person`], a sandbox HOME and config, the
+/// real LOCALAPPDATA), removes a real task in an earlier release's shape,
+/// and its log, and says so in a passing `sync-services` check. `doctor`
+/// removes every `\Kluris\sync-*` task, so while any other is on the
+/// machine the test touches nothing and says why.
+#[cfg(windows)]
+#[test]
+#[ignore = "installs a real per-user service on this machine"]
+fn real_doctor_removes_a_task() {
+    let _one = one_real_test();
+    let Some(others) = sync_tasks() else {
+        eprintln!("skipped: `schtasks /Query` cannot list this machine's tasks");
+        return;
+    };
+    if !others.is_empty() {
+        eprintln!(
+            "skipped: `kluris doctor` would remove these sync tasks too, which are not \
+             this test's: {others:?}"
+        );
+        return;
+    }
+    let brain = round_trip_brain();
+    let Some(service) = RealService::create(&brain) else {
+        return;
+    };
+    let task = service.task();
+    assert_eq!(sync_tasks(), Some(vec![task.clone()]));
+    let sb = Sandbox::new();
+    sb.write_config(&[]);
+    let tmp = sb.root.join("tmp");
+    let vars = [
+        ("HOME", sb.home.display().to_string()),
+        ("USERPROFILE", sb.home.display().to_string()),
+        ("KLURIS_CONFIG", sb.config.display().to_string()),
+        ("GIT_CONFIG_GLOBAL", sb.gitconfig().display().to_string()),
+        ("GIT_CONFIG_NOSYSTEM", "1".to_string()),
+        ("KLURIS_NO_PROMPT", "1".to_string()),
+        ("COPILOT_HOME", String::new()),
+        ("XDG_CONFIG_HOME", String::new()),
+        ("TEMP", tmp.display().to_string()),
+        ("TMP", tmp.display().to_string()),
+    ];
+    // `cmd` starts no `\\?\` path, which `kluris_exe` is on Windows.
+    let exe = assert_cmd::cargo::cargo_bin!("kluris");
+    let command = format!("\"{}\" doctor --json", exe.display());
+    let Some((code, stdout, stderr)) = as_person(&brain, &vars, &command) else {
+        return;
+    };
+    let doc: Value = serde_json::from_str(stdout.trim())
+        .unwrap_or_else(|e| panic!("{e}: exit {code}\n{stdout}\n{stderr}"));
+    let check = doctor_check(&doc).unwrap_or_else(|| panic!("no sync-services check: {doc}"));
+    assert_eq!(check["passed"], true, "{check}\n{}", service.report());
+    assert!(
+        check.get("warning").is_none(),
+        "{check}\n{}",
+        service.report()
+    );
+    let detail = check["detail"].as_str().unwrap();
+    assert!(detail.contains(&task), "{detail}");
+    let left = service.left();
+    assert!(
+        left.is_empty(),
+        "after doctor, still there: {left:?}\n{}",
+        service.report()
+    );
+    eprintln!("kluris doctor removed {task} and its log");
 }

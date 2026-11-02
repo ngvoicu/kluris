@@ -20,7 +20,7 @@
 //! [`Runner`], so tests assert the commands with a fake.
 
 use std::fs;
-use std::io;
+use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant};
@@ -353,7 +353,9 @@ pub fn remove_one(brain: &str, env: &Env) -> Removed {
 ///   From inside, the unit is never stopped: that would end this process
 ///   before its file is gone; its exit 0 ends it.
 /// - Task Scheduler: with `stop`, `/End` (ending its conhost, which the
-///   watch it runs follows), then `/Delete`, then the log.
+///   watch it runs follows), then `/Delete`, then the log. A task that will
+///   not go keeps its log, which gains a line saying why (inside the task
+///   nobody reads stderr), and the next sweep finds the task again.
 fn remove(env: &Env, brain: &str, stop: bool) -> Removed {
     let mut out = Removed {
         brain: brain.to_string(),
@@ -427,18 +429,28 @@ fn remove(env: &Env, brain: &str, stop: bool) -> Removed {
             let there = env
                 .run("schtasks", &["/Query", "/TN", &task])
                 .is_ok_and(|ran| ran.ok());
+            let mut deleted = Ok(());
             if there {
                 if stop {
                     // Not running is fine.
                     let _ = env.run("schtasks", &["/End", "/TN", &task]);
                 }
-                match env.must("schtasks", &["/Delete", "/TN", &task, "/F"]) {
-                    Ok(()) => out.removed.push(PathBuf::from(&task)),
-                    Err(e) => note(&mut out, Err(e)),
+                deleted = env.must("schtasks", &["/Delete", "/TN", &task, "/F"]);
+                if deleted.is_ok() {
+                    out.removed.push(PathBuf::from(&task));
                 }
             }
-            let r = delete_log(env, brain, &mut out.removed);
-            note(&mut out, r);
+            match deleted {
+                Ok(()) => {
+                    let r = delete_log(env, brain, &mut out.removed);
+                    note(&mut out, r);
+                }
+                Err(e) => {
+                    let kept = keep_log(env, brain, &task, &e);
+                    note(&mut out, Err(e));
+                    note(&mut out, kept);
+                }
+            }
         }
     }
     out
@@ -474,6 +486,31 @@ fn delete_log(env: &Env, brain: &str, removed: &mut Vec<PathBuf>) -> Result<(), 
         let _ = fs::remove_dir(dir);
     }
     Ok(())
+}
+
+/// Append to the brain's log, when it is there, one line saying that
+/// `task` stays and why.
+fn keep_log(env: &Env, brain: &str, task: &str, problem: &str) -> Result<(), String> {
+    let Some(log) = env.log(brain).filter(|p| exists(p)) else {
+        return Ok(());
+    };
+    let append = || -> io::Result<()> {
+        let mut file = fs::OpenOptions::new().read(true).append(true).open(&log)?;
+        let mut line = String::new();
+        if file.metadata()?.len() > 0 {
+            let mut last = [0u8];
+            file.seek(SeekFrom::End(-1))?;
+            file.read_exact(&mut last)?;
+            if last[0] != b'\n' {
+                line.push('\n');
+            }
+        }
+        line.push_str(&format!(
+            "kluris: could not remove the task {task}, which keeps this log: {problem}\n"
+        ));
+        file.write_all(line.as_bytes())
+    };
+    append().map_err(|e| format!("{}: {e}", log.display()))
 }
 
 /// The fields of one `schtasks /FO CSV` row.
