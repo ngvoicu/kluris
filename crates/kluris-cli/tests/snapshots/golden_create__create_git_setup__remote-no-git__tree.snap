@@ -434,13 +434,13 @@ agents:
   - junie
   - antigravity
 companions: []
-== home/.agents/skills/kluris-demo/SKILL.md (file, 36941 bytes)
+== home/.agents/skills/kluris-demo/SKILL.md (file, 37053 bytes)
 <snapshot skill_demo_none_at-demo>
-== home/.claude/skills/kluris-demo/SKILL.md (file, 36941 bytes)
+== home/.claude/skills/kluris-demo/SKILL.md (file, 37053 bytes)
 <snapshot skill_demo_none_at-demo>
-== home/.gemini/config/skills/kluris-demo/SKILL.md (file, 36941 bytes)
+== home/.gemini/config/skills/kluris-demo/SKILL.md (file, 37053 bytes)
 <snapshot skill_demo_none_at-demo>
-== home/.hermes/skills/kluris-demo/SKILL.md (file, 36941 bytes)
+== home/.hermes/skills/kluris-demo/SKILL.md (file, 37053 bytes)
 <snapshot skill_demo_none_at-demo>
 == home/.kluris/config.yml (file, 80 bytes)
 brains:

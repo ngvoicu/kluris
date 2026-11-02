@@ -458,6 +458,14 @@ pub enum CommitError {
         recorded: bool,
         needs: MergeNeeds,
     },
+    /// A given conflicted path that is not on disk because `file`, on its
+    /// way, is a file in the work tree: not a deletion, since no file
+    /// could be written there.
+    Unwritable {
+        path: String,
+        file: String,
+        needs: MergeNeeds,
+    },
     /// A settled file that cannot be kept.
     InvalidFile {
         path: String,
@@ -555,6 +563,10 @@ impl fmt::Display for CommitError {
             } => write!(
                 f,
                 "{path} is a file on one side and a directory on the other, or a rename, and keeps the side chosen for it, so leave it out of --paths; nothing was committed. To finish the merge:\n{needs}"
+            ),
+            CommitError::Unwritable { path, file, needs } => write!(
+                f,
+                "{path} cannot be written in the work tree, where {file} is a file, so its absence is no deletion; nothing was committed. To finish the merge:\n{needs}"
             ),
             CommitError::InvalidFile { path, reason } => write!(
                 f,

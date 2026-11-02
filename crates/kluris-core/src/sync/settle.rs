@@ -24,7 +24,9 @@
 //! Each given path's file is its choice, in place of one recorded for it
 //! as a later `kluris resolve` replaces an earlier one, checked as `kluris
 //! resolve --file` checks one (no conflict markers, frontmatter that
-//! parses); a path gone from disk is a deletion. The merge commit has the
+//! parses); a path gone from disk is a deletion, unless a folder on its
+//! way is a file in the work tree: no file could be written there, so the
+//! path is refused and settled with `kluris resolve`. The merge commit has the
 //! two commits the person was shown as its parents, every map rebuilt from
 //! the merged files, the message `kluris: sync (resolved)` (or the
 //! person's) with the `Kluris-Sync: resolved`, `Kluris-Resolved-By`,
@@ -38,7 +40,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 
-use super::advice::{MergeNeeds, Settle};
+use super::advice::{MergeNeeds, Settle, file_above};
 use super::claim::TreeClaim;
 use super::commit::{
     CommitError, CommitReport, CommitRequest, check_on_disk, commit, normalize_path, one_line,
@@ -97,6 +99,7 @@ fn normalized(paths: &[String]) -> Result<Vec<String>, CommitError> {
 /// What `waiting` still needs of `kluris resolve` and `--paths`, given
 /// the choices `recorded` in it.
 fn needs(
+    root: &Path,
     brain: &str,
     waiting: &Pending,
     recorded: &BTreeMap<String, ResolvedChoice>,
@@ -110,7 +113,7 @@ fn needs(
             .filter(|c| !recorded.contains_key(&c.path))
             .map(|c| {
                 let structure = c.kind == ConflictKind::Structure;
-                (c.path.clone(), Settle::of(&c.path, structure, false))
+                (c.path.clone(), Settle::of(root, &c.path, structure, false))
             })
             .collect(),
     }
@@ -128,7 +131,7 @@ fn finish<G: SyncGit>(
     let (git, repo) = (ctx.git(), ctx.repo());
     let conflicted: Vec<String> = waiting.conflicts.iter().map(|c| c.path.clone()).collect();
     let recorded: BTreeMap<String, ResolvedChoice> = waiting.resolved.iter().cloned().collect();
-    let needs = needs(request.brain, waiting, &recorded);
+    let needs = needs(root, request.brain, waiting, &recorded);
     let Some(merge) = merge else {
         return Err(CommitError::MergeWaits(needs));
     };
@@ -178,6 +181,14 @@ fn finish<G: SyncGit>(
         })?;
         let path = join(root, rel);
         if fs::symlink_metadata(&path).is_err() {
+            // No file can be there: its absence says nothing.
+            if let Some(file) = file_above(root, rel) {
+                return Err(CommitError::Unwritable {
+                    path: rel.clone(),
+                    file,
+                    needs,
+                });
+            }
             choices.insert(rel.clone(), ResolvedChoice::Removed);
             settled.insert(rel.clone(), None);
             continue;

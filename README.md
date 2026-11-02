@@ -567,7 +567,10 @@ it. A path you give replaces the choice recorded for it with its file; a
 `structure` path is never given, and `kluris commit --merge` refuses the
 merge while one has no choice. `--paths` splits at commas and trims each
 name, so a file with a comma in its name, or spaces at either end, is
-settled with `kluris resolve`. `kluris resolve` alone also settles a
+settled with `kluris resolve`; so is a conflicted path your work tree
+cannot hold because a folder on its way is a file there (a teammate moved
+that file under its own name), which `kluris commit --merge` refuses
+rather than take its absence for a deletion. `kluris resolve` alone also settles a
 merge, path by path; for a text or binary path, write the version to keep
 outside the brain and pass it with `--file`:
 

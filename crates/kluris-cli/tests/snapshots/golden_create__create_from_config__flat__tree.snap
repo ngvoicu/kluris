@@ -499,13 +499,13 @@ sideways [alpha-beta](../alpha-beta/map.md) | [mid-lobe-name](../mid-lobe-name/m
 ## Contents
 
 (empty)
-== home/.agents/skills/kluris-demo/SKILL.md (file, 36938 bytes)
+== home/.agents/skills/kluris-demo/SKILL.md (file, 37050 bytes)
 <snapshot skill_demo_none_at-demo_git>
-== home/.claude/skills/kluris-demo/SKILL.md (file, 36938 bytes)
+== home/.claude/skills/kluris-demo/SKILL.md (file, 37050 bytes)
 <snapshot skill_demo_none_at-demo_git>
-== home/.gemini/config/skills/kluris-demo/SKILL.md (file, 36938 bytes)
+== home/.gemini/config/skills/kluris-demo/SKILL.md (file, 37050 bytes)
 <snapshot skill_demo_none_at-demo_git>
-== home/.hermes/skills/kluris-demo/SKILL.md (file, 36938 bytes)
+== home/.hermes/skills/kluris-demo/SKILL.md (file, 37050 bytes)
 <snapshot skill_demo_none_at-demo_git>
 == home/.kluris/config.yml (file, 80 bytes)
 brains:

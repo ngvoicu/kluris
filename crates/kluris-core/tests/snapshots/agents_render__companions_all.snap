@@ -548,7 +548,8 @@ brain):
     the merge waits, `kluris commit` refuses any other path: commit those
     after it. Running `kluris dream` in between is fine.
   - A `structure` conflict (a file on one side, a folder on the other, or a
-    rename) or a `binary` one: ask which side to keep, then run
+    rename), a `binary` one, or a path you cannot write because a folder on
+    its way is a file in the brain: ask which side to keep, then run
     `kluris resolve --brain all-four <path> --ours|--theirs --merge <merge> --json`.
   - A merge that has both: settle each `structure` path with
     `kluris resolve` first, then write the text files and run
@@ -682,7 +683,7 @@ These are terminal commands, not skill actions:
 - `kluris status --brain all-four` -- show brain tree, recent changes, and counts
 - `kluris mri --brain all-four` -- generate interactive visualization
 - `kluris commit --brain all-four --paths <a.md,b.md> --json` -- commit exactly those files and the maps and links they change, bring in teammates' commits, and push; with `--merge <id>`, finish a waiting merge from the settled files (without `--paths` once every path has a choice)
-- `kluris resolve --brain all-four <path> --ours|--theirs|--file <merged file> --merge <id> --json` -- settle a conflicted path of a waiting merge: a `structure` one with `--ours` or `--theirs`, a binary one or one `--paths` cannot name (a comma, or spaces at either end) with any of the three
+- `kluris resolve --brain all-four <path> --ours|--theirs|--file <merged file> --merge <id> --json` -- settle a conflicted path of a waiting merge: a `structure` one with `--ours` or `--theirs`, a binary one, one `--paths` cannot name (a comma, or spaces at either end) or one under a file of the brain with any of the three
 
 Branch operations and anything else go through `git` directly -- kluris
 brains are plain git repos. Use `git -C /home/dev/brains/all-four status / log / checkout`

@@ -1427,6 +1427,113 @@ fn a_name_with_a_trailing_space_is_settled_with_resolve_file() {
     a_name_paths_cannot_carry("notes/trailing.md ", "'notes/trailing.md '");
 }
 
+/// `alpha` with one waiting merge: the teammate removed `notes/topic.md`
+/// and wrote it again, its third paragraph changed, at `to`; this brain
+/// changed the same paragraph in `notes/topic.md`. Git takes the two as a
+/// rename and reports one conflict, at `to`, with this brain's
+/// `notes/topic.md` as its `ours`. The waiting merge's id.
+fn renamed_to(h: &Home, root: &Path, to: &str) -> String {
+    h.commit(root, "notes/topic.md", &neuron("Topic", BODY));
+    h.git(root, &["push", "-q"]);
+    let mate = h.teammate("alpha");
+    h.git(&mate, &["pull", "-q"]);
+    h.git(&mate, &["rm", "-q", "notes/topic.md"]);
+    h.write(&mate, to, &neuron("Topic", &theirs_body()));
+    h.git(&mate, &["add", "-A"]);
+    h.git(&mate, &["commit", "-q", "-m", "theirs"]);
+    h.git(&mate, &["push", "-q"]);
+    h.commit(root, "notes/topic.md", &neuron("Topic", &ours_body()));
+    let (code, doc) = h.json(&["sync", "--brain", "alpha", "--json"]);
+    assert_eq!(code, 1, "{doc}");
+    let conflicts = doc["brains"][0]["sync"]["conflicts"].as_array().unwrap();
+    let found: Vec<(&str, &str)> = conflicts
+        .iter()
+        .map(|c| (c["path"].as_str().unwrap(), c["kind"].as_str().unwrap()))
+        .collect();
+    assert_eq!(found, [(to, "content")], "{doc}");
+    assert_eq!(conflicts[0]["ours"], neuron("Topic", &ours_body()), "{doc}");
+    conflicts[0]["merge"].as_str().unwrap().to_string()
+}
+
+/// A conflicted path that cannot be written in the work tree, because a
+/// parent of it is a file there, is settled with `kluris resolve`: `commit
+/// --merge` refuses it, never taking its absence for a deletion, and each
+/// printed choice lands the merge, the file's place taken by the folder.
+#[test]
+fn a_path_under_a_file_of_the_work_tree_is_settled_with_resolve() {
+    let child = "notes/topic.md/child.md";
+    for (choice, kept) in [
+        ("--ours", neuron("Topic", &ours_body())),
+        ("--theirs", neuron("Topic", &theirs_body())),
+        ("--file merged.md", neuron("Topic", "Kept as merged.\n")),
+    ] {
+        let (h, root) = team();
+        let merge = renamed_to(&h, &root, child);
+        let (ours, theirs) = (head(&h, &root), remote_main(&h));
+        let lines: Vec<String> = ["--ours", "--theirs", "--file merged.md"]
+            .iter()
+            .map(|c| format!("kluris resolve --brain alpha {child} {c} --merge {merge}"))
+            .collect();
+        assert_eq!(
+            refused_with(&h, &root, Some(child), Some(&merge)),
+            lines,
+            "{choice}"
+        );
+        let (_, doc) = commit(&h, child, &["--merge", &merge]);
+        let error = doc["error"].as_str().unwrap();
+        assert!(
+            error.starts_with(&format!(
+                "{child} cannot be written in the work tree, where notes/topic.md is a file, so its absence is no deletion; nothing was committed."
+            )),
+            "{error}"
+        );
+        let (code, out, _) = h.run(&["sync", "--brain", "alpha"]);
+        assert_eq!(code, 1, "{out}");
+        assert_eq!(printed(&out), lines, "{out}");
+
+        let outside = h.dir.path();
+        fs::write(outside.join("merged.md"), &kept).unwrap();
+        let line = lines.iter().find(|l| l.contains(choice)).unwrap();
+        let (code, out, err) = h.shell(line, outside);
+        assert_eq!(code, 0, "{choice}: {out}{err}");
+        let merged = head(&h, &root);
+        assert_eq!(parents(&h, &root, &merged), [ours, theirs]);
+        assert_eq!(show(&h, &root, &merged, child), kept, "{choice}");
+        assert_eq!(
+            topic_files(&h, &root, &merged),
+            [child, "notes/topic.md/map.md"],
+            "{choice}"
+        );
+        assert_eq!(h.read(&root, child), kept);
+        assert!(!git_file(&root, "kluris-sync/pending.json").exists());
+        assert_eq!(status(&h, &root), "", "{choice}");
+        assert_eq!(remote_main(&h), merged);
+    }
+}
+
+/// A rename to a path the work tree can hold is settled as any text
+/// conflict: its file written, then `kluris commit --merge`.
+#[test]
+fn a_rename_to_a_writable_path_is_settled_with_commit_merge() {
+    let (h, root) = team();
+    let merge = renamed_to(&h, &root, "notes/moved.md");
+    let (ours, theirs) = (head(&h, &root), remote_main(&h));
+    let commit_line = format!("kluris commit --brain alpha --merge {merge} --paths notes/moved.md");
+    let (code, out, _) = h.run(&["sync", "--brain", "alpha"]);
+    assert_eq!(code, 1, "{out}");
+    assert_eq!(printed(&out), std::slice::from_ref(&commit_line), "{out}");
+    let kept = neuron("Topic", "Kept.\n");
+    h.write(&root, "notes/moved.md", &kept);
+    let (code, out, err) = h.shell(&commit_line, h.dir.path());
+    assert_eq!(code, 0, "{out}{err}");
+    let merged = head(&h, &root);
+    assert_eq!(parents(&h, &root, &merged), [ours, theirs]);
+    assert_eq!(show(&h, &root, &merged, "notes/moved.md"), kept);
+    assert_eq!(remote_main(&h), merged);
+    assert!(topic_files(&h, &root, &merged).is_empty());
+    assert_eq!(status(&h, &root), "");
+}
+
 #[test]
 fn without_merge_paths_are_required() {
     let (h, _) = team();

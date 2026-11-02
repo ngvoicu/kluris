@@ -72,6 +72,7 @@ fn about_the_merge(error: &CommitError) -> bool {
             | CommitError::Unsettled { .. }
             | CommitError::Unrelated { .. }
             | CommitError::Structure { .. }
+            | CommitError::Unwritable { .. }
             | CommitError::InvalidFile { .. }
     )
 }

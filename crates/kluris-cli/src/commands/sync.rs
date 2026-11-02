@@ -33,8 +33,8 @@ fn plural(n: usize, one: &str, many: &str) -> String {
     format!("{n} {}", if n == 1 { one } else { many })
 }
 
-/// One brain's short text block.
-fn text(name: &str, report: &SyncReport) -> String {
+/// One brain's short text block; `root` is the brain's folder.
+fn text(name: &str, root: &Path, report: &SyncReport) -> String {
     let done = |report: &SyncReport| {
         let mut done = Vec::new();
         if report.pulled > 0 {
@@ -86,7 +86,7 @@ fn text(name: &str, report: &SyncReport) -> String {
                 continue;
             }
             out.push_str(&format!("  {}: {}\n", c.kind.as_str(), c.path));
-            match Settle::of(&c.path, c.kind == ConflictKind::Structure, c.binary) {
+            match Settle::of(root, &c.path, c.kind == ConflictKind::Structure, c.binary) {
                 Settle::Paths => text_paths.push(c.path.clone()),
                 how => {
                     open = true;
@@ -179,12 +179,12 @@ pub fn run(brain: Option<&str>, no_verify: bool, as_json: bool) -> Result<(), Cl
             },
             Err(why) => return Err(CliError::new(format!("Brain {}: {why}", brain.name))),
         };
-        reports.push((brain.name.clone(), report));
+        reports.push((brain.name.clone(), py_path_str(&brain.entry.path), report));
     }
     if as_json {
         let entries = reports
             .iter()
-            .map(|(name, report)| {
+            .map(|(name, _, report)| {
                 Json::Object(vec![
                     ("name".into(), Json::Str(name.clone())),
                     ("sync".into(), report.to_json()),
@@ -196,11 +196,14 @@ pub fn run(brain: Option<&str>, no_verify: bool, as_json: bool) -> Result<(), Cl
             ("brains".into(), Json::Array(entries)),
         ])));
     } else {
-        let out: String = reports.iter().map(|(name, r)| text(name, r)).collect();
+        let out: String = reports
+            .iter()
+            .map(|(name, root, r)| text(name, Path::new(root), r))
+            .collect();
         human::print(&out);
-        brains::print_lines(reports.iter().map(|(name, r)| (name.as_str(), Some(r))));
+        brains::print_lines(reports.iter().map(|(name, _, r)| (name.as_str(), Some(r))));
     }
-    if reports.iter().any(|(_, report)| failed(report)) {
+    if reports.iter().any(|(_, _, report)| failed(report)) {
         Err(CliError::exit_only())
     } else {
         Ok(())

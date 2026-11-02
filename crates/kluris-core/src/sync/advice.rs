@@ -8,9 +8,12 @@
 //! - a structure path (a file against a directory, or a rename) takes a
 //!   side with `kluris resolve --ours` or `--theirs`: a file says nothing
 //!   about the directory, so `--file` is never offered there;
-//! - a binary path, or a text path `--paths` cannot name exactly
-//!   ([`fits_paths`]), takes a side or a version the person wrote to a file
-//!   outside the brain, with `kluris resolve --file`;
+//! - a binary path, a text path `--paths` cannot name exactly
+//!   ([`fits_paths`]), and one the work tree cannot hold because a folder
+//!   on its way is a file there ([`file_above`]: a rename into a path under
+//!   a file, as git reports it, at the new path) take a side or a version
+//!   the person wrote to a file outside the brain, with `kluris resolve
+//!   --file`;
 //! - any other text path is written in the work tree and named in the one
 //!   `kluris commit --merge --paths` line.
 //!
@@ -21,7 +24,10 @@
 //! merge.
 
 use std::fmt;
+use std::fs;
 use std::path::Path;
+
+use super::land::join;
 
 /// The width of a choice's label, `keep theirs:` and the spaces after it.
 const LABEL: usize = 14;
@@ -38,17 +44,37 @@ pub enum Settle {
 }
 
 impl Settle {
-    /// How a path is settled: `structure` for a file against a directory
-    /// or a rename, `binary` for a side that is not text.
-    pub fn of(rel: &str, structure: bool, binary: bool) -> Settle {
+    /// How a path of the brain at `root` is settled: `structure` for a file
+    /// against a directory or a rename, `binary` for a side that is not
+    /// text.
+    pub fn of(root: &Path, rel: &str, structure: bool, binary: bool) -> Settle {
         if structure {
             Settle::Side
-        } else if binary || !fits_paths(rel) {
+        } else if binary || !fits_paths(rel) || file_above(root, rel).is_some() {
             Settle::SideOrFile
         } else {
             Settle::Paths
         }
     }
+}
+
+/// The folder on the way to `rel` that is something other than a folder
+/// in the work tree at `root` (a file, a link to one), brain-relative: no
+/// file can be written at `rel` there. `None` when every folder on its way
+/// is a folder or not there.
+pub fn file_above(root: &Path, rel: &str) -> Option<String> {
+    let parts: Vec<&str> = rel.split('/').collect();
+    for end in 1..parts.len() {
+        let above = parts[..end].join("/");
+        let path = join(root, &above);
+        if fs::symlink_metadata(&path).is_err() {
+            return None;
+        }
+        if !fs::metadata(&path).is_ok_and(|meta| meta.is_dir()) {
+            return Some(above);
+        }
+    }
+    None
 }
 
 /// Whether `--paths` names `rel` exactly: its value is split at commas and
@@ -201,6 +227,33 @@ mod tests {
         for rel in ["notes/a,b.md", "notes/trailing.md ", " notes/a.md", ""] {
             assert!(!fits_paths(rel), "{rel:?}");
         }
+    }
+
+    #[test]
+    fn a_path_under_a_file_cannot_be_written() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        fs::create_dir_all(root.join("notes")).unwrap();
+        fs::write(root.join("notes").join("topic.md"), "x").unwrap();
+        assert_eq!(
+            file_above(root, "notes/topic.md/child.md"),
+            Some("notes/topic.md".to_string())
+        );
+        assert_eq!(
+            file_above(root, "notes/topic.md/deeper/child.md"),
+            Some("notes/topic.md".to_string())
+        );
+        assert_eq!(file_above(root, "notes/new.md"), None);
+        assert_eq!(file_above(root, "gone/new.md"), None);
+        assert_eq!(file_above(root, "top.md"), None);
+        assert_eq!(
+            Settle::of(root, "notes/topic.md/child.md", false, false),
+            Settle::SideOrFile
+        );
+        assert_eq!(
+            Settle::of(root, "notes/new.md", false, false),
+            Settle::Paths
+        );
     }
 
     #[test]
