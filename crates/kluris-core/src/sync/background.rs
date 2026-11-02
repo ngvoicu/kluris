@@ -434,7 +434,6 @@ fn push_brain(root: &Path, git: &SystemGit) {
         no_verify: false,
         maps,
         network_time_limit: NETWORK_TIME_LIMIT,
-        tree_bound: COMMAND_BOUND,
     };
     let Ok(mut ctx) = engine::open(root, git, &request) else {
         return;

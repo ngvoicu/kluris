@@ -1418,7 +1418,6 @@ fn child_session() {
                 no_verify: false,
                 maps: options(),
                 network_time_limit: NETWORK_TIME_LIMIT,
-                tree_bound: COMMAND_BOUND,
             };
             let ctx = engine::open(&root, &git, &request).unwrap();
             let upstream = engine::ready(&ctx).unwrap();
@@ -1426,7 +1425,7 @@ fn child_session() {
             let theirs = engine::fetch_upstream(&ctx, upstream, &remote).unwrap();
             drop(remote);
             fs::write(claiming(Path::new(&out)), "").unwrap();
-            let tree = ctx.claim_tree().unwrap();
+            let tree = TreeClaim::exclusive(&ctx.dirs().own, COMMAND_BOUND).unwrap();
             engine::pull_fetched(&ctx, &tree, theirs).pulled
         }
         "explicit" => {

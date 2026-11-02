@@ -159,9 +159,6 @@ pub struct SyncRequest<'a> {
     pub maps: DreamOptions<'a>,
     /// The time each fetch and push may take.
     pub network_time_limit: Duration,
-    /// How long to wait for the work tree another command holds
-    /// ([`claim::TreeClaim`]).
-    pub tree_bound: Duration,
 }
 
 /// Why a pull or a push left the brain as it is.

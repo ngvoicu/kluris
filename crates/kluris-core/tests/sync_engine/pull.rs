@@ -164,9 +164,10 @@ const TRACKING_REWRITES: [Rewrite; 3] = [
     }),
 ];
 
-/// Another process holds the remote claim: this pull cannot learn the
-/// upstream's commit, so it lands nothing, whatever the tracking ref holds,
-/// and pushes nothing.
+/// Another process holds the remote claim: a read, which never waits for
+/// it, cannot learn the upstream's commit, so it lands nothing, whatever
+/// the tracking ref holds, and pushes nothing; once the claim is let go, a
+/// sync pulls and pushes.
 #[test]
 fn a_held_remote_claim_lands_nothing() {
     let w = World::new();
@@ -175,7 +176,7 @@ fn a_held_remote_claim_lands_nothing() {
     w.ours_commit(&[("notes/second.md", &neuron("", "# Second\n"))], &[]);
     let claim = RemoteClaim::try_take(&w.ours.join(".git")).unwrap();
     let before = w.snapshot();
-    let r = w.sync();
+    let r = w.read_session().expect("a report");
     assert!(left(&r, LeftReason::Busy), "{r:?}");
     assert!(detail(&r).contains("remote"), "{}", detail(&r));
     assert_eq!((r.pulled, r.pushed), (0, false), "{r:?}");
@@ -187,8 +188,8 @@ fn a_held_remote_claim_lands_nothing() {
 }
 
 /// The tracking ref names a private commit while another process holds the
-/// remote claim: nothing is adopted, and nothing private is published by a
-/// later sync.
+/// remote claim: a read adopts nothing, and nothing private is published by
+/// a later sync.
 #[test]
 fn a_held_remote_claim_never_adopts_what_the_tracking_ref_holds() {
     for (how, rewrite) in TRACKING_REWRITES {
@@ -197,7 +198,7 @@ fn a_held_remote_claim_never_adopts_what_the_tracking_ref_holds() {
         rewrite(&w, &private);
         let claim = RemoteClaim::try_take(&w.ours.join(".git")).unwrap();
         let head = w.head(&w.ours);
-        let r = w.pull();
+        let r = w.read_session().expect("a report");
         drop(claim);
         assert!(left(&r, LeftReason::Busy), "{how}: {r:?}");
         assert_eq!(w.head(&w.ours), head, "{how}: adopted the private commit");

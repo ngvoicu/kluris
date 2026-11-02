@@ -1,22 +1,23 @@
-//! The sync engine: every command that opens a brain pulls teammates'
-//! commits in before it works ([`pull`]) and shares what is committed when
-//! it is done ([`push`]); [`sync`] does both, and [`finish_merge`] lands a
-//! merge a person settled.
+//! The sync engine: the steps through which a session
+//! ([`super::session`]) pulls teammates' commits into a brain and shares
+//! what is committed ([`share`]), and [`finish_merge`], which lands a merge
+//! a person settled.
 //!
 //! [`open`] pins the branch HEAD names and its upstream: every later step
 //! pulls into that branch and pushes that branch's commit, and never reads
 //! HEAD for a commit again.
 //!
-//! [`pull`], local but for the fetch:
+//! A pull, local but for the fetch:
 //! 1. a git merge, rebase, cherry-pick or revert in progress, or a branch
-//!    without an upstream, leaves the brain as it is;
-//! 2. the upstream is fetched ([`fetch::fetch`]) under the remote claim; the
-//!    only commit that may land is the one this fetch's own `ls-remote`
-//!    named. When another command holds the remote claim, the upstream's
-//!    commit is not known, so the pull lands nothing (`busy`);
-//! 3. under the exclusive tree claim it checks that HEAD still names the
-//!    pinned branch and no git operation started ([`land::changed`]), then
-//!    decides and moves the work tree:
+//!    without an upstream, leaves the brain as it is ([`ready`]);
+//! 2. the upstream is fetched ([`fetch_upstream`], through
+//!    [`fetch::fetch`]) under the remote claim; the only commit that may
+//!    land is the one this fetch's own `ls-remote` named. When another
+//!    command holds the remote claim, the upstream's commit is not known,
+//!    so the pull lands nothing ([`remote_busy`]);
+//! 3. under the exclusive tree claim ([`pull_fetched`]) it checks that HEAD
+//!    still names the pinned branch and no git operation started
+//!    ([`land::changed`]), then decides and moves the work tree:
 //!    behind only, it fast-forwards; diverged, it merges in memory
 //!    ([`merge_commits`]) and, without conflicts, makes the merge commit
 //!    (`kluris: sync` with `Kluris-Sync: auto`, through the merge hooks) and
@@ -63,16 +64,12 @@
 //! `refused`, as a fetch does. Every push takes this path: an explicit
 //! command's, the background push, and a retry.
 //!
-//! [`sync`] pulls again after a push the remote turned back because it
-//! moved, [`PUSH_ATTEMPTS`] times at most ([`share`]). Only the fetch and
-//! the push are bounded in time, unless the caller bounds every step before
-//! the land too ([`Context::until`]: the merge hooks and the land's own
-//! checks before it writes included); the land and what follows it never
-//! are.
-//!
-//! A caller that fetches and lands apart (the session) has the two halves
-//! of [`pull`]: [`fetch_upstream`] under the remote claim, and
-//! [`pull_fetched`] under the tree claim it holds.
+//! [`share`] pushes what a pull left to push, and pulls again
+//! ([`pull_claimed`]) after a push the remote turned back because it moved,
+//! [`PUSH_ATTEMPTS`] times at most. Only the fetch and the push are bounded
+//! in time, unless the caller bounds every step before the land too
+//! ([`Context::until`]: the merge hooks and the land's own checks before it
+//! writes included); the land and what follows it never are.
 
 use std::cell::Cell;
 use std::collections::BTreeMap;
@@ -176,18 +173,6 @@ impl<'a, G: SyncGit> Context<'a, G> {
         pending::path(&self.dirs)
     }
 
-    /// The exclusive tree claim, waited for up to the request's bound;
-    /// busy while another command holds it past that.
-    pub fn claim_tree(&self) -> Result<TreeClaim, LeftAsIs> {
-        TreeClaim::exclusive(&self.dirs.own, self.request.tree_bound).map_err(|e| match e {
-            ClaimError::Busy => LeftAsIs::because(
-                LeftReason::Busy,
-                "another kluris command is changing this brain's files; run again once it is done",
-            ),
-            ClaimError::Io(e) => failed(format!("cannot claim the work tree: {e}")),
-        })
-    }
-
     /// The pinned branch, or why there is none.
     fn pinned(&self) -> Result<&str, LeftAsIs> {
         self.branch().ok_or_else(|| {
@@ -257,16 +242,9 @@ pub fn open<'a, G: SyncGit>(
     })
 }
 
-/// Bring the upstream's commits into the brain (see the module docs).
-pub fn pull<G: SyncGit>(ctx: &Context<G>) -> SyncReport {
-    reported(|report| {
-        let theirs = fetch_step(ctx)?;
-        let tree = ctx.claim_tree()?;
-        land_into(ctx, &tree, theirs, report)
-    })
-}
-
-/// [`pull`] into a work tree whose claim the caller holds (`tree`).
+/// Bring the upstream's commits into the brain (see the module docs): its
+/// fetch under the remote claim, then the land into a work tree whose claim
+/// the caller holds (`tree`).
 pub fn pull_claimed<G: SyncGit>(ctx: &Context<G>, tree: &TreeClaim) -> SyncReport {
     reported(|report| {
         let theirs = fetch_step(ctx)?;
@@ -761,21 +739,11 @@ fn push_head<G: SyncGit>(ctx: &Context<G>) -> Result<Pushed, LeftAsIs> {
     }
 }
 
-/// Pull, then push what is committed ([`share`]).
-pub fn sync<G: SyncGit>(ctx: &Context<G>) -> SyncReport {
-    share(ctx, None, pull(ctx))
-}
-
 /// Push what `pulled`, a pull's report, left to push, unless it left the
 /// brain as it is or found a conflict. A push the remote turned back
 /// because it moved pulls again, into the work tree whose claim the caller
-/// holds (`tree`; without one the pull takes it), then pushes again,
-/// [`PUSH_ATTEMPTS`] pushes at most.
-pub fn share<G: SyncGit>(
-    ctx: &Context<G>,
-    tree: Option<&TreeClaim>,
-    pulled: SyncReport,
-) -> SyncReport {
+/// holds (`tree`), then pushes again, [`PUSH_ATTEMPTS`] pushes at most.
+pub fn share<G: SyncGit>(ctx: &Context<G>, tree: &TreeClaim, pulled: SyncReport) -> SyncReport {
     let mut total = pulled;
     for attempt in 1..=PUSH_ATTEMPTS {
         if total.left_as_is.is_some() || !total.conflicts.is_empty() || total.to_push == 0 {
@@ -795,11 +763,7 @@ pub fn share<G: SyncGit>(
                 return total;
             }
             Pushed::RemoteMoved if attempt < PUSH_ATTEMPTS => {
-                let again = match tree {
-                    Some(tree) => pull_claimed(ctx, tree),
-                    None => pull(ctx),
-                };
-                absorb(&mut total, again);
+                absorb(&mut total, pull_claimed(ctx, tree));
             }
             Pushed::RemoteMoved => {}
         }

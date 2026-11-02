@@ -1,8 +1,8 @@
 //! The sync engine (`kluris_core::sync::engine`) with real git: a bare
 //! remote and two clones in temp dirs, "ours" (the brain) and "theirs" (a
-//! teammate). `pull` brings the teammate's commits in, `push` shares ours,
-//! `sync` does both, and `finish_merge` (through `kluris resolve`) lands a
-//! merge a person settled.
+//! teammate). A command's session pulls the teammate's commits in when it
+//! opens and shares ours when it closes, and `finish_merge` (through
+//! `kluris resolve`) lands a merge a person settled.
 
 #[path = "../common/mod.rs"]
 mod common;

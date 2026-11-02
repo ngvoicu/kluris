@@ -138,9 +138,7 @@ fn a_switch_just_before_gits_write_is_reported() {
     )
     .unwrap();
     fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
-    let ctx =
-        kluris_core::sync::engine::open(&w.ours, &w.git().program(&script), &w.request()).unwrap();
-    let r = engine::pull(&ctx);
+    let r = w.pull_at(&w.ours, &w.git().program(&script));
     assert_eq!(
         w.run(&w.ours, &["rev-parse", "side"]).trim(),
         incoming,

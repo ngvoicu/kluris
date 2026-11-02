@@ -4,12 +4,29 @@
 //! most.
 
 use std::fs;
+use std::time::Duration;
 
-use kluris_core::sync::engine::{open, sync};
+use kluris_core::git::SystemGit;
+use kluris_core::sync::engine::{self, Pushed};
 use kluris_core::sync::{LeftReason, PUSH_ATTEMPTS, SyncRequest};
 
 use crate::common::*;
 use crate::sh_path;
+
+/// The push of "ours" alone, the step a session's close takes, with `git`
+/// and the time limit `limit` (a session gives it a minute).
+fn push_within(w: &World, git: &SystemGit, limit: Duration) -> Pushed {
+    let request = SyncRequest {
+        network_time_limit: limit,
+        ..w.request()
+    };
+    engine::push(&engine::open(&w.ours, git, &request).unwrap())
+}
+
+/// Left offline by the push.
+fn offline(pushed: &Pushed) -> bool {
+    matches!(pushed, Pushed::Left(left) if left.reason == LeftReason::Offline)
+}
 
 /// A third clone, and our `pre-push` hook that makes it push a new commit
 /// first: once, or on every push. Returns the file each race appends to.
@@ -100,11 +117,7 @@ fn no_verify_never_skips_pre_push() {
     let w = World::new();
     w.ours_commit(&[("notes/second.md", &neuron("", "# Second\n"))], &[]);
     w.hook(&w.ours, "pre-push", "exit 5");
-    let request = SyncRequest {
-        no_verify: true,
-        ..w.request()
-    };
-    let r = sync(&open(&w.ours, &w.git(), &request).unwrap());
+    let r = w.sync_no_verify();
     assert!(left(&r, LeftReason::Hook), "{r:?}");
     assert!(!r.pushed);
 }
@@ -338,22 +351,17 @@ fn a_hook_past_the_pushs_time_limit_is_stopped() {
         ),
     );
     let remote = w.remote_head();
-    let request = SyncRequest {
-        network_time_limit: std::time::Duration::from_millis(1500),
-        ..w.request()
-    };
-    let ctx = open(&w.ours, &w.git(), &request).unwrap();
     let began = std::time::Instant::now();
-    let r = sync(&ctx);
+    let pushed = push_within(&w, &w.git(), Duration::from_millis(1500));
     let took = began.elapsed();
     assert!(started.exists(), "the hook never ran");
-    assert!(took < std::time::Duration::from_millis(2900), "{took:?}");
-    assert!(left(&r, LeftReason::Offline) && !r.pushed, "{r:?}");
+    assert!(took < Duration::from_millis(2900), "{took:?}");
+    assert!(offline(&pushed), "{pushed:?}");
     assert_eq!(w.remote_head(), remote);
     // Its processes are gone: what it would do after the sleep never comes.
-    while began.elapsed() < std::time::Duration::from_millis(4000) {
+    while began.elapsed() < Duration::from_millis(4000) {
         assert!(!late.exists(), "the hook went on after it was stopped");
-        std::thread::sleep(std::time::Duration::from_millis(50));
+        std::thread::sleep(Duration::from_millis(50));
     }
     #[cfg(unix)]
     {
@@ -529,14 +537,9 @@ fn a_failed_push_classified_past_the_time_limit_is_a_timeout() {
     )
     .unwrap();
     fs::set_permissions(&stalling, fs::Permissions::from_mode(0o755)).unwrap();
-    let request = SyncRequest {
-        network_time_limit: std::time::Duration::from_millis(1500),
-        ..w.request()
-    };
-    let ctx = open(&w.ours, &w.git().program(&stalling), &request).unwrap();
     let began = std::time::Instant::now();
-    let r = sync(&ctx);
+    let pushed = push_within(&w, &w.git().program(&stalling), Duration::from_millis(1500));
     let took = began.elapsed();
-    assert!(left(&r, LeftReason::Offline) && !r.pushed, "{r:?}");
-    assert!(took < std::time::Duration::from_millis(4000), "{took:?}");
+    assert!(offline(&pushed), "{pushed:?}");
+    assert!(took < Duration::from_millis(4000), "{took:?}");
 }

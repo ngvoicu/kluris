@@ -15,13 +15,14 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use kluris_core::git::{Git, Repo, SystemGit};
+use kluris_core::sync::claim::{COMMAND_BOUND, TreeClaim};
 use kluris_core::sync::engine;
 use kluris_core::sync::fetch::{
     BACKOFF_FIRST, BACKOFF_MAX, Fetch, back_off, backed_off, end_backoff, fetch, fetched_recently,
     write_stamp,
 };
 use kluris_core::sync::git::{PushOutcome, SyncGit, Upstream, remote_env};
-use kluris_core::sync::{LeftReason, SyncReport};
+use kluris_core::sync::{LeftReason, SyncReport, SyncRequest};
 
 mod common;
 
@@ -43,10 +44,30 @@ fn sh_path(path: &Path) -> String {
     path.display().to_string().replace('\\', "/")
 }
 
-fn sync_within(w: &World, limit: Duration) -> SyncReport {
-    let mut request = w.request();
-    request.network_time_limit = limit;
-    engine::sync(&engine::open(&w.ours, &w.git(), &request).unwrap())
+/// The pull an explicit session's open makes in the brain at `root`, its
+/// steps as the session takes them ([`engine::fetch_upstream`] under the
+/// remote claim, then [`engine::pull_fetched`] under the tree claim), with
+/// `limit` for the fetch (a session gives it a minute, a read 3 s).
+fn pull_within(w: &World, root: &Path, limit: Duration) -> SyncReport {
+    let request = SyncRequest {
+        network_time_limit: limit,
+        ..w.request()
+    };
+    let ctx = engine::open(root, &w.git(), &request).unwrap();
+    let fetched = engine::ready(&ctx).and_then(|upstream| {
+        let remote = ctx.take_remote()?.expect("the remote claim");
+        engine::fetch_upstream(&ctx, upstream, &remote)
+    });
+    match fetched {
+        Ok(theirs) => {
+            let tree = TreeClaim::exclusive(&ctx.dirs().own, COMMAND_BOUND).unwrap();
+            engine::pull_fetched(&ctx, &tree, theirs)
+        }
+        Err(left) => SyncReport {
+            left_as_is: Some(left),
+            ..SyncReport::default()
+        },
+    }
 }
 
 /// Why the brain was refused; empty when it was not.
@@ -436,7 +457,7 @@ fn no_git_the_engine_starts_prompts_through_ssh_or_an_askpass() {
     // Diverged: the fetch, the merge and the push all go through ssh.
     w.theirs_push(&[("ideas/new.md", &neuron("", "# New\n"))], &[]);
     w.ours_commit(&[("notes/second.md", &neuron("", "# Second\n"))], &[]);
-    let r = engine::sync(&engine::open(&w.ours, &ssh.git(&w), &w.request()).unwrap());
+    let r = w.sync_at(&w.ours, &ssh.git(&w));
     assert!(
         clean(&r) && r.pulled > 0 && r.pushed,
         "{r:?}\n{}",
@@ -473,7 +494,7 @@ fn no_git_the_engine_starts_prompts_through_ssh_or_an_askpass() {
     w.run(&w.theirs, &["pull", "-q", "--no-rebase"]);
     w.theirs_push(&[("ideas/later.md", &neuron("", "# Later\n"))], &[]);
     fs::remove_file(&ssh.calls).unwrap();
-    let r = engine::sync(&engine::open(&partial, &ssh.git(&w), &w.request()).unwrap());
+    let r = w.sync_at(&partial, &ssh.git(&w));
     assert!(clean(&r) && r.pulled > 0, "{r:?}\n{}", ssh.calls());
     assert!(w.read(&partial, "ideas/later.md").contains("# Later"));
     let calls = ssh.calls();
@@ -504,7 +525,7 @@ fn a_host_asking_for_credentials_is_refused_without_asking_the_askpass() {
     assert!(ssh.asked.exists(), "git never asks: proves nothing");
     fs::remove_file(&ssh.asked).unwrap();
     let before = w.snapshot();
-    let r = engine::sync(&engine::open(&w.ours, &ssh.git(&w), &w.request()).unwrap());
+    let r = w.sync_at(&w.ours, &ssh.git(&w));
     assert!(!left(&r, LeftReason::Offline), "{r:?}");
     let why = refused(&r);
     assert!(why.contains("could not read Username"), "{why}");
@@ -573,10 +594,8 @@ fn a_listed_commit_missing_from_a_partial_clone_is_reported_absent_not_fetched()
         ),
     );
     let limit = Duration::from_secs(5);
-    let mut request = w.request();
-    request.network_time_limit = limit;
     let started = Instant::now();
-    let report = engine::sync(&engine::open(&partial, &w.git(), &request).unwrap());
+    let report = pull_within(&w, &partial, limit);
     let took = started.elapsed();
     let contacts = fs::read_to_string(&log).unwrap();
     // Both rounds within the one bound.
@@ -841,7 +860,7 @@ fn a_concurrent_fetch_that_moved_the_tracking_ref_is_kept() {
             ours = sh_path(&w.ours),
         ),
     );
-    let r = sync_within(&w, Duration::from_secs(60));
+    let r = w.sync();
     let latest = w.remote_head();
     assert_eq!(w.head(&w.theirs), latest, "the teammate's second push");
     assert!(clean(&r) && r.pulled > 0, "{r:?}");
@@ -1182,7 +1201,7 @@ fn a_transfer_slower_than_http_low_speed_limit_is_offline() {
     w.run(&w.ours, &["config", "http.lowSpeedLimit", "1000"]);
     w.run(&w.ours, &["config", "http.lowSpeedTime", "1"]);
     let before = w.snapshot();
-    let r = sync_within(&w, Duration::from_secs(30));
+    let r = w.sync();
     assert!(left(&r, LeftReason::Offline), "{r:?}");
     assert!(!left(&r, LeftReason::Refused), "{r:?}");
     assert_eq!(w.snapshot(), before);
@@ -1201,11 +1220,8 @@ fn a_fetch_held_past_the_time_limit_is_offline() {
         "sleep 10\nexec git upload-pack \"$@\"\n",
     );
     let before = w.snapshot();
-    let r = sync_within(&w, Duration::from_secs(1));
-    assert!(
-        left(&r, LeftReason::Offline) && r.pulled == 0 && !r.pushed,
-        "{r:?}"
-    );
+    let r = pull_within(&w, &w.ours, Duration::from_secs(1));
+    assert!(left(&r, LeftReason::Offline) && r.pulled == 0, "{r:?}");
     assert!(!left(&r, LeftReason::Refused), "{r:?}");
     assert_eq!(w.snapshot(), before);
 }
@@ -1217,7 +1233,7 @@ fn a_fetch_stopped_while_git_would_hold_the_tracking_ref_leaves_no_lock() {
     let w = World::new();
     w.theirs_push(&[("ideas/new.md", &neuron("", "# New\n"))], &[]);
     w.hook(&w.ours, "reference-transaction", SLOW_TRACKING_HOOK);
-    let r = sync_within(&w, LIMIT);
+    let r = pull_within(&w, &w.ours, LIMIT);
     assert_eq!(ref_locks(&w.ours), Vec::<PathBuf>::new(), "{r:?}");
     assert!(clean(&r) && r.pulled > 0, "{r:?}");
     assert!(!left(&r, LeftReason::Refused), "{r:?}");
@@ -1238,7 +1254,7 @@ fn a_fetch_held_past_the_bound_by_a_slow_upload_pack_leaves_no_lock() {
     );
     let before = tracking(&w);
     let started = Instant::now();
-    let r = sync_within(&w, LIMIT);
+    let r = pull_within(&w, &w.ours, LIMIT);
     let took = started.elapsed();
     assert!(took < Duration::from_secs(8), "{took:?}");
     assert!(left(&r, LeftReason::Offline) && r.pulled == 0, "{r:?}");
@@ -1246,7 +1262,7 @@ fn a_fetch_held_past_the_bound_by_a_slow_upload_pack_leaves_no_lock() {
     assert_eq!(tracking(&w), before);
     // The remote fast again: the next sync fetches and merges.
     w.run(&w.ours, &["config", "--unset", "remote.origin.uploadpack"]);
-    let r = sync_within(&w, LIMIT);
+    let r = pull_within(&w, &w.ours, LIMIT);
     assert!(clean(&r) && r.pulled > 0, "{r:?}");
     assert_eq!(tracking(&w), w.remote_head());
     assert_eq!(w.head(&w.ours), w.remote_head());

@@ -26,13 +26,11 @@ fn resolve_req(
         &w.ours,
         &w.git(),
         &Resolve {
-            path,
-            merge: &merge,
-            choice,
             sync: SyncRequest {
                 no_verify,
                 ..w.request()
             },
+            ..w.resolve_call(path, &merge, choice)
         },
     )
 }

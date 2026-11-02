@@ -109,12 +109,7 @@ fn check(name: &str, setup: &dyn Fn(&World)) -> Outcome {
             let done = resolve(
                 &w.ours,
                 &w.git(),
-                &Resolve {
-                    path: &c.path,
-                    merge: &merge,
-                    choice: choice.clone(),
-                    sync: w.request(),
-                },
+                &w.resolve_call(&c.path, &merge, choice.clone()),
             )
             .unwrap_or_else(|e| panic!("{name} --{label} {}: {e}", c.path));
             last = Some(done);

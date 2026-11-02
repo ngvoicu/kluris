@@ -5,20 +5,9 @@
 use std::fs;
 
 use kluris_core::sync::LeftReason;
-use kluris_core::sync::SyncRequest;
-use kluris_core::sync::engine::{self, open};
 
 use crate::common::*;
 use crate::{diverged, sh_path};
-
-/// The engine with `no_verify`.
-fn sync_no_verify(w: &World) -> kluris_core::sync::SyncReport {
-    let request = SyncRequest {
-        no_verify: true,
-        ..w.request()
-    };
-    engine::sync(&open(&w.ours, &w.git(), &request).unwrap())
-}
 
 /// Left for `hook` with `detail`; nothing changed.
 fn stopped_by(w: &World, hook: &str, detail_text: &str) {
@@ -61,7 +50,7 @@ fn no_verify_skips_the_gates_but_not_prepare_commit_msg_and_post_merge_runs() {
     );
     let ran = w.dir.path().join("post-merge-ran");
     w.hook(&w.ours, "post-merge", &format!("touch '{}'", sh_path(&ran)));
-    let r = sync_no_verify(&w);
+    let r = w.sync_no_verify();
     assert!(clean(&r) && r.pulled == 1 && r.pushed, "{r:?}");
     assert!(
         w.run(&w.ours, &["log", "-1", "--format=%B"])

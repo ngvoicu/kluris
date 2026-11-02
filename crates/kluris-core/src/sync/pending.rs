@@ -3,7 +3,7 @@
 //! resolve`. It pins the teammate's commit (`theirs`) the conflict was shown
 //! against, so the merge is finished against that commit, never a newer
 //! one. It blocks nothing: each pull compares it with HEAD and the upstream
-//! ([`super::engine::pull`]).
+//! ([`super::engine::pull_fetched`]).
 //!
 //! Each record has an id ([`Pending::id`]), shown with every conflict it
 //! reports. A command that finishes the merge names the id the person

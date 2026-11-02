@@ -12,28 +12,32 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus};
 use std::sync::{Mutex, MutexGuard};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use kluris_core::brain::store::LocalGitStore;
 use kluris_core::dream::{DreamOptions, dream};
 use kluris_core::git::SystemGit;
-use kluris_core::sync::claim::COMMAND_BOUND;
+use kluris_core::sync::claim::{COMMAND_BOUND, ClaimError, TreeClaim};
 use kluris_core::sync::commit::{CommitRequest, commit};
 use kluris_core::sync::engine::{self, Context};
+use kluris_core::sync::land::failed;
 use kluris_core::sync::pending::{Found, Pending};
 use kluris_core::sync::resolve::{Choice, ResolveError, ResolveReport, ResolveRequest, resolve_in};
-use kluris_core::sync::{LeftReason, PENDING, SyncReport, SyncRequest};
+use kluris_core::sync::session::{self, Brain, Intent, SessionEnv};
+use kluris_core::sync::{LeftAsIs, LeftReason, PENDING, SyncReport, SyncRequest};
 use kluris_core::yaml::Date;
 use tempfile::TempDir;
 
-/// One `kluris resolve` call: the choice, and the request of the engine
-/// it is made with.
+/// One `kluris resolve` call: the choice, the request of the engine it is
+/// made with, and how long it waits for the tree claim another command
+/// holds.
 #[derive(Debug, Clone)]
 pub struct Resolve<'a> {
     pub path: &'a str,
     pub merge: &'a str,
     pub choice: Choice,
     pub sync: SyncRequest<'a>,
+    pub tree_bound: Duration,
 }
 
 /// What a [`resolve`] call did: the choice's report, then, once the merge
@@ -54,10 +58,19 @@ pub struct Resolved {
 
 /// The choice recorded under the exclusive tree claim ([`resolve_in`]), as
 /// the command's explicit session holds it; once the merge landed, the
-/// claim let go and the brain synced, as the session's close does.
+/// claim let go and the brain synced by an explicit session
+/// ([`explicit`]).
 pub fn resolve(root: &Path, git: &SystemGit, call: &Resolve) -> Result<Resolved, ResolveError> {
     let ctx = engine::open(root, git, &call.sync)?;
-    let claim = ctx.claim_tree().map_err(ResolveError::Left)?;
+    let claim = TreeClaim::exclusive(&ctx.dirs().own, call.tree_bound).map_err(|e| {
+        ResolveError::Left(match e {
+            ClaimError::Busy => LeftAsIs::because(
+                LeftReason::Busy,
+                "another kluris command is changing this brain's files; run again once it is done",
+            ),
+            ClaimError::Io(e) => failed(format!("cannot claim the work tree: {e}")),
+        })
+    })?;
     let request = ResolveRequest {
         path: call.path,
         merge: call.merge,
@@ -82,7 +95,7 @@ pub fn resolve(root: &Path, git: &SystemGit, call: &Resolve) -> Result<Resolved,
     };
     if committed {
         drop(claim);
-        let synced = engine::sync(&ctx);
+        let synced = explicit(root, &env(git, call.sync.no_verify));
         done.pushed = synced.pushed;
         done.remaining = synced.conflicts.into_iter().map(|c| c.path).collect();
         done.sync_error = synced
@@ -91,6 +104,43 @@ pub fn resolve(root: &Path, git: &SystemGit, call: &Resolve) -> Result<Resolved,
             .map(|left| left.to_string());
     }
     Ok(done)
+}
+
+/// The environment a command's sessions share, with `git` and no
+/// background push.
+pub fn env(git: &SystemGit, no_verify: bool) -> SessionEnv {
+    SessionEnv {
+        git: git.clone(),
+        no_verify,
+        now: SystemTime::now(),
+        program: None,
+    }
+}
+
+fn brain(root: &Path) -> Brain<'_> {
+    Brain {
+        root,
+        maps: options(),
+    }
+}
+
+/// What `kluris sync` reports for the brain at `root`: an explicit session
+/// opened (its pull), then closed (its push).
+pub fn explicit(root: &Path, env: &SessionEnv) -> SyncReport {
+    session::close(session::open(brain(root), Intent::Explicit, env))
+        .expect("an explicit session reports")
+}
+
+/// What a read reports for the brain at `root` an hour from now, past the
+/// throttle of every session the test ran before: it never waits for the
+/// remote claim, and waits [`kluris_core::sync::claim::READ_BOUND`] for the
+/// tree claim; `None` when it has nothing to say.
+pub fn read_session(root: &Path, git: &SystemGit) -> Option<SyncReport> {
+    let env = SessionEnv {
+        now: SystemTime::now() + Duration::from_secs(3600),
+        ..env(git, false)
+    };
+    session::close(session::open(brain(root), Intent::Read, &env))
 }
 
 /// The waiting merge recorded in the brain at `root`, whatever commit it
@@ -381,6 +431,17 @@ impl World {
             no_verify: false,
             maps: options(),
             network_time_limit: Duration::from_secs(60),
+        }
+    }
+
+    /// A `kluris resolve` call in "ours" with the engine's request and the
+    /// command's wait for the tree claim.
+    pub fn resolve_call<'a>(&self, path: &'a str, merge: &'a str, choice: Choice) -> Resolve<'a> {
+        Resolve {
+            path,
+            merge,
+            choice,
+            sync: self.request(),
             tree_bound: COMMAND_BOUND,
         }
     }
@@ -390,14 +451,39 @@ impl World {
         engine::open(&self.ours, &self.git(), &self.request()).unwrap()
     }
 
-    /// Pull "ours".
+    /// Pull "ours" as an explicit command's session opens it: the open's
+    /// report, the session ended before its close would push.
     pub fn pull(&self) -> SyncReport {
-        engine::pull(&self.open())
+        self.pull_at(&self.ours, &self.git())
     }
 
-    /// Pull and push "ours".
+    /// [`World::pull`] of the brain at `root` with `git`.
+    pub fn pull_at(&self, root: &Path, git: &SystemGit) -> SyncReport {
+        let opened = session::open(brain(root), Intent::Explicit, &env(git, false));
+        opened
+            .report()
+            .cloned()
+            .expect("an explicit session reports")
+    }
+
+    /// Pull and push "ours", as `kluris sync` does ([`explicit`]).
     pub fn sync(&self) -> SyncReport {
-        engine::sync(&self.open())
+        self.sync_at(&self.ours, &self.git())
+    }
+
+    /// [`World::sync`] of the brain at `root` with `git`.
+    pub fn sync_at(&self, root: &Path, git: &SystemGit) -> SyncReport {
+        explicit(root, &env(git, false))
+    }
+
+    /// [`World::sync`] with `--no-verify`.
+    pub fn sync_no_verify(&self) -> SyncReport {
+        explicit(&self.ours, &env(&self.git(), true))
+    }
+
+    /// What a read of "ours" reports ([`read_session`]).
+    pub fn read_session(&self) -> Option<SyncReport> {
+        read_session(&self.ours, &self.git())
     }
 
     /// The id of "ours"' waiting merge; empty when none is open.

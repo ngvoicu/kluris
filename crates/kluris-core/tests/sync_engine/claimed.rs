@@ -7,10 +7,8 @@ use std::fs;
 use std::time::Duration;
 
 use kluris_core::sync::claim::TreeClaim;
-#[cfg(unix)]
-use kluris_core::sync::engine;
 use kluris_core::sync::resolve::{Choice, ResolveError};
-use kluris_core::sync::{LeftReason, PENDING, SyncRequest};
+use kluris_core::sync::{LeftReason, PENDING};
 
 #[cfg(unix)]
 use crate::chosen;
@@ -21,25 +19,11 @@ fn pending(w: &World) -> Vec<u8> {
     fs::read(w.ours.join(".git").join(PENDING)).unwrap()
 }
 
-/// A request whose wait for the tree claim is short.
-fn hurried(w: &World) -> SyncRequest<'static> {
-    SyncRequest {
-        tree_bound: Duration::from_millis(200),
-        ..w.request()
-    }
-}
-
-fn request<'a>(
-    path: &'a str,
-    merge: &'a str,
-    choice: Choice,
-    sync: SyncRequest<'a>,
-) -> Resolve<'a> {
+/// A call whose wait for the tree claim is short.
+fn hurried<'a>(w: &World, path: &'a str, merge: &'a str, choice: Choice) -> Resolve<'a> {
     Resolve {
-        path,
-        merge,
-        choice,
-        sync,
+        tree_bound: Duration::from_millis(200),
+        ..w.resolve_call(path, merge, choice)
     }
 }
 
@@ -58,7 +42,7 @@ fn a_resolution_while_another_holds_the_tree_claim_records_nothing() {
     let r = resolve(
         &w.ours,
         &w.git(),
-        &request("notes/first.md", &merge, Choice::Ours, hurried(&w)),
+        &hurried(&w, "notes/first.md", &merge, Choice::Ours),
     );
     assert!(busy(r.clone()), "{r:?}");
     assert_eq!(pending(&w), recorded);
@@ -66,7 +50,7 @@ fn a_resolution_while_another_holds_the_tree_claim_records_nothing() {
     let r = resolve(
         &w.ours,
         &w.git(),
-        &request("notes/first.md", &merge, Choice::Ours, hurried(&w)),
+        &hurried(&w, "notes/first.md", &merge, Choice::Ours),
     );
     assert!(r.is_ok(), "{r:?}");
 }
@@ -126,14 +110,14 @@ fn a_second_resolver_never_loses_a_recorded_choice() {
             resolve(
                 &w.ours,
                 &pausing,
-                &request("notes/first.md", &merge, Choice::Ours, w.request()),
+                &w.resolve_call("notes/first.md", &merge, Choice::Ours),
             )
         });
         reached(&paused);
         let second = resolve(
             &w.ours,
             &w.git(),
-            &request("ideas/idea.md", &merge, Choice::Theirs, hurried(&w)),
+            &hurried(&w, "ideas/idea.md", &merge, Choice::Theirs),
         );
         fs::write(&go, "").unwrap();
         (first.join().unwrap(), second)
@@ -151,8 +135,8 @@ fn a_second_resolver_never_loses_a_recorded_choice() {
     assert_eq!(first.remaining, ["ideas/idea.md"]);
 }
 
-/// A pull while a resolver is inside its transaction waits for the tree
-/// claim and changes nothing.
+/// A pull while a resolver is inside its transaction (a read's) waits for
+/// the tree claim and changes nothing.
 #[cfg(unix)]
 #[test]
 fn a_pull_while_a_resolver_records_is_busy() {
@@ -165,12 +149,11 @@ fn a_pull_while_a_resolver_records_is_busy() {
             resolve(
                 &w.ours,
                 &pausing,
-                &request("notes/first.md", &merge, Choice::Ours, w.request()),
+                &w.resolve_call("notes/first.md", &merge, Choice::Ours),
             )
         });
         reached(&paused);
-        let ctx = engine::open(&w.ours, &w.git(), &hurried(&w)).unwrap();
-        let pulled = engine::pull(&ctx);
+        let pulled = w.read_session().expect("a report");
         fs::write(&go, "").unwrap();
         resolver.join().unwrap().unwrap();
         pulled

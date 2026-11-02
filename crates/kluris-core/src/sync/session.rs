@@ -472,7 +472,11 @@ fn finish(session: Session) -> (Option<SyncReport>, Option<(PathBuf, PathBuf)>) 
         // The record as it was before the push: the one a push that
         // succeeds makes moot.
         let before = background::LastPush::read(&common.join(background::LAST_PUSH));
-        report = engine::share(&ctx, claim.as_ref(), report);
+        // Without the claim the open left the brain as it is, and nothing
+        // is pushed.
+        if let Some(tree) = claim.as_ref() {
+            report = engine::share(&ctx, tree, report);
+        }
         drop(claim);
         match before.filter(|seen| report.pushed && seen.result != background::PushResult::Pushed) {
             Some(seen) => {
@@ -542,7 +546,6 @@ fn fetch<'a>(brain: Brain<'a>, intent: Intent, env: &SessionEnv) -> Fetched<'a> 
         no_verify: env.no_verify,
         maps: brain.maps,
         network_time_limit: intent.network_bound(),
-        tree_bound: intent.tree_bound(),
     };
     let alone = Fetched::alone(intent);
     let mut ctx = match engine::open(brain.root, &git, &request) {

@@ -1,18 +1,17 @@
 //! Never half-done: uncommitted files in the way, an edit made before the
 //! land, a git operation in progress, locks, a git that stops partway,
-//! unrelated histories, a busy work tree, linked worktrees, and the brains
-//! the engine does not open.
+//! unrelated histories, linked worktrees, and the brains the engine does not
+//! open.
 
 use std::fs;
-use std::time::Duration;
 
 use kluris_core::git::Git;
-use kluris_core::sync::claim::{RemoteClaim, TreeClaim};
+use kluris_core::sync::claim::RemoteClaim;
 #[cfg(unix)]
 use kluris_core::sync::engine::check_git;
-use kluris_core::sync::engine::{self, open};
+use kluris_core::sync::engine::open;
 use kluris_core::sync::git::SyncGit;
-use kluris_core::sync::{LeftReason, PENDING, SyncError, SyncRequest};
+use kluris_core::sync::{LeftReason, PENDING, SyncError};
 
 use crate::common::*;
 
@@ -461,25 +460,6 @@ fn unrelated_histories_are_refused_before_any_merge() {
 
 // --- claims and worktrees -------------------------------------------------------------
 
-#[test]
-fn a_work_tree_another_command_holds_is_busy_after_the_bound() {
-    let w = World::new();
-    w.theirs_push(&[("ideas/new.md", &neuron("", "# New\n"))], &[]);
-    let held = TreeClaim::exclusive(&w.ours.join(".git"), Duration::ZERO).unwrap();
-    let request = SyncRequest {
-        tree_bound: Duration::from_millis(100),
-        ..w.request()
-    };
-    let before = w.snapshot();
-    let r = engine::pull(&open(&w.ours, &w.git(), &request).unwrap());
-    assert!(left(&r, LeftReason::Busy), "{r:?}");
-    assert_eq!(r.pulled, 0);
-    assert_eq!(w.snapshot(), before);
-    drop(held);
-    let r = engine::pull(&open(&w.ours, &w.git(), &request).unwrap());
-    assert!(clean(&r) && r.pulled == 1, "{r:?}");
-}
-
 /// Linked worktrees share the remote and its claim (the common git dir);
 /// each keeps its own waiting merge (its own git dir).
 #[test]
@@ -506,17 +486,16 @@ fn a_linked_worktree_shares_the_remote_claim_and_keeps_its_own_waiting_merge() {
         &base.replace("Three.", "Three, side."),
     );
     w.commit(&linked, &["notes/first.md"]);
-    let open_linked = || open(&linked, &w.git(), &w.request()).unwrap();
 
     let claim = RemoteClaim::try_take(&w.ours.join(".git")).unwrap();
-    let r = engine::pull(&open_linked());
+    let r = read_session(&linked, &w.git()).expect("a report");
     assert!(
         left(&r, LeftReason::Busy),
         "pulled under a held claim: {r:?}"
     );
     drop(claim);
 
-    let r = engine::pull(&open_linked());
+    let r = w.pull_at(&linked, &w.git());
     assert_eq!(r.conflicts.len(), 1, "{r:?}");
     let own = w.run(&linked, &["rev-parse", "--absolute-git-dir"]);
     assert!(std::path::Path::new(own.trim()).join(PENDING).is_file());

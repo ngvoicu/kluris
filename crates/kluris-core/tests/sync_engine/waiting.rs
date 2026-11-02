@@ -104,12 +104,7 @@ fn newer_commits_wait_behind_the_recorded_conflict() {
     let done = resolve(
         &w.ours,
         &w.git(),
-        &Resolve {
-            path: "notes/first.md",
-            merge: shown,
-            choice: Choice::Ours,
-            sync: w.request(),
-        },
+        &w.resolve_call("notes/first.md", shown, Choice::Ours),
     )
     .unwrap();
     assert!(done.committed && done.pushed, "{done:?}");
@@ -143,12 +138,7 @@ fn a_choice_for_a_replaced_waiting_merge_records_nothing() {
         resolve(
             &w.ours,
             &w.git(),
-            &Resolve {
-                path: "notes/first.md",
-                merge,
-                choice: Choice::Ours,
-                sync: w.request(),
-            },
+            &w.resolve_call("notes/first.md", merge, Choice::Ours),
         )
     };
     match answer(&shown) {
@@ -183,12 +173,7 @@ fn a_replaced_waiting_merge_starts_with_no_choices() {
     resolve(
         &w.ours,
         &w.git(),
-        &Resolve {
-            path: "notes/first.md",
-            merge: &merge,
-            choice: Choice::Ours,
-            sync: w.request(),
-        },
+        &w.resolve_call("notes/first.md", &merge, Choice::Ours),
     )
     .unwrap();
     assert_eq!(chosen(&w), ["notes/first.md"]);
