@@ -351,6 +351,9 @@ pub fn cleanup_message(text: &str) -> String {
 /// What to commit.
 #[derive(Debug, Clone, Copy)]
 pub struct CommitRequest<'a> {
+    /// The brain's name as `--brain` takes it: the commands a refusal
+    /// suggests name it.
+    pub brain: &'a str,
     /// Brain-relative paths as given (files written or deleted).
     pub paths: &'a [String],
     /// The message; `None` or blank for [`default_message`].
@@ -426,28 +429,33 @@ pub enum CommitError {
     MessageFile(String),
     /// `HEAD` moved while the commit was built; nothing was committed.
     HeadMoved(GitError),
-    /// A merge waits for a person (`merge`, its id): it is finished with
-    /// `--merge`, its conflicted `paths` settled in the work tree.
-    MergeWaits {
-        merge: String,
-        paths: Vec<String>,
-    },
+    /// A merge waits for a person: it is finished as `needs` says.
+    MergeWaits(MergeNeeds),
     /// `--merge` names a merge that is not the waiting one.
     WrongMerge(WrongMerge),
     /// `--merge` while no merge waits.
     NoMergeWaits {
         given: String,
     },
-    /// The waiting merge's conflicted paths that `--paths` leaves out.
-    Unsettled(Vec<String>),
+    /// The waiting merge's conflicted paths that need a file and that
+    /// `--paths` leaves out.
+    Unsettled {
+        missing: Vec<String>,
+        needs: MergeNeeds,
+    },
     /// Paths given with the waiting merge that are not its conflicts.
     Unrelated {
-        conflicted: Vec<String>,
+        needs: MergeNeeds,
         rest: Vec<String>,
     },
     /// A conflict one file cannot settle (a file on one side where the
-    /// other has a directory, or a rename).
-    Structure(String),
+    /// other has a directory, or a rename): without a side `kluris resolve`
+    /// chose, or given in `--paths` (`recorded`, the side chosen).
+    Structure {
+        path: String,
+        recorded: bool,
+        needs: MergeNeeds,
+    },
     /// A settled file that cannot be kept.
     InvalidFile {
         path: String,
@@ -502,11 +510,10 @@ impl fmt::Display for CommitError {
                 f,
                 "HEAD moved while the commit was made; nothing was committed ({e})"
             ),
-            CommitError::MergeWaits { merge, paths } => write!(
+            CommitError::MergeWaits(needs) => write!(
                 f,
-                "a merge waits to be finished (merge {merge}): settle {} in the work tree, then run kluris commit --merge {merge} --paths {}; nothing was committed",
-                paths.join(", "),
-                paths.join(",")
+                "a merge waits to be finished (merge {}): {needs}; nothing was committed",
+                needs.merge
             ),
             CommitError::WrongMerge(wrong) => write!(
                 f,
@@ -517,20 +524,32 @@ impl fmt::Display for CommitError {
                 f,
                 "no merge waits in this brain, so --merge {given} answers none; nothing was committed"
             ),
-            CommitError::Unsettled(paths) => write!(
+            CommitError::Unsettled { missing, needs } => write!(
                 f,
-                "settle these too: {}; nothing was committed",
-                paths.join(", ")
+                "settle these too: {}; {needs}; nothing was committed",
+                missing.join(", ")
             ),
-            CommitError::Unrelated { conflicted, rest } => write!(
+            CommitError::Unrelated { needs, rest } => write!(
                 f,
-                "a merge waits: commit the conflicted paths first ({}), then the rest ({}); nothing was committed",
-                conflicted.join(", "),
-                rest.join(", ")
+                "a merge waits: commit the conflicted paths first ({needs}), then the rest with `kluris commit --brain {} --paths {}`; nothing was committed",
+                shell_word(&needs.brain),
+                path_list(rest)
             ),
-            CommitError::Structure(path) => write!(
+            CommitError::Structure {
+                path,
+                recorded: false,
+                needs,
+            } => write!(
                 f,
-                "{path} is a file on one side and a directory on the other, or a rename: settle it with `kluris resolve {path} --ours|--theirs`; nothing was committed"
+                "{path} is a file on one side and a directory on the other, or a rename, which only kluris resolve settles: {needs}; nothing was committed"
+            ),
+            CommitError::Structure {
+                path,
+                recorded: true,
+                needs,
+            } => write!(
+                f,
+                "{path} is a file on one side and a directory on the other, or a rename, and keeps the side kluris resolve chose, so leave it out of --paths: {needs}; nothing was committed"
             ),
             CommitError::InvalidFile { path, reason } => write!(
                 f,
@@ -573,6 +592,71 @@ pub(super) fn index_not_updated(paths: &[String], e: &GitError) -> String {
         one_line(&e.to_string()),
         words.join(" ")
     )
+}
+
+/// What finishing a waiting merge with `kluris commit --merge` still
+/// needs: a side from `kluris resolve` for each structure path without one,
+/// then a file for each other conflicted path without a recorded choice.
+/// Paths with a recorded choice need nothing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MergeNeeds {
+    /// The brain, as `--brain` takes it.
+    pub brain: String,
+    /// The waiting merge's id.
+    pub merge: String,
+    /// Structure paths without a recorded side.
+    pub resolve: Vec<String>,
+    /// The other conflicted paths without a recorded choice: `--paths`.
+    pub paths: Vec<String>,
+}
+
+impl MergeNeeds {
+    /// The command that finishes the merge once every structure path has
+    /// a side and the files are written.
+    pub fn commit(&self) -> String {
+        let paths = if self.paths.is_empty() {
+            "\"\"".to_string()
+        } else {
+            path_list(&self.paths)
+        };
+        format!(
+            "kluris commit --brain {} --merge {} --paths {paths}",
+            shell_word(&self.brain),
+            self.merge
+        )
+    }
+}
+
+/// Each step in order, every command in backticks to be run as it is.
+impl fmt::Display for MergeNeeds {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for path in &self.resolve {
+            write!(
+                f,
+                "keep a side of {path} with `kluris resolve --brain {} {} --ours|--theirs --merge {}`, then ",
+                shell_word(&self.brain),
+                shell_word(path),
+                self.merge
+            )?;
+        }
+        if !self.paths.is_empty() {
+            write!(
+                f,
+                "write the version to keep to {} and ",
+                self.paths.join(", ")
+            )?;
+        }
+        write!(f, "run `{}`", self.commit())
+    }
+}
+
+/// `paths` as one `--paths` value: each a shell word, joined with `,`.
+fn path_list(paths: &[String]) -> String {
+    paths
+        .iter()
+        .map(|rel| shell_word(rel))
+        .collect::<Vec<_>>()
+        .join(",")
 }
 
 /// `path` as a shell word: quoted when it holds anything but letters,

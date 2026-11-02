@@ -27,8 +27,13 @@
 //! the merged files, the message `kluris: sync (resolved)` (or the
 //! person's) with the `Kluris-Sync: resolved`, `Kluris-Resolved-By`,
 //! `Kluris-Approved-By` and `Co-Authored-By` trailers, and the hooks `git
-//! commit` runs to conclude a merge. It lands over the settled files ([`super::land`]); the record
-//! goes once it landed. Every refusal changes nothing.
+//! commit` runs to conclude a merge. It lands over the settled files
+//! ([`super::land`]); the record goes once it landed. Every refusal changes
+//! nothing, and each one while a merge waits says what finishing it still
+//! needs ([`MergeNeeds`]): a `kluris resolve` for each structure path
+//! without a side, then the `kluris commit --merge` whose `--paths` names
+//! the paths without a recorded choice, each command to be run as it is
+//! written.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -36,7 +41,8 @@ use std::path::Path;
 
 use super::claim::TreeClaim;
 use super::commit::{
-    CommitError, CommitReport, CommitRequest, check_on_disk, commit, normalize_path, one_line,
+    CommitError, CommitReport, CommitRequest, MergeNeeds, check_on_disk, commit, normalize_path,
+    one_line,
 };
 use super::engine::{self, Context, Finish};
 use super::git::SyncGit;
@@ -89,6 +95,30 @@ fn normalized(paths: &[String]) -> Result<Vec<String>, CommitError> {
     Ok(out)
 }
 
+/// What `waiting` still needs of `kluris resolve` and `--paths`, given
+/// the choices `recorded` in it.
+fn needs(
+    brain: &str,
+    waiting: &Pending,
+    recorded: &BTreeMap<String, ResolvedChoice>,
+) -> MergeNeeds {
+    let open = |structure: bool| -> Vec<String> {
+        waiting
+            .conflicts
+            .iter()
+            .filter(|c| (c.kind == ConflictKind::Structure) == structure)
+            .filter(|c| !recorded.contains_key(&c.path))
+            .map(|c| c.path.clone())
+            .collect()
+    };
+    MergeNeeds {
+        brain: brain.to_string(),
+        merge: waiting.id(),
+        resolve: open(true),
+        paths: open(false),
+    }
+}
+
 /// Finish `waiting` from the settled files (see the module docs).
 fn finish<G: SyncGit>(
     root: &Path,
@@ -100,11 +130,10 @@ fn finish<G: SyncGit>(
 ) -> Result<CommitReport, CommitError> {
     let (git, repo) = (ctx.git(), ctx.repo());
     let conflicted: Vec<String> = waiting.conflicts.iter().map(|c| c.path.clone()).collect();
+    let recorded: BTreeMap<String, ResolvedChoice> = waiting.resolved.iter().cloned().collect();
+    let needs = needs(request.brain, waiting, &recorded);
     let Some(merge) = merge else {
-        return Err(CommitError::MergeWaits {
-            merge: waiting.id(),
-            paths: conflicted,
-        });
+        return Err(CommitError::MergeWaits(needs));
     };
     pending::check_answer(waiting, merge).map_err(CommitError::WrongMerge)?;
     if let Some(op) = git.in_progress(repo)? {
@@ -114,21 +143,25 @@ fn finish<G: SyncGit>(
     if paths.is_empty() && waiting.resolved.is_empty() {
         return Err(CommitError::NoPaths);
     }
-    let recorded: BTreeMap<String, ResolvedChoice> = waiting.resolved.iter().cloned().collect();
     // A structure path is settled by a recorded side alone.
     if let Some(c) = waiting.conflicts.iter().find(|c| {
         c.kind == ConflictKind::Structure
             && (paths.contains(&c.path) || !recorded.contains_key(&c.path))
     }) {
-        return Err(CommitError::Structure(c.path.clone()));
+        return Err(CommitError::Structure {
+            path: c.path.clone(),
+            recorded: recorded.contains_key(&c.path),
+            needs,
+        });
     }
-    let unsettled: Vec<String> = conflicted
+    let missing: Vec<String> = needs
+        .paths
         .iter()
-        .filter(|rel| !paths.contains(rel) && !recorded.contains_key(*rel))
+        .filter(|rel| !paths.contains(rel))
         .cloned()
         .collect();
-    if !unsettled.is_empty() {
-        return Err(CommitError::Unsettled(unsettled));
+    if !missing.is_empty() {
+        return Err(CommitError::Unsettled { missing, needs });
     }
     let rest: Vec<String> = paths
         .iter()
@@ -136,7 +169,7 @@ fn finish<G: SyncGit>(
         .cloned()
         .collect();
     if !rest.is_empty() {
-        return Err(CommitError::Unrelated { conflicted, rest });
+        return Err(CommitError::Unrelated { needs, rest });
     }
 
     // The recorded choices, then each given file in place of its path's:

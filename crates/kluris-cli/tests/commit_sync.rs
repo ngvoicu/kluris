@@ -1033,7 +1033,7 @@ fn a_structure_conflict_is_settled_with_resolve() {
     assert_eq!(code, 1, "{doc}");
     let error = doc["error"].as_str().unwrap();
     assert!(
-        error.contains("settle it with `kluris resolve notes/topic.md --ours|--theirs`"),
+        error.contains("which only kluris resolve settles"),
         "{error}"
     );
     assert_eq!(head(&h, &root), ours);
@@ -1143,7 +1143,7 @@ fn a_merge_whose_structure_path_has_no_choice_is_refused_and_nothing_changes() {
         assert_eq!(code, 1, "{paths}: {doc}");
         let error = doc["error"].as_str().unwrap();
         assert!(
-            error.contains("settle it with `kluris resolve notes/topic.md --ours|--theirs`"),
+            error.contains("which only kluris resolve settles"),
             "{error}"
         );
         assert!(error.contains("nothing was committed"), "{error}");
@@ -1166,7 +1166,7 @@ fn a_structure_path_resolve_settled_cannot_be_given_as_a_file() {
     assert_eq!(code, 1, "{doc}");
     let error = doc["error"].as_str().unwrap();
     assert!(
-        error.contains("settle it with `kluris resolve notes/topic.md --ours|--theirs`"),
+        error.contains("keeps the side kluris resolve chose, so leave it out of --paths"),
         "{error}"
     );
     assert_eq!(head(&h, &root), ours);
@@ -1204,7 +1204,18 @@ fn with_every_path_recorded_paths_may_name_none() {
     assert_eq!(head(&h, &root), ours);
     h.git(&root, &["checkout", "--", "notes/first.md"]);
 
-    let (code, doc) = commit(&h, "", &["--merge", &merge]);
+    // Every path has a choice: the suggestion gives no path.
+    let (code, doc) = commit(&h, "notes/first.md", &[]);
+    assert_eq!(code, 1, "{doc}");
+    let commands = suggested(doc["error"].as_str().unwrap());
+    assert_eq!(
+        commands,
+        [words(&format!(
+            "kluris commit --brain alpha --merge {merge} --paths \"\""
+        ))],
+        "{doc}"
+    );
+    let (code, doc) = follow(&h, &commands[0], "--ours");
     assert_eq!(code, 0, "{doc}");
     assert_eq!(doc["paths"], json!([]), "{doc}");
     let head = head(&h, &root);
@@ -1235,7 +1246,18 @@ fn a_recorded_text_choice_holds_for_a_path_not_given() {
     assert_eq!(code, 0, "{doc}");
     let second = second_settled();
     h.write(&root, "notes/second.md", &second);
-    let (code, doc) = commit(&h, "notes/second.md", &["--merge", &merge]);
+    // The suggestion leaves the recorded path out.
+    let (code, doc) = commit(&h, "notes/second.md", &[]);
+    assert_eq!(code, 1, "{doc}");
+    let commands = suggested(doc["error"].as_str().unwrap());
+    assert_eq!(
+        commands,
+        [words(&format!(
+            "kluris commit --brain alpha --merge {merge} --paths notes/second.md"
+        ))],
+        "{doc}"
+    );
+    let (code, doc) = follow(&h, &commands[0], "--ours");
     assert_eq!(code, 0, "{doc}");
     let head_rev = head(&h, &root);
     assert_eq!(
@@ -1266,6 +1288,156 @@ fn the_file_of_a_given_path_replaces_the_choice_recorded_for_it() {
     assert_eq!(show(&h, &root, &head_rev, "notes/second.md"), second);
     assert_eq!(status(&h, &root), "");
     assert_eq!(remote_main(&h), head_rev);
+}
+
+/// `text` split into words as a shell splits it: whitespace apart,
+/// `'...'` and `"..."` quoted (an empty pair is an empty word), `\x` the
+/// character itself.
+fn words(text: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut word: Option<String> = None;
+    let mut chars = text.chars();
+    while let Some(c) = chars.next() {
+        match c {
+            ' ' | '\t' | '\n' => {
+                if let Some(done) = word.take() {
+                    out.push(done);
+                }
+            }
+            '\'' | '"' => {
+                let w = word.get_or_insert_with(String::new);
+                for q in chars.by_ref() {
+                    if q == c {
+                        break;
+                    }
+                    w.push(q);
+                }
+            }
+            '\\' => {
+                let w = word.get_or_insert_with(String::new);
+                if let Some(next) = chars.next() {
+                    w.push(next);
+                }
+            }
+            other => word.get_or_insert_with(String::new).push(other),
+        }
+    }
+    out.extend(word);
+    out
+}
+
+/// The `kluris` commands `error` suggests (each in backticks), in order,
+/// as their words.
+fn suggested(error: &str) -> Vec<Vec<String>> {
+    error
+        .split('`')
+        .skip(1)
+        .step_by(2)
+        .filter(|span| span.starts_with("kluris "))
+        .map(words)
+        .collect()
+}
+
+/// A suggested command run as it is written, with `--json`; where it
+/// offers `--ours|--theirs`, the person's pick, `side`.
+fn follow(h: &Home, command: &[String], side: &str) -> (i32, Value) {
+    assert_eq!(command.first().map(String::as_str), Some("kluris"));
+    let mut args: Vec<&str> = command[1..]
+        .iter()
+        .map(|w| {
+            if w == "--ours|--theirs" {
+                side
+            } else {
+                w.as_str()
+            }
+        })
+        .collect();
+    args.push("--json");
+    h.json(&args)
+}
+
+/// What a refused commit while `merge` waits suggests, checked to have
+/// changed nothing.
+fn refused_with(h: &Home, root: &Path, paths: &str, extra: &[&str]) -> Vec<Vec<String>> {
+    let record = git_file(root, "kluris-sync/pending.json");
+    let (before, pending) = (head(h, root), fs::read(&record).unwrap());
+    let (code, doc) = commit(h, paths, extra);
+    assert_eq!(code, 1, "{paths} {extra:?}: {doc}");
+    let error = doc["error"].as_str().unwrap();
+    assert!(error.contains("nothing was committed"), "{error}");
+    assert_eq!(head(h, root), before);
+    assert_eq!(fs::read(&record).unwrap(), pending);
+    suggested(error)
+}
+
+#[test]
+fn each_refusal_of_a_mixed_merge_suggests_what_finishes_it_word_for_word() {
+    let (h, root) = team();
+    let (merge, ours, theirs) = text_and_structure(&h, &root);
+    h.write(&root, "notes/first.md", &settled());
+    h.write(&root, "notes/other.md", &neuron("Other", BODY));
+    let resolve_topic = words(&format!(
+        "kluris resolve --brain alpha notes/topic.md --ours|--theirs --merge {merge}"
+    ));
+    let commit_first = words(&format!(
+        "kluris commit --brain alpha --merge {merge} --paths notes/first.md"
+    ));
+    let commit_other = words("kluris commit --brain alpha --paths notes/other.md");
+
+    // The structure path has no side: it is named with its resolve, never
+    // suggested for --paths.
+    let both = [resolve_topic.clone(), commit_first.clone()];
+    let given_merge = ["--merge", merge.as_str()];
+    for (paths, extra) in [
+        ("notes/first.md", &[][..]),
+        ("notes/first.md", &given_merge[..]),
+        ("notes/first.md,notes/topic.md", &given_merge[..]),
+        ("notes/first.md,notes/other.md", &given_merge[..]),
+    ] {
+        assert_eq!(
+            refused_with(&h, &root, paths, extra),
+            both,
+            "{paths} {extra:?}"
+        );
+    }
+    let (code, doc) = follow(&h, &resolve_topic, "--theirs");
+    assert_eq!(code, 0, "{doc}");
+    assert_eq!(doc["committed"], false, "{doc}");
+
+    // Its side recorded, it is left out: only the text path is suggested.
+    for (paths, extra) in [
+        ("notes/first.md", &[][..]),
+        ("notes/first.md,notes/topic.md", &given_merge[..]),
+        ("", &given_merge[..]),
+    ] {
+        assert_eq!(
+            refused_with(&h, &root, paths, extra),
+            std::slice::from_ref(&commit_first),
+            "{paths} {extra:?}"
+        );
+    }
+    // A path that is no conflict: the merge first, then the rest.
+    let then = refused_with(&h, &root, "notes/first.md,notes/other.md", &given_merge);
+    assert_eq!(then, [commit_first.clone(), commit_other.clone()]);
+
+    let (code, doc) = follow(&h, &then[0], "--ours");
+    assert_eq!(code, 0, "{doc}");
+    let merged = head(&h, &root);
+    assert_eq!(parents(&h, &root, &merged), [ours, theirs]);
+    assert_eq!(show(&h, &root, &merged, "notes/first.md"), settled());
+    assert_eq!(
+        topic_files(&h, &root, &merged),
+        ["notes/topic.md/child.md", "notes/topic.md/map.md"]
+    );
+    assert!(!git_file(&root, "kluris-sync/pending.json").exists());
+    let (code, doc) = follow(&h, &then[1], "--ours");
+    assert_eq!(code, 0, "{doc}");
+    assert_eq!(
+        changed(&h, &root, "HEAD"),
+        ["notes/map.md", "notes/other.md"]
+    );
+    assert_eq!(status(&h, &root), "");
+    assert_eq!(remote_main(&h), head(&h, &root));
 }
 
 #[test]

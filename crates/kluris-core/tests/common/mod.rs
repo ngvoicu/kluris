@@ -332,6 +332,7 @@ impl World {
             at,
             &self.git(),
             &CommitRequest {
+                brain: "demo",
                 paths: &paths,
                 message: None,
                 agent: None,

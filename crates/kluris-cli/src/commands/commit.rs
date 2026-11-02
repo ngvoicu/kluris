@@ -66,11 +66,11 @@ fn message(name: &str, root: &str, error: &CommitError) -> String {
 fn about_the_merge(error: &CommitError) -> bool {
     matches!(
         error,
-        CommitError::MergeWaits { .. }
+        CommitError::MergeWaits(_)
             | CommitError::WrongMerge(_)
-            | CommitError::Unsettled(_)
+            | CommitError::Unsettled { .. }
             | CommitError::Unrelated { .. }
-            | CommitError::Structure(_)
+            | CommitError::Structure { .. }
             | CommitError::InvalidFile { .. }
     )
 }
@@ -108,6 +108,7 @@ pub fn run(options: &Options) -> Result<(), CliError> {
     let agent = std::env::var("KLURIS_AGENT").ok();
     let today = today()?;
     let request = CommitRequest {
+        brain: &brain.name,
         paths: &paths,
         message: options.message,
         agent: agent.as_deref(),

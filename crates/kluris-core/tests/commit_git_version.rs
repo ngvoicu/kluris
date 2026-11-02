@@ -31,6 +31,7 @@ fn an_older_git_is_a_clean_error_naming_the_version_needed() {
         &brain,
         &SystemGit::new().program(&fake),
         &CommitRequest {
+            brain: "demo",
             paths: &paths,
             message: None,
             agent: None,
