@@ -118,8 +118,9 @@ fn teammates_changes_replaces_sync_before_you_write() {
             "`structure`",
             "`binary`",
             "`kluris resolve --brain acme <path> --ours|--theirs --merge <merge> --json`",
-            "`--file <merged file>`",
-            "outside the brain",
+            "settle each `structure` path with `kluris resolve` first",
+            "`kluris commit --brain acme --merge <merge> --paths <its text paths> --json`",
+            "never give a `structure` path in `--paths`",
             // What was left as it is.
             "`left_as_is`",
             "`uncommitted`",

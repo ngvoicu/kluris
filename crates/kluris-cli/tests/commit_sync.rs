@@ -1039,6 +1039,235 @@ fn a_structure_conflict_is_settled_with_resolve() {
     assert_eq!(head(&h, &root), ours);
 }
 
+/// `kluris resolve --brain alpha <rel> <choice> --merge <merge> --json`.
+fn resolve(h: &Home, rel: &str, choice: &[&str], merge: &str) -> (i32, Value) {
+    let mut args = vec!["resolve", "--brain", "alpha", rel];
+    args.extend_from_slice(choice);
+    args.extend(["--merge", merge, "--json"]);
+    h.json(&args)
+}
+
+/// `alpha` with one waiting merge of two conflicts: an overlapping edit of
+/// `notes/first.md`, and `notes/topic.md` a file here and a folder (with
+/// `child.md`) in the teammate's commit. Its id, `ours` and `theirs`.
+fn text_and_structure(h: &Home, root: &Path) -> (String, String, String) {
+    let mate = h.teammate("alpha");
+    h.write(&mate, "notes/first.md", &neuron("First", &theirs_body()));
+    h.write(&mate, "notes/topic.md/child.md", &neuron("Child", BODY));
+    h.git(&mate, &["add", "-A"]);
+    h.git(&mate, &["commit", "-q", "-m", "theirs"]);
+    h.git(&mate, &["push", "-q"]);
+    h.write(root, "notes/first.md", &neuron("First", &ours_body()));
+    h.write(root, "notes/topic.md", &neuron("Topic", BODY));
+    h.git(root, &["add", "-A"]);
+    h.git(root, &["commit", "-q", "-m", "ours"]);
+    let (code, doc) = h.json(&["sync", "--brain", "alpha", "--json"]);
+    assert_eq!(code, 1, "{doc}");
+    let conflicts = doc["brains"][0]["sync"]["conflicts"].as_array().unwrap();
+    let mut found: Vec<(&str, &str)> = conflicts
+        .iter()
+        .map(|c| (c["path"].as_str().unwrap(), c["kind"].as_str().unwrap()))
+        .collect();
+    found.sort();
+    assert_eq!(
+        found,
+        [
+            ("notes/first.md", "content"),
+            ("notes/topic.md", "structure")
+        ],
+        "{doc}"
+    );
+    let merge = conflicts[0]["merge"].as_str().unwrap().to_string();
+    (merge, head(h, root), remote_main(h))
+}
+
+/// The files of `rev` under `notes/topic.md`, the file itself included (a
+/// folder has the map the merge builds for it).
+fn topic_files(h: &Home, root: &Path, rev: &str) -> Vec<String> {
+    h.git(root, &["ls-tree", "-r", "--name-only", rev])
+        .lines()
+        .filter(|rel| rel.starts_with("notes/topic.md"))
+        .map(str::to_string)
+        .collect()
+}
+
+#[test]
+fn a_written_text_file_finishes_a_merge_whose_structure_path_resolve_settled() {
+    for (choice, topic) in [
+        ("--ours", vec!["notes/topic.md"]),
+        (
+            "--theirs",
+            vec!["notes/topic.md/child.md", "notes/topic.md/map.md"],
+        ),
+    ] {
+        let (h, root) = team();
+        let (merge, ours, theirs) = text_and_structure(&h, &root);
+        let (code, doc) = resolve(&h, "notes/topic.md", &[choice], &merge);
+        assert_eq!(code, 0, "{choice}: {doc}");
+        assert_eq!(doc["remaining"], json!(["notes/first.md"]), "{doc}");
+        h.write(&root, "notes/first.md", &settled());
+
+        let (code, doc) = commit(&h, "notes/first.md", &["--merge", &merge]);
+        assert_eq!(code, 0, "{choice}: {doc}");
+        assert_eq!(keys(&doc), COMMIT_KEYS, "{doc}");
+        assert_eq!(doc["committed"], true, "{doc}");
+        assert_eq!(doc["paths"], json!(["notes/first.md"]), "{doc}");
+        let head = head(&h, &root);
+        assert_eq!(doc["commit"], head.as_str());
+        assert_eq!(parents(&h, &root, &head), [ours, theirs], "{choice}");
+        assert_eq!(show(&h, &root, &head, "notes/first.md"), settled());
+        assert_eq!(topic_files(&h, &root, &head), topic, "{choice}");
+        assert_eq!(
+            h.git(&root, &["log", "-1", "--format=%s", &head]).trim(),
+            "kluris: sync (resolved)"
+        );
+        assert_eq!(h.read(&root, "notes/first.md"), settled());
+        assert_eq!(status(&h, &root), "", "{choice}");
+        assert!(!git_file(&root, "kluris-sync/pending.json").exists());
+        let sync = sync_of(&doc);
+        assert_eq!(sync["conflicts"], json!([]), "{doc}");
+        assert_eq!(sync["pushed"], true, "{doc}");
+        assert_eq!(remote_main(&h), head);
+    }
+}
+
+#[test]
+fn a_merge_whose_structure_path_has_no_choice_is_refused_and_nothing_changes() {
+    let (h, root) = team();
+    let (merge, ours, _) = text_and_structure(&h, &root);
+    h.write(&root, "notes/first.md", &settled());
+    let record = git_file(&root, "kluris-sync/pending.json");
+    let pending = fs::read(&record).unwrap();
+    for paths in ["notes/first.md", "notes/first.md,notes/topic.md"] {
+        let (code, doc) = commit(&h, paths, &["--merge", &merge]);
+        assert_eq!(code, 1, "{paths}: {doc}");
+        let error = doc["error"].as_str().unwrap();
+        assert!(
+            error.contains("settle it with `kluris resolve notes/topic.md --ours|--theirs`"),
+            "{error}"
+        );
+        assert!(error.contains("nothing was committed"), "{error}");
+        assert_eq!(head(&h, &root), ours);
+        assert_eq!(fs::read(&record).unwrap(), pending);
+        assert_eq!(h.read(&root, "notes/first.md"), settled());
+    }
+}
+
+#[test]
+fn a_structure_path_resolve_settled_cannot_be_given_as_a_file() {
+    let (h, root) = team();
+    let (merge, ours, _) = text_and_structure(&h, &root);
+    let (code, doc) = resolve(&h, "notes/topic.md", &["--ours"], &merge);
+    assert_eq!(code, 0, "{doc}");
+    h.write(&root, "notes/first.md", &settled());
+    let record = git_file(&root, "kluris-sync/pending.json");
+    let pending = fs::read(&record).unwrap();
+    let (code, doc) = commit(&h, "notes/first.md,notes/topic.md", &["--merge", &merge]);
+    assert_eq!(code, 1, "{doc}");
+    let error = doc["error"].as_str().unwrap();
+    assert!(
+        error.contains("settle it with `kluris resolve notes/topic.md --ours|--theirs`"),
+        "{error}"
+    );
+    assert_eq!(head(&h, &root), ours);
+    assert_eq!(fs::read(&record).unwrap(), pending);
+}
+
+#[test]
+fn with_every_path_recorded_paths_may_name_none() {
+    let (h, root) = team();
+    let (merge, ours, theirs) = text_and_structure(&h, &root);
+    let (code, doc) = resolve(&h, "notes/topic.md", &["--theirs"], &merge);
+    assert_eq!(code, 0, "{doc}");
+
+    // A text path still without a choice must be given.
+    let record = git_file(&root, "kluris-sync/pending.json");
+    let pending = fs::read(&record).unwrap();
+    let (code, doc) = commit(&h, "", &["--merge", &merge]);
+    assert_eq!(code, 1, "{doc}");
+    let error = doc["error"].as_str().unwrap();
+    assert!(
+        error.contains("settle these too: notes/first.md"),
+        "{error}"
+    );
+    assert_eq!(head(&h, &root), ours);
+    assert_eq!(fs::read(&record).unwrap(), pending);
+
+    // The last choice cannot land past an uncommitted edit: every path has
+    // a choice and the merge still waits.
+    let merged = h.dir.path().join("merged.md");
+    fs::write(&merged, settled()).unwrap();
+    h.write(&root, "notes/first.md", &neuron("First", "A draft.\n"));
+    let file = merged.display().to_string();
+    let (code, doc) = resolve(&h, "notes/first.md", &["--file", &file], &merge);
+    assert_eq!(code, 1, "{doc}");
+    assert_eq!(head(&h, &root), ours);
+    h.git(&root, &["checkout", "--", "notes/first.md"]);
+
+    let (code, doc) = commit(&h, "", &["--merge", &merge]);
+    assert_eq!(code, 0, "{doc}");
+    assert_eq!(doc["paths"], json!([]), "{doc}");
+    let head = head(&h, &root);
+    assert_eq!(doc["commit"], head.as_str());
+    assert_eq!(parents(&h, &root, &head), [ours, theirs]);
+    assert_eq!(show(&h, &root, &head, "notes/first.md"), settled());
+    assert_eq!(
+        topic_files(&h, &root, &head),
+        ["notes/topic.md/child.md", "notes/topic.md/map.md"]
+    );
+    assert_eq!(h.read(&root, "notes/first.md"), settled());
+    assert_eq!(status(&h, &root), "");
+    assert!(!record.exists());
+    assert_eq!(sync_of(&doc)["pushed"], true, "{doc}");
+    assert_eq!(remote_main(&h), head);
+}
+
+/// The settled text of `notes/second.md`.
+fn second_settled() -> String {
+    neuron("Second", &BODY.replace("Three.", "Three, settled."))
+}
+
+#[test]
+fn a_recorded_text_choice_holds_for_a_path_not_given() {
+    let (h, root) = team();
+    let merge = two_waiting(&h, &root);
+    let (code, doc) = resolve(&h, "notes/first.md", &["--theirs"], &merge);
+    assert_eq!(code, 0, "{doc}");
+    let second = second_settled();
+    h.write(&root, "notes/second.md", &second);
+    let (code, doc) = commit(&h, "notes/second.md", &["--merge", &merge]);
+    assert_eq!(code, 0, "{doc}");
+    let head_rev = head(&h, &root);
+    assert_eq!(
+        show(&h, &root, &head_rev, "notes/first.md"),
+        neuron("First", &theirs_body())
+    );
+    assert_eq!(show(&h, &root, &head_rev, "notes/second.md"), second);
+    assert_eq!(status(&h, &root), "");
+    assert_eq!(remote_main(&h), head_rev);
+}
+
+#[test]
+fn the_file_of_a_given_path_replaces_the_choice_recorded_for_it() {
+    let (h, root) = team();
+    let merge = two_waiting(&h, &root);
+    let second = second_settled();
+    let merged = h.dir.path().join("merged.md");
+    fs::write(&merged, neuron("First", "Recorded.\n")).unwrap();
+    let file = merged.display().to_string();
+    let (code, doc) = resolve(&h, "notes/first.md", &["--file", &file], &merge);
+    assert_eq!(code, 0, "{doc}");
+    h.write(&root, "notes/first.md", &settled());
+    h.write(&root, "notes/second.md", &second);
+    let (code, doc) = commit(&h, "notes/first.md,notes/second.md", &["--merge", &merge]);
+    assert_eq!(code, 0, "{doc}");
+    let head_rev = head(&h, &root);
+    assert_eq!(show(&h, &root, &head_rev, "notes/first.md"), settled());
+    assert_eq!(show(&h, &root, &head_rev, "notes/second.md"), second);
+    assert_eq!(status(&h, &root), "");
+    assert_eq!(remote_main(&h), head_rev);
+}
+
 #[test]
 fn a_conflicted_file_gone_from_disk_is_a_deletion() {
     let (h, root) = team();

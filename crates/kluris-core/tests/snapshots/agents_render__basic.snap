@@ -533,11 +533,11 @@ brain):
   - A `structure` conflict (a file on one side, a folder on the other, or a
     rename) or a `binary` one: ask which side to keep, then run
     `kluris resolve --brain acme <path> --ours|--theirs --merge <merge> --json`.
-  - A merge that has a `structure` conflict among its paths is settled with
-    `kluris resolve` alone, path by path: `--ours` or `--theirs`, or for a
-    text path `--file <merged file>`, with the merged text written outside
-    the brain and the conflicted file left as it is. The last path's choice
-    commits the merge and pushes it.
+  - A merge that has both: settle each `structure` path with
+    `kluris resolve` first, then write the text files and run
+    `kluris commit --brain acme --merge <merge> --paths <its text paths> --json`.
+    It keeps the sides `kluris resolve` recorded; never give a `structure`
+    path in `--paths`.
   Never write conflict markers into a brain file.
 - `left_as_is` with `reason` `uncommitted`: teammates' commits did not come
   in because of the files in `paths`. Tell the human before you write one

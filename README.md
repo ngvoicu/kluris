@@ -557,10 +557,15 @@ the merge with `kluris commit --brain acme --merge <id> --paths <every
 conflicted path of that merge>`; while the merge waits, `kluris commit`
 refuses any other path, and `kluris dream` in between is fine. A conflict
 between a file and a folder (`structure`), or in a binary file, is settled
-with `kluris resolve`, and so is every path of a merge that has a
-`structure` conflict among its paths (`kluris commit --merge` refuses that
-merge); for a text path there, write your merged text outside the brain and
-pass it with `--file`, leaving the conflicted file as it is:
+with `kluris resolve`. In a merge that has both, settle its `structure`
+paths with `kluris resolve` first, then write the text files: `kluris commit
+--merge` keeps every choice `kluris resolve` recorded for that merge, and
+its `--paths` names the conflicted paths still without one (none at all,
+`--paths ""`, when every path has one). A path you give replaces the choice
+recorded for it with its file; a `structure` path is never given, and
+`kluris commit --merge` refuses the merge while one has no choice. `kluris
+resolve` alone settles a merge too, path by path; for a text path, write
+your merged text outside the brain and pass it with `--file`:
 
 ```sh
 kluris resolve --brain acme knowledge/auth.md --ours --merge 4ba0581dd58e             # keep this brain's version

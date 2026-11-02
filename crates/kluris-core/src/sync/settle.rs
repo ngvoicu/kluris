@@ -7,21 +7,27 @@
 //! finishes it, and only as asked:
 //! - `--merge` must name it ([`pending::check_answer`]); a commit without
 //!   one, or with another id, is refused;
-//! - every conflicted path must be given, and no other: an unrelated path
-//!   is committed after the merge, on the merged files, so a teammate's
-//!   clean change to it is never reverted and no edit hides in a merge;
-//! - a `structure` conflict is refused: one file says nothing about the
-//!   directory or the rename, which `kluris resolve --ours|--theirs`
-//!   settles.
+//! - a choice `kluris resolve` recorded in the waiting merge stands, for a
+//!   `structure` path or a text one, and that path need not be given;
+//! - a `structure` path is never settled from a file: one file says
+//!   nothing about the directory or the rename, which `kluris resolve
+//!   --ours|--theirs` settles. Without a recorded choice it is refused, and
+//!   so is one given in the paths;
+//! - every other conflicted path without a recorded choice must be given,
+//!   and no path that is not conflicted: an unrelated path is committed
+//!   after the merge, on the merged files, so a teammate's clean change to
+//!   it is never reverted and no edit hides in a merge. With a choice
+//!   recorded for every conflicted path, the paths may name none.
 //!
-//! Each conflicted path's file is its choice, checked as `kluris resolve
-//! --file` checks one (no conflict markers, frontmatter that parses); a
-//! path gone from disk is a deletion. The merge commit has the two commits
-//! the person was shown as its parents, every map rebuilt from the merged
-//! files, the message `kluris: sync (resolved)` (or the person's) with the
-//! `Kluris-Sync: resolved`, `Kluris-Resolved-By`, `Kluris-Approved-By` and
-//! `Co-Authored-By` trailers, and the hooks `git commit` runs to conclude a
-//! merge. It lands over the settled files ([`super::land`]); the record
+//! Each given path's file is its choice, in place of one recorded for it
+//! as a later `kluris resolve` replaces an earlier one, checked as `kluris
+//! resolve --file` checks one (no conflict markers, frontmatter that
+//! parses); a path gone from disk is a deletion. The merge commit has the
+//! two commits the person was shown as its parents, every map rebuilt from
+//! the merged files, the message `kluris: sync (resolved)` (or the
+//! person's) with the `Kluris-Sync: resolved`, `Kluris-Resolved-By`,
+//! `Kluris-Approved-By` and `Co-Authored-By` trailers, and the hooks `git
+//! commit` runs to conclude a merge. It lands over the settled files ([`super::land`]); the record
 //! goes once it landed. Every refusal changes nothing.
 
 use std::collections::BTreeMap;
@@ -80,9 +86,6 @@ fn normalized(paths: &[String]) -> Result<Vec<String>, CommitError> {
             out.push(rel);
         }
     }
-    if out.is_empty() {
-        return Err(CommitError::NoPaths);
-    }
     Ok(out)
 }
 
@@ -107,17 +110,21 @@ fn finish<G: SyncGit>(
     if let Some(op) = git.in_progress(repo)? {
         return Err(CommitError::InProgress(op));
     }
-    if let Some(c) = waiting
-        .conflicts
-        .iter()
-        .find(|c| c.kind == ConflictKind::Structure)
-    {
+    let paths = normalized(request.paths)?;
+    if paths.is_empty() && waiting.resolved.is_empty() {
+        return Err(CommitError::NoPaths);
+    }
+    let recorded: BTreeMap<String, ResolvedChoice> = waiting.resolved.iter().cloned().collect();
+    // A structure path is settled by a recorded side alone.
+    if let Some(c) = waiting.conflicts.iter().find(|c| {
+        c.kind == ConflictKind::Structure
+            && (paths.contains(&c.path) || !recorded.contains_key(&c.path))
+    }) {
         return Err(CommitError::Structure(c.path.clone()));
     }
-    let paths = normalized(request.paths)?;
     let unsettled: Vec<String> = conflicted
         .iter()
-        .filter(|rel| !paths.contains(rel))
+        .filter(|rel| !paths.contains(rel) && !recorded.contains_key(*rel))
         .cloned()
         .collect();
     if !unsettled.is_empty() {
@@ -132,10 +139,11 @@ fn finish<G: SyncGit>(
         return Err(CommitError::Unrelated { conflicted, rest });
     }
 
-    // Each settled file is its choice; a file gone is a deletion.
-    let mut choices = BTreeMap::new();
+    // The recorded choices, then each given file in place of its path's:
+    // a file gone is a deletion.
+    let mut choices = recorded;
     let mut settled = Settled::new();
-    for rel in &conflicted {
+    for rel in &paths {
         check_on_disk(root, rel, true).map_err(|problem| CommitError::Path {
             path: rel.clone(),
             problem,

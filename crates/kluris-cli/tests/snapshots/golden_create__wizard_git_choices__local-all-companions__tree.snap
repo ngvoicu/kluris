@@ -2,13 +2,13 @@
 source: crates/kluris-cli/tests/golden_create.rs
 expression: text.as_ref()
 ---
-== home/.agents/skills/kluris-wiz/SKILL.md (file, 37977 bytes)
+== home/.agents/skills/kluris-wiz/SKILL.md (file, 37940 bytes)
 <snapshot skill_wiz_specmint-core+specmint-tdd+specmint-core-html+specmint-tdd-html_at-wiz_git_desc-d>
-== home/.claude/skills/kluris-wiz/SKILL.md (file, 37977 bytes)
+== home/.claude/skills/kluris-wiz/SKILL.md (file, 37940 bytes)
 <snapshot skill_wiz_specmint-core+specmint-tdd+specmint-core-html+specmint-tdd-html_at-wiz_git_desc-d>
-== home/.gemini/config/skills/kluris-wiz/SKILL.md (file, 37977 bytes)
+== home/.gemini/config/skills/kluris-wiz/SKILL.md (file, 37940 bytes)
 <snapshot skill_wiz_specmint-core+specmint-tdd+specmint-core-html+specmint-tdd-html_at-wiz_git_desc-d>
-== home/.hermes/skills/kluris-wiz/SKILL.md (file, 37977 bytes)
+== home/.hermes/skills/kluris-wiz/SKILL.md (file, 37940 bytes)
 <snapshot skill_wiz_specmint-core+specmint-tdd+specmint-core-html+specmint-tdd-html_at-wiz_git_desc-d>
 == home/.kluris/companions/specmint-core-html/SKILL.md (file, 42542 bytes)
 <vendored/specmint-core-html/SKILL.md>

@@ -459,21 +459,21 @@ agents:
   - junie
   - antigravity
 companions: []
-== home/.agents/skills/kluris-sub-brain/SKILL.md (file, 37136 bytes)
+== home/.agents/skills/kluris-sub-brain/SKILL.md (file, 37105 bytes)
 <snapshot skill_sub-brain_none_at-brains-team-projects-sub_desc-inner>
-== home/.agents/skills/kluris-team/SKILL.md (file, 36853 bytes)
+== home/.agents/skills/kluris-team/SKILL.md (file, 36817 bytes)
 <snapshot skill_team_none_git_desc-the-team-brain>
-== home/.claude/skills/kluris-sub-brain/SKILL.md (file, 37136 bytes)
+== home/.claude/skills/kluris-sub-brain/SKILL.md (file, 37105 bytes)
 <snapshot skill_sub-brain_none_at-brains-team-projects-sub_desc-inner>
-== home/.claude/skills/kluris-team/SKILL.md (file, 36853 bytes)
+== home/.claude/skills/kluris-team/SKILL.md (file, 36817 bytes)
 <snapshot skill_team_none_git_desc-the-team-brain>
-== home/.gemini/config/skills/kluris-sub-brain/SKILL.md (file, 37136 bytes)
+== home/.gemini/config/skills/kluris-sub-brain/SKILL.md (file, 37105 bytes)
 <snapshot skill_sub-brain_none_at-brains-team-projects-sub_desc-inner>
-== home/.gemini/config/skills/kluris-team/SKILL.md (file, 36853 bytes)
+== home/.gemini/config/skills/kluris-team/SKILL.md (file, 36817 bytes)
 <snapshot skill_team_none_git_desc-the-team-brain>
-== home/.hermes/skills/kluris-sub-brain/SKILL.md (file, 37136 bytes)
+== home/.hermes/skills/kluris-sub-brain/SKILL.md (file, 37105 bytes)
 <snapshot skill_sub-brain_none_at-brains-team-projects-sub_desc-inner>
-== home/.hermes/skills/kluris-team/SKILL.md (file, 36853 bytes)
+== home/.hermes/skills/kluris-team/SKILL.md (file, 36817 bytes)
 <snapshot skill_team_none_git_desc-the-team-brain>
 == home/.kluris/config.yml (file, 166 bytes)
 brains:

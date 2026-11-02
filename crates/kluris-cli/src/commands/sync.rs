@@ -89,11 +89,10 @@ fn text(name: &str, report: &SyncReport) -> String {
             ));
         }
         let mut out = format!("{name}: {}:\n", parts.join("; "));
-        // `kluris commit --merge` settles a merge from the work tree:
-        // its --paths covers every conflicted path, and it refuses a
-        // merge with a `structure` conflict. A merge holding a
-        // structure or a binary path settles with `kluris resolve`
-        // alone, path by path.
+        // `kluris commit --merge` settles text paths from the work tree;
+        // a `structure` path takes a side with `kluris resolve` alone. A
+        // merge holding a structure or a binary path is shown settling
+        // with `kluris resolve`, path by path, which settles every kind.
         let all_text = report
             .conflicts
             .iter()

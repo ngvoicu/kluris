@@ -18,13 +18,13 @@ agents:
   - antigravity
 companions:
 - specmint-core-html
-== home/.agents/skills/kluris-a/SKILL.md (file, 36702 bytes)
+== home/.agents/skills/kluris-a/SKILL.md (file, 36663 bytes)
 <snapshot skill_a_none>
-== home/.agents/skills/kluris-b/SKILL.md (file, 37704 bytes)
+== home/.agents/skills/kluris-b/SKILL.md (file, 37665 bytes)
 <snapshot skill_b_specmint-core-html>
-== home/.claude/skills/kluris-a/SKILL.md (file, 36702 bytes)
+== home/.claude/skills/kluris-a/SKILL.md (file, 36663 bytes)
 <snapshot skill_a_none>
-== home/.claude/skills/kluris-b/SKILL.md (file, 37704 bytes)
+== home/.claude/skills/kluris-b/SKILL.md (file, 37665 bytes)
 <snapshot skill_b_specmint-core-html>
 == home/.codeium/windsurf/global_workflows/kluris-a.md (removed)
 == home/.codeium/windsurf/global_workflows/kluris-b.md (removed)
@@ -36,15 +36,15 @@ companions:
 == home/.copilot/skills/kluris-b/SKILL.md (removed)
 == home/.cursor/skills/kluris-a/SKILL.md (removed)
 == home/.cursor/skills/kluris-b/SKILL.md (removed)
-== home/.gemini/config/skills/kluris-a/SKILL.md (file, 36702 bytes)
+== home/.gemini/config/skills/kluris-a/SKILL.md (file, 36663 bytes)
 <snapshot skill_a_none>
-== home/.gemini/config/skills/kluris-b/SKILL.md (file, 37704 bytes)
+== home/.gemini/config/skills/kluris-b/SKILL.md (file, 37665 bytes)
 <snapshot skill_b_specmint-core-html>
 == home/.gemini/skills/kluris-a/SKILL.md (removed)
 == home/.gemini/skills/kluris-b/SKILL.md (removed)
-== home/.hermes/skills/kluris-a/SKILL.md (file, 36702 bytes)
+== home/.hermes/skills/kluris-a/SKILL.md (file, 36663 bytes)
 <snapshot skill_a_none>
-== home/.hermes/skills/kluris-b/SKILL.md (file, 37704 bytes)
+== home/.hermes/skills/kluris-b/SKILL.md (file, 37665 bytes)
 <snapshot skill_b_specmint-core-html>
 == home/.junie/skills/kluris-a/SKILL.md (removed)
 == home/.junie/skills/kluris-b/SKILL.md (removed)

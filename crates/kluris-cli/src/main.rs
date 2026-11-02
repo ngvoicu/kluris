@@ -580,7 +580,10 @@ them.
 
 While a merge waits for you (a command that met a conflict shows its id), \
 --merge ID finishes it: --paths names every conflicted file, as you settled \
-it in the work tree (a file you deleted is a deletion), and nothing else. \
+it in the work tree (a file you deleted is a deletion), and nothing else, \
+but for the paths kluris resolve already chose a side or a file for: those \
+choices stand. A conflict between a file and a folder is settled with \
+kluris resolve alone. \
 The exit code is the commit's: 0 when it landed, whatever the sync did, \
 which the sync object says. The repository's pre-commit, \
 prepare-commit-msg, commit-msg and post-commit hooks run as git commit runs \
