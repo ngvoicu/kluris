@@ -19,11 +19,11 @@ use kluris_core::git::SystemGit;
 use kluris_core::pyrepr::py_path_str;
 use kluris_core::sync::engine::check_git;
 use kluris_core::sync::session::Intent;
-use kluris_core::sync::{LeftAsIs, LeftReason, SyncReport};
+use kluris_core::sync::{ConflictKind, LeftAsIs, LeftReason, SyncReport};
 
 use crate::brains::{self, Target};
 use crate::commands::dream::today;
-use crate::commands::resolve::command;
+use crate::commands::resolve::{command, shell_word};
 use crate::error::CliError;
 use crate::output::human;
 use crate::output::json::{self, Json};
@@ -61,13 +61,62 @@ fn text(name: &str, report: &SyncReport) -> String {
         out
     };
     if !report.conflicts.is_empty() {
-        let mut out = format!(
-            "{name}: {} conflict(s), nothing changed; settle them with `kluris resolve`:\n",
-            report.conflicts.len()
-        );
+        // The line the session summary makes of this state (the merge id
+        // named once, the commits of the person's own waiting to push),
+        // the paths left out: each gets a line of its own below.
+        let merge = &report.conflicts[0].merge;
+        let mut parts = Vec::new();
+        if report.pulled > 0 {
+            parts.push(format!(
+                "pulled {}",
+                plural(report.pulled, "commit", "commits")
+            ));
+        }
+        parts.push(format!(
+            "{} in merge {merge}",
+            plural(report.conflicts.len(), "conflict", "conflicts")
+        ));
+        if report.behind_conflict > 0 {
+            parts.push(format!(
+                "{} behind the conflict",
+                plural(report.behind_conflict, "newer commit", "newer commits")
+            ));
+        }
+        if report.to_push > 0 {
+            parts.push(format!(
+                "{} to push",
+                plural(report.to_push, "commit", "commits")
+            ));
+        }
+        let mut out = format!("{name}: {}:\n", parts.join("; "));
+        // `kluris commit --merge` settles a merge from the work tree:
+        // its --paths covers every conflicted path, and it refuses a
+        // merge with a `structure` conflict. A merge holding a
+        // structure or a binary path settles with `kluris resolve`
+        // alone, path by path.
+        let all_text = report
+            .conflicts
+            .iter()
+            .all(|c| !c.binary && c.kind != ConflictKind::Structure);
         for c in &report.conflicts {
             out.push_str(&format!("  {}: {}\n", c.kind.as_str(), c.path));
-            out.push_str(&format!("    {}\n", command(name, &c.path, &c.merge)));
+            if !all_text {
+                out.push_str(&format!("    {}\n", command(name, &c.path, &c.merge)));
+            }
+        }
+        if all_text {
+            let paths = report
+                .conflicts
+                .iter()
+                .map(|c| shell_word(&c.path))
+                .collect::<Vec<_>>()
+                .join(",");
+            out.push_str(
+                "    write the version you want to each file (a deleted file is a deletion), then:\n",
+            );
+            out.push_str(&format!(
+                "    kluris commit --brain {name} --merge {merge} --paths {paths}\n"
+            ));
         }
         return out;
     }

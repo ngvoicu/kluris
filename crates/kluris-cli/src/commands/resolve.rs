@@ -43,7 +43,7 @@ fn conflicts(n: usize) -> &'static str {
 
 /// `path` as a shell word: quoted when it holds anything but letters,
 /// digits and `._/-`.
-fn shell_word(path: &str) -> String {
+pub fn shell_word(path: &str) -> String {
     let plain = |c: char| c.is_ascii_alphanumeric() || "._/-".contains(c);
     if !path.is_empty() && path.chars().all(plain) {
         path.to_string()

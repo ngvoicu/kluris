@@ -107,15 +107,43 @@ fn brain_all_syncs_the_clean_brain_and_reports_the_conflicted_one() {
     assert_eq!(code, 1);
     let merge = c["merge"].as_str().unwrap();
     assert_eq!(merge.len(), 12, "{merge}");
-    assert!(
-        out.contains(&format!(
-            "  content: notes/first.md\n    kluris resolve --brain alpha notes/first.md --ours|--theirs|--file FILE --merge {merge}\n"
-        )),
-        "{out}"
+    assert_eq!(
+        out,
+        format!(
+            "alpha: 1 conflict in merge {merge}; 1 commit to push:\n  content: notes/first.md\n    write the version you want to each file (a deleted file is a deletion), then:\n    kluris commit --brain alpha --merge {merge} --paths notes/first.md\nbeta: up to date\n"
+        )
     );
     assert_eq!(
         err,
         format!("kluris: alpha: 1 conflict (notes/first.md) in merge {merge}; 1 commit to push\n")
+    );
+}
+
+/// A merge that has a `structure` conflict among its paths is settled with
+/// `kluris resolve` alone, path by path (`kluris commit --merge` refuses
+/// it), so the text gives every path the resolve line.
+#[test]
+fn a_merge_with_a_structure_conflict_points_every_path_at_resolve() {
+    let mut h = Home::new();
+    let root = h.brain("alpha");
+    h.teammate_pushes("alpha", "notes/first.md", &neuron("First", &theirs_body()));
+    h.teammate_pushes("alpha", "notes/topic.md/child.md", &neuron("Child", BODY));
+    h.write(&root, "notes/first.md", &neuron("First", &ours_body()));
+    h.write(&root, "notes/topic.md", &neuron("Topic", BODY));
+    h.git(&root, &["add", "-A"]);
+    h.git(&root, &["commit", "-q", "-m", "ours"]);
+    let (code, doc) = h.json(&["sync", "--brain", "alpha", "--json"]);
+    assert_eq!(code, 1, "{doc}");
+    let sync = &doc["brains"][0]["sync"];
+    let merge = sync["conflicts"][0]["merge"].as_str().unwrap().to_string();
+    let (code, out, _) = h.run(&["sync", "--brain", "alpha"]);
+    assert_eq!(code, 1, "{out}");
+    assert_eq!(
+        out,
+        format!(
+            "alpha: 2 conflicts in merge {merge}; 1 commit to push:\n  content: notes/first.md\n    kluris resolve --brain alpha notes/first.md --ours|--theirs|--file FILE --merge {merge}\n  structure: notes/topic.md\n    kluris resolve --brain alpha notes/topic.md --ours|--theirs|--file FILE --merge {merge}\n"
+        ),
+        "{out}"
     );
 }
 
