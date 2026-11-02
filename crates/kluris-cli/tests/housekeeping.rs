@@ -19,9 +19,7 @@ use std::fs;
 #[cfg(unix)]
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
-#[cfg(unix)]
 use std::thread;
-#[cfg(unix)]
 use std::time::Instant;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -72,11 +70,9 @@ const COMMIT_HOOKS: [&str; 4] = [
 ];
 
 /// The longest a test waits for a process to do something.
-#[cfg(unix)]
 const PATIENCE: Duration = Duration::from_secs(60);
 
 /// Polls `done` until it holds, at most [`PATIENCE`].
-#[cfg(unix)]
 fn eventually(what: &str, mut done: impl FnMut() -> bool) {
     let start = Instant::now();
     while !done() {
@@ -1215,4 +1211,123 @@ fn the_readmes_of_the_upgrade_fixtures_are_recognised() {
         }
     }
     assert_eq!(seen, 8);
+}
+
+#[test]
+fn a_readme_the_person_brought_up_to_date_is_left_to_them() {
+    let earlier = earlier_readme("3.1.1");
+    let current = current_readme();
+    for command in ["dream", "mri"] {
+        // The current render in the work tree alone, and staged with the
+        // committed bytes back on disk.
+        for case in ["work tree", "staged"] {
+            let (h, root) = team_with_readme(&earlier);
+            h.write(&root, "README.md", &current);
+            if case == "staged" {
+                h.git(&root, &["add", "README.md"]);
+                h.write(&root, "README.md", &earlier);
+            }
+            let (head, status) = (h.head(&root), tracked_status(&h, &root));
+            let (code, doc, err) = h.json_run(&[command, "--brain", "alpha"]);
+            assert_eq!(code, 0, "{command} {case}: {doc}{err}");
+            // Nothing else to tidy: no commit at all.
+            assert_eq!(h.head(&root), head, "{command} {case}: {doc}");
+            assert_eq!(tracked_status(&h, &root), status, "{command} {case}");
+            let (disk, index) = match case {
+                "staged" => (&earlier, &current),
+                _ => (&current, &earlier),
+            };
+            assert_eq!(&h.read(&root, "README.md"), disk, "{command} {case}");
+            assert_eq!(&staged(&h, &root, "README.md"), index, "{command} {case}");
+        }
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn a_readme_whose_mode_the_person_changed_is_left_out() {
+    use std::os::unix::fs::PermissionsExt;
+    let earlier = earlier_readme("3.1.1");
+    for command in ["dream", "mri"] {
+        let (h, root) = team_with_readme(&earlier);
+        let path = root.join("README.md");
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+        let (head, status) = (h.head(&root), tracked_status(&h, &root));
+        assert_eq!(status, " M README.md\n", "{command}");
+        let (code, doc, err) = h.json_run(&[command, "--brain", "alpha"]);
+        assert_eq!(code, 0, "{command}: {doc}{err}");
+        assert_eq!(h.head(&root), head, "{command}: {doc}");
+        assert_eq!(h.read(&root, "README.md"), earlier, "{command}");
+        let mode = fs::metadata(&path).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o755, "{command}");
+        assert_eq!(tracked_status(&h, &root), status, "{command}");
+    }
+}
+
+// --- what the person stages while the hooks run ----------------------------------
+
+/// A `pre-commit` hook that makes the file `ready` in the home and waits,
+/// at most a minute, for `go` there: the two files.
+fn pausing_hook(h: &Home, root: &Path) -> (PathBuf, PathBuf) {
+    let ready = h.dir.path().join("ready");
+    let go = h.dir.path().join("go");
+    hook(
+        root,
+        "pre-commit",
+        &format!(
+            "touch '{}'\ni=0\nwhile [ ! -f '{}' ] && [ $i -lt 600 ]; do sleep 0.1; i=$((i+1)); done\n",
+            sh_path(&ready),
+            sh_path(&go)
+        ),
+    );
+    (ready, go)
+}
+
+#[test]
+fn a_version_staged_while_the_hooks_run_stays_staged() {
+    let earlier = earlier_readme("3.1.1");
+    for command in ["dream", "mri"] {
+        // The README and a neuron, each one the housekeeping commit takes.
+        for rel in ["README.md", "notes/plain.md"] {
+            let (h, root) = team_with_readme(&earlier);
+            h.commit(&root, "notes/plain.md", PLAIN);
+            h.git(&root, &["push", "-q"]);
+            let (ready, go) = pausing_hook(&h, &root);
+            let child = h
+                .command(&[command, "--brain", "alpha", "--json"])
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .spawn()
+                .unwrap();
+            eventually("the pre-commit hook", || ready.exists());
+            // A version staged alone, the work tree as it was.
+            let disk = fs::read(root.join(rel)).unwrap();
+            let private = format!(
+                "{}\nStaged while the hook ran.\n",
+                String::from_utf8_lossy(&disk)
+            );
+            h.write(&root, rel, &private);
+            h.git(&root, &["add", rel]);
+            fs::write(root.join(rel), &disk).unwrap();
+            fs::write(&go, "").unwrap();
+            let out = child.wait_with_output().unwrap();
+            let (stdout, stderr) = (
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr),
+            );
+            assert_eq!(
+                out.status.code(),
+                Some(0),
+                "{command} {rel}: {stdout}{stderr}"
+            );
+            let doc: Value = serde_json::from_str(&stdout).unwrap();
+            assert!(
+                committed_by(command, &doc).contains(&rel.to_string()),
+                "{command} {rel}: {doc}"
+            );
+            assert_eq!(staged(&h, &root, rel), private, "{command} {rel}");
+            assert_eq!(fs::read(root.join(rel)).unwrap(), disk, "{command} {rel}");
+            settle(sync_by(command, &doc), &root);
+        }
+    }
 }

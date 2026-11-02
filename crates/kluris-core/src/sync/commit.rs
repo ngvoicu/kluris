@@ -73,7 +73,8 @@ use crate::brain::tree_store::{Node, TreeStore};
 use crate::dream::{DreamOptions, link_changes, map_changes};
 use crate::frontmatter::{LineEnding, line_ending};
 use crate::git::{
-    GitError, Identity, InProgress, MIN_SYNC_VERSION, Plumbing, Repo, StagedBlob, parse_version,
+    GitError, Identity, InProgress, IndexEntry, MIN_SYNC_VERSION, Plumbing, Repo, StagedBlob,
+    parse_version,
 };
 
 /// The longest default subject, in characters.
@@ -820,23 +821,37 @@ fn reverse_links(
 
 /// What the person has in a file a Kluris commit gives new bytes (R)
 /// beside the person's own paths: nothing, where each of these holds.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct Untouched {
     /// The user's index entry, mode and blob, is the base's or R's.
     pub index: bool,
     /// The work-tree copy, as read, is the base's bytes or exactly R (as
     /// `kluris dream` writes the same fix there), line endings aside.
     pub work_tree: bool,
+    /// The user's index entry is exactly the base's (both absent too).
+    pub index_base: bool,
+    /// The work-tree copy is the base's bytes, line endings aside, with
+    /// the base's mode where the file system keeps an executable bit.
+    pub work_tree_base: bool,
     /// The index entry is flagged `assume-unchanged` or `skip-worktree`:
     /// the person's setup, which git hides. Such a file is never taken nor
     /// written, whatever it is.
     pub hidden: bool,
+    /// The user's index entry as it was read (`None`: not in the index).
+    pub entry: Option<IndexEntry>,
 }
 
 impl Untouched {
     /// Nothing of the person's is in the file: the commit may take it.
-    pub fn both(self) -> bool {
+    pub fn both(&self) -> bool {
         self.index && self.work_tree && !self.hidden
+    }
+
+    /// The file is exactly the base's in the index and the work tree: a
+    /// file no step of this run wrote is taken only then, since R's bytes
+    /// there could be the person's own.
+    pub fn as_base(&self) -> bool {
+        self.index_base && self.work_tree_base && !self.hidden
     }
 }
 
@@ -881,20 +896,34 @@ pub(super) fn untouched<G: Plumbing>(
         let rel = blob.rel.as_str();
         let base_entry = in_base.get(rel);
         let staged = index.get(rel);
+        let index_base = match (staged, base_entry) {
+            (None, None) => true,
+            (Some(entry), Some((mode, oid))) => *mode == entry.mode && *oid == entry.oid,
+            _ => false,
+        };
         let index_ok = match (staged, &blob.bytes) {
             (None, _) => base_entry.is_none() || blob.bytes.is_none(),
             (Some(entry), r) => {
-                base_entry.is_some_and(|(mode, oid)| *mode == entry.mode && *oid == entry.oid)
+                index_base
                     || r.as_ref().is_some_and(|r| {
                         entry.mode == blob.mode && bytes_of.get(&entry.oid) == Some(r)
                     })
             }
         };
         let path = join(root, rel);
-        let on_disk = fs::symlink_metadata(&path)
-            .ok()
+        let meta = fs::symlink_metadata(&path).ok();
+        let on_disk = meta
+            .as_ref()
             .filter(|meta| meta.is_file())
             .and_then(|_| fs::read(&path).ok());
+        let head = base_entry.and_then(|(_, oid)| bytes_of.get(oid));
+        let work_tree_base = match (&on_disk, base_entry, &meta) {
+            (None, None, None) => true,
+            (Some(disk), Some((mode, _)), Some(meta)) => {
+                head.is_some_and(|head| same(head, disk)) && keeps_mode(meta, mode)
+            }
+            _ => false,
+        };
         let work_tree_ok = match (&blob.bytes, on_disk) {
             (None, None) => true,
             (Some(r), Some(disk)) => {
@@ -913,11 +942,30 @@ pub(super) fn untouched<G: Plumbing>(
             Untouched {
                 index: index_ok,
                 work_tree: work_tree_ok,
+                index_base,
+                work_tree_base,
                 hidden: staged.is_some_and(|entry| entry.hidden),
+                entry: staged.cloned(),
             },
         );
     }
     Ok(out)
+}
+
+/// Whether a work-tree file (`meta`) has the git `mode` it is committed
+/// with: its owner's executable bit, as git reads it, where the file system
+/// keeps one.
+fn keeps_mode(meta: &fs::Metadata, mode: &str) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        (meta.permissions().mode() & 0o100 != 0) == (mode == "100755")
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (meta, mode);
+        true
+    }
 }
 
 /// `view` with the `links` in its neurons.

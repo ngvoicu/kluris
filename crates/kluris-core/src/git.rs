@@ -18,6 +18,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
 use std::fmt;
+use std::fs;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
@@ -758,6 +759,19 @@ pub trait Plumbing: Git {
     /// <rev> -- <paths>`); every other entry stays as it is.
     fn reset_paths(&self, repo: &Repo, rev: &str, paths: &[String]) -> Result<(), GitError>;
 
+    /// Set the user's index entry of each path in `observed` to `rev`'s
+    /// only where it is still the entry observed (`None`: not in the
+    /// index), checked and written under `index.lock` as git writes the
+    /// index, so an entry staged since is never replaced. The paths reset,
+    /// sorted; every other entry stays as it is. A lock already there is
+    /// another git writing the index: an error, and nothing changes.
+    fn reset_unchanged(
+        &self,
+        repo: &Repo,
+        rev: &str,
+        observed: &BTreeMap<String, Option<IndexEntry>>,
+    ) -> Result<Vec<String>, GitError>;
+
     /// The entry each of `paths` has in the user's index; a path the index
     /// does not hold is left out.
     fn index_entries(
@@ -847,6 +861,85 @@ impl Drop for StagingIndex {
         let mut lock = self.0.clone().into_os_string();
         lock.push(".lock");
         let _ = std::fs::remove_file(lock);
+    }
+}
+
+/// The entries of `git ls-files -s -v -z`: each path, its entry and its
+/// stage (`0` outside a merge). Each record is `<tag> <mode> <blob>
+/// <stage>\t<path>`; the tag is lowercase for an assume-unchanged entry,
+/// `S` for a skip-worktree one.
+fn index_lines(out: &[u8]) -> impl Iterator<Item = (String, IndexEntry, String)> + '_ {
+    nul_names(out).filter_map(|line| {
+        let (meta, path) = line.split_once('\t')?;
+        let mut fields = meta.split(' ');
+        let tag = fields.next()?;
+        let mode = fields.next()?.to_string();
+        let oid = fields.next()?.to_string();
+        let stage = fields.next()?.to_string();
+        let hidden = tag.chars().any(|c| c.is_ascii_lowercase()) || tag == "S";
+        Some((path.to_string(), IndexEntry { mode, oid, hidden }, stage))
+    })
+}
+
+/// The user's `index.lock`, held as git holds it while it writes the
+/// index: made new (one already there is another git's), and removed
+/// unless [`IndexLock::commit`] puts it in the index's place.
+struct IndexLock {
+    lock: PathBuf,
+    index: PathBuf,
+    /// The open lock while it is this run's to remove.
+    file: Option<fs::File>,
+}
+
+impl IndexLock {
+    fn take(index: &Path) -> Result<IndexLock, String> {
+        let mut lock = index.as_os_str().to_owned();
+        lock.push(".lock");
+        let lock = PathBuf::from(lock);
+        let file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&lock)
+            .map_err(|e| match e.kind() {
+                std::io::ErrorKind::AlreadyExists => format!(
+                    "{} is there: another git is writing the index",
+                    lock.display()
+                ),
+                _ => format!("cannot create {}: {e}", lock.display()),
+            })?;
+        Ok(IndexLock {
+            lock,
+            index: index.to_path_buf(),
+            file: Some(file),
+        })
+    }
+
+    /// Write `bytes` to the lock and rename it over the index. A renamed
+    /// lock is the index: a lock at its path afterwards is another git's.
+    fn commit(mut self, bytes: &[u8]) -> Result<(), String> {
+        let Some(mut file) = self.file.take() else {
+            return Err(format!("{} is not held", self.lock.display()));
+        };
+        let written = file.write_all(bytes).and_then(|()| file.sync_all());
+        drop(file);
+        let renamed = written
+            .map_err(|e| format!("cannot write {}: {e}", self.lock.display()))
+            .and_then(|()| {
+                fs::rename(&self.lock, &self.index)
+                    .map_err(|e| format!("cannot replace {}: {e}", self.index.display()))
+            });
+        if renamed.is_err() {
+            let _ = fs::remove_file(&self.lock);
+        }
+        renamed
+    }
+}
+
+impl Drop for IndexLock {
+    fn drop(&mut self) {
+        if self.file.take().is_some() {
+            let _ = fs::remove_file(&self.lock);
+        }
     }
 }
 
@@ -1241,21 +1334,10 @@ impl Plumbing for SystemGit {
         if paths.is_empty() {
             return Ok(BTreeMap::new());
         }
-        // `<tag> <mode> <blob> <stage>\t<path>`, NUL-terminated; the tag is
-        // lowercase for an assume-unchanged entry, `S` for a skip-worktree
-        // one.
         let args = with_paths(&["ls-files", "-s", "-v", "-z"], paths);
         let out = self.run(&repo.dir, &args)?;
-        Ok(nul_names(&out)
-            .filter_map(|line| {
-                let (meta, path) = line.split_once('\t')?;
-                let mut fields = meta.split(' ');
-                let tag = fields.next()?;
-                let mode = fields.next()?.to_string();
-                let oid = fields.next()?.to_string();
-                let hidden = tag.chars().any(|c| c.is_ascii_lowercase()) || tag == "S";
-                Some((path.to_string(), IndexEntry { mode, oid, hidden }))
-            })
+        Ok(index_lines(&out)
+            .map(|(path, entry, _)| (path, entry))
             .collect())
     }
 
@@ -1265,6 +1347,55 @@ impl Plumbing for SystemGit {
         }
         let args = with_paths(&["reset", "-q", rev], paths);
         self.run(&repo.dir, &args).map(drop)
+    }
+
+    fn reset_unchanged(
+        &self,
+        repo: &Repo,
+        rev: &str,
+        observed: &BTreeMap<String, Option<IndexEntry>>,
+    ) -> Result<Vec<String>, GitError> {
+        if observed.is_empty() {
+            return Ok(Vec::new());
+        }
+        let paths: Vec<String> = observed.keys().cloned().collect();
+        let reset_args = with_paths(&["reset", "-q", rev], &paths);
+        let failed = |detail: String| GitError::new(&reset_args, None, detail);
+        let index = self.git_path(&repo.dir, "index")?;
+        let lock = IndexLock::take(&index).map_err(failed)?;
+        // The index as it is under the lock, read and changed in a copy.
+        let copy = StagingIndex(
+            self.git_path(&repo.dir, &format!("{}.index", unique_name("kluris-reset")))?,
+        );
+        match fs::copy(&index, &copy.0) {
+            Ok(_) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(failed(format!("cannot read {}: {e}", index.display()))),
+        }
+        let listed = with_paths(&["ls-files", "-s", "-v", "-z"], &paths);
+        let out = self.run_with_index(&repo.dir, &copy.0, &listed)?;
+        let mut now: BTreeMap<String, IndexEntry> = BTreeMap::new();
+        let mut merging: BTreeSet<String> = BTreeSet::new();
+        for (path, entry, stage) in index_lines(&out) {
+            if stage != "0" {
+                merging.insert(path.clone());
+            }
+            now.insert(path, entry);
+        }
+        let unchanged: Vec<String> = observed
+            .iter()
+            .filter(|(path, seen)| !merging.contains(*path) && now.get(*path) == seen.as_ref())
+            .map(|(path, _)| path.clone())
+            .collect();
+        if unchanged.is_empty() {
+            return Ok(unchanged);
+        }
+        let args = with_paths(&["reset", "-q", rev], &unchanged);
+        self.run_with_index(&repo.dir, &copy.0, &args)?;
+        let bytes = fs::read(&copy.0)
+            .map_err(|e| failed(format!("cannot read {}: {e}", copy.0.display())))?;
+        lock.commit(&bytes).map_err(failed)?;
+        Ok(unchanged)
     }
 
     fn dirty(&self, repo: &Repo) -> Result<Vec<String>, GitError> {

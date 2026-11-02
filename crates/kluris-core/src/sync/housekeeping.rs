@@ -21,14 +21,20 @@
 //! index entry is HEAD's blob or the commit's, and its work-tree copy is
 //! HEAD's or exactly the commit's (dream already wrote the same fix
 //! there). Any other neuron is left out, its fixes staying in the work
-//! tree, and a version the person staged stays staged; the README is
-//! taken on the same terms. A generated file (`map.md`, `brain.md`) is
-//! always taken, so no map in history lags its neurons; a version of it the
-//! person staged keeps its index entry.
+//! tree, and a version the person staged stays staged. The README, which
+//! no step writes in the work tree first, is taken only when its index
+//! entry and work-tree copy (bytes, line endings aside, and mode) are
+//! exactly HEAD's: the current render there may be the person's own. A
+//! generated file (`map.md`, `brain.md`) is always taken, so no map in
+//! history lags its neurons; a version of it the person staged keeps its
+//! index entry.
 //!
 //! Afterwards each committed file's index entry and work-tree copy get the
 //! committed bytes where they had nothing of the person's, as `kluris
-//! commit` does for its maps.
+//! commit` does for its maps: an index entry only if it is still the one
+//! read before the hooks ran (checked under the index lock), a work-tree
+//! copy only if it is still as it was then, so a version the person staged
+//! or wrote while the hooks ran stays theirs.
 //! A hook that stops the commit, or changes what it would commit, leaves
 //! everything as it was. Nothing to commit makes no commit.
 
@@ -42,7 +48,7 @@ use super::land::{failed, join};
 use super::merge::is_generated;
 use crate::brain::tree_store::{Node, TreeStore};
 use crate::dream::{DreamOptions, housekeeping_changes};
-use crate::git::{Plumbing, Repo, StagedBlob};
+use crate::git::{IndexEntry, Plumbing, Repo, StagedBlob};
 use crate::upgrade::readme::{README, refreshed};
 
 /// The housekeeping commit's message.
@@ -95,13 +101,18 @@ pub fn commit<G: Plumbing>(
         .collect();
     let theirs = untouched(git, repo, &repo.dir, Some(&base), &blobs)?;
     let is_untouched = |rel: &str, part: fn(&Untouched) -> bool| theirs.get(rel).is_some_and(part);
-    // A neuron with anything of the person's in it is left out, and any
-    // file whose index entry hides it from `git status`.
+    // A neuron with anything of the person's in it is left out, the README
+    // unless it is exactly HEAD's, and any file whose index entry hides it
+    // from `git status`.
     let blobs: Vec<StagedBlob> = blobs
         .into_iter()
         .filter(|blob| {
             !is_untouched(&blob.rel, |u| u.hidden)
-                && (is_generated(&blob.rel) || is_untouched(&blob.rel, |u| u.both()))
+                && if blob.rel == README {
+                    is_untouched(&blob.rel, Untouched::as_base)
+                } else {
+                    is_generated(&blob.rel) || is_untouched(&blob.rel, Untouched::both)
+                }
         })
         .collect();
     let paths: Vec<String> = blobs.iter().map(|blob| blob.rel.clone()).collect();
@@ -136,13 +147,16 @@ pub fn commit<G: Plumbing>(
         })?;
     drop(index);
     let files: Vec<String> = files.into_iter().collect();
-    // A version of a generated file the person staged stays staged.
-    let index_files: Vec<String> = files
+    // A version of a generated file the person staged stays staged, and so
+    // does one staged while the hooks ran.
+    let observed: BTreeMap<String, Option<IndexEntry>> = files
         .iter()
-        .filter(|rel| is_untouched(rel, |u| u.index))
-        .cloned()
+        .filter_map(|rel| {
+            let seen = theirs.get(rel).filter(|u| u.index)?;
+            Some((rel.clone(), seen.entry.clone()))
+        })
         .collect();
-    git.reset_paths(repo, &new, &index_files).map_err(|e| {
+    git.reset_unchanged(repo, &new, &observed).map_err(|e| {
         failed(format!(
             "committed the housekeeping as {new}, but the index was not updated for its files ({e})"
         ))

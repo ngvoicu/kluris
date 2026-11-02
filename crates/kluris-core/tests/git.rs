@@ -801,3 +801,62 @@ fn log_of_a_fresh_repo_with_staged_files_is_empty() {
     let git = sb.git();
     assert_eq!(git.log(&git.repo(&brain).unwrap(), 10).unwrap(), []);
 }
+
+// --- an index entry reset only while it is still as observed ----------------
+
+#[test]
+fn reset_unchanged_resets_only_the_entries_still_as_observed() {
+    use kluris_core::git::{IndexEntry, Plumbing};
+    use std::collections::BTreeMap;
+    let sb = Sandbox::new();
+    let brain = sb.repo("brain");
+    let files = ["a.md", "b.md", "c.md"];
+    sb.commit(
+        &brain,
+        &[("a.md", "a1\n"), ("b.md", "b1\n"), ("c.md", "c1\n")],
+        "one",
+        DATE,
+    );
+    sb.commit(
+        &brain,
+        &[("a.md", "a2\n"), ("b.md", "b2\n"), ("c.md", "c2\n")],
+        "two",
+        DATE,
+    );
+    let git = sb.git();
+    let repo = git.repo(&brain).unwrap();
+    let paths: Vec<String> = files.iter().map(|f| f.to_string()).collect();
+    let observe = || -> BTreeMap<String, Option<IndexEntry>> {
+        let entries = git.index_entries(&repo, &paths).unwrap();
+        paths
+            .iter()
+            .map(|p| (p.clone(), entries.get(p).cloned()))
+            .collect()
+    };
+    let mut args = vec!["reset", "-q", "HEAD~1", "--"];
+    args.extend(files);
+    sb.run(&brain, &args);
+    let observed = observe();
+    // `b.md` staged anew after it was observed.
+    fs::write(brain.join("b.md"), "b staged\n").unwrap();
+    sb.run(&brain, &["add", "b.md"]);
+    let reset = git.reset_unchanged(&repo, "HEAD", &observed).unwrap();
+    assert_eq!(reset, ["a.md", "c.md"]);
+    let staged = |rel: &str| sb.run(&brain, &["show", &format!(":{rel}")]);
+    assert_eq!(staged("a.md"), "a2\n");
+    assert_eq!(staged("b.md"), "b staged\n");
+    assert_eq!(staged("c.md"), "c2\n");
+    assert!(!brain.join(".git").join("index.lock").exists());
+
+    // A lock already there is another git's: nothing changes, and it stays.
+    sb.run(&brain, &args);
+    let observed = observe();
+    let index = brain.join(".git").join("index");
+    let before = fs::read(&index).unwrap();
+    let lock = brain.join(".git").join("index.lock");
+    fs::write(&lock, "").unwrap();
+    let err = git.reset_unchanged(&repo, "HEAD", &observed).unwrap_err();
+    assert!(err.to_string().contains("another git"), "{err}");
+    assert!(lock.exists());
+    assert_eq!(fs::read(&index).unwrap(), before);
+}
