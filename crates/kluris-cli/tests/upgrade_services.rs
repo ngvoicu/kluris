@@ -865,7 +865,11 @@ fn task_scheduler_a_task_that_stays_keeps_its_log_with_the_failure() {
         let problem = done.problem.clone().unwrap_or_default();
         assert_eq!(
             problem,
-            format!("`schtasks /Delete /TN {TASK} /F`: ERROR: Access is denied."),
+            format!(
+                "`schtasks /Delete /TN {TASK} /F`: ERROR: Access is denied. (run `kluris \
+                 doctor` once from a terminal opened with \"Run as administrator\" to \
+                 remove it)"
+            ),
             "stop {stop}"
         );
         assert_eq!(

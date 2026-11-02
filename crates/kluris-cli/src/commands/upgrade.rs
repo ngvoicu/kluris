@@ -99,3 +99,56 @@ fn check(removed: &[Removed]) -> Option<Check> {
         }
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use std::io;
+
+    use super::*;
+    use kluris_core::upgrade::services::Ran;
+
+    /// Lists one task, `\Kluris\sync-acme`, and refuses to delete it in
+    /// another language's words; every other call answers 0.
+    struct Refusing;
+
+    impl Runner for Refusing {
+        fn run(&self, _program: &str, args: &[&str]) -> io::Result<Ran> {
+            let (code, stdout, stderr) = match args {
+                ["/Query", "/FO", "CSV", "/NH"] => {
+                    (0, "\"\\Kluris\\sync-acme\",\"N/A\",\"Bereit\"\r\n", "")
+                }
+                ["/Delete", ..] => (1, "", "FEHLER: Zugriff verweigert.\r\n"),
+                _ => (0, "", ""),
+            };
+            Ok(Ran {
+                code: Some(code),
+                stdout: stdout.into(),
+                stderr: stderr.into(),
+            })
+        }
+    }
+
+    /// Whatever words Windows gives the refusal, `doctor`'s warning says
+    /// how to remove the task.
+    #[test]
+    fn a_task_doctor_cannot_delete_is_a_warning_that_says_how_to_remove_it() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let env = Env {
+            manager: Manager::TaskScheduler,
+            home: tmp.path().to_path_buf(),
+            xdg_config_home: None,
+            local_app_data: Some(tmp.path().join("lad")),
+            uid: 0,
+            runner: &Refusing,
+        };
+        let check = check(&services::sweep(&env)).unwrap();
+        assert_eq!(check.status, Status::Warn);
+        assert_eq!(
+            check.detail,
+            "removed the sync services an earlier release installed: \\Kluris\\sync-acme; \
+             not all of it went: \\Kluris\\sync-acme: `schtasks /Delete /TN \\Kluris\\sync-acme \
+             /F`: FEHLER: Zugriff verweigert. (run `kluris doctor` once from a terminal opened \
+             with \"Run as administrator\" to remove it)"
+        );
+    }
+}

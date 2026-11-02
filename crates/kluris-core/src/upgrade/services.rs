@@ -170,6 +170,12 @@ pub struct Removed {
     pub problem: Option<String>,
 }
 
+/// What a `/Delete` that fails says to do, whatever its words (Windows
+/// translates them): most likely the task was registered from an elevated
+/// prompt, which only an elevated process may undo.
+const ELEVATED_HINT: &str =
+    "run `kluris doctor` once from a terminal opened with \"Run as administrator\" to remove it";
+
 const LABEL_PREFIX: &str = "dev.ngvoicu.kluris.sync.";
 const UNIT_PREFIX: &str = "kluris-sync-";
 const TASK_PREFIX: &str = r"\Kluris\sync-";
@@ -354,8 +360,9 @@ pub fn remove_one(brain: &str, env: &Env) -> Removed {
 ///   before its file is gone; its exit 0 ends it.
 /// - Task Scheduler: with `stop`, `/End` (ending its conhost, which the
 ///   watch it runs follows), then `/Delete`, then the log. A task that will
-///   not go keeps its log, which gains a line saying why (inside the task
-///   nobody reads stderr), and the next sweep finds the task again.
+///   not go keeps its log, which gains a line saying why and how to remove
+///   it (inside the task nobody reads stderr), and the next sweep finds the
+///   task again.
 fn remove(env: &Env, brain: &str, stop: bool) -> Removed {
     let mut out = Removed {
         brain: brain.to_string(),
@@ -435,7 +442,9 @@ fn remove(env: &Env, brain: &str, stop: bool) -> Removed {
                     // Not running is fine.
                     let _ = env.run("schtasks", &["/End", "/TN", &task]);
                 }
-                deleted = env.must("schtasks", &["/Delete", "/TN", &task, "/F"]);
+                deleted = env
+                    .must("schtasks", &["/Delete", "/TN", &task, "/F"])
+                    .map_err(|e| format!("{e} ({ELEVATED_HINT})"));
                 if deleted.is_ok() {
                     out.removed.push(PathBuf::from(&task));
                 }
