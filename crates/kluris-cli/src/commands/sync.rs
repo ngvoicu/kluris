@@ -69,25 +69,33 @@ fn text(name: &str, report: &SyncReport) -> String {
             "{name}: {} in merge {merge}:\n",
             plural(report.conflicts.len(), "conflict", "conflicts")
         );
-        // `kluris commit --merge` settles text paths from the work tree;
-        // a `structure` path takes a side with `kluris resolve` alone. A
-        // merge holding a structure or a binary path is shown settling
-        // with `kluris resolve`, path by path, which settles every kind.
-        let all_text = report
-            .conflicts
-            .iter()
-            .all(|c| !c.binary && c.kind != ConflictKind::Structure);
+        // `kluris commit --merge` settles a text path from its file and
+        // keeps the choices `kluris resolve` recorded; a `structure` or
+        // binary path without a choice takes a side with `kluris resolve`.
+        // A path that has its choice is said as settled, never advised
+        // again.
+        let mut text_paths = Vec::new();
         for c in &report.conflicts {
+            if let Some(choice) = &c.resolved {
+                out.push_str(&format!(
+                    "  {}: {} ({})\n",
+                    c.kind.as_str(),
+                    c.path,
+                    choice.as_str()
+                ));
+                continue;
+            }
             out.push_str(&format!("  {}: {}\n", c.kind.as_str(), c.path));
-            if !all_text {
+            if c.binary || c.kind == ConflictKind::Structure {
                 out.push_str(&format!("    {}\n", command(name, &c.path, &c.merge)));
+            } else {
+                text_paths.push(c.path.as_str());
             }
         }
-        if all_text {
-            let paths = report
-                .conflicts
+        if !text_paths.is_empty() {
+            let paths = text_paths
                 .iter()
-                .map(|c| shell_word(&c.path))
+                .map(|p| shell_word(p))
                 .collect::<Vec<_>>()
                 .join(",");
             out.push_str(

@@ -123,6 +123,9 @@ pub struct ConflictText {
     pub theirs: Option<String>,
     /// A side is binary (holds a NUL byte) or not UTF-8.
     pub binary: bool,
+    /// The choice `kluris resolve` recorded for the path, `None` while it
+    /// still waits for one.
+    pub resolved: Option<ResolvedChoice>,
 }
 
 /// What a person chose for one conflicted path ([`resolve`]).

@@ -646,6 +646,11 @@ pub fn texts<G: Plumbing>(
                 ours,
                 theirs,
                 binary,
+                resolved: waiting
+                    .resolved
+                    .iter()
+                    .find(|(p, _)| *p == c.path)
+                    .map(|(_, choice)| choice.clone()),
             }
         })
         .collect())

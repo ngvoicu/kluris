@@ -119,11 +119,13 @@ fn brain_all_syncs_the_clean_brain_and_reports_the_conflicted_one() {
     );
 }
 
-/// A merge that has a `structure` conflict among its paths is shown
-/// settling with `kluris resolve` alone, path by path, which settles
-/// every kind.
+/// A merge holding a `structure` path and a text path is settled in two
+/// moves: `kluris resolve` takes the structure path's side, and the
+/// person's file settles the text path through `kluris commit --merge`,
+/// which keeps the recorded choice. The text says exactly that, before
+/// and after the choice is recorded, and the advice lands the merge.
 #[test]
-fn a_merge_with_a_structure_conflict_points_every_path_at_resolve() {
+fn a_mixed_merge_resolves_the_structure_path_and_commits_the_text_path() {
     let mut h = Home::new();
     let root = h.brain("alpha");
     h.teammate_pushes("alpha", "notes/first.md", &neuron("First", &theirs_body()));
@@ -141,9 +143,59 @@ fn a_merge_with_a_structure_conflict_points_every_path_at_resolve() {
     assert_eq!(
         out,
         format!(
-            "alpha: 2 conflicts in merge {merge}:\n  content: notes/first.md\n    kluris resolve --brain alpha notes/first.md --ours|--theirs|--file FILE --merge {merge}\n  structure: notes/topic.md\n    kluris resolve --brain alpha notes/topic.md --ours|--theirs|--file FILE --merge {merge}\n"
+            "alpha: 2 conflicts in merge {merge}:\n  content: notes/first.md\n  structure: notes/topic.md\n    kluris resolve --brain alpha notes/topic.md --ours|--theirs|--file FILE --merge {merge}\n    write the version you want to each file (a deleted file is a deletion), then:\n    kluris commit --brain alpha --merge {merge} --paths notes/first.md\n"
         ),
         "{out}"
+    );
+
+    // The advice, word for word: the structure side first, ...
+    let (code, out, err) = h.run(&[
+        "resolve",
+        "--brain",
+        "alpha",
+        "notes/topic.md",
+        "--theirs",
+        "--merge",
+        &merge,
+    ]);
+    assert_eq!(code, 0, "{out}{err}");
+
+    // ... the same state read back: the recorded side is said, and the
+    // text asks only for the path still open.
+    let (code, out, _) = h.run(&["sync", "--brain", "alpha"]);
+    assert_eq!(code, 1, "{out}");
+    assert_eq!(
+        out,
+        format!(
+            "alpha: 2 conflicts in merge {merge}:\n  content: notes/first.md\n  structure: notes/topic.md (theirs)\n    write the version you want to each file (a deleted file is a deletion), then:\n    kluris commit --brain alpha --merge {merge} --paths notes/first.md\n"
+        ),
+        "{out}"
+    );
+
+    // ... then the file for the text path, committed over the merge.
+    let keep = neuron("First", "Kept.\n");
+    h.write(&root, "notes/first.md", &keep);
+    let (code, out, err) = h.run(&[
+        "commit",
+        "--brain",
+        "alpha",
+        "--merge",
+        &merge,
+        "--paths",
+        "notes/first.md",
+    ]);
+    assert_eq!(code, 0, "{out}{err}");
+
+    // The merge landed and pushed: their folder, the person's file.
+    let (code, out, err) = h.run(&["sync", "--brain", "alpha"]);
+    assert_eq!(code, 0, "{out}{err}");
+    assert_eq!(out, "alpha: up to date\n");
+    assert_eq!(h.read(&root, "notes/first.md"), keep);
+    assert!(h.read(&root, "notes/topic.md/child.md").contains("# Child"));
+    let bare = h.dir.path().join("alpha.git");
+    assert_eq!(
+        h.git(&bare, &["rev-parse", "main"]),
+        h.git(&root, &["rev-parse", "HEAD"])
     );
 }
 
