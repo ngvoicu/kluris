@@ -110,7 +110,7 @@ fn brain_all_syncs_the_clean_brain_and_reports_the_conflicted_one() {
     assert_eq!(
         out,
         format!(
-            "alpha: 1 conflict in merge {merge}; 1 commit to push:\n  content: notes/first.md\n    write the version you want to each file (a deleted file is a deletion), then:\n    kluris commit --brain alpha --merge {merge} --paths notes/first.md\nbeta: up to date\n"
+            "alpha: 1 conflict in merge {merge}:\n  content: notes/first.md\n    write the version you want to each file (a deleted file is a deletion), then:\n    kluris commit --brain alpha --merge {merge} --paths notes/first.md\nbeta: up to date\n"
         )
     );
     assert_eq!(
@@ -119,9 +119,9 @@ fn brain_all_syncs_the_clean_brain_and_reports_the_conflicted_one() {
     );
 }
 
-/// A merge that has a `structure` conflict among its paths is settled with
-/// `kluris resolve` alone, path by path (`kluris commit --merge` refuses
-/// it), so the text gives every path the resolve line.
+/// A merge that has a `structure` conflict among its paths is shown
+/// settling with `kluris resolve` alone, path by path, which settles
+/// every kind.
 #[test]
 fn a_merge_with_a_structure_conflict_points_every_path_at_resolve() {
     let mut h = Home::new();
@@ -141,7 +141,7 @@ fn a_merge_with_a_structure_conflict_points_every_path_at_resolve() {
     assert_eq!(
         out,
         format!(
-            "alpha: 2 conflicts in merge {merge}; 1 commit to push:\n  content: notes/first.md\n    kluris resolve --brain alpha notes/first.md --ours|--theirs|--file FILE --merge {merge}\n  structure: notes/topic.md\n    kluris resolve --brain alpha notes/topic.md --ours|--theirs|--file FILE --merge {merge}\n"
+            "alpha: 2 conflicts in merge {merge}:\n  content: notes/first.md\n    kluris resolve --brain alpha notes/first.md --ours|--theirs|--file FILE --merge {merge}\n  structure: notes/topic.md\n    kluris resolve --brain alpha notes/topic.md --ours|--theirs|--file FILE --merge {merge}\n"
         ),
         "{out}"
     );

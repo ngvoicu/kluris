@@ -61,34 +61,14 @@ fn text(name: &str, report: &SyncReport) -> String {
         out
     };
     if !report.conflicts.is_empty() {
-        // The line the session summary makes of this state (the merge id
-        // named once, the commits of the person's own waiting to push),
-        // the paths left out: each gets a line of its own below.
+        // Every conflict belongs to the one waiting merge, whose id the
+        // settle commands name; the session summary says the rest on
+        // stderr.
         let merge = &report.conflicts[0].merge;
-        let mut parts = Vec::new();
-        if report.pulled > 0 {
-            parts.push(format!(
-                "pulled {}",
-                plural(report.pulled, "commit", "commits")
-            ));
-        }
-        parts.push(format!(
-            "{} in merge {merge}",
+        let mut out = format!(
+            "{name}: {} in merge {merge}:\n",
             plural(report.conflicts.len(), "conflict", "conflicts")
-        ));
-        if report.behind_conflict > 0 {
-            parts.push(format!(
-                "{} behind the conflict",
-                plural(report.behind_conflict, "newer commit", "newer commits")
-            ));
-        }
-        if report.to_push > 0 {
-            parts.push(format!(
-                "{} to push",
-                plural(report.to_push, "commit", "commits")
-            ));
-        }
-        let mut out = format!("{name}: {}:\n", parts.join("; "));
+        );
         // `kluris commit --merge` settles text paths from the work tree;
         // a `structure` path takes a side with `kluris resolve` alone. A
         // merge holding a structure or a binary path is shown settling
