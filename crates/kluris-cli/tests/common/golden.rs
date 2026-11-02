@@ -58,7 +58,10 @@ pub const PINNED_ENV: &[(&str, &str)] = &[
 ];
 
 /// The variables a sandboxed run inherits from the test's own environment
-/// (it starts from an empty one), so the binary and git can start.
+/// (it starts from an empty one), so the binary and git can start, and so a
+/// binary built for coverage writes its profile where the coverage run
+/// asked (`LLVM_PROFILE_FILE`), not into the sandbox's working directory.
+/// Unset, it stays unset.
 pub const PASSTHROUGH_ENV: &[&str] = &[
     "PATH",
     "SYSTEMROOT",
@@ -66,6 +69,7 @@ pub const PASSTHROUGH_ENV: &[&str] = &[
     "COMSPEC",
     "PATHEXT",
     "WINDIR",
+    "LLVM_PROFILE_FILE",
 ];
 
 const VERSION: &str = r"\d+\.\d+\.\d+(?:[-+.][0-9A-Za-z.+-]*)?";

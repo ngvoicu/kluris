@@ -973,6 +973,10 @@ fn dream_keeps_a_file_whose_write_is_cut_short() {
     let brain = resilience_brain(&sb, files(&[("projects/large.md", large.as_bytes())]));
     register(&sb, &[&brain]);
     let limit = |cmd: &mut Command| {
+        // Under coverage the child's profile would be cut by the same limit,
+        // break the merge and print the runtime's error on stderr: it goes
+        // nowhere instead.
+        cmd.env("LLVM_PROFILE_FILE", "/dev/null");
         // SAFETY: only async-signal-safe calls between fork and exec.
         unsafe {
             cmd.pre_exec(|| {
