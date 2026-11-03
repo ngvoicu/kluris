@@ -1498,13 +1498,13 @@ fn a_fetch_within_the_last_minute_is_not_repeated() {
 }
 
 #[test]
-fn a_fetch_stopped_at_the_deadline_backs_off_an_hour_doubling_to_a_day() {
-    assert_eq!(BACKOFF_FIRST, Duration::from_secs(3600));
-    assert_eq!(BACKOFF_MAX, Duration::from_secs(24 * 3600));
+fn a_fetch_stopped_at_the_deadline_backs_off_five_minutes_doubling_to_an_hour() {
+    assert_eq!(BACKOFF_FIRST, Duration::from_secs(300));
+    assert_eq!(BACKOFF_MAX, Duration::from_secs(3600));
     let tmp = tempfile::TempDir::new().unwrap();
     let backoff = tmp.path().join("kluris-sync").join("fetch-backoff");
     let mut now = 1_000_000_000u64;
-    for window in [3600u64, 7200, 14400, 28800, 57600, 86400, 86400] {
+    for window in [300u64, 600, 1200, 2400, 3600, 3600] {
         back_off(&backoff, at(now));
         assert_eq!(
             fs::read_to_string(&backoff).unwrap(),
@@ -1531,17 +1531,17 @@ fn a_fetch_that_succeeds_ends_the_back_off() {
         .join("fetch-backoff");
     let now = 1_000_000_000u64;
     back_off(&backoff, at(now));
-    back_off(&backoff, at(now + 3600));
-    assert!(backed_off(&backoff, at(now + 3601)));
+    back_off(&backoff, at(now + 300));
+    assert!(backed_off(&backoff, at(now + 301)));
     // A fetch that brought the upstream ends it, a sync's too.
     w.theirs_push(&[("ideas/new.md", &neuron("", "# New\n"))], &[]);
     assert!(matches!(fetch_ours(&w), Fetch::Moved { .. }));
     assert!(!backoff.exists());
-    // The next stop starts over at one hour.
+    // The next stop starts over at five minutes.
     back_off(&backoff, at(now));
     assert_eq!(
         fs::read_to_string(&backoff).unwrap(),
-        format!("{} 3600\n", now + 3600)
+        format!("{} 300\n", now + 300)
     );
     // A fetch that failed otherwise (offline) leaves it as it is.
     let url = "ssh://git@nonexistent.invalid/x.git";
@@ -1562,13 +1562,46 @@ fn a_back_off_that_does_not_read_or_lies_far_ahead_never_blocks_longer() {
         (String::new(), false),
         (format!("{}\n", now + 100), false),
         // Further ahead than its own window (the clock went back).
-        (format!("{} 3600\n", now + 3601), false),
+        (format!("{} 300\n", now + 301), false),
         // A window past the cap counts as the cap.
-        (format!("{} 999999999\n", now + 86_400), true),
-        (format!("{} 999999999\n", now + 86_401), false),
-        (format!("{} 3600\n", now + 3600), true),
+        (format!("{} 999999999\n", now + 3600), true),
+        (format!("{} 999999999\n", now + 3601), false),
+        (format!("{} 300\n", now + 300), true),
     ] {
         fs::write(&backoff, &text).unwrap();
         assert_eq!(backed_off(&backoff, at(now)), blocked, "{text:?}");
     }
+}
+
+#[test]
+fn a_day_long_back_off_holds_a_read_back_at_most_the_longest_window() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let backoff = tmp.path().join("fetch-backoff");
+    let written = 1_000_000_000u64;
+    let day = 24 * 3600;
+    let until = written + day;
+    let longest = BACKOFF_MAX.as_secs();
+    let text = format!("{until} {day}\n");
+    fs::write(&backoff, &text).unwrap();
+    // Every minute of its day: a read is held back only while its end is
+    // within the longest window, never longer.
+    for now in (written..=until).step_by(60) {
+        let blocked = backed_off(&backoff, at(now));
+        assert_eq!(blocked, until - now <= longest && now < until, "{now}");
+    }
+    assert!(!backed_off(&backoff, at(written)));
+    assert!(!backed_off(&backoff, at(until - longest - 1)));
+    assert!(backed_off(&backoff, at(until - longest)));
+    assert!(!backed_off(&backoff, at(until)));
+    assert_eq!(
+        fs::read_to_string(&backoff).unwrap(),
+        text,
+        "never rewritten"
+    );
+    // The next stop after it backs off the longest window, not two days.
+    back_off(&backoff, at(written + 60));
+    assert_eq!(
+        fs::read_to_string(&backoff).unwrap(),
+        format!("{} {longest}\n", written + 60 + longest)
+    );
 }

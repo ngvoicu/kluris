@@ -221,7 +221,7 @@ fn a_back_off_ends_after_its_window() {
     let w = World::new();
     back_off(&w.ours.join(".git").join(BACKOFF), at(0));
     teammate_pushes(&w, "ideas/new.md");
-    let report = session_at(&w, &w.ours, Intent::Read, at(3601)).expect("a report");
+    let report = session_at(&w, &w.ours, Intent::Read, at(301)).expect("a report");
     assert_eq!(report.pulled, 1, "{report:?}");
 }
 

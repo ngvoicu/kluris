@@ -1615,9 +1615,9 @@ fn two_reads_at_once_fetch_once_per_back_off_window() {
             .unwrap()
             .as_secs()
     };
-    for (round, window) in [3600u64, 7200, 14400].into_iter().enumerate() {
+    for (round, window) in [300u64, 600, 1200].into_iter().enumerate() {
         if round > 0 {
-            // The last window has run out (as an hour later).
+            // The last window has run out (as its length later).
             fs::write(&backoff, format!("{} {}\n", now() - 1, window / 2)).unwrap();
         }
         stamp_age(&root, 61);

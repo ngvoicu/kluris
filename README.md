@@ -331,9 +331,9 @@ has to remember to sync:
   fetch at most once a minute, within 3 seconds, and the git steps they run
   before they read stop within 10 seconds in all, so a slow network or a
   stalled hook never holds them: the brain is then read as it is. A fetch
-  cut off at 3 seconds pauses these fetches for that brain for an hour,
-  doubling up to a day, until a fetch succeeds. A read's exit code is never
-  its sync's.
+  cut off at 3 seconds pauses these fetches for that brain for five
+  minutes, doubling up to an hour, until a fetch succeeds. A read's exit
+  code is never its sync's.
 - `kluris dream` and `kluris mri` pull, then commit the brain's own
   housekeeping, built from what is already committed: dates, a missing
   `parent`, reverse `related` links, the maps and `brain.md` (see

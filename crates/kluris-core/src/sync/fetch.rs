@@ -34,7 +34,9 @@
 //! A fetch that brought the commit ends the back-off; [`fetched_recently`],
 //! [`back_off`] and their files are the read throttle: at most one read's
 //! fetch per [`THROTTLE`], and after a fetch stopped at the deadline none for
-//! [`BACKOFF_FIRST`], each further stop doubling that up to [`BACKOFF_MAX`].
+//! [`BACKOFF_FIRST`] (five minutes), each further stop doubling that up to
+//! [`BACKOFF_MAX`] (an hour). A back-off file whose end lies further ahead
+//! than that holds a read back only once its end is within it.
 //! Like the remote claim, they belong to the remote, so they are in the
 //! repository's common git directory, which every linked worktree shares.
 
@@ -58,10 +60,10 @@ pub const THROTTLE: Duration = Duration::from_secs(60);
 pub const BACKOFF: &str = "kluris-sync/fetch-backoff";
 
 /// The first back-off after a fetch stopped at the deadline.
-pub const BACKOFF_FIRST: Duration = Duration::from_secs(60 * 60);
+pub const BACKOFF_FIRST: Duration = Duration::from_secs(5 * 60);
 
 /// The longest back-off: each stop doubles it up to this.
-pub const BACKOFF_MAX: Duration = Duration::from_secs(24 * 60 * 60);
+pub const BACKOFF_MAX: Duration = Duration::from_secs(60 * 60);
 
 /// What a fetch of the upstream did.
 #[derive(Debug, Clone, PartialEq, Eq)]
