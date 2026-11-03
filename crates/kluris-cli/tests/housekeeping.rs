@@ -1331,3 +1331,187 @@ fn a_version_staged_while_the_hooks_run_stays_staged() {
         }
     }
 }
+
+// --- dates from the person's commits, never the housekeeping ---------------------
+
+/// The day a person last wrote the notes.
+const WRITTEN: &str = "2026-01-05";
+
+/// The day an earlier housekeeping commit touched them.
+const TIDIED: &str = "2026-01-20";
+
+/// A neuron dated `day`, with `extra` frontmatter lines.
+fn dated(title: &str, day: &str, extra: &str) -> String {
+    format!(
+        "---\ncreated: '{day}'\nparent: ./map.md\n{extra}updated: '{day}'\n---\n\n# {title}\n\n{BODY}"
+    )
+}
+
+/// `files` committed at `day` (noon UTC) with `message`, and pushed.
+fn commit_on(h: &Home, root: &Path, day: &str, message: &str, files: &[(&str, &str)]) {
+    for (rel, text) in files {
+        h.write(root, rel, text);
+    }
+    h.git(root, &["add", "-A"]);
+    let date = format!("{day}T12:00:00+00:00");
+    h.git(root, &["commit", "-q", "-m", message, "--date", &date]);
+    h.git(root, &["push", "-q"]);
+}
+
+/// A team whose brain's own housekeeping is done.
+fn settled_team() -> (Home, PathBuf) {
+    let (h, root) = team();
+    let (code, doc, err) = h.json_run(&["dream", "--brain", "alpha"]);
+    assert_eq!(code, 0, "{doc}{err}");
+    settle(dream_sync(&doc, "alpha"), &root);
+    (h, root)
+}
+
+/// `rel`'s `updated` as HEAD has it.
+fn committed_updated(h: &Home, root: &Path, rel: &str) -> String {
+    let text = h.committed(root, rel);
+    text.lines()
+        .find_map(|line| line.strip_prefix("updated: "))
+        .unwrap_or_else(|| panic!("no updated: {text}"))
+        .to_string()
+}
+
+/// `dream --json`, its sync settled; the document.
+fn dream_settled(h: &Home, root: &Path) -> Value {
+    let (code, doc, err) = h.json_run(&["dream", "--brain", "alpha"]);
+    assert_eq!(code, 0, "{doc}{err}");
+    settle(dream_sync(&doc, "alpha"), root);
+    doc
+}
+
+#[test]
+fn a_neuron_the_housekeeping_touched_keeps_the_day_it_was_written() {
+    let (h, root) = settled_team();
+    // A note, and one written the same day that links to it: dream adds
+    // the reverse link to the first, in its housekeeping commit.
+    commit_on(
+        &h,
+        &root,
+        WRITTEN,
+        "two notes",
+        &[
+            ("notes/plain.md", &dated("Plain", WRITTEN, "")),
+            (
+                "notes/linker.md",
+                &dated("Linker", WRITTEN, "related:\n- ./plain.md\n"),
+            ),
+        ],
+    );
+    let doc = dream_settled(&h, &root);
+    assert!(
+        dream_committed(&doc, "alpha").contains(&"notes/plain.md".to_string()),
+        "{doc}"
+    );
+    assert_eq!(h.message(&root), MESSAGE);
+    assert!(
+        h.committed(&root, "notes/plain.md")
+            .contains("- linker.md\n")
+    );
+    let quoted = format!("'{WRITTEN}'");
+    assert_eq!(committed_updated(&h, &root, "notes/plain.md"), quoted);
+
+    // The next dream finds nothing to change.
+    let head = h.head(&root);
+    stamp_age(&root, 0);
+    let doc = dream_settled(&h, &root);
+    assert_eq!(h.head(&root), head, "{doc}");
+    assert!(doc.get("committed").is_none(), "{doc}");
+    assert_eq!(committed_updated(&h, &root, "notes/plain.md"), quoted);
+    assert_eq!(h.status(&root), "");
+}
+
+#[test]
+fn a_date_a_housekeeping_commit_moved_goes_back_to_the_written_day() {
+    let (h, root) = settled_team();
+    commit_on(
+        &h,
+        &root,
+        WRITTEN,
+        "a note",
+        &[("notes/plain.md", &dated("Plain", WRITTEN, ""))],
+    );
+    // A housekeeping commit that moved its `updated` to its own day.
+    let moved = dated("Plain", WRITTEN, "").replace(
+        &format!("updated: '{WRITTEN}'"),
+        &format!("updated: '{TIDIED}'"),
+    );
+    commit_on(
+        &h,
+        &root,
+        TIDIED,
+        "kluris: dream\n\nKluris-Sync: dream\n",
+        &[("notes/plain.md", &moved)],
+    );
+    let doc = dream_settled(&h, &root);
+    assert!(
+        dream_committed(&doc, "alpha").contains(&"notes/plain.md".to_string()),
+        "{doc}"
+    );
+    assert_eq!(h.message(&root), MESSAGE);
+    let quoted = format!("'{WRITTEN}'");
+    assert_eq!(committed_updated(&h, &root, "notes/plain.md"), quoted);
+    assert_eq!(
+        h.read(&root, "notes/plain.md"),
+        h.committed(&root, "notes/plain.md")
+    );
+
+    // The next dream finds nothing to change.
+    let head = h.head(&root);
+    stamp_age(&root, 0);
+    let doc = dream_settled(&h, &root);
+    assert_eq!(h.head(&root), head, "{doc}");
+    assert_eq!(committed_updated(&h, &root, "notes/plain.md"), quoted);
+}
+
+#[test]
+fn a_persons_commit_that_names_the_trailer_still_dates_the_note() {
+    let (h, root) = settled_team();
+    commit_on(
+        &h,
+        &root,
+        WRITTEN,
+        "a note",
+        &[("notes/plain.md", &dated("Plain", WRITTEN, ""))],
+    );
+    let edited = format!("{}\nA new paragraph.\n", dated("Plain", WRITTEN, ""));
+    commit_on(
+        &h,
+        &root,
+        TIDIED,
+        "plain: a paragraph\n\nDates skip commits marked Kluris-Sync: dream.\n",
+        &[("notes/plain.md", &edited)],
+    );
+    dream_settled(&h, &root);
+    let quoted = format!("'{TIDIED}'");
+    assert_eq!(committed_updated(&h, &root, "notes/plain.md"), quoted);
+}
+
+#[test]
+fn created_is_the_oldest_commit_a_person_made() {
+    let (h, root) = settled_team();
+    let undated = format!("---\nparent: ./map.md\n---\n\n# Plain\n\n{BODY}");
+    // First committed by a housekeeping commit, then by a person.
+    commit_on(
+        &h,
+        &root,
+        WRITTEN,
+        "kluris: dream\n\nKluris-Sync: dream\n",
+        &[("notes/plain.md", &undated)],
+    );
+    commit_on(
+        &h,
+        &root,
+        TIDIED,
+        "plain: a paragraph",
+        &[("notes/plain.md", &format!("{undated}\nMore.\n"))],
+    );
+    dream_settled(&h, &root);
+    let text = h.committed(&root, "notes/plain.md");
+    assert!(text.contains(&format!("created: '{TIDIED}'\n")), "{text}");
+    assert!(text.contains(&format!("updated: '{TIDIED}'\n")), "{text}");
+}

@@ -1,9 +1,12 @@
 //! Step 1 of dream: `updated` and `created` from git.
 //!
-//! For each neuron with a commit, `updated` becomes the first 10 characters
-//! of its newest commit's author date (the author's own time zone) when
-//! `str(updated)` differs; a markdown neuron without `created` gets its oldest
-//! commit's. One write per neuron. An uncommitted neuron is left alone.
+//! The commits are those a person made ([`crate::git::Git::file_dates`]):
+//! a housekeeping commit never dates a neuron. For each neuron with such a
+//! commit, `updated` becomes the first 10 characters of its newest commit's
+//! author date (the author's own time zone) when `str(updated)` differs; a
+//! markdown neuron without `created` gets its oldest commit's. One write per
+//! neuron. A neuron with no such commit (uncommitted, or touched only by
+//! housekeeping) is left alone.
 
 use super::workspace::{Workspace, converged};
 use crate::brain::neuron_index::{Neuron, NeuronKind};

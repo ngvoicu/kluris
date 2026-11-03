@@ -714,7 +714,9 @@ The web app refreshes the access token five minutes before it expires.
 `brain.md`, refreshes `updated` dates from git history, fills in a missing
 `parent`, adds the missing half of a one-way synapse, lists unlisted neurons in
 their lobe's map, then reports what it could not fix: broken synapses, orphans,
-frontmatter problems.
+frontmatter problems. A neuron's dates come from the commits that changed it,
+never from Kluris's own `kluris: dream` commits, so tidying a note does not
+make it look newer.
 
 In a brain with a remote, `kluris dream` and `kluris mri` first bring your
 teammates' commits in, then commit the brain's own housekeeping: what those

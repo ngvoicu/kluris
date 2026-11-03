@@ -51,8 +51,12 @@ use crate::dream::{DreamOptions, housekeeping_changes};
 use crate::git::{IndexEntry, Plumbing, Repo, StagedBlob};
 use crate::upgrade::readme::{README, refreshed};
 
-/// The housekeeping commit's message.
+/// The housekeeping commit's message: its subject, then [`TRAILER`].
 pub const MESSAGE: &str = "kluris: dream\n\nKluris-Sync: dream\n";
+
+/// The trailer that marks a housekeeping commit, which
+/// [`crate::git::Git::file_dates`] leaves out.
+pub const TRAILER: &str = "Kluris-Sync: dream";
 
 /// What is said of fixes left uncommitted.
 const LEFT: &str = "the housekeeping was not committed and its fixes are in the work tree";
@@ -208,5 +212,17 @@ fn stopped(e: HookError) -> LeftAsIs {
             "cannot write the housekeeping commit's message file ({e}), so {LEFT}"
         )),
         HookError::Git(e) => e.into(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The commit carries the trailer that keeps it out of the dates, as
+    /// its message's last paragraph.
+    #[test]
+    fn the_message_ends_with_the_trailer() {
+        assert!(MESSAGE.ends_with(&format!("\n\n{TRAILER}\n")), "{MESSAGE}");
     }
 }

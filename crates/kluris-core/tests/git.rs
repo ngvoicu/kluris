@@ -606,6 +606,113 @@ fn file_dates_latest_and_created_per_path() {
 }
 
 #[test]
+fn file_dates_leave_out_the_housekeeping_commits() {
+    let sb = Sandbox::new();
+    let brain = sb.repo("brain");
+    sb.commit(
+        &brain,
+        &[("a.md", "1"), ("b.md", "1")],
+        "one",
+        "2026-01-01T10:00:00Z",
+    );
+    sb.commit(&brain, &[("a.md", "2")], "two", "2026-02-01T10:00:00Z");
+    // Kluris's housekeeping commit, a hook's sign-off after its trailer.
+    sb.commit(
+        &brain,
+        &[("a.md", "3"), ("b.md", "3"), ("only.md", "k")],
+        "kluris: dream\n\nKluris-Sync: dream\n",
+        "2026-03-01T10:00:00Z",
+    );
+    sb.commit(
+        &brain,
+        &[("b.md", "4")],
+        "kluris: dream\n\nKluris-Sync: dream\nSigned-off-by: Setup <setup@kluris.invalid>\n",
+        "2026-03-02T10:00:00Z",
+    );
+    // A person's commits whose messages name the trailer without being it:
+    // in a sentence, before a paragraph that ends the message, with
+    // another value.
+    for (rel, message, date) in [
+        (
+            "c.md",
+            "notes\n\nWe skip commits marked Kluris-Sync: dream in dates.\n",
+            "2026-04-01T10:00:00Z",
+        ),
+        (
+            "d.md",
+            "notes\n\nKluris-Sync: dream\n\nA paragraph after it.\n",
+            "2026-04-02T10:00:00Z",
+        ),
+        (
+            "e.md",
+            "notes\n\nKluris-Sync: dreams\n",
+            "2026-04-03T10:00:00Z",
+        ),
+    ] {
+        sb.commit(&brain, &[(rel, "1")], message, date);
+    }
+    let git = sb.git();
+    let dates = git.file_dates(&git.repo(&brain).unwrap());
+    let pairs = |map: &std::collections::BTreeMap<String, String>| {
+        map.iter()
+            .map(|(k, v)| format!("{k}={v}"))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        pairs(&dates.latest),
+        [
+            "a.md=2026-02-01T10:00:00Z",
+            "b.md=2026-01-01T10:00:00Z",
+            "c.md=2026-04-01T10:00:00Z",
+            "d.md=2026-04-02T10:00:00Z",
+            "e.md=2026-04-03T10:00:00Z",
+        ]
+    );
+    // `only.md`, which only housekeeping touched, has no date at all.
+    assert_eq!(
+        pairs(&dates.created),
+        [
+            "a.md=2026-01-01T10:00:00Z",
+            "b.md=2026-01-01T10:00:00Z",
+            "c.md=2026-04-01T10:00:00Z",
+            "d.md=2026-04-02T10:00:00Z",
+            "e.md=2026-04-03T10:00:00Z",
+        ]
+    );
+}
+
+#[test]
+fn file_dates_take_nothing_from_a_merge() {
+    // Kluris's merges (`Kluris-Sync: auto`, `resolved`) list no files.
+    let sb = Sandbox::new();
+    let brain = sb.repo("brain");
+    sb.commit(&brain, &[("a.md", "1")], "one", "2026-01-01T10:00:00Z");
+    sb.run(&brain, &["checkout", "-q", "-b", "theirs"]);
+    sb.commit(&brain, &[("b.md", "1")], "theirs", "2026-02-01T10:00:00Z");
+    sb.run(&brain, &["checkout", "-q", "-"]);
+    sb.commit(&brain, &[("a.md", "2")], "ours", "2026-02-02T10:00:00Z");
+    sb.run_with(
+        &brain,
+        &[
+            "merge",
+            "-q",
+            "--no-ff",
+            "-m",
+            "kluris: sync (resolved)\n\nKluris-Sync: resolved\n",
+            "theirs",
+        ],
+        &[
+            ("GIT_AUTHOR_DATE", "2026-03-01T10:00:00Z"),
+            ("GIT_COMMITTER_DATE", "2026-03-01T10:00:00Z"),
+        ],
+    );
+    let git = sb.git();
+    let dates = git.file_dates(&git.repo(&brain).unwrap());
+    assert_eq!(dates.latest["a.md"], "2026-02-02T10:00:00Z");
+    assert_eq!(dates.latest["b.md"], "2026-02-01T10:00:00Z");
+}
+
+#[test]
 fn file_dates_keep_non_ascii_and_odd_names_as_written() {
     // Read as plain `git log --name-only` lines, non-ASCII names would come
     // C-quoted (`"lobe/\303\251.md"`) and never match a neuron.

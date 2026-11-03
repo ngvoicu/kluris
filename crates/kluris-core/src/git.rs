@@ -164,8 +164,10 @@ pub trait Git {
     fn status_short(&self, repo: &Repo) -> Result<String, GitError>;
 
     /// The latest and created author date of every path in the history of
-    /// `HEAD`, from one `git log`; empty when
-    /// the log fails (no commits, no git).
+    /// `HEAD`, from one `git log`, counting only the commits a person made:
+    /// a housekeeping commit (its message's trailers, as git reads them,
+    /// hold [`crate::sync::housekeeping::TRAILER`]) is left out, and a
+    /// merge lists no paths. Empty when the log fails (no commits, no git).
     fn file_dates(&self, repo: &Repo) -> FileDates;
 
     /// `git --version`, trimmed.
@@ -565,13 +567,17 @@ impl Git for SystemGit {
     }
 
     fn file_dates(&self, repo: &Repo) -> FileDates {
+        // `trailer.separators` pinned to git's default, so the person's
+        // config cannot change which lines read as trailers.
         let args = [
             "-c",
             "core.quotePath=false",
+            "-c",
+            "trailer.separators=:",
             "log",
             "-z",
             "--relative",
-            "--format=%x00%aI",
+            "--format=%x00%aI%n%(trailers:key=Kluris-Sync,unfold)",
             "--name-only",
             "HEAD",
         ];
@@ -1434,9 +1440,12 @@ fn parse_log(text: &str) -> Vec<Commit> {
     commits
 }
 
-/// `git log -z --format=%x00%aI --name-only` output: per commit `\0<date>\0`,
-/// then, when it touched a path in scope, `\n` and each path ending in `\0`.
-/// A path is never empty, so an empty field always comes before a date.
+/// [`Git::file_dates`]'s `git log -z --name-only` output: per commit
+/// `\0<date>\n`, its `Kluris-Sync` trailers one per line (each unfolded,
+/// so a line is one whole trailer) and `\0`, then, when it touched a path
+/// in scope, `\n` and each path ending in `\0`. A path is never empty, so
+/// an empty field always comes before a commit. The paths of a commit with
+/// the housekeeping trailer, written exactly, are left out.
 fn parse_file_dates(out: &[u8]) -> FileDates {
     let mut dates = FileDates::default();
     let mut fields = out.split(|b| *b == 0);
@@ -1444,9 +1453,13 @@ fn parse_file_dates(out: &[u8]) -> FileDates {
     let mut first_path = false;
     while let Some(field) = fields.next() {
         if field.is_empty() {
-            date = fields
-                .next()
-                .map(|d| String::from_utf8_lossy(d).into_owned());
+            date = fields.next().and_then(|head| {
+                let head = String::from_utf8_lossy(head);
+                let mut lines = head.split('\n');
+                let date = lines.next()?.to_string();
+                let housekeeping = lines.any(|line| line == crate::sync::housekeeping::TRAILER);
+                (!housekeeping).then_some(date)
+            });
             first_path = true;
             continue;
         }
@@ -1536,7 +1549,7 @@ mod tests {
 
     #[test]
     fn parse_file_dates_records() {
-        let out = b"\0D3\0\0D2\0\n\nodd.md\0b.md\0\0D1\0\nb.md\0";
+        let out = b"\0D4\nKluris-Sync: dream\n\0\nb.md\0\0D3\n\0\0D2\n\0\n\nodd.md\0b.md\0\0D1\nKluris-Sync: auto\n\0\nb.md\0";
         let dates = parse_file_dates(out);
         assert_eq!(dates.latest["\nodd.md"], "D2", "only one \\n is git's");
         assert_eq!(dates.latest["b.md"], "D2");
