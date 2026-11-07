@@ -293,13 +293,14 @@ fn fetch_step<G: SyncGit>(ctx: &Context<G>) -> Result<Option<String>, LeftAsIs> 
     fetch_upstream(ctx, upstream, &remote)
 }
 
-/// Why a pull lands nothing while another command holds the remote claim:
+/// Why a pull lands nothing while another command holds the remote claim
+/// (to fetch, or to push commits that wait: the claim does not say which):
 /// the upstream's commit is not known, and the tracking ref, which any git
 /// can rewrite, is never taken for it.
 pub fn remote_busy() -> LeftAsIs {
     LeftAsIs::because(
         LeftReason::Busy,
-        "another kluris command is fetching this brain's remote, so the upstream's commit is not known; nothing was pulled: run again",
+        "another kluris command is using this brain's remote (a fetch, or a push of waiting commits), so the upstream's commit is not known; nothing was pulled: run again",
     )
 }
 

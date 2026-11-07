@@ -663,7 +663,7 @@ fn a_busy_brain_says_busy_with_its_detail() {
     drop(held);
     assert_eq!(code, 1, "{out}{err}");
     assert!(
-        out.starts_with("alpha: busy: another kluris command is fetching this brain's remote"),
+        out.starts_with("alpha: busy: another kluris command is using this brain's remote (a fetch, or a push of waiting commits)"),
         "{out}"
     );
     assert!(

@@ -366,7 +366,7 @@ success, by the one command that reads it. For ten minutes after a failure
 no background push starts; `kluris commit` and `kluris sync` push at once.
 
 One Kluris command at a time changes a brain. A read never waits for another
-command that is fetching or changing it: it reads the brain as it is, and
+command that is fetching, pushing or changing it: it reads the brain as it is, and
 its `sync` says `busy`. `kluris commit`, `kluris sync` and `kluris resolve`
 wait up to 30 seconds for it, then stop with `busy` too, as does any command
 that finds a git lock (such as `index.lock`) held.
@@ -487,8 +487,8 @@ minute), `refused` (a locked ref, a remote-tracking ref Kluris will not
 move, a remote that turned the brain away or kept moving, histories with
 no commit in common, or under `--brain all` a brain that cannot be synced:
 not a git repository, inside a larger one, or a shallow clone),
-`busy` (another Kluris command is changing the brain or fetching its
-remote, a git lock is held, or the branch changed while Kluris synced it:
+`busy` (another Kluris command is changing the brain or using its
+remote for a fetch or a push, a git lock is held, or the branch changed while Kluris synced it:
 a switch, a commit, a rebase started), `in_progress` (a git merge, rebase, cherry-pick or revert), `hook` (a
 hook stopped the merge or the push), `failed` (git stopped partway) or `no_upstream`
 (the branch has no upstream: `set one with git push -u origin main`; a brain
