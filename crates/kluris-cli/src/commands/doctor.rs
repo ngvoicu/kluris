@@ -1,8 +1,10 @@
 //! `kluris doctor [--no-refresh] [--json]` (the checks are
 //! `kluris_core::doctor`'s). Every registered brain is read through its
-//! session: a brain's check carries what its sync did (`sync`), and warns
-//! when the brain was left as it is or a conflict waits; the sync never
-//! fails it.
+//! session as a check (`Intent::Check`: its remote is asked every time): a
+//! brain's check carries what its sync did, in its detail and its `sync`
+//! object, and warns when the brain was left as it is or a conflict waits;
+//! the sync never fails it. Each brain's sync is said once, on its check's
+//! line: doctor prints no `kluris: <brain>: ...` lines.
 
 use std::path::Path;
 
@@ -47,7 +49,7 @@ pub fn run(no_refresh: bool, as_json: bool) -> Result<(), CliError> {
                 .unzip()
         })
         .unwrap_or_default();
-    let opened = brains::open_today(&targets, Intent::Read)?;
+    let opened = brains::open_today(&targets, Intent::Check)?;
     let mut report = doctor::run(&DoctorRequest {
         config_path: &config_path,
         home: &home,
@@ -70,14 +72,13 @@ pub fn run(no_refresh: bool, as_json: bool) -> Result<(), CliError> {
         .collect();
     for (name, sync) in &synced {
         if let Some(sync) = sync {
-            warn_for(&mut report.checks, name, sync);
+            say_sync(&mut report.checks, name, sync);
         }
     }
     if as_json {
         human::print(&json::to_line(&report_json(&report, &synced)));
     } else {
         human::print(&report_text(&report, &home, Painter::stdout()));
-        brains::print_lines(synced.iter().map(|(n, s)| (n.as_str(), s.as_ref())));
     }
     if report.ok() {
         Ok(())
@@ -90,19 +91,24 @@ fn strings(items: &[String]) -> Json {
     Json::Array(items.iter().map(|s| Json::Str(s.clone())).collect())
 }
 
-/// The check of brain `name` warns when its sync left it as it is or a
-/// conflict waits, its detail then the path, `; ` and what the sync said.
-/// A check that fails stays failed.
-fn warn_for(checks: &mut [Check], name: &str, sync: &SyncReport) {
-    let stuck = sync.left_as_is.is_some() || !sync.conflicts.is_empty();
-    let check = checks
+/// The check of brain `name` says what its sync did: its detail is then
+/// the path, `; ` and the sync's summary (`pulled 2 commits`, `left as is
+/// (offline): ...`). It warns when the sync left the brain as it is or a
+/// conflict waits; a check that fails stays failed.
+fn say_sync(checks: &mut [Check], name: &str, sync: &SyncReport) {
+    let Some(check) = checks
         .iter_mut()
-        .find(|c| c.name == format!("brain:{name}"));
-    if let (true, Some(check), Some(said)) = (stuck, check, brains::summary(sync))
-        && check.status == Status::Pass
-    {
+        .find(|c| c.name == format!("brain:{name}"))
+    else {
+        return;
+    };
+    let Some(said) = brains::summary(sync) else {
+        return;
+    };
+    check.detail = format!("{}; {said}", check.detail);
+    let stuck = sync.left_as_is.is_some() || !sync.conflicts.is_empty();
+    if stuck && check.status == Status::Pass {
         check.status = Status::Warn;
-        check.detail = format!("{}; {said}", check.detail);
     }
 }
 

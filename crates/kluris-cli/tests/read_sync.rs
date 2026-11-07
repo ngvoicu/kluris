@@ -2,8 +2,9 @@
 //! bring a teammate's commits in before they read, through the session
 //! (`kluris_core::sync::session`), and say what the sync did in a `sync`
 //! object (all eight keys, absent when there is nothing to say) and, in
-//! text, in one stderr line per brain. A read's exit code is never its
-//! sync's. `list`, `companion` and `remove` reach no remote.
+//! text, in one stderr line per brain (`doctor`: on the brain's check
+//! line). A read's exit code is never its sync's. `list`, `companion` and
+//! `remove` reach no remote.
 //!
 //! Real git, the built binary under a sandbox HOME and `KLURIS_CONFIG`,
 //! and local bare remotes.
@@ -264,12 +265,18 @@ fn each_read_pulls_a_teammates_commit_first_and_says_so() {
         let (code, _, err) = h.run_args(&read.args(&root, false));
         assert_eq!((code, err.as_str()), (0, ""), "{read:?}");
 
-        // Text: one stderr line.
+        // Text: one stderr line; doctor's is its brain line.
         teammate_pushes_zebra(&h, "zebra");
         stamp_age(&root, 61);
-        let (code, _, err) = h.run_args(&read.args(&root, false));
+        let (code, out, err) = h.run_args(&read.args(&root, false));
         assert_eq!(code, 0, "{read:?}: {err}");
-        assert_eq!(err, "kluris: alpha: pulled 1 commit\n", "{read:?}");
+        if read == Read::Doctor {
+            assert_eq!(err, "", "{read:?}");
+            let line = format!("  PASS brain:alpha: {}; pulled 1 commit\n", root.display());
+            assert!(out.contains(&line), "{out}");
+        } else {
+            assert_eq!(err, "kluris: alpha: pulled 1 commit\n", "{read:?}");
+        }
         assert!(root.join("notes").join("zebra.md").is_file(), "{read:?}");
 
         // JSON: the object after the command's own keys; no stderr line.
@@ -526,8 +533,39 @@ fn doctor_reads_the_brain_it_pulled() {
     assert_eq!(code, 0, "{doc}");
     let check = Read::Doctor.entry(&doc);
     assert_eq!(check["passed"], true, "{doc}");
-    assert_eq!(check["detail"], root.display().to_string());
+    assert_eq!(
+        check["detail"],
+        format!("{}; pulled 1 commit", root.display())
+    );
     assert_eq!(sync_of(check)["pulled"], 1);
+}
+
+#[test]
+fn doctor_asks_the_remote_inside_the_throttle_and_the_back_off() {
+    let (h, root) = team();
+    h.read_json(Read::WakeUp, &root);
+    teammate_pushes_zebra(&h, "zebra");
+    // Fetched seconds ago: a read skips the remote, doctor asks it.
+    let (_, doc, _) = h.read_json(Read::Search, &root);
+    assert_eq!(keys(Read::Search.entry(&doc)), Read::Search.quiet_keys());
+    let (code, doc, _) = h.read_json(Read::Doctor, &root);
+    assert_eq!(code, 0, "{doc}");
+    assert_eq!(sync_of(Read::Doctor.entry(&doc))["pulled"], 1, "{doc}");
+    // Inside a back-off too, and its fetch ends it.
+    let backoff = git_file(&root, "kluris-sync/fetch-backoff");
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    fs::write(&backoff, format!("{} 300\n", now + 300)).unwrap();
+    teammate_pushes_zebra(&h, "okapi");
+    stamp_age(&root, 61);
+    let (_, doc, _) = h.read_json(Read::Search, &root);
+    assert_eq!(keys(Read::Search.entry(&doc)), Read::Search.quiet_keys());
+    let (code, doc, _) = h.read_json(Read::Doctor, &root);
+    assert_eq!(code, 0, "{doc}");
+    assert_eq!(sync_of(Read::Doctor.entry(&doc))["pulled"], 1, "{doc}");
+    assert!(!backoff.exists(), "doctor did not end the back-off");
 }
 
 #[test]
@@ -582,27 +620,26 @@ fn doctor_warns_for_a_brain_offline_or_in_conflict_and_never_fails() {
         detail.starts_with(&format!("{}; left as is (refused): ", beta.display())),
         "{detail}"
     );
-    // In text: WARN, and each brain's line on stderr, once the background
-    // push of alpha's commit lets its remote go.
+    // In text: WARN, each brain's sync said once, on its line, once the
+    // background push of alpha's commit lets its remote go.
     wait_for_background(&alpha);
-    stamp_age(&alpha, 61);
-    stamp_age(&beta, 61);
     let last = last_push_said(&alpha);
     let (code, out, err) = h.run(&["doctor"]);
     assert_eq!(code, quiet);
-    assert!(out.contains("  WARN brain:alpha: "), "{out}");
-    assert!(out.contains("  WARN brain:beta: "), "{out}");
-    let lines: Vec<&str> = err.lines().collect();
-    assert_eq!(lines.len(), 2, "{err}");
-    assert_eq!(
-        lines[0],
-        format!(
-            "kluris: alpha: 1 conflict (notes/first.md) in merge {merge}; 1 commit to push{last}"
-        )
+    assert_eq!(err, "", "{out}");
+    assert!(
+        out.contains(&format!(
+            "  WARN brain:alpha: {}; 1 conflict (notes/first.md) in merge {merge}; 1 commit to push{last}\n",
+            alpha.display()
+        )),
+        "{out}"
     );
     assert!(
-        lines[1].starts_with("kluris: beta: left as is (refused): "),
-        "{err}"
+        out.contains(&format!(
+            "  WARN brain:beta: {}; left as is (refused): ",
+            beta.display()
+        )),
+        "{out}"
     );
     wait_for_background(&alpha);
 }

@@ -4,15 +4,21 @@
 //! [`open_all`] opens many brains at once, and [`close_all`] closes them.
 //!
 //! What a session does depends on its [`Intent`]:
-//! - **A read** (`wake-up`, `search`, `status`, `register`, `doctor`) and
+//! - **A read** (`wake-up`, `search`, `status`, `register`) and
 //!   **housekeeping** (`dream`, `mri`) fetch at most once per
 //!   [`THROTTLE`] per brain (the stamp, [`STAMP`]) and never inside the
 //!   back-off ([`BACKOFF`]); a fetch stopped at its bound starts one. Both
 //!   files are in the repository's common git directory, like the remote
-//!   claim, so one fetch throttles every linked worktree. Its fetch stops
-//!   at [`READ_FETCH_LIMIT`], so a slow network never holds a read. Every
-//!   git the read runs before it reads stops at [`READ_LOCAL_LIMIT`] in
-//!   all: the queries that open the brain, the fetch, and the pull's local
+//!   claim, so one fetch throttles every linked worktree. **A check**
+//!   (`doctor`) is a read that fetches every time, inside the throttle
+//!   and the back-off alike; what it finds counts for the reads as their
+//!   own fetch would (the stamp written, the back-off started, doubled or
+//!   ended), and a check stopped at its bound says how long the reads now
+//!   skip the brain. Everything else below holds for it as for a read.
+//!   A read's fetch stops at [`READ_FETCH_LIMIT`], so a slow network never
+//!   holds a read. Every git the read runs before it reads stops at
+//!   [`READ_LOCAL_LIMIT`] in all: the queries that open the brain, the
+//!   fetch, and the pull's local
 //!   steps up to the land, its merge commit and that commit's hooks
 //!   included (each with every process it started), and the land's own
 //!   checks before it writes. That bound stops a hang (a stalled hook, a
@@ -59,6 +65,11 @@
 //! says ([`background::report_last_push`]): a failure until a push
 //! succeeds, a success by one command at most. An explicit push that
 //! succeeds removes the failure it read before it, and only that one.
+//!
+//! **Offline** says why, in its detail, for every intent: `no answer
+//! within 3 s` (the bound the fetch or push had: 60 s for an explicit
+//! command and the background push), or git's own line for the network
+//! trouble (`ssh: Could not resolve hostname ...`).
 //!
 //! A pull that does not fetch lands nothing: only the commit this
 //! invocation's own `ls-remote` named may land, never what the shared
@@ -134,6 +145,9 @@ pub enum Intent {
     Read,
     /// It reads the brain and tidies it.
     Housekeeping,
+    /// It reads the brain to check that it syncs (`doctor`): a read that
+    /// fetches every time.
+    Check,
     /// The person asked for it to change the brain or sync it.
     Explicit,
 }
@@ -141,24 +155,33 @@ pub enum Intent {
 impl Intent {
     /// How long its fetch (and its push) may take.
     pub fn network_bound(self) -> Duration {
-        match self {
-            Intent::Read | Intent::Housekeeping => READ_FETCH_LIMIT,
-            Intent::Explicit => NETWORK_TIME_LIMIT,
+        if self.reads() {
+            READ_FETCH_LIMIT
+        } else {
+            NETWORK_TIME_LIMIT
         }
     }
 
     /// How long it waits for the tree claim another command holds.
     pub fn tree_bound(self) -> Duration {
-        match self {
-            Intent::Read | Intent::Housekeeping => READ_BOUND,
-            Intent::Explicit => COMMAND_BOUND,
+        if self.reads() {
+            READ_BOUND
+        } else {
+            COMMAND_BOUND
         }
     }
 
-    /// Whether it fetches at most once per [`THROTTLE`], outside the
-    /// back-off, with every git before the land bounded.
-    pub fn throttled(self) -> bool {
+    /// Whether it syncs as a read: every git before the land bounded, the
+    /// remote claim never waited for, and the brain read under the shared
+    /// tree claim.
+    pub fn reads(self) -> bool {
         !matches!(self, Intent::Explicit)
+    }
+
+    /// Whether it fetches at most once per [`THROTTLE`], and never inside
+    /// the back-off: every read but a check.
+    pub fn throttled(self) -> bool {
+        matches!(self, Intent::Read | Intent::Housekeeping)
     }
 }
 
@@ -375,7 +398,7 @@ pub fn housekeeping_commit(session: &mut Session, maps: &DreamOptions) -> Vec<St
         Ok(None) => housekeeping::commit(ctx.git(), ctx.repo(), maps),
         Err(left) => Err(left),
     };
-    session.claim = if session.intent.throttled() {
+    session.claim = if session.intent.reads() {
         claim.downgrade(READ_BOUND).ok()
     } else {
         Some(claim)
@@ -540,7 +563,7 @@ impl<'a> Fetched<'a> {
 /// to (see the module docs).
 fn fetch<'a>(brain: Brain<'a>, intent: Intent, env: &SessionEnv) -> Fetched<'a> {
     let started = Instant::now();
-    let deadline = intent.throttled().then(|| started + READ_LOCAL_LIMIT);
+    let deadline = intent.reads().then(|| started + READ_LOCAL_LIMIT);
     let git = env.git.clone().with_deadline(deadline);
     let request = SyncRequest {
         no_verify: env.no_verify,
@@ -552,12 +575,12 @@ fn fetch<'a>(brain: Brain<'a>, intent: Intent, env: &SessionEnv) -> Fetched<'a> 
         Ok(ctx) => ctx,
         Err(SyncError::NotARepo) => return alone.alone_for(Alone::NotARepo),
         Err(SyncError::Nested { prefix }) => return alone.alone_for(Alone::Nested { prefix }),
-        Err(SyncError::GitTooOld { .. }) if intent.throttled() => {
+        Err(SyncError::GitTooOld { .. }) if intent.reads() => {
             return alone.alone_for(Alone::GitTooOld);
         }
         Err(e) => return alone.left(e.into()),
     };
-    if !intent.throttled() {
+    if !intent.reads() {
         ctx.wait_for_remote(COMMAND_BOUND);
     }
     match ctx.git().is_shallow(ctx.repo()) {
@@ -573,7 +596,7 @@ fn fetch<'a>(brain: Brain<'a>, intent: Intent, env: &SessionEnv) -> Fetched<'a> 
         let no_remote = why == Alone::NoRemote;
         let alone = alone.alone_for(why);
         return match engine::ready(&ctx) {
-            Err(left) if !intent.throttled() => {
+            Err(left) if !intent.reads() => {
                 if no_remote && left.reason == LeftReason::NoUpstream {
                     alone.left(engine::no_remote(&ctx))
                 } else {
@@ -609,14 +632,17 @@ fn fetch<'a>(brain: Brain<'a>, intent: Intent, env: &SessionEnv) -> Fetched<'a> 
                     let bound = deadline.map_or(bound, |d| d.min(bound));
                     match engine::fetch_upstream(&ctx, upstream, &remote) {
                         Ok(theirs) => fetched.theirs = Some(theirs),
-                        Err(left) => {
+                        Err(mut left) => {
                             if left.stopped {
                                 // The read's own bound ended the fetch, not
                                 // the network: the next read fetches.
                                 let _ = fs::remove_file(&stamp);
                             } else if left.reason == LeftReason::Offline && Instant::now() >= bound
                             {
-                                back_off(&backoff, env.now);
+                                let window = back_off(&backoff, env.now);
+                                if intent == Intent::Check {
+                                    left.detail = Some(skipped(&left, window));
+                                }
                             }
                             fetched = fetched.left(left);
                         }
@@ -628,6 +654,15 @@ fn fetch<'a>(brain: Brain<'a>, intent: Intent, env: &SessionEnv) -> Fetched<'a> 
     fetched.spent = started.elapsed();
     fetched.ctx = Some(ctx);
     fetched
+}
+
+/// A check's offline detail, `left`'s, with how long reads now skip the
+/// brain: `no answer within 3 s; reads skip it for 10 min`.
+fn skipped(left: &LeftAsIs, window: Duration) -> String {
+    format!(
+        "{left}; reads skip it for {} min",
+        window.as_secs().div_ceil(60)
+    )
 }
 
 /// Land what the fetch named under the tree claim, and hold the claim the
@@ -655,7 +690,7 @@ fn settle<'a>(fetched: Fetched<'a>, env: &SessionEnv) -> Session<'a> {
         };
     };
     let own = ctx.dirs().own.clone();
-    let fetched = (!intent.throttled()).then(|| theirs.clone()).flatten();
+    let fetched = (!intent.reads()).then(|| theirs.clone()).flatten();
     // The read's one local deadline, fixed the first time a git after the
     // tree claim needs it: what the fetch left of READ_LOCAL_LIMIT. The
     // wait for the claim, behind other commands' and brains' lands, is not
@@ -665,7 +700,7 @@ fn settle<'a>(fetched: Fetched<'a>, env: &SessionEnv) -> Session<'a> {
         || *deadline.get_or_insert_with(|| Instant::now() + READ_LOCAL_LIMIT.saturating_sub(spent));
     let claim = match theirs {
         // Nothing to land: read under the shared claim.
-        None if intent.throttled() => match TreeClaim::shared(&own, intent.tree_bound()) {
+        None if intent.reads() => match TreeClaim::shared(&own, intent.tree_bound()) {
             Ok(claim) => Some(claim),
             Err(e) => {
                 add_left(&mut report, claim_left(e));
@@ -675,14 +710,14 @@ fn settle<'a>(fetched: Fetched<'a>, env: &SessionEnv) -> Session<'a> {
         theirs => match TreeClaim::exclusive(&own, intent.tree_bound()) {
             Ok(claim) => {
                 if let Some(theirs) = theirs {
-                    if intent.throttled() {
+                    if intent.reads() {
                         ctx.until(Some(read_deadline()));
                     }
                     let mut pulled = engine::pull_fetched(&ctx, &claim, theirs);
                     pulled.left_as_is = pulled.left_as_is.map(in_time);
                     report = Some(pulled);
                 }
-                if intent.throttled() {
+                if intent.reads() {
                     match claim.downgrade(READ_BOUND) {
                         Ok(shared) => Some(shared),
                         Err(e) => {
@@ -699,7 +734,7 @@ fn settle<'a>(fetched: Fetched<'a>, env: &SessionEnv) -> Session<'a> {
                 // Read as it is: shared with other readers when they are
                 // all that hold it.
                 intent
-                    .throttled()
+                    .reads()
                     .then(|| TreeClaim::shared(&own, Duration::ZERO).ok())
                     .flatten()
             }
@@ -710,7 +745,7 @@ fn settle<'a>(fetched: Fetched<'a>, env: &SessionEnv) -> Session<'a> {
     let quiet = report
         .as_ref()
         .is_none_or(|r| r.pulled == 0 && r.conflicts.is_empty());
-    if intent.throttled() && claim.is_some() && quiet {
+    if intent.reads() && claim.is_some() && quiet {
         ctx.until(Some(read_deadline()));
         match engine::waiting(&ctx) {
             Ok(conflicts) if conflicts.is_empty() => {}

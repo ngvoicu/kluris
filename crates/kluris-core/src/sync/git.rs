@@ -141,8 +141,9 @@ pub enum PushOutcome {
     Pushed,
     /// Rejected because the remote branch moved: fetch, merge, push again.
     RemoteMoved,
-    /// The remote could not be reached ([`network_failure`]) or not in time.
-    Unreachable,
+    /// The remote could not be reached: git's line saying so
+    /// ([`network_failure`]), or `None` when it did not answer in time.
+    Unreachable(Option<String>),
     /// git could not talk to the remote for another reason (a key or token
     /// turned away, no such repository, no write access): git's stderr.
     Refused(String),
@@ -361,8 +362,10 @@ pub(crate) fn ref_lock(stderr: &str) -> Option<RefLock> {
     between(stderr, "fetching ref ", " failed: reference already exists").map(RefLock::Ref)
 }
 
-/// Whether git's stderr says the network is in the way, in a form git, or
-/// the ssh or curl it runs, prints it, each from its source:
+/// The line of git's stderr that says the network is in the way, without
+/// git's `fatal: ` or `error: `, on one line ([`one_line`]) and without a
+/// final `:`, in a form
+/// git, or the ssh or curl it runs, prints it, each from its source:
 ///
 /// - curl's reason after git's `unable to access '<url>': `
 ///   (`remote-curl.c`), the text after the last `': ` on that line, or
@@ -386,7 +389,7 @@ pub(crate) fn ref_lock(stderr: &str) -> Option<RefLock> {
 ///
 /// A remote git reaches without a network ([`local_url`]: a path or a
 /// `file://` URL) is never offline: with any of `urls` local, or none
-/// known, this is false before any diagnostic is read.
+/// known, this is `None` before any diagnostic is read.
 ///
 /// Each line is read from its start, after git's `fatal: ` or `error: `:
 /// a line the remote sent (`remote: ...`) is never one of them, and a
@@ -401,23 +404,26 @@ pub(crate) fn ref_lock(stderr: &str) -> Option<RefLock> {
 /// them) is not network trouble. git translates its own messages (`unable
 /// to access`, `unable to look up`, `unable to connect to`); under another
 /// language those read as a refusal, shown rather than hidden.
-pub(crate) fn network_failure(urls: &[String], stderr: &str) -> bool {
+pub(crate) fn network_failure(urls: &[String], stderr: &str) -> Option<String> {
     if urls.is_empty() || urls.iter().any(|url| local_url(url)) {
-        return false;
+        return None;
     }
     for line in stderr.lines() {
         let line = line.trim();
         let message = ["fatal: ", "error: "]
             .iter()
             .find_map(|prefix| line.strip_prefix(prefix));
-        if network_line(message.unwrap_or(line)) {
-            return true;
+        let said = message.unwrap_or(line);
+        if network_line(said) {
+            // git's `unable to connect to <host>:` ends where the next line
+            // (the OS's words) begins.
+            return Some(one_line(said).trim_end_matches(':').to_string());
         }
         if message.is_some_and(quotes_a_field) {
-            return false;
+            return None;
         }
     }
-    false
+    None
 }
 
 /// Whether git reaches `url` without a network, as git tells it
@@ -818,16 +824,15 @@ impl SystemGit {
         if done.status.code() == Some(128) {
             let args = ["remote", "get-url", "--push", "--all", &upstream.remote];
             return match self.checked(&repo.dir, &args, deadline) {
-                Err(RemoteError::TimedOut) => PushOutcome::Unreachable,
+                Err(RemoteError::TimedOut) => PushOutcome::Unreachable(None),
                 Ok(out) => {
                     let urls: Vec<String> = String::from_utf8_lossy(&out)
                         .lines()
                         .map(str::to_string)
                         .collect();
-                    if network_failure(&urls, &stderr) {
-                        PushOutcome::Unreachable
-                    } else {
-                        PushOutcome::Refused(stderr.into_owned())
+                    match network_failure(&urls, &stderr) {
+                        Some(said) => PushOutcome::Unreachable(Some(said)),
+                        None => PushOutcome::Refused(stderr.into_owned()),
                     }
                 }
                 Err(RemoteError::Failed(_)) => PushOutcome::Refused(stderr.into_owned()),
@@ -1279,7 +1284,7 @@ impl SyncGit for SystemGit {
     fn push(&self, repo: &Repo, upstream: &Upstream, deadline: Instant) -> PushOutcome {
         let git = match self.remote(repo) {
             Ok(git) => git,
-            Err(RemoteError::TimedOut) => return PushOutcome::Unreachable,
+            Err(RemoteError::TimedOut) => return PushOutcome::Unreachable(None),
             Err(RemoteError::Failed(e)) => return PushOutcome::Failed(e.to_string()),
         };
         let refspec = format!("{}:{}", upstream.branch, upstream.remote_ref);
@@ -1306,7 +1311,7 @@ impl SyncGit for SystemGit {
             let _ = stderr.write_all(&done.stderr);
         }
         match done {
-            Err(RemoteError::TimedOut) => PushOutcome::Unreachable,
+            Err(RemoteError::TimedOut) => PushOutcome::Unreachable(None),
             Err(RemoteError::Failed(e)) => PushOutcome::Failed(e.to_string()),
             Ok(done) if done.status.success() => PushOutcome::Pushed,
             Ok(done) => {
@@ -1463,7 +1468,7 @@ mod tests {
 
     /// [`network_failure`] for a remote over ssh: the diagnostics decide.
     fn over_ssh(stderr: &str) -> bool {
-        network_failure(&["ssh://h/x.git".to_string()], stderr)
+        network_failure(&["ssh://h/x.git".to_string()], stderr).is_some()
     }
 
     /// A missing local path that holds an apostrophe, then a newline, then
@@ -1519,10 +1524,10 @@ mod tests {
                 "fatal: unable to look up h (port 9418) (nodename nor servname provided, or not known)".into(),
                 QUOTED_PATH_STDERR.into(),
             ] {
-                assert!(!network_failure(&[url.to_string()], &stderr), "{url:?}: {stderr}");
+                assert_eq!(network_failure(&[url.to_string()], &stderr), None, "{url:?}: {stderr}");
                 // One local URL among a push's URLs is enough.
                 let urls = ["ssh://h/x.git".to_string(), url.to_string()];
-                assert!(!network_failure(&urls, &stderr), "{url:?}: {stderr}");
+                assert_eq!(network_failure(&urls, &stderr), None, "{url:?}: {stderr}");
             }
         }
     }
@@ -1531,7 +1536,40 @@ mod tests {
     fn a_remote_whose_url_git_could_not_say_is_never_offline() {
         let stderr = "ssh: connect to host h port 22: Connection refused\nfatal: Could not read from remote repository.\n";
         assert!(over_ssh(stderr), "over ssh this is network trouble");
-        assert!(!network_failure(&[], stderr));
+        assert_eq!(network_failure(&[], stderr), None);
+    }
+
+    #[test]
+    fn network_trouble_is_said_in_gits_own_line() {
+        let read = "fatal: Could not read from remote repository.\n\nPlease make sure you have the correct access rights\nand the repository exists.\n";
+        for (stderr, said) in [
+            (
+                format!("ssh: Could not resolve hostname h: nope\n{read}"),
+                "ssh: Could not resolve hostname h: nope",
+            ),
+            (
+                format!("ssh: connect to host h port 22: Connection refused\r\n{read}"),
+                "ssh: connect to host h port 22: Connection refused",
+            ),
+            (
+                "fatal: unable to access 'https://h/x.git/': Could not resolve host: h\n".into(),
+                "unable to access 'https://h/x.git/': Could not resolve host: h",
+            ),
+            (
+                "fatal: unable to connect to h:\nh[0: 10.0.0.1]: errno=Connection refused\n".into(),
+                "unable to connect to h",
+            ),
+            (
+                "error: RPC failed; curl 28 Operation timed out after 3000 milliseconds.\nfatal: expected flush after ref listing\n".into(),
+                "RPC failed; curl 28 Operation timed out after 3000 milliseconds",
+            ),
+        ] {
+            assert_eq!(
+                network_failure(&["ssh://h/x.git".to_string()], &stderr).as_deref(),
+                Some(said),
+                "{stderr}"
+            );
+        }
     }
 
     #[test]

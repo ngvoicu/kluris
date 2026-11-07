@@ -80,6 +80,15 @@ impl World {
         }
     }
 
+    /// An empty world whose brains, in `work/brains/<name>`, the test makes
+    /// itself: their paths are checked and shown as a frozen world's.
+    pub fn with_brains(names: &[&'static str]) -> World {
+        World {
+            sb: Sandbox::new(),
+            brains: names.to_vec(),
+        }
+    }
+
     /// The frozen world `name` with its `brains`, made live.
     pub fn frozen(name: &str, brains: &[Brain]) -> World {
         let mut world = World::empty();

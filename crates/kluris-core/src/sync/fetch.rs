@@ -77,8 +77,9 @@ pub enum Fetch {
     Same { at: String },
     /// The remote has no such branch; the tracking ref is left as it is.
     NoBranch,
-    /// Stopped at the deadline, or the network is in the way.
-    Offline,
+    /// Stopped at the deadline (`None`), or the network is in the way:
+    /// git's line saying so ([`network_failure`]).
+    Offline(Option<String>),
     /// The brain is left alone: why, and the fix.
     Refused { detail: String },
 }
@@ -146,8 +147,8 @@ pub fn fetch<G: SyncGit>(
             Err(RemoteError::Failed(e)) if e.stopped => return Err(e),
             Err(e) => {
                 return Ok(match refusal(git, repo, &upstream.remote, &e) {
-                    Some(detail) => Fetch::Refused { detail },
-                    None => Fetch::Offline,
+                    Unreached::Offline(said) => Fetch::Offline(said),
+                    Unreached::Refused(detail) => Fetch::Refused { detail },
                 });
             }
         };
@@ -280,16 +281,26 @@ pub fn refused_access(command: &str, remote: &str, stderr: &str) -> String {
     )
 }
 
-/// Why a failed fetch leaves the brain alone, or `None` when it is offline:
-/// the deadline, or network trouble ([`network_failure`]). A ref lock is
-/// named ([`ref_locked`]); anything else is a refusal ([`refused_access`]),
+/// Why a git that asked the remote failed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Unreached {
+    /// Offline: stopped at the deadline (`None`), or git's line saying the
+    /// network is in the way ([`network_failure`]).
+    Offline(Option<String>),
+    /// The brain is left alone: why, and the fix.
+    Refused(String),
+}
+
+/// Why a failed fetch leaves the brain alone: offline at the deadline, or
+/// for network trouble ([`network_failure`]); a ref lock is named
+/// ([`ref_locked`]); anything else is a refusal ([`refused_access`]),
 /// shown, never taken for offline.
 pub(crate) fn refusal<G: SyncGit>(
     git: &G,
     repo: &Repo,
     remote: &str,
     error: &RemoteError,
-) -> Option<String> {
+) -> Unreached {
     let urls = git.remote_urls(repo, remote).unwrap_or_default();
     refusal_at(git, repo, "fetch", remote, &urls, error)
 }
@@ -303,17 +314,17 @@ pub(crate) fn refusal_at<G: SyncGit>(
     remote: &str,
     urls: &[String],
     error: &RemoteError,
-) -> Option<String> {
+) -> Unreached {
     let RemoteError::Failed(e) = error else {
-        return None;
+        return Unreached::Offline(None);
     };
     if let Some(lock) = locked_ref(git, repo, &e.detail) {
-        return Some(ref_locked(&lock));
+        return Unreached::Refused(ref_locked(&lock));
     }
-    if network_failure(urls, &e.detail) {
-        return None;
+    match network_failure(urls, &e.detail) {
+        Some(said) => Unreached::Offline(Some(said)),
+        None => Unreached::Refused(refused_access(command, remote, &e.detail)),
     }
-    Some(refused_access(command, remote, &e.detail))
 }
 
 /// The lock file a failed ref update was stopped by, if that is why it
@@ -383,7 +394,8 @@ pub fn backed_off(path: &Path, now: SystemTime) -> bool {
 
 /// Record a fetch stopped at the deadline at `now`: the next window is
 /// twice the last (the first [`BACKOFF_FIRST`]), at most [`BACKOFF_MAX`].
-pub fn back_off(path: &Path, now: SystemTime) {
+/// The window it starts.
+pub fn back_off(path: &Path, now: SystemTime) -> Duration {
     let window = read_backoff(path).map_or(BACKOFF_FIRST.as_secs(), |(_, last)| {
         last.saturating_mul(2)
             .clamp(BACKOFF_FIRST.as_secs(), BACKOFF_MAX.as_secs())
@@ -393,6 +405,7 @@ pub fn back_off(path: &Path, now: SystemTime) {
         let _ = fs::create_dir_all(parent);
     }
     let _ = atomic::write_atomic(path, format!("{until} {window}\n").as_bytes());
+    Duration::from_secs(window)
 }
 
 /// End the back-off: a fetch from the brain's remote succeeded.

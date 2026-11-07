@@ -1,0 +1,9 @@
+---
+source: crates/kluris-cli/tests/golden_doctor_sync.rs
+expression: world.render(&out)
+---
+== stdout (1402 bytes)
+{"ok": true, "checks": [{"name": "git", "passed": true, "detail": "git version <GIT>"}, {"name": "path", "passed": true, "detail": "<KLURIS>"}, {"name": "config", "passed": true, "detail": "<ROOT>/work/home/.kluris/config.yml"}, {"name": "brain:pulled", "passed": true, "detail": "<ROOT>/work/brains/pulled; pulled 1 commit", "sync": {"pulled": 1, "auto_merged": [], "left_as_is": {"reason": null, "paths": [], "detail": null}, "conflicts": [], "behind_conflict": 0, "to_push": 0, "pushed": false, "last_push": null}}, {"name": "brain:silent", "passed": true, "detail": "<ROOT>/work/brains/silent; left as is (offline): no answer within 3 s; reads skip it for 5 min", "sync": {"pulled": 0, "auto_merged": [], "left_as_is": {"reason": "offline", "paths": [], "detail": "no answer within 3 s; reads skip it for 5 min"}, "conflicts": [], "behind_conflict": 0, "to_push": 0, "pushed": false, "last_push": null}, "warning": true}, {"name": "brain:unreachable", "passed": true, "detail": "<ROOT>/work/brains/unreachable; left as is (offline): ssh: connect to host fakehost port 22: Connection refused", "sync": {"pulled": 0, "auto_merged": [], "left_as_is": {"reason": "offline", "paths": [], "detail": "ssh: connect to host fakehost port 22: Connection refused"}, "conflicts": [], "behind_conflict": 0, "to_push": 0, "pushed": false, "last_push": null}, "warning": true}], "companions": [], "skills": null}
+== stderr (0 bytes)
+== exit 0
+<end of run>

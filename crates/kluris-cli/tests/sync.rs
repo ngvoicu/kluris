@@ -478,17 +478,25 @@ fn a_host_that_does_not_resolve_is_still_offline() {
             "ssh://git@nonexistent.invalid/x.git",
         ],
     );
+    // ssh's own line, worded by the OS after the host's name.
+    let unresolved = "ssh: Could not resolve hostname nonexistent.invalid";
     let (code, doc) = h.json(&["sync", "--brain", "alpha", "--json"]);
     assert_eq!(code, 0, "{doc}");
+    let left = &sync_of(&doc, 0)["left_as_is"];
     assert_eq!(
-        sync_of(&doc, 0)["left_as_is"],
-        json!({"reason": "offline", "paths": [], "detail": null}),
+        (&left["reason"], &left["paths"]),
+        (&json!("offline"), &json!([])),
         "{doc}"
     );
+    let said = left["detail"].as_str().unwrap_or_default();
+    assert!(said.starts_with(unresolved), "{doc}");
     let (code, out, err) = h.run(&["sync", "--brain", "alpha"]);
     assert_eq!(code, 0);
     assert_eq!(out, "alpha: offline, nothing changed\n");
-    assert_eq!(err, "kluris: alpha: left as is (offline)\n");
+    assert_eq!(
+        err,
+        format!("kluris: alpha: left as is (offline): {said}\n")
+    );
 }
 
 #[test]

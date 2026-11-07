@@ -78,7 +78,7 @@ use std::time::{Duration, Instant};
 
 use super::background::LastPush;
 use super::claim::{ClaimError, RemoteClaim, TreeClaim};
-use super::fetch::{self, Fetch};
+use super::fetch::{self, Fetch, Unreached};
 use super::git::{GitDirs, PushOutcome, RemoteError, SyncGit, Upstream, one_line};
 use super::hooks::{HookError, MergeHookError, MergeHooks, merge_commit};
 use super::land::{Over, Settled, blocked_paths, failed, land, unchanged, uncommitted};
@@ -473,11 +473,12 @@ fn occupied_destination<G: SyncGit>(
 ) -> Result<bool, LeftAsIs> {
     let (git, repo, remote) = (&ctx.git, &ctx.repo, &upstream.remote);
     let fetches = git.remote_urls(repo, remote)?;
+    let bound = ctx.request.network_time_limit;
     let unasked = |urls: &[String], command: &str, e: RemoteError| match fetch::refusal_at(
         git, repo, command, remote, urls, &e,
     ) {
-        Some(detail) => LeftAsIs::because(LeftReason::Refused, detail),
-        None => offline(),
+        Unreached::Offline(said) => offline(said, bound),
+        Unreached::Refused(detail) => LeftAsIs::because(LeftReason::Refused, detail),
     };
     let pushes = git
         .push_urls(repo, remote, deadline)
@@ -518,7 +519,7 @@ pub fn fetch_upstream<G: SyncGit>(
         Fetch::Moved { new, .. } => Some(new),
         Fetch::Same { at } => Some(at),
         Fetch::NoBranch => None,
-        Fetch::Offline => return Err(offline()),
+        Fetch::Offline(said) => return Err(offline(said, ctx.request.network_time_limit)),
         Fetch::Refused { detail } => {
             return Err(LeftAsIs::because(LeftReason::Refused, detail));
         }
@@ -543,13 +544,19 @@ pub fn is_occupied(left: &LeftAsIs) -> bool {
     left.reason == LeftReason::Refused && left.detail.as_deref() == Some(REMOTE_OCCUPIED)
 }
 
-fn offline() -> LeftAsIs {
-    LeftAsIs {
-        reason: LeftReason::Offline,
-        paths: Vec::new(),
-        detail: None,
-        stopped: false,
-    }
+/// The brain left as it is because the remote was not reached: git's line
+/// saying why (`said`), or that no answer came within `bound`.
+fn offline(said: Option<String>, bound: Duration) -> LeftAsIs {
+    LeftAsIs::because(
+        LeftReason::Offline,
+        said.unwrap_or_else(|| no_answer(bound)),
+    )
+}
+
+/// What an offline brain's detail says of a remote that did not answer
+/// within `bound`: `no answer within 3 s`.
+pub fn no_answer(bound: Duration) -> String {
+    format!("no answer within {} s", bound.as_secs())
 }
 
 fn unrelated(upstream: &Upstream) -> LeftAsIs {
@@ -690,10 +697,11 @@ pub fn push_claimed<G: SyncGit>(ctx: &Context<G>, _remote: &RemoteClaim) -> Push
     }
 }
 
-/// Why the push did not go through, as the report says it.
-fn push_left(outcome: PushOutcome, remote: &str) -> LeftAsIs {
+/// Why the push did not go through, as the report says it; `bound` is the
+/// time the push had.
+fn push_left(outcome: PushOutcome, remote: &str, bound: Duration) -> LeftAsIs {
     match outcome {
-        PushOutcome::Unreachable => offline(),
+        PushOutcome::Unreachable(said) => offline(said, bound),
         PushOutcome::Refused(stderr) => LeftAsIs::because(
             LeftReason::Refused,
             fetch::refused_access("push", remote, &stderr),
@@ -740,7 +748,11 @@ fn push_head<G: SyncGit>(ctx: &Context<G>) -> Result<Pushed, LeftAsIs> {
     match git.push(repo, upstream, deadline) {
         PushOutcome::Pushed => Ok(Pushed::Pushed),
         PushOutcome::RemoteMoved => Ok(Pushed::RemoteMoved),
-        outcome => Err(push_left(outcome, &upstream.remote)),
+        outcome => Err(push_left(
+            outcome,
+            &upstream.remote,
+            ctx.request.network_time_limit,
+        )),
     }
 }
 

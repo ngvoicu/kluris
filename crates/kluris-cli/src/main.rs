@@ -491,8 +491,12 @@ the background sync services an earlier release installed. This is the step \
 after an upgrade: run `kluris doctor` and everything is back in sync.
 
 Like every command that opens a brain, the checks bring teammates' commits \
-into each brain first. --no-refresh skips refreshing the companions and \
-agent skills.";
+into each brain first. Doctor asks every brain's remote each time, within 3 \
+seconds, even where reads have paused their fetches, and each brain's line \
+says what its sync did: what it pulled or pushed, or why it left the brain as \
+it is (offline: no answer within 3 s, or git's own line, then how long reads \
+now skip that brain). --no-refresh skips refreshing the companions and agent \
+skills.";
 
 /// `sync`.
 const SYNC_HELP: &str = "Fetch, merge and push brains with their remotes.

@@ -3,7 +3,8 @@
 //! before the command reads, [`close`] ends every session it opened (one
 //! background push at most), and what each sync did is said the one way
 //! every command says it: the `sync` object ([`with_sync`]) and one stderr
-//! line per brain ([`print_lines`]).
+//! line per brain ([`print_lines`]); `doctor` says that line's [`summary`]
+//! on the brain's check line instead.
 //!
 //! A brain registered under two names is opened once, and each name gets
 //! its report: a second session of the same brain would wait for the

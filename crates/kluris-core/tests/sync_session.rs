@@ -10,6 +10,11 @@
 //!   in all (its fetch at 3 s): the brain is read as it is (`busy`). A git
 //!   that fails on its own is `failed`, whatever it says, and the land
 //!   itself is never stopped.
+//! - A check (`doctor`) is a read that fetches every time, inside the
+//!   throttle and the back-off: it stamps, and its outcome starts, doubles
+//!   or ends the back-off for the reads, saying how long they skip the
+//!   brain.
+//! - Offline says why: no answer within the fetch's bound, or git's line.
 //! - An explicit session always fetches, holds the tree claim until it is
 //!   closed, and pushes then.
 //! - `open_all` fetches eight brains at a time at most, then lands them one
@@ -35,7 +40,7 @@ use kluris_core::config::{parse_brain_config, read_brain_config, write_brain_con
 use kluris_core::git::SystemGit;
 use kluris_core::sync::claim::{COMMAND_BOUND, READ_BOUND, RemoteClaim, TreeClaim};
 use kluris_core::sync::engine;
-use kluris_core::sync::fetch::{BACKOFF, STAMP, back_off};
+use kluris_core::sync::fetch::{BACKOFF, STAMP, back_off, backed_off};
 use kluris_core::sync::session::{
     self, Alone, Brain, Intent, READ_FETCH_LIMIT, READ_LOCAL_LIMIT, SessionEnv,
 };
@@ -236,12 +241,120 @@ fn a_fetch_stopped_at_the_reads_bound_is_offline_and_backs_off() {
     let took = started.elapsed();
     assert!(took < READ_FETCH_LIMIT + ROOM, "{took:?}");
     assert_eq!(reason(&report), Some("offline"), "{report:?}");
+    assert_eq!(detail(&report), "no answer within 3 s", "{report:?}");
     assert_eq!(w.head(&w.ours), before);
     assert!(w.ours.join(".git").join(BACKOFF).is_file(), "no back-off");
     // Past the minute, inside the back-off: no fetch, nothing to say.
     let started = Instant::now();
     assert_eq!(session_at(&w, &w.ours, Intent::Read, at(61)), None);
     assert!(started.elapsed() < Duration::from_secs(2), "it fetched");
+}
+
+/// What [`ssh_cannot_connect`]'s ssh says.
+const CONNECTION_REFUSED: &str = "ssh: connect to host fakehost port 22: Connection refused";
+
+/// Point "ours"'s remote at an ssh host whose ssh says it refused the
+/// connection, as OpenSSH does, and fails with ssh's 255 at once.
+fn ssh_cannot_connect(w: &World) {
+    let script = w.dir.path().join("ssh-down.sh");
+    fs::write(
+        &script,
+        format!("#!/bin/sh\necho '{CONNECTION_REFUSED}' >&2\nexit 255\n"),
+    )
+    .unwrap();
+    let ssh = format!("sh '{}'", sh_path(&script));
+    w.run(&w.ours, &["config", "core.sshCommand", &ssh]);
+    w.run(&w.ours, &["config", "ssh.variant", "ssh"]);
+    w.run(
+        &w.ours,
+        &["config", "remote.origin.url", "fakehost:brain.git"],
+    );
+}
+
+#[test]
+fn a_network_failure_is_offline_with_gits_line_and_no_back_off() {
+    for intent in [Intent::Read, Intent::Check, Intent::Explicit] {
+        let w = World::new();
+        ssh_cannot_connect(&w);
+        let report = session_at(&w, &w.ours, intent, at(0)).expect("a report");
+        assert_eq!(reason(&report), Some("offline"), "{intent:?}: {report:?}");
+        assert_eq!(detail(&report), CONNECTION_REFUSED, "{intent:?}");
+        let backoff = w.ours.join(".git").join(BACKOFF);
+        assert!(!backoff.exists(), "{intent:?}: a back-off was written");
+    }
+}
+
+#[test]
+fn a_check_fetches_inside_the_throttle() {
+    let w = World::new();
+    let log = count_upload_packs(&w, &w.ours);
+    assert_eq!(session_at(&w, &w.ours, Intent::Read, at(0)), None);
+    let fetched = upload_packs(&log);
+    teammate_pushes(&w, "ideas/new.md");
+    let before = w.head(&w.ours);
+    // A read inside the minute skips it.
+    assert_eq!(session_at(&w, &w.ours, Intent::Read, at(10)), None);
+    assert_eq!(upload_packs(&log), fetched, "a read fetched");
+    assert_eq!(w.head(&w.ours), before);
+    // The check fetches and lands, and its stamp throttles the reads.
+    let report = session_at(&w, &w.ours, Intent::Check, at(10)).expect("a report");
+    assert_eq!(report.pulled, 1, "{report:?}");
+    assert_eq!(w.head(&w.ours), w.remote_head());
+    teammate_pushes(&w, "ideas/newer.md");
+    let checked = upload_packs(&log);
+    assert!(checked > fetched, "the check did not fetch");
+    assert_eq!(session_at(&w, &w.ours, Intent::Read, at(60)), None);
+    assert_eq!(upload_packs(&log), checked, "a read fetched");
+}
+
+#[test]
+fn a_check_fetches_inside_the_back_off_and_a_success_ends_it() {
+    let w = World::new();
+    let log = count_upload_packs(&w, &w.ours);
+    let backoff = w.ours.join(".git").join(BACKOFF);
+    back_off(&backoff, at(0));
+    teammate_pushes(&w, "ideas/new.md");
+    let before = w.head(&w.ours);
+    assert_eq!(session_at(&w, &w.ours, Intent::Read, at(120)), None);
+    assert_eq!(upload_packs(&log), 0, "a read fetched");
+    assert_eq!(w.head(&w.ours), before);
+    let report = session_at(&w, &w.ours, Intent::Check, at(120)).expect("a report");
+    assert_eq!(report.pulled, 1, "{report:?}");
+    assert!(!backoff.exists(), "the check did not end the back-off");
+    // The reads fetch again once the check's minute is over.
+    teammate_pushes(&w, "ideas/newer.md");
+    let report = session_at(&w, &w.ours, Intent::Read, at(181)).expect("a report");
+    assert_eq!(report.pulled, 1, "{report:?}");
+}
+
+#[test]
+fn a_check_stopped_at_its_bound_doubles_the_back_off_and_says_so() {
+    let w = World::new();
+    let backoff = w.ours.join(".git").join(BACKOFF);
+    back_off(&backoff, at(0));
+    teammate_pushes(&w, "ideas/new.md");
+    upload_pack(&w, &w.ours, "stalled-upload-pack.sh", "sleep 30\n");
+    let before = w.head(&w.ours);
+    let started = Instant::now();
+    let report = session_at(&w, &w.ours, Intent::Check, at(120)).expect("a report");
+    let took = started.elapsed();
+    assert!(took < READ_FETCH_LIMIT + ROOM, "{took:?}");
+    assert_eq!(reason(&report), Some("offline"), "{report:?}");
+    assert_eq!(
+        detail(&report),
+        "no answer within 3 s; reads skip it for 10 min"
+    );
+    assert_eq!(w.head(&w.ours), before);
+    let unix = |t: SystemTime| t.duration_since(UNIX_EPOCH).unwrap().as_secs();
+    assert_eq!(
+        fs::read_to_string(&backoff).unwrap(),
+        format!("{} 600\n", unix(at(120 + 600)))
+    );
+    // A read past the check's minute is inside the back-off: no fetch.
+    let started = Instant::now();
+    assert_eq!(session_at(&w, &w.ours, Intent::Read, at(181)), None);
+    assert!(started.elapsed() < Duration::from_secs(2), "it fetched");
+    assert!(backed_off(&backoff, at(181)));
 }
 
 #[test]

@@ -503,7 +503,13 @@ fn each_failure_is_recorded_with_its_detail() {
             "{:?}",
             record(&root)
         );
-        assert_eq!(record(&root).unwrap()["commits"], 1);
+        let doc = record(&root).unwrap();
+        assert_eq!(doc["commits"], 1);
+        // ssh's own line says why.
+        assert_eq!(
+            doc["detail"], "ssh: connect to host unreachable.example port 22: Connection refused",
+            "{doc}"
+        );
     }
 
     // Refused: a pre-push hook turns it away.

@@ -41,12 +41,12 @@ Options:
 == exit 0
 <end of run>
 $ kluris doctor --help
-== stdout (924 bytes)
+== stdout (1229 bytes)
 Check prerequisites and refresh installed agent skills.
 
 Checks that git runs, that the first kluris on PATH is this one, and that the config and every registered brain's kluris.yml read. Then refreshes the companion playbooks and re-installs every brain's agent skill (~/.agents/skills, plus the folders of the selected agents), removing the copies an earlier release left in folders Kluris does not use, and removes the background sync services an earlier release installed. This is the step after an upgrade: run `kluris doctor` and everything is back in sync.
 
-Like every command that opens a brain, the checks bring teammates' commits into each brain first. --no-refresh skips refreshing the companions and agent skills.
+Like every command that opens a brain, the checks bring teammates' commits into each brain first. Doctor asks every brain's remote each time, within 3 seconds, even where reads have paused their fetches, and each brain's line says what its sync did: what it pulled or pushed, or why it left the brain as it is (offline: no answer within 3 s, or git's own line, then how long reads now skip that brain). --no-refresh skips refreshing the companions and agent skills.
 
 Usage: kluris doctor [OPTIONS]
 

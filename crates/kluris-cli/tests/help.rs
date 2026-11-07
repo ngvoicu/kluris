@@ -141,9 +141,9 @@ fn help_names_the_hooks_a_command_runs() {
 }
 
 /// `doctor --help` and `sync --help` say what the commands do with the
-/// remote: doctor's checks read every brain through its sync, so
-/// `--no-refresh` only skips the refresh, and a conflict `sync` leaves is
-/// settled either way there is.
+/// remote: doctor's checks read every brain through its sync, asking its
+/// remote each time, so `--no-refresh` only skips the refresh, and a
+/// conflict `sync` leaves is settled either way there is.
 #[test]
 fn help_says_doctor_syncs_and_both_ways_to_settle_a_conflict() {
     let home = TempDir::new().unwrap();
@@ -157,6 +157,10 @@ fn help_says_doctor_syncs_and_both_ways_to_settle_a_conflict() {
     };
     let doctor = flat(&["doctor", "--help"]);
     assert!(!doctor.contains("read-only"), "{doctor}");
+    assert!(
+        doctor.contains("Doctor asks every brain's remote each time"),
+        "{doctor}"
+    );
     assert!(
         doctor.contains("--no-refresh skips refreshing the companions and agent skills"),
         "{doctor}"

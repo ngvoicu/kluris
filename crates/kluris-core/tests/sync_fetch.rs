@@ -947,12 +947,19 @@ fn a_host_that_does_not_resolve_is_offline_with_nothing_changed() {
     let url = "ssh://git@nonexistent.invalid/x.git";
     w.run(&w.ours, &["remote", "set-url", "origin", url]);
     let before = w.snapshot();
-    assert_eq!(fetch_ours(&w), Fetch::Offline);
+    // ssh's own line, worded by the OS after the host's name.
+    let unresolved = "ssh: Could not resolve hostname nonexistent.invalid";
+    let fetched = fetch_ours(&w);
+    assert!(
+        matches!(&fetched, Fetch::Offline(Some(said)) if said.starts_with(unresolved)),
+        "{fetched:?}"
+    );
     let r = w.sync();
     assert!(
         left(&r, LeftReason::Offline) && r.pulled == 0 && !r.pushed,
         "{r:?}"
     );
+    assert!(detail(&r).starts_with(unresolved), "{r:?}");
     assert!(!left(&r, LeftReason::Refused), "{r:?}");
     assert_eq!(w.snapshot(), before);
 }
@@ -1143,6 +1150,9 @@ fn an_ssh_url_that_insteadof_makes_a_local_path_is_local() {
     assert_eq!(w.snapshot(), before);
 }
 
+/// What [`ssh_cannot_connect`]'s ssh says.
+const CONNECTION_REFUSED: &str = "ssh: connect to host fakehost port 22: Connection refused";
+
 /// Point "ours"'s ssh at a script that says the host refused the
 /// connection, as OpenSSH does, and fails with ssh's 255. Returns the file
 /// each run of it appends to.
@@ -1152,7 +1162,7 @@ fn ssh_cannot_connect(w: &World) -> PathBuf {
     fs::write(
         &script,
         format!(
-            "#!/bin/sh\necho \"$*\" >> '{}'\necho 'ssh: connect to host fakehost port 22: Connection refused' >&2\nexit 255\n",
+            "#!/bin/sh\necho \"$*\" >> '{}'\necho '{CONNECTION_REFUSED}' >&2\nexit 255\n",
             sh_path(&calls)
         ),
     )
@@ -1190,9 +1200,14 @@ fn an_ssh_host_that_refuses_the_connection_is_offline() {
         };
         w.run(&w.ours, &["config", "remote.origin.url", &url]);
         let before = w.snapshot();
-        assert_eq!(fetch_ours(&w), Fetch::Offline, "{setup}");
+        assert_eq!(
+            fetch_ours(&w),
+            Fetch::Offline(Some(CONNECTION_REFUSED.into())),
+            "{setup}"
+        );
         let r = w.sync();
         assert!(left(&r, LeftReason::Offline), "{setup}: {r:?}");
+        assert_eq!(detail(&r), CONNECTION_REFUSED, "{setup}");
         assert!(!left(&r, LeftReason::Refused), "{setup}: {r:?}");
         assert!(
             fs::read_to_string(&calls)
@@ -1218,10 +1233,11 @@ fn a_push_to_an_ssh_host_that_refuses_the_connection_is_unreachable() {
     let deadline = Instant::now() + Duration::from_secs(60);
     assert_eq!(
         git.push(&repo, &upstream, deadline),
-        PushOutcome::Unreachable
+        PushOutcome::Unreachable(Some(CONNECTION_REFUSED.into()))
     );
     let r = w.sync();
     assert!(left(&r, LeftReason::Offline) && !r.pushed, "{r:?}");
+    assert_eq!(detail(&r), CONNECTION_REFUSED);
     assert!(fs::read_to_string(&calls).unwrap().contains("fakehost"));
     assert_eq!(w.remote_head(), before);
 }
@@ -1241,8 +1257,8 @@ fn a_transfer_slower_than_http_low_speed_limit_is_offline() {
     assert_eq!(w.snapshot(), before);
 }
 
-/// A fetch stopped at the time limit is offline (an upload-pack that
-/// starts late holds it past a 1 s limit).
+/// A fetch stopped at the time limit is offline, and says the limit it had
+/// (an upload-pack that starts late holds it past a 1 s limit).
 #[test]
 fn a_fetch_held_past_the_time_limit_is_offline() {
     let w = World::new();
@@ -1256,7 +1272,7 @@ fn a_fetch_held_past_the_time_limit_is_offline() {
     let before = w.snapshot();
     let r = pull_within(&w, &w.ours, Duration::from_secs(1));
     assert!(left(&r, LeftReason::Offline) && r.pulled == 0, "{r:?}");
-    assert!(!left(&r, LeftReason::Refused), "{r:?}");
+    assert_eq!(detail(&r), "no answer within 1 s");
     assert_eq!(w.snapshot(), before);
 }
 
@@ -1546,7 +1562,7 @@ fn a_fetch_that_succeeds_ends_the_back_off() {
     // A fetch that failed otherwise (offline) leaves it as it is.
     let url = "ssh://git@nonexistent.invalid/x.git";
     w.run(&w.ours, &["remote", "set-url", "origin", url]);
-    assert_eq!(fetch_ours(&w), Fetch::Offline);
+    assert!(matches!(fetch_ours(&w), Fetch::Offline(Some(_))));
     assert!(backoff.exists());
     end_backoff(&backoff);
     assert!(!backoff.exists());

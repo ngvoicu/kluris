@@ -338,8 +338,11 @@ fn readme_says_reads_pull_commit_pushes_and_a_background_push_shares_the_rest() 
     let sync = flat(sync_section(&readme));
     for claim in [
         // What each command does with the remote.
-        "`kluris wake-up`, `kluris search`, `kluris status`, `kluris register` and `kluris doctor` bring your teammates' commits in before they read",
+        "`kluris wake-up`, `kluris search`, `kluris status` and `kluris register` bring your teammates' commits in before they read",
         "at most once a minute, within 3 seconds",
+        "`kluris doctor` brings them in the same way",
+        "asks every brain's remote each time",
+        "reads skip it for 10 min",
         "within 10 seconds in all",
         "A read's exit code is never its sync's",
         "`kluris dream` and `kluris mri` pull, then commit the brain's own housekeeping",

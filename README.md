@@ -326,14 +326,21 @@ any other, and Kluris pulls and pushes the branch you have checked out.
 Every command that opens a brain keeps it in step with its remote, so nobody
 has to remember to sync:
 
-- `kluris wake-up`, `kluris search`, `kluris status`, `kluris register` and
-  `kluris doctor` bring your teammates' commits in before they read. They
-  fetch at most once a minute, within 3 seconds, and the git steps they run
-  before they read stop within 10 seconds in all, so a slow network or a
-  stalled hook never holds them: the brain is then read as it is. A fetch
-  cut off at 3 seconds pauses these fetches for that brain for five
-  minutes, doubling up to an hour, until a fetch succeeds. A read's exit
-  code is never its sync's.
+- `kluris wake-up`, `kluris search`, `kluris status` and `kluris register`
+  bring your teammates' commits in before they read. They fetch at most
+  once a minute, within 3 seconds, and the git steps they run before they
+  read stop within 10 seconds in all, so a slow network or a stalled hook
+  never holds them: the brain is then read as it is. A fetch cut off at 3
+  seconds pauses these fetches for that brain for five minutes, doubling up
+  to an hour, until a fetch succeeds. A read's exit code is never its
+  sync's.
+- `kluris doctor` brings them in the same way, within the same 3 and 10
+  seconds, but asks every brain's remote each time, paused or not: it is
+  how you find out whether syncing works. Its fetch counts for the reads:
+  one cut off at 3 seconds starts or doubles their pause, and its brain's
+  line says for how long (`left as is (offline): no answer within 3 s;
+  reads skip it for 10 min`); one that succeeds ends it. Each brain's line
+  says what its sync did (`pulled 2 commits`, `pushed`), once.
 - `kluris dream` and `kluris mri` pull, then commit the brain's own
   housekeeping, built from what is already committed: dates, a missing
   `parent`, reverse `related` links, the maps and `brain.md` (see
@@ -381,7 +388,7 @@ something to say; the commands you run to sync
 carry it for every git brain with a remote: `kluris commit`, `kluris sync`,
 `kluris resolve`,
 and `kluris create` with `--remote`. Without `--json`, the same news is one
-line on stderr.
+line on stderr (for `kluris doctor`, on each brain's check line).
 
 A teammate clones the brain and runs `kluris register` on the clone; from
 then on every command keeps it in step. A brain made with `kluris create
@@ -486,7 +493,11 @@ a switch, a commit, a rebase started), `in_progress` (a git merge, rebase, cherr
 hook stopped the merge or the push), `failed` (git stopped partway) or `no_upstream`
 (the branch has no upstream: `set one with git push -u origin main`; a brain
 with no remote at all says `add one with git remote add origin <url>, then
-git push -u origin main`); `detail` gives git's message and the fix. Without `--json`, every brain
+git push -u origin main`); `detail` gives git's message and the fix. An
+`offline` brain's `detail` says which kind: `no answer within 60 s` (the
+time the fetch or push had: 3 s for a read and `kluris doctor`), or the
+line git, ssh or curl printed for the network trouble, such as `ssh: Could
+not resolve hostname example.com: Name or service not known`. Without `--json`, every brain
 that has something to say also gets one line on stderr, such as `kluris:
 acme: pulled 2 commits; 1 conflict (notes/c.md) in merge 88e6700161ad`,
 which names the waiting merge's id for `kluris resolve --merge`. The exit code is 1 when a
@@ -892,7 +903,7 @@ from disk or send it to a colleague.
 | `kluris companion add <name>` | Turn a companion on for a brain (`--brain`) |
 | `kluris companion remove <name>` | Turn a companion off for a brain (`--brain`) |
 | `kluris remove <name>` | Unregister a brain; its files stay on disk |
-| `kluris doctor` | Check git, PATH, the config and every brain, then refresh companions and agent skills (`--no-refresh`: no refresh) |
+| `kluris doctor` | Check git, PATH, the config and every brain (asking each brain's remote, and saying what its sync did), then refresh companions and agent skills (`--no-refresh`: no refresh) |
 | `kluris self-update` | Update to the newest release, or `--version X` (`--check`: only look) |
 | `kluris self-uninstall` | Uninstall Kluris (`--purge`, `--yes`) |
 | `kluris help [COMMAND]` | The command list, or one command's summary |

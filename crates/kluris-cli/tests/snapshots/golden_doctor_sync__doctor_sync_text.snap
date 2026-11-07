@@ -1,0 +1,14 @@
+---
+source: crates/kluris-cli/tests/golden_doctor_sync.rs
+expression: world.render(&out)
+---
+== stdout (421 bytes)
+  PASS git: git version <GIT>
+  PASS path: <KLURIS>
+  PASS config: <ROOT>/work/home/.kluris/config.yml
+  PASS brain:pulled: <ROOT>/work/brains/pulled; pulled 1 commit
+  WARN brain:silent: <ROOT>/work/brains/silent; left as is (offline): no answer within 3 s; reads skip it for 5 min
+  WARN brain:unreachable: <ROOT>/work/brains/unreachable; left as is (offline): ssh: connect to host fakehost port 22: Connection refused
+== stderr (0 bytes)
+== exit 0
+<end of run>
