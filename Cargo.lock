@@ -1344,7 +1344,7 @@ dependencies = [
 
 [[package]]
 name = "kluris"
-version = "3.2.2"
+version = "3.2.3"
 dependencies = [
  "assert_cmd",
  "assert_fs",
@@ -1373,7 +1373,7 @@ dependencies = [
 
 [[package]]
 name = "kluris-core"
-version = "3.2.2"
+version = "3.2.3"
 dependencies = [
  "include_dir",
  "indexmap",
@@ -2895,7 +2895,7 @@ dependencies = [
 
 [[package]]
 name = "xtask"
-version = "3.2.2"
+version = "3.2.3"
 dependencies = [
  "base64 0.22.1",
  "kluris-core",

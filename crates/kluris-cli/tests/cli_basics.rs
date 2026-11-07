@@ -36,7 +36,7 @@ fn version_prints_the_release_version() {
         .arg("--version")
         .assert()
         .success()
-        .stdout("kluris 3.2.2\n");
+        .stdout("kluris 3.2.3\n");
 }
 
 #[test]
